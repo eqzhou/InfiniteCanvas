@@ -12,10 +12,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const schema = `
+const schemaMigrations = `
+CREATE TABLE IF NOT EXISTS openboard_schema_migrations (
+  version integer PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);`
+
+const migrationV1 = `
 CREATE TABLE IF NOT EXISTS openboard_projects (
   id text PRIMARY KEY,
-  title text NOT NULL,
+  title text NOT NULL CHECK (char_length(title) <= 500),
   updated_at timestamptz NOT NULL,
   document jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
@@ -23,10 +29,12 @@ CREATE TABLE IF NOT EXISTS openboard_projects (
 CREATE INDEX IF NOT EXISTS openboard_projects_updated_idx
   ON openboard_projects (updated_at DESC);
 CREATE TABLE IF NOT EXISTS openboard_state (
-  key text PRIMARY KEY,
+  key text PRIMARY KEY CHECK (char_length(key) BETWEEN 1 AND 128),
   value jsonb NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );`
+
+const currentSchemaVersion = 1
 
 type PostgresStore struct {
 	pool  *pgxpool.Pool
@@ -43,7 +51,7 @@ func Open(ctx context.Context, databaseURL, redisURL string) (*PostgresStore, er
 		s.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	if _, err := pool.Exec(ctx, schema); err != nil {
+	if err := migrate(ctx, pool); err != nil {
 		s.Close()
 		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
@@ -60,6 +68,36 @@ func Open(ctx context.Context, databaseURL, redisURL string) (*PostgresStore, er
 		}
 	}
 	return s, nil
+}
+
+func migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	if _, err := pool.Exec(ctx, schemaMigrations); err != nil {
+		return fmt.Errorf("create migration table: %w", err)
+	}
+	var version int
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM openboard_schema_migrations`).Scan(&version); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if version > currentSchemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, currentSchemaVersion)
+	}
+	if version < 1 {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin schema migration: %w", err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, migrationV1); err != nil {
+			return fmt.Errorf("apply schema migration 1: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_schema_migrations (version) VALUES (1)`); err != nil {
+			return fmt.Errorf("record schema migration 1: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit schema migration 1: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *PostgresStore) Close() {
