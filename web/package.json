@@ -1,0 +1,39 @@
+{
+  "name": "openboard-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "typecheck": "tsc --noEmit --pretty false && tsc -p benchmarks/tsconfig.json --pretty false",
+    "test": "bun test src benchmarks",
+    "test:coverage": "bun test --coverage src benchmarks",
+    "benchmark:indexes": "bun run benchmarks/indexes.bench.ts",
+    "benchmark:indexes:assert": "bun run benchmarks/indexes.bench.ts --assert",
+    "test:e2e": "playwright test",
+    "test:e2e:production": "OPENBOARD_E2E_PRODUCTION=1 playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "idb-keyval": "^6.2.2",
+    "lucide-react": "^0.525.0",
+    "nanoid": "^5.1.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.6.3",
+    "zustand": "^5.0.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/vite": "^4.1.11",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.4"
+  }
+}

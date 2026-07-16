@@ -1,0 +1,15 @@
+.git
+.github
+.DS_Store
+.env
+.env.*
+!.env.example
+**/node_modules
+**/dist
+**/build
+**/coverage
+server/bin
+server/data
+docs/screenshots
+*.log
+*.db

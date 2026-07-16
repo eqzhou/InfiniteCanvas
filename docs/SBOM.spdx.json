@@ -1,0 +1,666 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "OpenBoard web dependency inventory",
+  "documentNamespace": "https://openboard.local/spdx/openboard-web-0.1.0",
+  "creationInfo": {
+    "created": "2026-07-16T08:35:41.239Z",
+    "creators": [
+      "Tool: OpenBoard audit-licenses.mjs"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef--babel-code-frame-7.29.7",
+      "name": "@babel/code-frame",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-compat-data-7.29.7",
+      "name": "@babel/compat-data",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-core-7.29.7",
+      "name": "@babel/core",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-generator-7.29.7",
+      "name": "@babel/generator",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-compilation-targets-7.29.7",
+      "name": "@babel/helper-compilation-targets",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-globals-7.29.7",
+      "name": "@babel/helper-globals",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-module-imports-7.29.7",
+      "name": "@babel/helper-module-imports",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-module-transforms-7.29.7",
+      "name": "@babel/helper-module-transforms",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-plugin-utils-7.29.7",
+      "name": "@babel/helper-plugin-utils",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-string-parser-7.29.7",
+      "name": "@babel/helper-string-parser",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-validator-identifier-7.29.7",
+      "name": "@babel/helper-validator-identifier",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helper-validator-option-7.29.7",
+      "name": "@babel/helper-validator-option",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-helpers-7.29.7",
+      "name": "@babel/helpers",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-parser-7.29.7",
+      "name": "@babel/parser",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-plugin-transform-react-jsx-self-7.29.7",
+      "name": "@babel/plugin-transform-react-jsx-self",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-plugin-transform-react-jsx-source-7.29.7",
+      "name": "@babel/plugin-transform-react-jsx-source",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-template-7.29.7",
+      "name": "@babel/template",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-traverse-7.29.7",
+      "name": "@babel/traverse",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--babel-types-7.29.7",
+      "name": "@babel/types",
+      "versionInfo": "7.29.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--esbuild-darwin-arm64-0.28.1",
+      "name": "@esbuild/darwin-arm64",
+      "versionInfo": "0.28.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--jridgewell-gen-mapping-0.3.13",
+      "name": "@jridgewell/gen-mapping",
+      "versionInfo": "0.3.13",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--jridgewell-remapping-2.3.5",
+      "name": "@jridgewell/remapping",
+      "versionInfo": "2.3.5",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--jridgewell-resolve-uri-3.1.2",
+      "name": "@jridgewell/resolve-uri",
+      "versionInfo": "3.1.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--jridgewell-sourcemap-codec-1.5.5",
+      "name": "@jridgewell/sourcemap-codec",
+      "versionInfo": "1.5.5",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--jridgewell-trace-mapping-0.3.31",
+      "name": "@jridgewell/trace-mapping",
+      "versionInfo": "0.3.31",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--playwright-test-1.61.1",
+      "name": "@playwright/test",
+      "versionInfo": "1.61.1",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--rolldown-pluginutils-1.0.0-beta.27",
+      "name": "@rolldown/pluginutils",
+      "versionInfo": "1.0.0-beta.27",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--rollup-rollup-darwin-arm64-4.62.2",
+      "name": "@rollup/rollup-darwin-arm64",
+      "versionInfo": "4.62.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--tailwindcss-node-4.3.2",
+      "name": "@tailwindcss/node",
+      "versionInfo": "4.3.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--tailwindcss-oxide-4.3.2",
+      "name": "@tailwindcss/oxide",
+      "versionInfo": "4.3.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--tailwindcss-oxide-darwin-arm64-4.3.2",
+      "name": "@tailwindcss/oxide-darwin-arm64",
+      "versionInfo": "4.3.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--tailwindcss-vite-4.3.2",
+      "name": "@tailwindcss/vite",
+      "versionInfo": "4.3.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-babel--core-7.20.5",
+      "name": "@types/babel__core",
+      "versionInfo": "7.20.5",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-babel--generator-7.27.0",
+      "name": "@types/babel__generator",
+      "versionInfo": "7.27.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-babel--template-7.4.4",
+      "name": "@types/babel__template",
+      "versionInfo": "7.4.4",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-babel--traverse-7.28.0",
+      "name": "@types/babel__traverse",
+      "versionInfo": "7.28.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-estree-1.0.9",
+      "name": "@types/estree",
+      "versionInfo": "1.0.9",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-react-19.2.17",
+      "name": "@types/react",
+      "versionInfo": "19.2.17",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-react-dom-19.2.3",
+      "name": "@types/react-dom",
+      "versionInfo": "19.2.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--vitejs-plugin-react-4.7.0",
+      "name": "@vitejs/plugin-react",
+      "versionInfo": "4.7.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-baseline-browser-mapping-2.10.43",
+      "name": "baseline-browser-mapping",
+      "versionInfo": "2.10.43",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-browserslist-4.28.6",
+      "name": "browserslist",
+      "versionInfo": "4.28.6",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-caniuse-lite-1.0.30001805",
+      "name": "caniuse-lite",
+      "versionInfo": "1.0.30001805",
+      "licenseConcluded": "CC-BY-4.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-clsx-2.1.1",
+      "name": "clsx",
+      "versionInfo": "2.1.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-convert-source-map-2.0.0",
+      "name": "convert-source-map",
+      "versionInfo": "2.0.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-cookie-1.1.1",
+      "name": "cookie",
+      "versionInfo": "1.1.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-csstype-3.2.3",
+      "name": "csstype",
+      "versionInfo": "3.2.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-debug-4.4.3",
+      "name": "debug",
+      "versionInfo": "4.4.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-detect-libc-2.1.2",
+      "name": "detect-libc",
+      "versionInfo": "2.1.2",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-electron-to-chromium-1.5.392",
+      "name": "electron-to-chromium",
+      "versionInfo": "1.5.392",
+      "licenseConcluded": "ISC",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-enhanced-resolve-5.21.6",
+      "name": "enhanced-resolve",
+      "versionInfo": "5.21.6",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-esbuild-0.28.1",
+      "name": "esbuild",
+      "versionInfo": "0.28.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-escalade-3.2.0",
+      "name": "escalade",
+      "versionInfo": "3.2.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-fdir-6.5.0",
+      "name": "fdir",
+      "versionInfo": "6.5.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-fsevents-2.3.3",
+      "name": "fsevents",
+      "versionInfo": "2.3.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-gensync-1.0.0-beta.2",
+      "name": "gensync",
+      "versionInfo": "1.0.0-beta.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-graceful-fs-4.2.11",
+      "name": "graceful-fs",
+      "versionInfo": "4.2.11",
+      "licenseConcluded": "ISC",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-idb-keyval-6.3.0",
+      "name": "idb-keyval",
+      "versionInfo": "6.3.0",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-jiti-2.7.0",
+      "name": "jiti",
+      "versionInfo": "2.7.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-js-tokens-4.0.0",
+      "name": "js-tokens",
+      "versionInfo": "4.0.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-jsesc-3.1.0",
+      "name": "jsesc",
+      "versionInfo": "3.1.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-json5-2.2.3",
+      "name": "json5",
+      "versionInfo": "2.2.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-lightningcss-1.32.0",
+      "name": "lightningcss",
+      "versionInfo": "1.32.0",
+      "licenseConcluded": "MPL-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-lightningcss-darwin-arm64-1.32.0",
+      "name": "lightningcss-darwin-arm64",
+      "versionInfo": "1.32.0",
+      "licenseConcluded": "MPL-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-lru-cache-5.1.1",
+      "name": "lru-cache",
+      "versionInfo": "5.1.1",
+      "licenseConcluded": "ISC",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-lucide-react-0.525.0",
+      "name": "lucide-react",
+      "versionInfo": "0.525.0",
+      "licenseConcluded": "ISC",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-magic-string-0.30.21",
+      "name": "magic-string",
+      "versionInfo": "0.30.21",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-ms-2.1.3",
+      "name": "ms",
+      "versionInfo": "2.1.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-nanoid-5.1.16",
+      "name": "nanoid",
+      "versionInfo": "5.1.16",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-node-releases-2.0.51",
+      "name": "node-releases",
+      "versionInfo": "2.0.51",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-picocolors-1.1.1",
+      "name": "picocolors",
+      "versionInfo": "1.1.1",
+      "licenseConcluded": "ISC",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-picomatch-4.0.5",
+      "name": "picomatch",
+      "versionInfo": "4.0.5",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-playwright-1.61.1",
+      "name": "playwright",
+      "versionInfo": "1.61.1",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-playwright-core-1.61.1",
+      "name": "playwright-core",
+      "versionInfo": "1.61.1",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-postcss-8.5.19",
+      "name": "postcss",
+      "versionInfo": "8.5.19",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-react-19.2.7",
+      "name": "react",
+      "versionInfo": "19.2.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-react-dom-19.2.7",
+      "name": "react-dom",
+      "versionInfo": "19.2.7",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-react-refresh-0.17.0",
+      "name": "react-refresh",
+      "versionInfo": "0.17.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-react-router-7.18.1",
+      "name": "react-router",
+      "versionInfo": "7.18.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-react-router-dom-7.18.1",
+      "name": "react-router-dom",
+      "versionInfo": "7.18.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-rollup-4.62.2",
+      "name": "rollup",
+      "versionInfo": "4.62.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-scheduler-0.27.0",
+      "name": "scheduler",
+      "versionInfo": "0.27.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-semver-6.3.1",
+      "name": "semver",
+      "versionInfo": "6.3.1",
+      "licenseConcluded": "ISC",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-set-cookie-parser-2.7.2",
+      "name": "set-cookie-parser",
+      "versionInfo": "2.7.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-source-map-js-1.2.1",
+      "name": "source-map-js",
+      "versionInfo": "1.2.1",
+      "licenseConcluded": "BSD-3-Clause",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-tailwindcss-4.3.2",
+      "name": "tailwindcss",
+      "versionInfo": "4.3.2",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-tapable-2.3.3",
+      "name": "tapable",
+      "versionInfo": "2.3.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-tinyglobby-0.2.17",
+      "name": "tinyglobby",
+      "versionInfo": "0.2.17",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-typescript-5.9.3",
+      "name": "typescript",
+      "versionInfo": "5.9.3",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-update-browserslist-db-1.2.3",
+      "name": "update-browserslist-db",
+      "versionInfo": "1.2.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-vite-7.3.6",
+      "name": "vite",
+      "versionInfo": "7.3.6",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-yallist-3.1.1",
+      "name": "yallist",
+      "versionInfo": "3.1.1",
+      "licenseConcluded": "ISC",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-zustand-5.0.14",
+      "name": "zustand",
+      "versionInfo": "5.0.14",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    }
+  ]
+}

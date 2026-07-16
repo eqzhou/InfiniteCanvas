@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run test:coverage
+      - run: bun run benchmark:indexes:assert
+      - run: bun run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  go:
+    name: Go checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go build -trimpath -o ./bin/openboard-server ./cmd/server
+      - run: go build -trimpath -o ./bin/openboard-mcp ./cmd/mcp
+
+  licensing:
+    name: License and SBOM audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --cwd web --frozen-lockfile
+      - run: node scripts/audit-licenses.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openboard-sbom
+          path: |
+            docs/SBOM.spdx.json
+            docs/LICENSE_REVIEW.json
+          if-no-files-found: error
+          retention-days: 14
+      - run: node scripts/audit-cleanroom.mjs
+
+  e2e:
+    name: Chromium E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium firefox webkit
+      - run: bun run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: web/node_modules/.cache/playwright-test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  container:
+    name: Container build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENBOARD_TOKEN: ci-openboard-token-000000000000000000000000
+      OPENBOARD_POSTGRES_PASSWORD: ci-postgres-password-00000000000000000000
+      OPENBOARD_REDIS_PASSWORD: ci-redis-password-0000000000000000000000
+      OPENBOARD_MASTER_KEY: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: openboard:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run formal local stack
+        run: docker compose up --detach --no-build
+      - name: Verify health, storage, and runtime user
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/healthz > health.json; then
+              break
+            fi
+            sleep 2
+          done
+          grep -q 'postgresql+redis' health.json
+          docker compose exec -T openboard sh -c 'test "$(id -u)" -ne 0'
+          docker compose exec -T postgres psql -U openboard_local -d openboard_local -Atc \
+            "select count(*) from information_schema.tables where table_schema='public'" | grep -Eq '^[2-9][0-9]*$'
+          docker compose exec -T redis redis-cli -a "$OPENBOARD_REDIS_PASSWORD" ping | grep -q PONG
+      - name: Container logs
+        if: failure()
+        run: docker compose logs
+      - name: Clean up stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans

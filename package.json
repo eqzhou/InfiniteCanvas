@@ -1,0 +1,18 @@
+{
+  "name": "openboard",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "bun run --cwd web dev",
+    "build": "bun run --cwd web build",
+    "typecheck": "bun run --cwd web typecheck",
+    "test": "bun run --cwd web test && cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go test ./...",
+    "benchmark:indexes": "bun run --cwd web benchmark:indexes",
+    "benchmark:indexes:assert": "bun run --cwd web benchmark:indexes:assert",
+    "server": "cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go run ./cmd/server",
+    "mcp": "cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go run ./cmd/mcp",
+    "audit:licenses": "node scripts/audit-licenses.mjs",
+    "audit:cleanroom": "node scripts/audit-cleanroom.mjs",
+    "audit:release": "node scripts/check-release-readiness.mjs"
+  }
+}

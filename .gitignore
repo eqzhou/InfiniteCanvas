@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+web/dist/
+server/bin/
+server/data/
+*.db
+.idea/
+.vscode/
+coverage/
+*.tsbuildinfo

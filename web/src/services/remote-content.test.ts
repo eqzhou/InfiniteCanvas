@@ -1,0 +1,46 @@
+import { describe, expect, test } from "bun:test";
+import { readBoundedResponse } from "./remote-content";
+
+function response(chunks: string[], headers: Record<string, string> = {}) {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+    { headers },
+  );
+}
+
+describe("bounded remote content", () => {
+  test("rejects a declared or streamed body above the byte limit", async () => {
+    await expect(readBoundedResponse(response(["small"], {
+      "content-length": "101",
+      "content-type": "text/plain",
+    }), { maxBytes: 100, mimeTypes: ["text/plain"] })).rejects.toThrow("too large");
+
+    await expect(readBoundedResponse(response(["123456", "78901"], {
+      "content-type": "text/plain",
+    }), { maxBytes: 10, mimeTypes: ["text/plain"] })).rejects.toThrow("too large");
+  });
+
+  test("rejects unsupported or missing MIME types", async () => {
+    await expect(readBoundedResponse(response(["{}"], {
+      "content-type": "text/html; charset=utf-8",
+    }), { maxBytes: 100, mimeTypes: ["application/json", "text/plain"] })).rejects.toThrow("MIME");
+    await expect(readBoundedResponse(response(["{}"]), {
+      maxBytes: 100,
+      mimeTypes: ["application/json"],
+    })).rejects.toThrow("MIME");
+  });
+
+  test("returns bounded bytes and the normalized MIME type", async () => {
+    const result = await readBoundedResponse(response(["hello", " world"], {
+      "content-type": "text/plain; charset=utf-8",
+    }), { maxBytes: 20, mimeTypes: ["text/plain"] });
+    expect(new TextDecoder().decode(result.bytes)).toBe("hello world");
+    expect(result.mimeType).toBe("text/plain");
+  });
+});

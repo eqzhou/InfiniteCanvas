@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openboard_local
+      POSTGRES_USER: openboard_local
+      POSTGRES_PASSWORD: "${OPENBOARD_POSTGRES_PASSWORD:?Set OPENBOARD_POSTGRES_PASSWORD in .env}"
+    volumes:
+      - openboard-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openboard_local -d openboard_local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${OPENBOARD_REDIS_PASSWORD:?Set OPENBOARD_REDIS_PASSWORD in .env}"]
+    volumes:
+      - openboard-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '$${REDIS_PASSWORD}' ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: "${OPENBOARD_REDIS_PASSWORD:?Set OPENBOARD_REDIS_PASSWORD in .env}"
+    security_opt:
+      - no-new-privileges:true
+
+  openboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openboard:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Personal deployments stay host-local unless explicitly exposed.
+    ports:
+      - "${OPENBOARD_BIND:-127.0.0.1}:${OPENBOARD_PORT:-8080}:8080"
+    environment:
+      OPENBOARD_ADDR: 127.0.0.1:8790
+      OPENBOARD_DATA: /data
+      OPENBOARD_ORIGINS: "${OPENBOARD_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}"
+      # Require an explicit token even for local production-like deployments;
+      # this prevents an accidental non-loopback bind from exposing the API.
+      OPENBOARD_TOKEN: "${OPENBOARD_TOKEN:?Set OPENBOARD_TOKEN in .env}"
+      OPENBOARD_DATABASE_URL: "postgres://openboard_local:${OPENBOARD_POSTGRES_PASSWORD}@postgres:5432/openboard_local?sslmode=disable"
+      OPENBOARD_REDIS_URL: "redis://:${OPENBOARD_REDIS_PASSWORD}@redis:6379/0"
+      OPENBOARD_MASTER_KEY: "${OPENBOARD_MASTER_KEY:?Set OPENBOARD_MASTER_KEY in .env}"
+    volumes:
+      - openboard-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777,uid=101,gid=101
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  openboard-data:
+  openboard-postgres:
+  openboard-redis:

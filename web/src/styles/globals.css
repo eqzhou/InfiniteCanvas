@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+  --ob-bg: #f4f1ea;
+  --ob-panel: #fffdf8;
+  --ob-ink: #1c1917;
+  --ob-muted: #78716c;
+  --ob-line: #d6d3d1;
+  --ob-accent: #0f766e;
+  --ob-accent-soft: #ccfbf1;
+  --ob-danger: #b91c1c;
+  --ob-node: #ffffff;
+  --ob-shadow: 0 10px 30px rgba(28, 25, 23, 0.08);
+  --ob-canvas: #efe8dc;
+  --ob-grid: rgba(28, 25, 23, 0.08);
+  --ob-port: #0f766e;
+  --ob-select: #0d9488;
+}
+
+html.dark {
+  --ob-bg: #0c0a09;
+  --ob-panel: #1c1917;
+  --ob-ink: #fafaf9;
+  --ob-muted: #a8a29e;
+  --ob-line: #44403c;
+  --ob-accent: #2dd4bf;
+  --ob-accent-soft: #134e4a;
+  --ob-danger: #f87171;
+  --ob-node: #292524;
+  --ob-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  --ob-canvas: #12100e;
+  --ob-grid: rgba(250, 250, 249, 0.06);
+  --ob-port: #2dd4bf;
+  --ob-select: #5eead4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--ob-bg);
+  color: var(--ob-ink);
+  font-family:
+    "IBM Plex Sans",
+    "Segoe UI",
+    "PingFang SC",
+    "Noto Sans SC",
+    sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ob-muted) 50%, transparent);
+  border-radius: 999px;
+}
