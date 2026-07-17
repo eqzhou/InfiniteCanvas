@@ -24,9 +24,12 @@ done
 export OPENBOARD_ADDR=127.0.0.1:8790
 export OPENBOARD_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 export OPENBOARD_API_TARGET=http://127.0.0.1:8790
+export OPENBOARD_WEB_OUT_DIR=dist-local
 
 echo "Building the local production UI with PostgreSQL-backed server storage..."
 VITE_OPENBOARD_STORAGE=server bun run --cwd web build
+echo "Building the local production server..."
+(cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go build -trimpath -o ./bin/openboard-server ./cmd/server)
 
 cleanup() {
   trap - EXIT INT TERM
@@ -36,7 +39,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-(cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go run ./cmd/server) &
+"$ROOT/server/bin/openboard-server" &
 server_pid=$!
 
 for _ in {1..60}; do
@@ -51,7 +54,7 @@ for _ in {1..60}; do
 done
 curl -fsS -H "Authorization: Bearer $OPENBOARD_TOKEN" http://127.0.0.1:8790/api/health >/dev/null
 
-(cd web && bun run preview --host 127.0.0.1 --port 5173) &
+(cd web && exec ./node_modules/.bin/vite preview --host 127.0.0.1 --port 5173 --strictPort --outDir dist-local) &
 web_pid=$!
 echo "OpenBoard is ready at http://localhost:5173/"
 wait "$web_pid"

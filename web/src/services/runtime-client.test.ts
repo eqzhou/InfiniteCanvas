@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { applyBoardOperations, parseRuntimeCommand } from "./runtime-client";
+import {
+  applyBoardOperations,
+  parseRuntimeCommand,
+  resolveRuntimeFileUrl,
+} from "./runtime-client";
 import { createProject, createNode } from "@/lib/defaults";
 
 describe("browser runtime protocol", () => {
@@ -48,5 +52,18 @@ describe("browser runtime protocol", () => {
       { op: "addEdge", edge: { id: "edge-1", from: "node-1", to: "missing" } },
     ])).toThrow("unknown node");
     expect(project.nodes).toEqual([]);
+  });
+
+  test("publishes loopback runtime files through the browser origin", () => {
+    expect(resolveRuntimeFileUrl(
+      "/api/files/snapshot.png",
+      "http://127.0.0.1:8792",
+      "http://127.0.0.1:5174",
+    )).toBe("http://127.0.0.1:5174/api/files/snapshot.png");
+    expect(resolveRuntimeFileUrl(
+      "/api/files/snapshot.png",
+      "https://agent.example.com",
+      "http://localhost:5173",
+    )).toBe("https://agent.example.com/api/files/snapshot.png");
   });
 });

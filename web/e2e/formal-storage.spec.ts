@@ -49,9 +49,11 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await expect(page.locator('img[alt="图片"]').first()).toBeVisible();
 
   await page.goto("/assets");
-  const answers = ["Formal asset", "Stored in PostgreSQL"];
-  page.on("dialog", async (dialog) => dialog.accept(answers.shift() ?? ""));
   await page.getByRole("button", { name: "新增文本" }).click();
+  const creator = page.getByRole("dialog", { name: "新增素材" });
+  await creator.getByLabel("标题").fill("Formal asset");
+  await creator.getByLabel("内容").fill("Stored in PostgreSQL");
+  await creator.getByRole("button", { name: "保存" }).click();
   await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();
   await page.reload();
   await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();

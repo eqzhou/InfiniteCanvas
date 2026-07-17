@@ -9,6 +9,7 @@ import {
   syncProjectWithAgent,
   type AgentStatus,
   readAgentToken,
+  resolveAgentBaseUrl,
 } from "@/services/local-agent";
 
 const CodexPanel = lazy(async () => {
@@ -29,7 +30,11 @@ export function LocalAgentPanel() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [baseUrl, setBaseUrl] = useState(config.localAgentUrl ?? DEFAULT_AGENT_BASE_URL);
+  const [baseUrl, setBaseUrl] = useState(() => resolveAgentBaseUrl(
+    config.localAgentUrl,
+    readAgentToken(),
+    window.location.origin,
+  ));
   const [token, setToken] = useState(initialAgentToken);
   const connection = useMemo(() => ({ baseUrl, token }), [baseUrl, token]);
 

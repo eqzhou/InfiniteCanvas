@@ -14,6 +14,7 @@ export function AssetsPage() {
   const [kind, setKind] = useState<"all" | "text" | "image">("all");
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<AssetItem | null>(null);
+  const [creating, setCreating] = useState(false);
   const pageSize = 12;
 
   const filtered = useMemo(() => {
@@ -39,20 +40,17 @@ export function AssetsPage() {
   }, [totalPages]);
 
   const addText = () => {
-    const title = window.prompt("素材标题", "文本素材");
-    if (!title) return;
-    const content = window.prompt("内容", "") ?? "";
     const t = nowIso();
-    const item: AssetItem = {
+    setCreating(true);
+    setEditing({
       id: uid("asset"),
       kind: "text",
-      title,
-      content,
+      title: "文本素材",
+      content: "",
       tags: [],
       createdAt: t,
       updatedAt: t,
-    };
-    setAssets([item, ...useBoardStore.getState().assets]);
+    });
   };
 
   const addImage = async (file: File) => {
@@ -82,6 +80,21 @@ export function AssetsPage() {
 
   const saveAsset = async (values: AssetEditorValues) => {
     if (!editing) return;
+    if (creating) {
+      const created: AssetItem = {
+        ...editing,
+        title: values.title,
+        tags: [...values.tags],
+        source: values.source || undefined,
+        notes: values.notes || undefined,
+        content: values.content,
+        updatedAt: nowIso(),
+      };
+      setAssets([created, ...useBoardStore.getState().assets]);
+      setCreating(false);
+      setEditing(null);
+      return;
+    }
     const replacement = values.replacement
       ? await uploadMedia(values.replacement, "image")
       : null;
@@ -207,7 +220,10 @@ export function AssetsPage() {
               <button
                 type="button"
                 className="rounded border border-[var(--ob-line)] px-2 py-1"
-                onClick={() => setEditing(a)}
+                onClick={() => {
+                  setCreating(false);
+                  setEditing(a);
+                }}
               >
                 编辑
               </button>
@@ -256,7 +272,11 @@ export function AssetsPage() {
       )}
       <AssetEditorDialog
         asset={editing}
-        onClose={() => setEditing(null)}
+        mode={creating ? "create" : "edit"}
+        onClose={() => {
+          setCreating(false);
+          setEditing(null);
+        }}
         onSave={saveAsset}
       />
     </div>

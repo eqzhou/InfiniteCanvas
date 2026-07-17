@@ -8,6 +8,7 @@ import {
   interruptCodexTurn,
   normalizeAgentBaseUrl,
   parseCodexSseRecords,
+  resolveAgentBaseUrl,
   respondCodexApproval,
   sendCodexMessage,
   uploadCodexAttachments,
@@ -35,6 +36,15 @@ describe("local agent project synchronization", () => {
 });
 
 describe("local agent connection", () => {
+  test("uses the same-origin proxy for the default URL when no browser token exists", () => {
+    expect(resolveAgentBaseUrl("http://127.0.0.1:8790", "", "http://localhost:5173"))
+      .toBe("http://localhost:5173");
+    expect(resolveAgentBaseUrl("http://127.0.0.1:8790", "token", "http://localhost:5173"))
+      .toBe("http://127.0.0.1:8790");
+    expect(resolveAgentBaseUrl("https://agent.example.com", "", "http://localhost:5173"))
+      .toBe("https://agent.example.com");
+  });
+
   test("parses CRLF and multi-line SSE data while preserving incomplete frames", () => {
     const first = parseCodexSseRecords(
       ": keep-alive\r\n" +

@@ -3,6 +3,7 @@ import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
   generateImages,
+  generateSpeech,
   generateText,
   generateVideo,
   resolveNodeImageDataUrls,
@@ -13,6 +14,7 @@ import { uid } from "@/lib/id";
 import { isSubmitShortcut } from "@/lib/keyboard";
 import { Send } from "lucide-react";
 import { getProvider } from "@/lib/ai-config";
+import { isNodePromptType, nodePromptKind, nodePromptPlaceholder } from "@/lib/node-prompt";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
   const config = useBoardStore((s) => s.config);
@@ -25,7 +27,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
 
-  if (node.type === "config") return null;
+  if (!isNodePromptType(node.type)) return null;
+  const promptType = node.type;
 
   const placeRight = (created: BoardNode[]) => {
     updateActive((p) => ({
@@ -40,7 +43,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   const send = async () => {
     if (!text.trim() || busy) return;
-    const kind = node.type === "image" ? "image" : node.type === "video" ? "video" : "text";
+    const kind = nodePromptKind(promptType);
     if (!channel || !getProvider(channel, kind).apiKey) {
       alert("请先在设置中配置 API Key");
       return;
@@ -115,6 +118,34 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           ]);
           updateNode(node.id, { metadata: { status: "success" } });
         }
+      } else if (node.type === "audio") {
+        const speech = await generateSpeech({
+          channel,
+          model: node.metadata.model || getProvider(channel, "audio").model,
+          input: text.trim(),
+          voice: node.metadata.voice || "alloy",
+        });
+        const uploaded = await uploadMedia(speech.blob, "media");
+        const metadata = {
+          content: uploaded.url,
+          storageKey: uploaded.storageKey,
+          mimeType: speech.mimeType || uploaded.mimeType,
+          bytes: uploaded.bytes,
+          status: "success" as const,
+          prompt: text.trim(),
+        };
+        if (!node.metadata.content) {
+          updateNode(node.id, { metadata });
+        } else {
+          placeRight([
+            createNode(
+              "audio",
+              { x: node.position.x + node.width + 60, y: node.position.y },
+              { metadata },
+            ),
+          ]);
+          updateNode(node.id, { metadata: { status: "success" } });
+        }
       }
       setText("");
     } catch (err) {
@@ -129,14 +160,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     }
   };
 
-  const placeholder =
-    node.type === "text"
-      ? node.metadata.content
-        ? "描述如何改写这段文本…"
-        : "输入要生成的文本…"
-      : node.type === "image"
-        ? "输入提示词生成/改图…"
-        : "输入视频提示词…";
+  const placeholder = nodePromptPlaceholder(promptType, Boolean(node.metadata.content));
 
   // silence unused
   void project;

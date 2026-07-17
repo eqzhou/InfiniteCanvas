@@ -14,6 +14,9 @@ const apiProxy = {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    outDir: process.env.OPENBOARD_WEB_OUT_DIR || "dist",
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

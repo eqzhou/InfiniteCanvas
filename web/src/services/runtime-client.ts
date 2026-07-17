@@ -37,6 +37,27 @@ const NODE_PATCH_FIELDS = new Set([
   "title", "position", "width", "height", "metadata", "body", "tags", "source", "coverUrl",
 ]);
 
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" ||
+    hostname === "::1" || hostname === "[::1]";
+}
+
+export function resolveRuntimeFileUrl(path: string, baseUrl: string, publicOrigin?: string): string {
+  const internal = new URL(path, normalizeAgentBaseUrl(baseUrl));
+  if (!publicOrigin) return internal.toString();
+  try {
+    const publicUrl = new URL(publicOrigin);
+    if (isLoopbackHostname(internal.hostname) && isLoopbackHostname(publicUrl.hostname) &&
+        (publicUrl.protocol === "http:" || publicUrl.protocol === "https:") &&
+        !publicUrl.username && !publicUrl.password) {
+      return new URL(`${internal.pathname}${internal.search}`, publicUrl.origin).toString();
+    }
+  } catch {
+    // An invalid public origin must not change the authenticated upload target.
+  }
+  return internal.toString();
+}
+
 export function parseRuntimeCommand(input: string): RuntimeCommand {
   if (input.length > 32 * 1024 * 1024) throw new Error("runtime command is too large");
   let value: unknown;
@@ -173,6 +194,7 @@ export async function uploadRuntimeSnapshot(
   connection: AgentConnection,
   dataUrl: string,
   fetcher: typeof fetch = fetch,
+  publicOrigin?: string,
 ): Promise<string> {
   const baseUrl = normalizeAgentBaseUrl(connection.baseUrl);
   const image = await fetch(dataUrl).then((response) => response.blob());
@@ -196,5 +218,5 @@ export async function uploadRuntimeSnapshot(
   if (typeof value.url !== "string" || !value.url.startsWith("/api/files/")) {
     throw new Error("runtime snapshot upload response is invalid");
   }
-  return new URL(value.url, baseUrl).toString();
+  return resolveRuntimeFileUrl(value.url, baseUrl, publicOrigin);
 }

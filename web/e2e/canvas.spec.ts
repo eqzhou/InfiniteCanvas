@@ -555,11 +555,11 @@ test("prompt details can insert their content into the active canvas", async ({ 
 test("asset editor updates title, source, tags, notes, and text content", async ({ page }) => {
   await openFreshBoard(page);
   await page.goto("/assets");
-  const answers = ["Draft asset", "Initial content"];
-  page.on("dialog", async (dialog) => {
-    await dialog.accept(answers.shift() ?? "");
-  });
   await page.getByRole("button", { name: "新增文本" }).click();
+  const creator = page.getByRole("dialog", { name: "新增素材" });
+  await creator.getByLabel("标题").fill("Draft asset");
+  await creator.getByLabel("内容").fill("Initial content");
+  await creator.getByRole("button", { name: "保存" }).click();
 
   const card = page.locator("article").filter({ hasText: "Draft asset" });
   await card.getByRole("button", { name: "编辑" }).click();
@@ -622,11 +622,20 @@ test("assistant ignores the submit shortcut while IME composition is active", as
 test("local Agent connects to the real Go service with a session token", async ({ page }) => {
   await openFreshBoard(page);
   await page.getByTitle("本地 Agent").click();
+  await expect(page.getByLabel("Local URL")).toHaveValue(new URL(page.url()).origin);
+  await expect(page.getByText("已连接", { exact: true })).toBeVisible();
   await page.getByLabel("Local URL").fill(agentUrl);
   await page.getByLabel("Connect token").fill("e2e-token");
   await page.getByRole("button", { name: "连接" }).click();
   await expect(page.getByText("已连接", { exact: true })).toBeVisible();
   await expect(page.getByText("board.list_nodes", { exact: true })).toBeVisible();
+});
+
+test("audio nodes expose the audio generation prompt", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByRole("button", { name: "音频", exact: true }).click();
+  await expect(page.getByPlaceholder("输入语音文本…")).toBeVisible();
+  await expect(page.getByPlaceholder("输入视频提示词…")).toHaveCount(0);
 });
 
 test("browser runtime executes board commands, navigation, and protected snapshots", async ({ page, request }) => {

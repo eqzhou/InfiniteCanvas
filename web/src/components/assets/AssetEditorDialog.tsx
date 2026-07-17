@@ -13,10 +13,12 @@ export type AssetEditorValues = {
 
 export function AssetEditorDialog({
   asset,
+  mode = "edit",
   onClose,
   onSave,
 }: {
   asset: AssetItem | null;
+  mode?: "create" | "edit";
   onClose: () => void;
   onSave: (values: AssetEditorValues) => Promise<void>;
 }) {
@@ -66,7 +68,7 @@ export function AssetEditorDialog({
         }}
       >
         <div className="mb-4 flex items-center gap-2">
-          <h2 id="asset-editor-title" className="font-semibold">编辑素材</h2>
+          <h2 id="asset-editor-title" className="font-semibold">{mode === "create" ? "新增素材" : "编辑素材"}</h2>
           <button type="button" title="关闭编辑" className="ml-auto rounded-md p-1" onClick={onClose}>
             <X size={18} />
           </button>

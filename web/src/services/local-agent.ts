@@ -15,6 +15,11 @@ export function readAgentToken(): string {
   }
 }
 
+export function resolveAgentBaseUrl(configured: string | undefined, token: string, pageOrigin: string): string {
+  const baseUrl = configured || DEFAULT_AGENT_BASE_URL;
+  return !token && baseUrl === DEFAULT_AGENT_BASE_URL ? pageOrigin : baseUrl;
+}
+
 export type AgentConnection = {
   baseUrl: string;
   token?: string;

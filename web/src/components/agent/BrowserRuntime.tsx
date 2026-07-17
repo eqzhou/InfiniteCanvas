@@ -17,6 +17,7 @@ import {
 import {
   DEFAULT_AGENT_BASE_URL,
   readAgentToken,
+  resolveAgentBaseUrl,
   type AgentConnection,
 } from "@/services/local-agent";
 import type { BoardNode, Point } from "@/types/board";
@@ -72,7 +73,10 @@ async function executeRuntimeCommand(
         pixelRatio: Math.min(window.devicePixelRatio, 2),
         backgroundColor: getComputedStyle(document.documentElement).getPropertyValue("--ob-bg").trim() || "#ffffff",
       });
-      return { projectId: project.id, url: await uploadRuntimeSnapshot(connection, dataUrl) };
+      return {
+        projectId: project.id,
+        url: await uploadRuntimeSnapshot(connection, dataUrl, fetch, window.location.origin),
+      };
     }
     case "board.apply_ops": {
       if (!project || !Array.isArray(command.data.operations)) throw new Error("active project and operations are required");
@@ -216,7 +220,7 @@ export function BrowserRuntime() {
     const responses = new Map<string, string>();
     const token = readAgentToken();
     const connection: AgentConnection = {
-      baseUrl: !token && baseUrl === DEFAULT_AGENT_BASE_URL ? window.location.origin : baseUrl,
+      baseUrl: resolveAgentBaseUrl(baseUrl, token, window.location.origin),
       token,
     };
 

@@ -4,7 +4,6 @@ import { createDefaultChannel } from "@/lib/defaults";
 import { listModels } from "@/services/ai-client";
 import { webdavGetBlob, webdavPutBlob } from "@/services/webdav";
 import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
-import { uid } from "@/lib/id";
 import { getProvider, normalizeChannel } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
 import type { AiTemplateConfig } from "@/types/board";
@@ -260,9 +259,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           <p className="text-xs text-[var(--ob-muted)]">
             {import.meta.env.VITE_OPENBOARD_STORAGE === "server"
               ? "API Key 经本地服务加密后存入 PostgreSQL，数据库中不保存明文。"
-              : "API Key 仅保存在本机浏览器会话。"}
-            Seedance / 火山方舟 Agent Plan 请将 Base URL 设为
-            `.../api/plan/v3` 并手动填写模型名。渠道 id 占位：{uid("note").slice(0, 8)}…
+              : "API Key 仅保存在当前浏览器的本地存储中。"}
+            Ark / Seedance 请为对应服务选择 Ark 协议，并填写兼容的
+            `/api/v3` Base URL 与模型名。
           </p>
         </div>
       </div>
