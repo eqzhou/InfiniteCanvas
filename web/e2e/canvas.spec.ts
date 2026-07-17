@@ -245,10 +245,12 @@ test("a configuration node generates the requested text batch", async ({ page })
   const source = page.locator('[data-node-type="text"]');
   await source.getByPlaceholder("写下提示词或说明…").fill("three alternatives");
   await source.getByTitle("生图").click();
-  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
   await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
   const config = page.locator('[data-node-type="config"]');
   await expect(config).toHaveCount(1);
+  await config.click({ position: { x: 20, y: 20 } });
+  await expect(config.getByTitle("运行生成")).toBeVisible();
   await config.getByLabel("模式").selectOption("text");
   await config.getByLabel("数量").fill("3");
   await config.getByTitle("运行生成").click();
