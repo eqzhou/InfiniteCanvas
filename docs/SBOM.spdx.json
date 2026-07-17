@@ -5,7 +5,7 @@
   "name": "OpenBoard web dependency inventory",
   "documentNamespace": "https://openboard.local/spdx/openboard-web-0.1.0",
   "creationInfo": {
-    "created": "2026-07-16T08:35:41.239Z",
+    "created": "2026-07-17T12:19:26.390Z",
     "creators": [
       "Tool: OpenBoard audit-licenses.mjs"
     ]
@@ -145,6 +145,13 @@
       "downloadLocation": "NOASSERTION"
     },
     {
+      "SPDXID": "SPDXRef--dimforge-rapier3d-compat-0.12.0",
+      "name": "@dimforge/rapier3d-compat",
+      "versionInfo": "0.12.0",
+      "licenseConcluded": "Apache-2.0",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
       "SPDXID": "SPDXRef--esbuild-darwin-arm64-0.28.1",
       "name": "@esbuild/darwin-arm64",
       "versionInfo": "0.28.1",
@@ -236,6 +243,13 @@
       "downloadLocation": "NOASSERTION"
     },
     {
+      "SPDXID": "SPDXRef--tweenjs-tween.js-23.1.3",
+      "name": "@tweenjs/tween.js",
+      "versionInfo": "23.1.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
       "SPDXID": "SPDXRef--types-babel--core-7.20.5",
       "name": "@types/babel__core",
       "versionInfo": "7.20.5",
@@ -281,6 +295,27 @@
       "SPDXID": "SPDXRef--types-react-dom-19.2.3",
       "name": "@types/react-dom",
       "versionInfo": "19.2.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-stats.js-0.17.4",
+      "name": "@types/stats.js",
+      "versionInfo": "0.17.4",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-three-0.185.1",
+      "name": "@types/three",
+      "versionInfo": "0.185.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-webxr-0.5.24",
+      "name": "@types/webxr",
+      "versionInfo": "0.5.24",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },
@@ -390,6 +425,13 @@
       "downloadLocation": "NOASSERTION"
     },
     {
+      "SPDXID": "SPDXRef-fflate-0.8.3",
+      "name": "fflate",
+      "versionInfo": "0.8.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
       "SPDXID": "SPDXRef-fsevents-2.3.3",
       "name": "fsevents",
       "versionInfo": "2.3.3",
@@ -477,6 +519,13 @@
       "SPDXID": "SPDXRef-magic-string-0.30.21",
       "name": "magic-string",
       "versionInfo": "0.30.21",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-meshoptimizer-1.1.1",
+      "name": "meshoptimizer",
+      "versionInfo": "1.1.1",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },
@@ -617,6 +666,13 @@
       "SPDXID": "SPDXRef-tapable-2.3.3",
       "name": "tapable",
       "versionInfo": "2.3.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-three-0.185.1",
+      "name": "three",
+      "versionInfo": "0.185.1",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },

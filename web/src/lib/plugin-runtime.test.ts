@@ -7,7 +7,7 @@ import {
 } from "./plugin-runtime";
 
 const manifest = () => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "example.sticky-note",
   name: "Sticky Note",
   version: "1.0.0",
@@ -22,6 +22,22 @@ describe("plugin runtime boundary", () => {
     const parsed = parsePluginManifest(manifest());
     expect(parsed.id).toBe("example.sticky-note");
     expect(parsed.permissions).toEqual(["node:read", "node:write"]);
+  });
+
+  test("normalizes legacy v1 manifests to v2 without changing executable content", () => {
+    const legacy = { ...manifest(), schemaVersion: 1 };
+    const parsed = parsePluginManifest(legacy);
+    expect(parsed).toEqual({ ...legacy, schemaVersion: 2 });
+  });
+
+  test("accepts every v2 host permission and deduplicates consent entries", () => {
+    const permissions = [
+      "node:read", "node:write", "asset:read", "asset:write",
+      "ai:text", "ai:image", "ai:video", "panel:control", "ai:text",
+    ];
+    expect(parsePluginManifest({ ...manifest(), permissions }).permissions).toEqual(
+      permissions.slice(0, -1),
+    );
   });
 
   test("rejects unknown permissions, identifiers, and oversized documents", () => {

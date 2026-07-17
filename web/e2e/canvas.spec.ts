@@ -257,7 +257,7 @@ test("image split supports draggable guides and persists normalized lineage", as
 
 test("a sandboxed plugin node persists its state across reloads", async ({ page }) => {
   await openFreshBoard(page);
-  await page.goto("/plugins");
+  await page.locator('nav a[href="/plugins"]').click();
 
   const stickyCard = page.locator("article").filter({ hasText: "openboard.sticky-note" });
   await stickyCard.getByRole("button", { name: "添加到画布" }).click();
@@ -300,6 +300,112 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await expect(
     page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"),
   ).toHaveValue("plugin state from Playwright");
+});
+
+test("plugin registry installation requires consent for every permission", async ({ page }) => {
+  await page.route("https://registry.example/openboard.json", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: 1,
+        plugins: [{
+          id: "example.registry-note",
+          name: "Registry Note",
+          version: "1.0.0",
+          description: "Registry test plugin",
+          manifestUrl: "https://plugins.example/registry-note.json",
+        }],
+      }),
+    });
+  });
+  await page.route("https://plugins.example/registry-note.json", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: 2,
+        id: "example.registry-note",
+        name: "Registry Note",
+        version: "1.0.0",
+        description: "Registry test plugin",
+        document: "<script>openboard.ready()</script>",
+        permissions: ["node:read", "ai:text"],
+        defaultSize: { width: 320, height: 220 },
+      }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.goto("/plugins");
+  await page.getByLabel("OpenBoard 插件注册表 URL").fill("https://registry.example/openboard.json");
+  await page.getByRole("button", { name: "刷新注册表" }).click();
+  const registryCard = page.locator("article").filter({ hasText: "example.registry-note" });
+  await registryCard.getByRole("button", { name: "安装" }).click();
+  const dialog = page.getByRole("dialog", { name: /安装 Registry Note/ });
+  const confirm = dialog.getByRole("button", { name: "同意并安装" });
+  await expect(confirm).toBeDisabled();
+  await dialog.getByLabel("node:read").check();
+  await expect(confirm).toBeDisabled();
+  await dialog.getByLabel("ai:text").check();
+  await confirm.click();
+  await expect(page.locator("article").filter({ hasText: "example.registry-note" })).toContainText("已安装");
+});
+
+test("SVG plugin edits and previews isolated markup", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.goto("/plugins");
+  const card = page.locator("article").filter({ hasText: "openboard.svg-studio" });
+  await card.getByRole("button", { name: "添加到画布" }).click();
+  const frame = page.frameLocator('iframe[title="SVG 工作室 插件"]');
+  await frame.getByLabel("SVG 源码").fill('<svg xmlns="http://www.w3.org/2000/svg"><rect width="80" height="60" fill="#0f766e"/></svg>');
+  await expect(frame.getByLabel("SVG 预览").locator("rect")).toHaveAttribute("fill", "#0f766e");
+});
+
+test("Three.js panorama renders nonblank pixels on desktop and mobile", async ({ page }, testInfo) => {
+  await openFreshBoard(page);
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    name: "panorama-source.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  await expect(page.locator('img[alt="图片"]')).toBeVisible();
+  await page.locator('nav a[href="/plugins"]').click();
+  const card = page.locator("article").filter({ hasText: "openboard.panorama" });
+  await card.getByRole("button", { name: "添加到画布" }).click();
+  const canvas = page.locator('canvas[data-panorama-canvas="true"]');
+  await expect(canvas).toBeVisible();
+  await page.getByLabel("选择全景图片").selectOption({ label: "画布 · 图片" });
+  await expect.poll(() => page.evaluate(() => new Promise<boolean>((resolve, reject) => {
+    const open = indexedDB.open("openboard-app");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const request = database.transaction("app_state", "readonly").objectStore("app_state").get("openboard:projects");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const projects = Array.isArray(request.result) ? request.result : [];
+        resolve(projects.some((project) => project?.nodes?.some((node: { metadata?: { pluginId?: string; pluginState?: { storageKey?: string } } }) =>
+          node.metadata?.pluginId === "openboard.panorama" && Boolean(node.metadata.pluginState?.storageKey))));
+        database.close();
+      };
+    };
+  }))).toBe(true);
+  await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext("webgl2") ?? element.getContext("webgl");
+    if (!context || element.width < 2 || element.height < 2) return 0;
+    const pixels = new Uint8Array(4 * 9);
+    context.readPixels(
+      Math.max(0, Math.floor(element.width / 2) - 1),
+      Math.max(0, Math.floor(element.height / 2) - 1),
+      3,
+      3,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixels,
+    );
+    return pixels.reduce((sum, value) => sum + value, 0);
+  })).toBeGreaterThan(0);
+  await page.locator('div[aria-label="3D 全景视图"]').screenshot({
+    path: testInfo.outputPath(`panorama-${testInfo.project.name}.png`),
+  });
 });
 
 test("double-clicking an image opens and closes the full preview", async ({ page }) => {
@@ -510,13 +616,16 @@ test("remote plugin installation requires explicit permission consent", async ({
 
   const dialog = page.getByRole("dialog", { name: "安装 Remote Note" });
   await expect(dialog).toContainText("可能通过页面导航或网络请求发送插件内的数据");
-  await expect(dialog).toContainText("node:read、node:write");
+  await expect(dialog.getByLabel("node:read")).not.toBeChecked();
+  await expect(dialog.getByLabel("node:write")).not.toBeChecked();
   await dialog.getByRole("button", { name: "取消" }).click();
   await expect(page.getByText("已安装", { exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "安装清单" }).click();
-  await page.getByRole("dialog", { name: "安装 Remote Note" })
-    .getByRole("button", { name: "同意并安装" }).click();
+  const consent = page.getByRole("dialog", { name: "安装 Remote Note" });
+  await consent.getByLabel("node:read").check();
+  await consent.getByLabel("node:write").check();
+  await consent.getByRole("button", { name: "同意并安装" }).click();
   await expect(page.locator("article").filter({ hasText: "example.remote-note" })).toContainText("已安装");
 });
 

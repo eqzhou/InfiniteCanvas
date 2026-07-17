@@ -8,12 +8,14 @@ const bundledNotices = new Map([
 ]);
 const packages = [
   "react", "react-dom", "react-router-dom", "zustand", "lucide-react",
-  "nanoid", "clsx", "idb-keyval", "@playwright/test", "typescript", "vite",
+  "nanoid", "clsx", "idb-keyval", "three", "@types/three",
+  "@playwright/test", "typescript", "vite",
 ];
 const expected = new Map([
   ["react", "MIT"], ["react-dom", "MIT"], ["react-router-dom", "MIT"],
   ["zustand", "MIT"], ["lucide-react", "ISC"], ["nanoid", "MIT"],
   ["clsx", "MIT"], ["idb-keyval", "Apache-2.0"],
+  ["three", "MIT"], ["@types/three", "MIT"],
 ]);
 const failures = [];
 const rows = [];

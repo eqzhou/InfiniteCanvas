@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-16T08:35:41.241Z",
+  "generatedAt": "2026-07-17T12:19:26.391Z",
   "packages": [
     {
       "name": "@babel/code-frame",
@@ -154,6 +154,14 @@
       "homepage": "https://babel.dev/docs/en/next/babel-types"
     },
     {
+      "name": "@dimforge/rapier3d-compat",
+      "version": "0.12.0",
+      "license": "Apache-2.0",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/dimforge/rapier.js",
+      "homepage": "https://rapier.rs"
+    },
+    {
       "name": "@esbuild/darwin-arm64",
       "version": "0.28.1",
       "license": "MIT",
@@ -258,6 +266,14 @@
       "homepage": "https://tailwindcss.com"
     },
     {
+      "name": "@tweenjs/tween.js",
+      "version": "23.1.3",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/tweenjs/tween.js.git",
+      "homepage": "https://github.com/tweenjs/tween.js"
+    },
+    {
       "name": "@types/babel__core",
       "version": "7.20.5",
       "license": "MIT",
@@ -312,6 +328,30 @@
       "noticeFile": "LICENSE",
       "repository": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
       "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-dom"
+    },
+    {
+      "name": "@types/stats.js",
+      "version": "0.17.4",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+      "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/stats.js"
+    },
+    {
+      "name": "@types/three",
+      "version": "0.185.1",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+      "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/three"
+    },
+    {
+      "name": "@types/webxr",
+      "version": "0.5.24",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+      "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/webxr"
     },
     {
       "name": "@vitejs/plugin-react",
@@ -434,6 +474,14 @@
       "homepage": "https://github.com/thecodrr/fdir#readme"
     },
     {
+      "name": "fflate",
+      "version": "0.8.3",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/101arrowz/fflate",
+      "homepage": "https://101arrowz.github.io/fflate"
+    },
+    {
       "name": "fsevents",
       "version": "2.3.3",
       "license": "MIT",
@@ -536,6 +584,14 @@
       "noticeFile": "LICENSE",
       "repository": "git+https://github.com/Rich-Harris/magic-string.git",
       "homepage": "UNKNOWN"
+    },
+    {
+      "name": "meshoptimizer",
+      "version": "1.1.1",
+      "license": "MIT",
+      "noticeFile": "LICENSE.md",
+      "repository": "https://github.com/zeux/meshoptimizer",
+      "homepage": "https://github.com/zeux/meshoptimizer"
     },
     {
       "name": "ms",
@@ -696,6 +752,14 @@
       "noticeFile": "LICENSE",
       "repository": "http://github.com/webpack/tapable.git",
       "homepage": "https://github.com/webpack/tapable"
+    },
+    {
+      "name": "three",
+      "version": "0.185.1",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/mrdoob/three.js",
+      "homepage": "https://threejs.org/"
     },
     {
       "name": "tinyglobby",

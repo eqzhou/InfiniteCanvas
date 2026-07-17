@@ -1,0 +1,28 @@
+{
+  "name": "@openboard/plugin-sdk",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src",
+    "examples",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "typecheck": "../../web/node_modules/.bin/tsc --noEmit --pretty false",
+    "build": "../../web/node_modules/.bin/tsc --pretty false",
+    "prepack": "bun run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

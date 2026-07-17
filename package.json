@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "bun run --cwd web dev",
-    "build": "bun run --cwd web build",
+    "build": "bun run --cwd web build && bun run --cwd packages/plugin-sdk build",
     "build:local": "VITE_OPENBOARD_STORAGE=server bun run --cwd web build",
     "start:local": "./scripts/run-local-production.sh",
-    "typecheck": "bun run --cwd web typecheck",
+    "typecheck": "bun run --cwd web typecheck && bun run --cwd packages/plugin-sdk typecheck",
     "test": "bun run --cwd web test && cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go test ./...",
     "benchmark:indexes": "bun run --cwd web benchmark:indexes",
     "benchmark:indexes:assert": "bun run --cwd web benchmark:indexes:assert",

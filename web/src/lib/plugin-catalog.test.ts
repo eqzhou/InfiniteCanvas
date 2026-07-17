@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  comparePluginVersions,
+  fetchPluginRegistry,
   fetchPluginManifest,
   installPluginManifest,
   normalizePluginManifests,
+  persistPluginUpgrade,
   uninstallPluginManifest,
 } from "./plugin-catalog";
 
 const manifest = (version = "1.0.0") => ({
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   id: "example.timer",
   name: "Timer",
   version,
@@ -24,6 +27,24 @@ describe("plugin catalog", () => {
 
     const upgraded = installPluginManifest(original, manifest("1.1.0"));
     expect(upgraded).toEqual([manifest("1.1.0")]);
+    expect(original).toEqual([manifest()]);
+    expect(() => installPluginManifest(upgraded, manifest("1.0.0"))).toThrow("downgraded");
+  });
+
+  test("compares semantic versions for update notices", () => {
+    expect(comparePluginVersions("1.10.0", "1.2.9")).toBeGreaterThan(0);
+    expect(comparePluginVersions("2.0.0-beta.1", "2.0.0")).toBeLessThan(0);
+    expect(comparePluginVersions("2.0.0", "2.0.0")).toBe(0);
+  });
+
+  test("rolls an upgrade back when persistence fails", async () => {
+    const original = [manifest()];
+    const writes: unknown[] = [];
+    await expect(persistPluginUpgrade(original, manifest("1.1.0"), async (plugins) => {
+      writes.push(plugins);
+      if (writes.length === 1) throw new Error("disk full");
+    })).rejects.toThrow("disk full");
+    expect(writes).toEqual([[manifest("1.1.0")], original]);
     expect(original).toEqual([manifest()]);
   });
 
@@ -81,5 +102,22 @@ describe("plugin catalog", () => {
     await expect(fetchPluginManifest("https://plugins.example/a", async () =>
       new Response(body, { headers: { "content-type": "application/json" } }),
     )).rejects.toThrow("too large");
+  });
+
+  test("fetches an independent bounded registry and validates manifest URLs", async () => {
+    const registry = await fetchPluginRegistry("https://registry.openboard.local/index.json", async () =>
+      new Response(JSON.stringify({
+        schemaVersion: 1,
+        plugins: [{
+          id: "example.timer",
+          name: "Timer",
+          version: "1.2.0",
+          manifestUrl: "https://plugins.example/timer.json",
+          description: "A small timer",
+        }],
+      }), { headers: { "content-type": "application/json" } }),
+    );
+    expect(registry.plugins[0]?.manifestUrl).toBe("https://plugins.example/timer.json");
+    await expect(fetchPluginRegistry("http://registry.example/index.json")).rejects.toThrow("HTTPS");
   });
 });

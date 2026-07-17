@@ -2,24 +2,31 @@ import { useMemo, useState } from "react";
 import { Box, Download, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
+  comparePluginVersions,
+  fetchPluginRegistry,
   fetchPluginManifest,
-  installPluginManifest,
+  persistPluginUpgrade,
   uninstallPluginManifest,
 } from "@/lib/plugin-catalog";
+import { saveConfig } from "@/services/storage";
 import { BUILTIN_PLUGINS } from "@/plugins/builtins";
 import { useBoardStore } from "@/stores/use-board-store";
-import type { PluginManifest } from "@/types/board";
+import type { PluginManifest, PluginPermission, PluginRegistryEntry } from "@/types/board";
 
 function PluginCard({
   manifest,
   builtin,
   onAdd,
   onRemove,
+  update,
+  onUpdate,
 }: {
   manifest: PluginManifest;
   builtin: boolean;
   onAdd: () => void;
   onRemove?: () => void;
+  update?: PluginRegistryEntry;
+  onUpdate?: () => void;
 }) {
   return (
     <article className="flex min-h-48 flex-col rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
@@ -47,6 +54,15 @@ function PluginCard({
         >
           <Plus size={15} /> 添加到画布
         </button>
+        {update && onUpdate ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
+            onClick={onUpdate}
+          >
+            <RefreshCw size={15} /> 升级到 v{update.version}
+          </button>
+        ) : null}
         {onRemove ? (
           <button
             type="button"
@@ -70,9 +86,12 @@ export function PluginsPage() {
   const addNode = useBoardStore((state) => state.addNode);
   const installed = config.plugins ?? [];
   const [source, setSource] = useState("");
+  const [registrySource, setRegistrySource] = useState(config.pluginRegistryUrl ?? "");
+  const [registry, setRegistry] = useState<PluginRegistryEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingManifest, setPendingManifest] = useState<PluginManifest | null>(null);
+  const [consented, setConsented] = useState<PluginPermission[]>([]);
   const builtinIds = useMemo(() => new Set(BUILTIN_PLUGINS.map((plugin) => plugin.id)), []);
 
   const install = async () => {
@@ -82,12 +101,78 @@ export function PluginsPage() {
       const manifest = await fetchPluginManifest(source.trim());
       if (builtinIds.has(manifest.id)) throw new Error("远程插件不能覆盖内置插件");
       setPendingManifest(manifest);
+      const existing = installed.find((plugin) => plugin.id === manifest.id);
+      setConsented(existing?.permissions.filter((permission) => manifest.permissions.includes(permission)) ?? []);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
   };
+
+  const loadRegistry = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await fetchPluginRegistry(registrySource.trim());
+      setRegistry(result.plugins);
+      const current = useBoardStore.getState().config;
+      setConfig({ ...current, pluginRegistryUrl: registrySource.trim() });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const prepareRegistryInstall = async (entry: PluginRegistryEntry) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const manifest = await fetchPluginManifest(entry.manifestUrl);
+      if (manifest.id !== entry.id || manifest.version !== entry.version) {
+        throw new Error("注册表条目与插件清单不一致");
+      }
+      if (builtinIds.has(manifest.id)) throw new Error("远程插件不能覆盖内置插件");
+      const existing = installed.find((plugin) => plugin.id === manifest.id);
+      setConsented(existing?.permissions.filter((permission) => manifest.permissions.includes(permission)) ?? []);
+      setPendingManifest(manifest);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmInstall = async () => {
+    if (!pendingManifest) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const current = useBoardStore.getState().config;
+      const plugins = await persistPluginUpgrade(
+        current.plugins ?? [],
+        pendingManifest,
+        async (next) => saveConfig({ ...current, plugins: next }),
+      );
+      setConfig({ ...current, plugins });
+      setSource("");
+      setPendingManifest(null);
+      setConsented([]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setPendingManifest(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updates = useMemo(() => new Map(registry
+    .filter((entry) => {
+      const current = installed.find((plugin) => plugin.id === entry.id);
+      return current && comparePluginVersions(entry.version, current.version) > 0;
+    })
+    .map((entry) => [entry.id, entry])), [installed, registry]);
 
   const addToCanvas = (manifest: PluginManifest) => {
     if (!active) {
@@ -118,6 +203,27 @@ export function PluginsPage() {
       </div>
 
       <section className="mb-6 border-y border-[var(--ob-line)] py-4">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">OpenBoard 插件注册表 URL</span>
+            <input
+              type="url"
+              inputMode="url"
+              className="w-full rounded-md border border-[var(--ob-line)] bg-transparent px-3 py-2 text-sm"
+              placeholder="https://registry.example/openboard.json"
+              value={registrySource}
+              onChange={(event) => setRegistrySource(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-[var(--ob-line)] px-3 py-2 text-sm disabled:opacity-50"
+            disabled={busy || !registrySource.trim()}
+            onClick={() => void loadRegistry()}
+          >
+            <RefreshCw size={16} className={busy ? "animate-spin" : ""} /> 刷新注册表
+          </button>
+        </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <label className="min-w-0 flex-1">
             <span className="sr-only">HTTPS 插件清单 URL</span>
@@ -155,6 +261,10 @@ export function PluginsPage() {
             key={manifest.id}
             manifest={manifest}
             builtin={false}
+            update={updates.get(manifest.id)}
+            onUpdate={updates.has(manifest.id)
+              ? () => void prepareRegistryInstall(updates.get(manifest.id)!)
+              : undefined}
             onAdd={() => addToCanvas(manifest)}
             onRemove={() => {
               if (!window.confirm(`卸载 ${manifest.name}？现有节点会保留数据，但无法渲染。`)) return;
@@ -165,6 +275,19 @@ export function PluginsPage() {
               });
             }}
           />
+        ))}
+        {registry.filter((entry) => !installed.some((plugin) => plugin.id === entry.id) && !builtinIds.has(entry.id)).map((entry) => (
+          <article key={entry.id} className="flex min-h-48 flex-col rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
+            <div className="flex items-start gap-3">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"><Box size={20} /></span>
+              <div className="min-w-0"><h2 className="truncate font-medium">{entry.name}</h2><p className="text-xs text-[var(--ob-muted)]">{entry.id} · v{entry.version}</p></div>
+              <span className="ml-auto text-xs text-[var(--ob-muted)]">注册表</span>
+            </div>
+            <p className="mt-3 line-clamp-3 text-sm text-[var(--ob-muted)]">{entry.description}</p>
+            <button type="button" disabled={busy} className="mt-auto inline-flex w-fit items-center gap-1 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50" onClick={() => void prepareRegistryInstall(entry)}>
+              <Download size={15} /> 安装
+            </button>
+          </article>
         ))}
       </div>
       </div>
@@ -186,7 +309,20 @@ export function PluginsPage() {
               <dt className="text-[var(--ob-muted)]">标识</dt>
               <dd className="break-all">{pendingManifest.id} · v{pendingManifest.version}</dd>
               <dt className="text-[var(--ob-muted)]">权限</dt>
-              <dd>{pendingManifest.permissions.length ? pendingManifest.permissions.join("、") : "无"}</dd>
+              <dd className="space-y-2">
+                {pendingManifest.permissions.length ? pendingManifest.permissions.map((permission) => (
+                  <label key={permission} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={consented.includes(permission)}
+                      onChange={(event) => setConsented((current) => event.target.checked
+                        ? [...current, permission]
+                        : current.filter((item) => item !== permission))}
+                    />
+                    <span>{permission}</span>
+                  </label>
+                )) : "无"}
+              </dd>
             </dl>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -198,21 +334,9 @@ export function PluginsPage() {
               </button>
               <button
                 type="button"
-                className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white"
-                onClick={() => {
-                  try {
-                    const current = useBoardStore.getState().config;
-                    setConfig({
-                      ...current,
-                      plugins: installPluginManifest(current.plugins ?? [], pendingManifest),
-                    });
-                    setSource("");
-                    setPendingManifest(null);
-                  } catch (cause) {
-                    setError(cause instanceof Error ? cause.message : String(cause));
-                    setPendingManifest(null);
-                  }
-                }}
+                disabled={busy || consented.length !== pendingManifest.permissions.length}
+                className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                onClick={() => void confirmInstall()}
               >
                 同意并安装
               </button>

@@ -65,6 +65,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const controlPluginPanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ open?: unknown }>).detail;
+      if (typeof detail?.open === "boolean") {
+        useBoardStore.getState().setShowAssistant(detail.open);
+      }
+    };
+    window.addEventListener("openboard:plugin-panel", controlPluginPanel);
+    return () => window.removeEventListener("openboard:plugin-panel", controlPluginPanel);
+  }, []);
+
+  useEffect(() => {
     const dark =
       theme === "dark" ||
       (theme === "system" &&

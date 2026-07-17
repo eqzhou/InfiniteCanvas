@@ -3,7 +3,16 @@ import { validateJsonObject } from "@/lib/bounded-json";
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$/;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-const PERMISSIONS = new Set<PluginPermission>(["node:read", "node:write"]);
+const PERMISSIONS = new Set<PluginPermission>([
+  "node:read",
+  "node:write",
+  "asset:read",
+  "asset:write",
+  "ai:text",
+  "ai:image",
+  "ai:video",
+  "panel:control",
+]);
 const MAX_DOCUMENT_LENGTH = 512_000;
 const MAX_PATCH_BYTES = 64 * 1024;
 
@@ -21,13 +30,15 @@ function boundedString(value: unknown, label: string, max: number): string {
 
 export function parsePluginManifest(value: unknown): PluginManifest {
   const input = object(value, "plugin manifest");
-  if (input.schemaVersion !== 1) throw new Error("unsupported plugin schemaVersion");
+  if (input.schemaVersion !== 1 && input.schemaVersion !== 2) {
+    throw new Error("unsupported plugin schemaVersion");
+  }
   const id = boundedString(input.id, "plugin id", 128);
   if (!ID_PATTERN.test(id)) throw new Error("plugin id is invalid");
   const version = boundedString(input.version, "plugin version", 64);
   if (!VERSION_PATTERN.test(version)) throw new Error("plugin version is invalid");
   const permissions = Array.isArray(input.permissions) ? input.permissions : [];
-  if (permissions.length > 2 || permissions.some((permission) =>
+  if (permissions.length > 32 || permissions.some((permission) =>
     typeof permission !== "string" || !PERMISSIONS.has(permission as PluginPermission))) {
     throw new Error("plugin permission is unsupported");
   }
@@ -39,7 +50,7 @@ export function parsePluginManifest(value: unknown): PluginManifest {
     throw new Error("plugin defaultSize is invalid");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id,
     name: boundedString(input.name, "plugin name", 100),
     version,
@@ -59,7 +70,7 @@ export function buildPluginDocument(manifest: PluginManifest, nonce: string): st
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'">
 <style>html,body{margin:0;min-height:100%;font:14px system-ui,sans-serif;color:#202124;background:transparent}*{box-sizing:border-box}</style>
-<script>(function(){const identity=${bridge};let current={};function send(type,payload){parent.postMessage({type,nonce:identity.nonce,pluginId:identity.pluginId,...payload},'*')}window.openboard={ready:function(){send('openboard:ready',{})},getState:function(){return current},patch:function(patch){send('openboard:patch',{patch})}};addEventListener('message',function(event){const message=event.data;if(!message||message.type!=='openboard:init'||message.nonce!==identity.nonce)return;current=message.state||{};dispatchEvent(new CustomEvent('openboard:init',{detail:current}))})})();</script>
+<script>(function(){const identity=${bridge};let current={};const pending=new Map();function send(type,payload){parent.postMessage({type,nonce:identity.nonce,pluginId:identity.pluginId,...payload},'*')}function request(method,params){const requestId=crypto.randomUUID();return new Promise(function(resolve,reject){pending.set(requestId,{resolve:resolve,reject:reject});send('openboard:request',{requestId:requestId,method:method,params:params||{}})})}window.openboard={ready:function(){send('openboard:ready',{})},getState:function(){return current},patch:function(patch){send('openboard:patch',{patch})},request:request,node:{get:function(){return request('node.get')},patch:function(patch){return request('node.patch',patch)}},assets:{list:function(query){return request('asset.list',{query:query||''})},create:function(asset){return request('asset.create',asset)}},ai:{text:function(options){return request('ai.text',options)},image:function(options){return request('ai.image',options)},video:function(options){return request('ai.video',options)}},panel:{setOpen:function(open){return request('panel.setOpen',{open:!!open})}}};addEventListener('message',function(event){const message=event.data;if(!message||message.nonce!==identity.nonce||message.pluginId!==identity.pluginId)return;if(message.type==='openboard:init'){current=message.state||{};dispatchEvent(new CustomEvent('openboard:init',{detail:current}));return}if(message.type==='openboard:response'){const task=pending.get(message.requestId);if(!task)return;pending.delete(message.requestId);if(message.ok)task.resolve(message.result);else task.reject(new Error(message.error||'Plugin host request failed'))}})})();</script>
 </head><body>${manifest.document}</body></html>`;
 }
 

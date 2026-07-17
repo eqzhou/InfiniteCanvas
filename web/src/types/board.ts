@@ -7,9 +7,17 @@ export type AssistantMode = "ask" | "image";
 export type Point = { x: number; y: number };
 export type Size = { width: number; height: number };
 export type Viewport = { x: number; y: number; k: number };
-export type PluginPermission = "node:read" | "node:write";
+export type PluginPermission =
+  | "node:read"
+  | "node:write"
+  | "asset:read"
+  | "asset:write"
+  | "ai:text"
+  | "ai:image"
+  | "ai:video"
+  | "panel:control";
 export type PluginManifest = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   name: string;
   version: string;
@@ -17,6 +25,19 @@ export type PluginManifest = {
   document: string;
   permissions: PluginPermission[];
   defaultSize: Size;
+};
+
+export type PluginRegistryEntry = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  manifestUrl: string;
+};
+
+export type PluginRegistry = {
+  schemaVersion: 1;
+  plugins: PluginRegistryEntry[];
 };
 
 export type NodeMetadata = {
@@ -209,6 +230,7 @@ export type AppConfig = {
   webdavPass?: string;
   promptSources?: string[];
   plugins?: PluginManifest[];
+  pluginRegistryUrl?: string;
   localAgentUrl?: string;
 };
 
