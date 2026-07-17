@@ -66,7 +66,7 @@ implementation evidence.
 
 - [verified] 187 Bun unit/integration tests; 85.38% lines and 87.43% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
-- [verified] 129 passed and 7 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
+- [verified] 128 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
 - [verified] 34/34 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
