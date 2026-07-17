@@ -25,7 +25,7 @@ import { ZoomControls } from "@/components/canvas/ZoomControls";
 import { CanvasToolbar } from "@/components/canvas/CanvasToolbar";
 import { ContextMenu, type ContextMenuState } from "@/components/canvas/ContextMenu";
 import { AssetPickerModal } from "@/components/canvas/AssetPickerModal";
-import { expandGroupedSelection } from "@/lib/grouping";
+import { expandGroupedSelection, reconcileGroupMembership } from "@/lib/grouping";
 import {
   createGestureState,
   reduceGesture,
@@ -36,7 +36,7 @@ import { createEdgeGeometryIndex } from "@/lib/edge-index";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
-  | { kind: "node"; ids: string[]; start: Point; origins: Record<string, Point> }
+  | { kind: "node"; ids: string[]; rootIds: string[]; start: Point; origins: Record<string, Point> }
   | { kind: "marquee"; start: Point; current: Point }
   | {
       kind: "resize";
@@ -67,6 +67,7 @@ export function BoardCanvas() {
   const redo = useBoardStore((s) => s.redo);
   const selectAll = useBoardStore((s) => s.selectAll);
   const addNode = useBoardStore((s) => s.addNode);
+  const installedPlugins = useBoardStore((s) => s.config.plugins ?? []);
   const alignSelected = useBoardStore((s) => s.alignSelected);
   const distributeSelected = useBoardStore((s) => s.distributeSelected);
   const duplicateSelected = useBoardStore((s) => s.duplicateSelected);
@@ -91,6 +92,7 @@ export function BoardCanvas() {
   const [drag, setDrag] = useState<DragMode | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const [menu, setMenu] = useState<ContextMenuState>(null);
+  const [groupHoverId, setGroupHoverId] = useState<string | null>(null);
   const [assetPicker, setAssetPicker] = useState<{ open: boolean; at: Point | null }>({ open: false, at: null });
 
   useEffect(() => {
@@ -367,6 +369,22 @@ export function BoardCanvas() {
           );
         });
       }
+      const start = screenToWorld(drag.start, project.viewport);
+      const current = screenToWorld(p, project.viewport);
+      const root = drag.rootIds
+        .map((id) => nodeById.get(id))
+        .find((node) => node?.type !== "group");
+      const rootOrigin = root ? drag.origins[root.id] : undefined;
+      const candidate = root && rootOrigin
+        ? project.nodes.find((node) =>
+            node.type === "group" &&
+            rootOrigin.x + current.x - start.x <= node.position.x + node.width &&
+            rootOrigin.x + current.x - start.x + root.width >= node.position.x &&
+            rootOrigin.y + current.y - start.y <= node.position.y + node.height &&
+            rootOrigin.y + current.y - start.y + root.height >= node.position.y,
+          )
+        : undefined;
+      setGroupHoverId(candidate?.id ?? null);
     } else if (drag.kind === "marquee") {
       setDrag({ ...drag, current: p });
     } else if (drag.kind === "resize") {
@@ -436,13 +454,26 @@ export function BoardCanvas() {
       );
       if (hit) connect(drag.from, hit.id);
       setConnectingFrom(null);
+    } else if (drag.kind === "node") {
+      const current = useBoardStore.getState().getActive();
+      if (current) {
+        const reconciled = reconcileGroupMembership(current.nodes, drag.rootIds);
+        if (reconciled.changed) {
+          useBoardStore.getState().updateActive(
+            (active) => ({ ...active, nodes: reconciled.nodes }),
+            { history: false },
+          );
+        }
+      }
     }
+    setGroupHoverId(null);
     setDrag(null);
   };
 
   const onPointerCancel = (e: ReactPointerEvent) => {
     if (e.pointerType !== "touch" || !touchGestureRef.current) {
       setDrag(null);
+      setGroupHoverId(null);
       return;
     }
     const next = reduceGesture(touchGestureRef.current, {
@@ -595,6 +626,14 @@ export function BoardCanvas() {
             world: screenToWorld(p, project.viewport),
           });
         }}
+        onDoubleClick={(e) => {
+          if (e.target !== e.currentTarget) return;
+          const p = localPoint(e);
+          setMenu({
+            screen: { x: e.clientX, y: e.clientY },
+            world: screenToWorld(p, project.viewport),
+          });
+        }}
       >
         <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
           {visibleEdges.map((edge) => {
@@ -667,6 +706,7 @@ export function BoardCanvas() {
               node={node}
               selected={selectedIds.includes(node.id)}
               related={related.has(node.id)}
+              groupHighlighted={groupHoverId === node.id}
               onSelect={(additive) => toggleSelect(node.id, additive)}
               onDragStart={(client) => {
                 const p = localPoint(client);
@@ -681,7 +721,7 @@ export function BoardCanvas() {
                   if (n) origins[id] = { ...n.position };
                 }
                 captureHistory();
-                setDrag({ kind: "node", ids, start: p, origins });
+                setDrag({ kind: "node", ids, rootIds: selectedForDrag, start: p, origins });
               }}
               onResizeStart={(client, free) => {
                 const p = localPoint(client);
@@ -750,9 +790,21 @@ export function BoardCanvas() {
             state={menu}
             multi={selectedIds.length > 1}
             onClose={() => setMenu(null)}
-            onAdd={(type, at) => {
+            onAdd={(type, at, pluginId) => {
+              if (type === "plugin") {
+                const manifest = installedPlugins.find((plugin) => plugin.id === pluginId);
+                if (!manifest) return;
+                addNode("plugin", at, {
+                  title: manifest.name,
+                  width: manifest.defaultSize.width,
+                  height: manifest.defaultSize.height,
+                  metadata: { pluginId: manifest.id, pluginState: {} },
+                });
+                return;
+              }
               addNode(type, at);
             }}
+            plugins={installedPlugins}
             onPaste={() => pasteClipboard({ x: 40, y: 40 })}
             onDelete={() => {
               if (menu?.nodeId) {

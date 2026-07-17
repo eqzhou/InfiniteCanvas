@@ -5,6 +5,7 @@ const formal = process.env.OPENBOARD_E2E_FORMAL === "1";
 const webPort = formal ? 5175 : production ? 5174 : 5173;
 const agentPort = formal ? 8793 : production ? 8792 : 8791;
 const origin = `http://127.0.0.1:${webPort}`;
+const chromiumExecutable = process.env.OPENBOARD_CHROMIUM_EXECUTABLE;
 const dataDir = production
   ? "$(mktemp -d \"${TMPDIR:-/tmp}/openboard-e2e-prod.XXXXXX\")"
   : "../web/node_modules/.cache/openboard-agent-e2e";
@@ -26,12 +27,18 @@ export default defineConfig({
   projects: (formal ? [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(chromiumExecutable ? { launchOptions: { executablePath: chromiumExecutable } } : {}),
+      },
     },
   ] : [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(chromiumExecutable ? { launchOptions: { executablePath: chromiumExecutable } } : {}),
+      },
     },
     {
       name: "firefox",
@@ -43,7 +50,10 @@ export default defineConfig({
     },
     {
       name: "mobile-chromium",
-      use: { ...devices["Pixel 5"] },
+      use: {
+        ...devices["Pixel 5"],
+        ...(chromiumExecutable ? { launchOptions: { executablePath: chromiumExecutable } } : {}),
+      },
     },
   ]),
   webServer: [

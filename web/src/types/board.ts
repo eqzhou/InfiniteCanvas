@@ -116,6 +116,7 @@ export type AssistantSession = {
 };
 
 export type BoardProject = {
+  schemaVersion: 2;
   id: string;
   title: string;
   createdAt: string;

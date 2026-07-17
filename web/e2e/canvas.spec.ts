@@ -73,6 +73,93 @@ test("a text node and its content survive a reload", async ({ page }) => {
   }
 });
 
+test("blank canvas double-click opens the node chooser at the pointer", async ({ page }) => {
+  await openFreshBoard(page);
+  const surface = page.getByTestId("canvas-surface");
+  await surface.dblclick({ position: { x: 420, y: 300 } });
+  await expect(page.getByRole("button", { name: "新建文本" })).toBeVisible();
+  await page.getByRole("button", { name: "新建音频" }).click();
+  await expect(page.locator('[data-node-type="audio"]')).toHaveCount(1);
+});
+
+test("node title, font size, and model overrides are editable and persistent", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByTitle("文本").click();
+  const node = page.locator('[data-node-type="text"]');
+  await node.locator("span", { hasText: "文本" }).dblclick();
+  const title = node.getByLabel("节点标题");
+  await title.fill("本地创作节点");
+  await title.press("Enter");
+  await expect(node.getByTitle("本地创作节点")).toBeVisible();
+
+  const model = node.getByLabel("文本节点模型");
+  await model.fill("local-text-model");
+  const editor = page.getByPlaceholder("写下提示词或说明…");
+  const initialSize = await editor.evaluate((element) => getComputedStyle(element).fontSize);
+  await page.getByTitle("增大字号").click();
+  await expect.poll(() => editor.evaluate((element) => getComputedStyle(element).fontSize))
+    .not.toBe(initialSize);
+
+  await expect.poll(() => page.evaluate(
+    () => new Promise<boolean>((resolve, reject) => {
+      const open = indexedDB.open("openboard-app");
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const database = open.result;
+        const request = database.transaction("app_state", "readonly")
+          .objectStore("app_state")
+          .get("openboard:projects");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const projects = Array.isArray(request.result) ? request.result : [];
+          resolve(projects.some((project) => project?.nodes?.some(
+            (item: { title?: string; metadata?: { model?: string } }) =>
+              item.title === "本地创作节点" && item.metadata?.model === "local-text-model",
+          )));
+          database.close();
+        };
+      };
+    }),
+  )).toBe(true);
+
+  await page.reload();
+  await expect(page.locator('[data-node-type="text"]').getByTitle("本地创作节点")).toBeVisible();
+  await expect(page.getByLabel("文本节点模型")).toHaveValue("local-text-model");
+});
+
+test("text-to-image creates a connected config and executes immediately", async ({ page }) => {
+  let requestBody: Record<string, unknown> | null = null;
+  await page.route("https://mock.example/v1/images/generations", async (route) => {
+    requestBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{
+          b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC",
+        }],
+      }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  const settings = page.getByRole("heading", { name: "设置" }).locator("..").locator("..");
+  await settings.getByLabel("生图 URL").fill("https://mock.example/v1");
+  await settings.getByLabel("生图 API Key").fill("test-only-key");
+  await settings.getByLabel("生图模型").fill("mock-image-model");
+  await settings.getByRole("button", { name: "关闭" }).click();
+
+  await page.getByTitle("文本").click();
+  await page.getByPlaceholder("写下提示词或说明…").fill("a red square");
+  await page.getByTitle("生图").click();
+
+  await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
+  await expect(page.locator('[data-node-type="image"] img')).toHaveCount(1);
+  await expect.poll(() => requestBody).toMatchObject({
+    model: "mock-image-model",
+    prompt: "a red square",
+  });
+});
+
 test("a sandboxed plugin node persists its state across reloads", async ({ page }) => {
   await openFreshBoard(page);
   await page.goto("/plugins");

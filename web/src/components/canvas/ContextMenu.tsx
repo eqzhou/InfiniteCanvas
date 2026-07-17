@@ -1,4 +1,4 @@
-import type { Point } from "@/types/board";
+import type { PluginManifest, Point } from "@/types/board";
 
 export type ContextMenuState = {
   screen: Point;
@@ -21,11 +21,12 @@ export function ContextMenu({
   canUngroup,
   onGroup,
   onUngroup,
+  plugins = [],
 }: {
   state: ContextMenuState;
   multi?: boolean;
   onClose: () => void;
-  onAdd: (type: "text" | "image" | "config" | "video" | "audio", at: Point) => void;
+  onAdd: (type: "text" | "image" | "config" | "video" | "audio" | "plugin", at: Point, pluginId?: string) => void;
   onPaste: (at: Point) => void;
   onDelete?: () => void;
   onDuplicate?: () => void;
@@ -36,6 +37,7 @@ export function ContextMenu({
   canUngroup?: boolean;
   onGroup?: () => void;
   onUngroup?: () => void;
+  plugins?: PluginManifest[];
 }) {
   if (!state) return null;
   type Item = { label: string; action?: () => void; disabled?: boolean };
@@ -64,6 +66,10 @@ export function ContextMenu({
         { label: "新建配置", action: () => onAdd("config", state.world) },
         { label: "新建视频", action: () => onAdd("video", state.world) },
         { label: "新建音频", action: () => onAdd("audio", state.world) },
+        ...plugins.map((plugin) => ({
+          label: `插件 · ${plugin.name}`,
+          action: () => onAdd("plugin", state.world, plugin.id),
+        })),
       ];
   if (state.nodeId && canGroup) items.unshift({ label: "组合", action: onGroup });
   if (state.nodeId && canUngroup) items.unshift({ label: "取消组合", action: onUngroup });
@@ -74,6 +80,7 @@ export function ContextMenu({
       <div
         className="fixed z-[80] min-w-40 overflow-hidden rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] py-1 shadow-[var(--ob-shadow)]"
         style={{ left: state.screen.x, top: state.screen.y }}
+        onPointerDown={(event) => event.stopPropagation()}
       >
         {items.map((item) => (
           <button
@@ -82,8 +89,8 @@ export function ContextMenu({
             className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
             disabled={item.disabled}
             onClick={() => {
-              item.action?.();
               onClose();
+              item.action?.();
             }}
           >
             {item.label}

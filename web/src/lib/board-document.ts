@@ -217,6 +217,10 @@ function parseSession(value: unknown, index: number): AssistantSession {
 
 export function parseBoardProject(value: unknown): BoardProject {
   const input = record(value, "project");
+  const schemaVersion = input.schemaVersion ?? 1;
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
+    throw new Error("schemaVersion is unsupported");
+  }
   const nodes = array(input.nodes, "nodes", MAX_NODES).map(parseNode);
   const nodeIDs = new Set(nodes.map((node) => node.id));
   if (nodeIDs.size !== nodes.length) throw new Error("duplicate node id");
@@ -271,6 +275,7 @@ export function parseBoardProject(value: unknown): BoardProject {
   }
 
   return {
+    schemaVersion: 2,
     id: id(input.id, "id"),
     title: string(input.title, "title", 500),
     createdAt: isoDate(input.createdAt, "createdAt"),

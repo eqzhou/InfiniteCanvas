@@ -28,7 +28,17 @@ const validProject = () => ({
 describe("parseBoardProject", () => {
   test("accepts a complete valid document without mutating it", () => {
     const input = validProject();
-    expect(parseBoardProject(input)).toEqual(input);
+    const parsed = parseBoardProject(input);
+    expect(parsed).toEqual({ ...input, schemaVersion: 2 });
+    expect("schemaVersion" in input).toBe(false);
+  });
+
+  test("accepts schema v2 and rejects unknown future schemas", () => {
+    const current = { ...validProject(), schemaVersion: 2 };
+    expect(parseBoardProject(current)).toEqual(current);
+    expect(() => parseBoardProject({ ...current, schemaVersion: 3 })).toThrow(
+      "schemaVersion",
+    );
   });
 
   test("rejects non-finite geometry", () => {

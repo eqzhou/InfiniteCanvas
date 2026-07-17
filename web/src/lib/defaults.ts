@@ -70,6 +70,7 @@ export function createProject(title = "未命名画布"): BoardProject {
   const t = nowIso();
   const session = createEmptySession();
   return {
+    schemaVersion: 2,
     id: uid("proj"),
     title,
     createdAt: t,

@@ -4,6 +4,7 @@ import {
   createGroup,
   expandGroupedSelection,
   pruneGroupMembership,
+  reconcileGroupMembership,
   ungroupNodes,
 } from "./grouping";
 import type { BoardNode } from "@/types/board";
@@ -87,5 +88,90 @@ describe("node grouping", () => {
     const noneLeft = pruneGroupMembership(grouped.nodes, new Set(["a", "b"]));
     expect(noneLeft.some((node) => node.id === "group_1")).toBe(false);
     expect(grouped.group?.metadata.childIds).toEqual(["a", "b"]);
+  });
+
+  test("joins a group when a node is dragged inside and recomputes 24px bounds", () => {
+    const a = textNode("a", 100, 100);
+    const b = textNode("b", 220, 100);
+    const grouped = createGroup([a, b], ["a", "b"], "group_1", 24);
+    const c = textNode("c", 150, 130);
+    const result = reconcileGroupMembership([...grouped.nodes, c], ["c"]);
+    const group = result.nodes.find((node) => node.id === "group_1")!;
+
+    expect(result.changed).toBe(true);
+    expect(group.metadata.childIds).toEqual(["a", "b", "c"]);
+    expect(group.position).toEqual({ x: 76, y: 76 });
+    expect(group.width).toBe(268);
+    expect(group.height).toBe(158);
+    expect(grouped.group?.metadata.childIds).toEqual(["a", "b"]);
+  });
+
+  test("removes a member only after it clears the group by more than 16px", () => {
+    const grouped = createGroup(
+      [textNode("a", 100, 100), textNode("b", 220, 100)],
+      ["a", "b"],
+      "group_1",
+      24,
+    );
+    const near = grouped.nodes.map((node) =>
+      node.id === "a" ? { ...node, position: { x: 61, y: 100 } } : node,
+    );
+    expect(
+      reconcileGroupMembership(near, ["a"]).nodes.find((node) => node.id === "group_1")
+        ?.metadata.childIds,
+    ).toContain("a");
+
+    const far = grouped.nodes.map((node) =>
+      node.id === "a" ? { ...node, position: { x: 20, y: 100 } } : node,
+    );
+    const result = reconcileGroupMembership(far, ["a"]);
+    expect(
+      result.nodes.find((node) => node.id === "group_1")?.metadata.childIds,
+    ).toEqual(["b"]);
+  });
+
+  test("does not steal a node from another group", () => {
+    const first = createGroup(
+      [textNode("a", 100, 100), textNode("b", 220, 100)],
+      ["a", "b"],
+      "group_1",
+      24,
+    );
+    const other: BoardNode = {
+      id: "group_2",
+      type: "group",
+      title: "other",
+      position: { x: 50, y: 50 },
+      width: 500,
+      height: 300,
+      metadata: { childIds: ["a"] },
+    };
+    const invalid = first.nodes.map((node) =>
+      node.id === "group_1"
+        ? { ...node, metadata: { ...node.metadata, childIds: ["b"] } }
+        : node,
+    );
+    const result = reconcileGroupMembership([other, ...invalid], ["a"]);
+    expect(result.nodes.find((node) => node.id === "group_2")?.metadata.childIds).toEqual(["a"]);
+    expect(result.nodes.find((node) => node.id === "group_1")?.metadata.childIds).toEqual(["b"]);
+  });
+
+  test("updates group bounds when a member moves without changing membership", () => {
+    const grouped = createGroup(
+      [textNode("a", 100, 100), textNode("b", 220, 100)],
+      ["a", "b"],
+      "group_1",
+      24,
+    );
+    const moved = grouped.nodes.map((node) =>
+      node.id === "b" ? { ...node, position: { x: 260, y: 140 } } : node,
+    );
+    const result = reconcileGroupMembership(moved, ["b"]);
+    const group = result.nodes.find((node) => node.id === "group_1")!;
+    expect(result.changed).toBe(true);
+    expect(group.metadata.childIds).toEqual(["a", "b"]);
+    expect(group.position).toEqual({ x: 76, y: 76 });
+    expect(group.width).toBe(308);
+    expect(group.height).toBe(168);
   });
 });

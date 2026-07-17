@@ -11,12 +11,14 @@ import { findPluginManifest } from "@/plugins/builtins";
 import { uploadMedia } from "@/services/storage";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { defaultModelForMode } from "@/lib/generation-model";
+import { normalizeNodeTitle } from "@/lib/node-format";
 import { Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
 
 type Props = {
   node: BoardNode;
   selected: boolean;
   related: boolean;
+  groupHighlighted?: boolean;
   onSelect: (additive: boolean) => void;
   onDragStart: (e: { clientX: number; clientY: number }) => void;
   onResizeStart: (e: { clientX: number; clientY: number }, free: boolean) => void;
@@ -29,6 +31,7 @@ export function BoardNodeView({
   node,
   selected,
   related,
+  groupHighlighted = false,
   onSelect,
   onDragStart,
   onResizeStart,
@@ -38,8 +41,11 @@ export function BoardNodeView({
 }: Props) {
   const updateNode = useBoardStore((s) => s.updateNode);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(node.title);
   const project = useBoardStore((s) => s.getActive());
   const config = useBoardStore((s) => s.config);
+  const prompts = useBoardStore((s) => s.prompts);
   const installedPlugins = config.plugins ?? [];
   const activeChannel = config.channels.find(
     (channel) => channel.id === config.activeChannelId,
@@ -64,10 +70,14 @@ export function BoardNodeView({
 
   return (
     <div
+      data-node-id={node.id}
+      data-node-type={node.type}
       className={cn(
         "absolute flex flex-col overflow-visible rounded-lg border shadow-[var(--ob-shadow)]",
         node.type === "group"
-          ? "border-dashed bg-[color-mix(in_srgb,var(--ob-accent)_8%,transparent)]"
+          ? groupHighlighted
+            ? "border-solid border-[var(--ob-accent)] bg-[color-mix(in_srgb,var(--ob-accent)_18%,transparent)] ring-2 ring-[color-mix(in_srgb,var(--ob-accent)_35%,transparent)]"
+            : "border-dashed bg-[color-mix(in_srgb,var(--ob-accent)_8%,transparent)]"
           : "bg-[var(--ob-node)]",
         selected
           ? "border-[var(--ob-select)] ring-2 ring-[color-mix(in_srgb,var(--ob-select)_35%,transparent)]"
@@ -93,9 +103,47 @@ export function BoardNodeView({
         onContextMenu?.(e);
       }}
     >
+      <div
+        className="absolute bottom-full left-0 mb-1 max-w-full text-xs font-medium text-[var(--ob-text)]"
+        onPointerDown={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          setTitleDraft(node.title);
+          setEditingTitle(true);
+        }}
+      >
+        {editingTitle ? (
+          <input
+            autoFocus
+            aria-label="节点标题"
+            className="w-full min-w-32 rounded border border-[var(--ob-select)] bg-[var(--ob-panel)] px-1.5 py-0.5 outline-none"
+            maxLength={500}
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            onBlur={() => {
+              const title = normalizeNodeTitle(titleDraft);
+              if (title) updateNode(node.id, { title });
+              setEditingTitle(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                const title = normalizeNodeTitle(titleDraft);
+                if (title) updateNode(node.id, { title });
+                setEditingTitle(false);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setTitleDraft(node.title);
+                setEditingTitle(false);
+              }
+            }}
+          />
+        ) : (
+          <span className="block max-w-full truncate" title={node.title}>{node.title}</span>
+        )}
+      </div>
       <div className="flex items-center gap-2 border-b border-[var(--ob-line)] px-2 py-1.5 text-xs">
         <Icon size={14} className="text-[var(--ob-accent)]" />
-        <span className="truncate font-medium">{node.title}</span>
         <span className="ml-auto text-[var(--ob-muted)]">
           {node.metadata.isBatchRoot ? "batch" : node.type}
         </span>
@@ -103,18 +151,42 @@ export function BoardNodeView({
 
       <div className="min-h-0 flex-1 overflow-hidden rounded-b-lg p-2">
         {node.type === "text" ? (
-          <textarea
-            className="h-full w-full resize-none border-0 bg-transparent outline-none"
-            style={{ fontSize: node.metadata.fontSize ?? 14 }}
-            value={node.metadata.content ?? ""}
-            placeholder="写下提示词或说明…"
-            onPointerDown={(e) => e.stopPropagation()}
-            onChange={(e) =>
-              updateNode(node.id, {
-                metadata: { content: e.target.value },
-              })
-            }
-          />
+          <div className="flex h-full flex-col gap-1" onPointerDown={(event) => event.stopPropagation()}>
+            <div className="flex gap-1">
+              <input
+                aria-label="文本节点模型"
+                className="min-w-0 flex-1 rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-0.5 text-[11px]"
+                value={node.metadata.model ?? ""}
+                placeholder={activeChannel ? defaultModelForMode(activeChannel, "text") : "继承默认文本模型"}
+                onChange={(event) => updateNode(node.id, { metadata: { model: event.target.value || undefined } })}
+              />
+              <select
+                aria-label="提示词库"
+                className="max-w-[45%] rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
+                value=""
+                onChange={(event) => {
+                  const prompt = prompts.find((item) => item.id === event.target.value);
+                  if (prompt) updateNode(node.id, { metadata: { content: prompt.body } });
+                }}
+              >
+                <option value="">提示词库</option>
+                {prompts.map((prompt) => (
+                  <option key={prompt.id} value={prompt.id}>{prompt.title}</option>
+                ))}
+              </select>
+            </div>
+            <textarea
+              className="min-h-0 flex-1 resize-none border-0 bg-transparent outline-none"
+              style={{ fontSize: node.metadata.fontSize ?? 14 }}
+              value={node.metadata.content ?? ""}
+              placeholder="写下提示词或说明…"
+              onChange={(e) =>
+                updateNode(node.id, {
+                  metadata: { content: e.target.value },
+                })
+              }
+            />
+          </div>
         ) : null}
 
         {node.type === "image" ? (

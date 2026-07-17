@@ -24,15 +24,17 @@ import { createRectEditMaskBlob } from "@/services/image-transform/mask-raster";
 import { resolveNodeImageTransformSource } from "@/services/image-transform/source";
 import { createTransformLineage } from "@/services/image-transform/lineage";
 import { getProvider } from "@/lib/ai-config";
+import { adjustFontSize } from "@/lib/node-format";
 import {
   BookmarkPlus,
   Crop,
   Download,
   ImagePlus,
   Info,
+  Minus,
+  Plus,
   RotateCw,
   Sparkles,
-  Type,
   Wand2,
 } from "lucide-react";
 
@@ -251,7 +253,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
     }
   };
 
-  const textToImage = () => {
+  const textToImage = async () => {
     const cfg = createNode(
       "config",
       { x: node.position.x + node.width + 60, y: node.position.y },
@@ -259,7 +261,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
         metadata: {
           generationMode: "image",
           prompt: node.metadata.content,
-          status: "idle",
+          status: "loading",
           size: config.imageSize,
           count: config.imageCount,
         },
@@ -271,6 +273,63 @@ export function NodeActions({ node }: { node: BoardNode }) {
       edges: [...p.edges, { id: uid("edge"), from: node.id, to: cfg.id }],
       updatedAt: nowIso(),
     }));
+    try {
+      if (!channel || !getProvider(channel, "image").apiKey) {
+        throw new Error("请先在设置中配置图片模型服务的 API Key");
+      }
+      const prompt = node.metadata.content?.trim() || "a clean product photo";
+      const urls = await generateImages({
+        channel,
+        model: getProvider(channel, "image").model,
+        prompt,
+        size: cfg.metadata.size,
+        quality: config.imageQuality,
+        n: cfg.metadata.count,
+      });
+      const created: BoardNode[] = [];
+      for (const [index, url] of urls.entries()) {
+        const uploaded = await uploadMedia(url, "image");
+        created.push(createNode(
+          "image",
+          { x: cfg.position.x + cfg.width + 60, y: cfg.position.y + index * 40 },
+          {
+            metadata: {
+              content: uploaded.url,
+              storageKey: uploaded.storageKey,
+              naturalWidth: uploaded.width,
+              naturalHeight: uploaded.height,
+              bytes: uploaded.bytes,
+              mimeType: uploaded.mimeType,
+              status: "success",
+              prompt,
+              model: getProvider(channel, "image").model,
+            },
+            width: Math.min(360, uploaded.width || 320),
+            height: Math.min(360, uploaded.height || 320),
+          },
+        ));
+      }
+      updateActive((project) => ({
+        ...project,
+        nodes: [
+          ...project.nodes.map((item) => item.id === cfg.id
+            ? { ...item, metadata: { ...item.metadata, status: "success" as const, errorDetails: undefined } }
+            : item),
+          ...created,
+        ],
+        edges: [
+          ...project.edges,
+          ...created.map((item) => ({ id: uid("edge"), from: cfg.id, to: item.id })),
+        ],
+      }));
+    } catch (error) {
+      updateNode(cfg.id, {
+        metadata: {
+          status: "error",
+          errorDetails: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
   };
 
   const rewriteText = async () => {
@@ -625,7 +684,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
 return (
     <>
       <div
-        className="absolute -top-11 left-0 flex items-center gap-1 rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
+        className="absolute left-full top-0 z-30 ml-2 flex max-w-[min(520px,70vw)] flex-wrap items-center gap-1 rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
         onPointerDown={(e) => e.stopPropagation()}
       >
         {node.type === "text" ? (
@@ -633,18 +692,28 @@ return (
             <IconBtn title="AI 改写" onClick={() => void rewriteText()}>
               <Wand2 size={14} />
             </IconBtn>
-            <IconBtn title="生图" onClick={textToImage}>
+            <IconBtn title="生图" onClick={() => void textToImage()}>
               <ImagePlus size={14} />
             </IconBtn>
             <IconBtn
-              title="字号+"
+              title="减小字号"
               onClick={() =>
                 updateNode(node.id, {
-                  metadata: { fontSize: (node.metadata.fontSize ?? 14) + 2 },
+                  metadata: { fontSize: adjustFontSize(node.metadata.fontSize, -2) },
                 })
               }
             >
-              <Type size={14} />
+              <Minus size={14} />
+            </IconBtn>
+            <IconBtn
+              title="增大字号"
+              onClick={() =>
+                updateNode(node.id, {
+                  metadata: { fontSize: adjustFontSize(node.metadata.fontSize, 2) },
+                })
+              }
+            >
+              <Plus size={14} />
             </IconBtn>
           </>
         ) : null}

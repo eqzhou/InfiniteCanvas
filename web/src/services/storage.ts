@@ -3,6 +3,7 @@ import type { AppConfig, AssetItem, BoardProject, PromptItem } from "@/types/boa
 import { readBoundedResponse } from "@/services/remote-content";
 import { normalizeExternalHttpsUrl } from "@/lib/remote-url";
 import { normalizeChannel } from "@/lib/ai-config";
+import { parseBoardProject } from "@/lib/board-document";
 import {
   deleteServerBlob,
   getServerBlob,
@@ -101,7 +102,8 @@ export async function loadProjects(): Promise<BoardProject[]> {
     await ensureServerMigration();
     return loadServerProjects();
   }
-  return (await get<BoardProject[]>(PROJECTS_KEY, appStore)) ?? [];
+  const projects = (await get<unknown[]>(PROJECTS_KEY, appStore)) ?? [];
+  return projects.map(parseBoardProject);
 }
 
 export async function saveProjects(projects: BoardProject[]): Promise<void> {
