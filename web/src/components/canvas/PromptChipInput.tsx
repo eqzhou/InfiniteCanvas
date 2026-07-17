@@ -229,6 +229,7 @@ export function PromptChipInput({
         role="textbox"
         aria-label="节点生成提示词"
         aria-multiline="true"
+        aria-placeholder={placeholder}
         contentEditable
         suppressContentEditableWarning
         className={`min-h-[56px] whitespace-pre-wrap break-words rounded-md border border-[var(--ob-line)] bg-transparent p-2 text-xs outline-none ${className}`}

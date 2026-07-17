@@ -111,7 +111,7 @@ test("node ports support click-to-connect without requiring a drag", async ({ pa
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
   });
-  await page.getByTitle("视频").click();
+  await page.getByRole("button", { name: "视频", exact: true }).click();
   const video = page.locator('[data-node-type="video"]');
   const header = video.locator("[data-node-header]");
   const box = await header.boundingBox();
@@ -147,7 +147,7 @@ test("node title, font size, and model overrides are editable and persistent", a
   await openFreshBoard(page);
   await page.getByTitle("文本").click();
   const node = page.locator('[data-node-type="text"]');
-  await node.locator("span", { hasText: "文本" }).dblclick();
+  await node.locator('[title="文本"]').dblclick();
   const title = node.getByLabel("节点标题");
   await title.fill("本地创作节点");
   await title.press("Enter");
@@ -713,7 +713,7 @@ test("node prompt media chips preserve and submit connected image references", a
   await editor.type("@");
   await page.getByRole("option", { name: "图片1 图片" }).click();
   await editor.type(" slow orbit");
-  await page.getByTitle("发送 (Ctrl/Cmd+Enter)").click();
+  await editor.press("Control+Enter");
 
   await expect.poll(() => requestBodies).toHaveLength(2);
   expect(requestBodies[1]?.prompt).toContain("图片1 slow orbit");
@@ -931,8 +931,9 @@ test("local Agent connects to the real Go service with a session token", async (
 test("audio nodes expose the audio generation prompt", async ({ page }) => {
   await openFreshBoard(page);
   await page.getByRole("button", { name: "音频", exact: true }).click();
-  await expect(page.getByPlaceholder("输入语音文本…")).toBeVisible();
-  await expect(page.getByPlaceholder("输入视频提示词…")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "节点生成提示词" })).toBeVisible();
+  await expect(page.getByText("输入语音文本…", { exact: true })).toBeVisible();
+  await expect(page.getByText("输入视频提示词…", { exact: true })).toHaveCount(0);
 });
 
 test("browser runtime executes board commands, navigation, and protected snapshots", async ({ page, request }) => {
