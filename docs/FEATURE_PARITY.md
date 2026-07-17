@@ -26,12 +26,14 @@ implementation evidence.
 | Text/image/config/video/audio nodes, drag, resize, ports, metadata and preview | `BoardNodeView.tsx`, `NodeActions.tsx`, canvas E2E |
 | Image proportional/free resizing, replacement, download and asset insertion | `BoardNodeView.tsx`, `NodeActions.tsx`, `AssetsPage.tsx` |
 | Text editing, node model/prompt selection, empty-node fill and connected rewrite | `NodePromptBar.tsx`, `node title, font size, and model overrides` E2E |
+| Connected media `@` menu, thumbnail chips, atomic deletion and deterministic request references | `PromptChipInput.tsx`, `prompt-references.test.ts`, prompt-chip E2E |
 | Text-to-image creates and immediately runs a connected config node | `text-to-image creates a connected config` E2E |
 | Config nodes aggregate ordered text/image/video/audio inputs | `BoardNodeView.tsx` input preview and `NodeActions.tsx` ordered upstream resolver |
 | Config image batches and config text batches of 1-8 results | `image-generation.test.ts`, `text-batch.test.ts`, config text-batch E2E |
 | Image upload/drag, crop, rotate/multi-angle, mask, upscale, split and lineage | image transform unit tests plus split/upscale E2E |
 | Image retry protects missing references; multi-result batches expand and select a primary image | `image-generation.test.ts`, `BatchGroupControls.tsx`, canvas E2E |
 | Independent text/image/video/audio provider URL, key, protocol, model and model listing | `SettingsModal.tsx`, `ai-client.test.ts`, formal storage E2E |
+| Global system prompt across text, image generation, and image editing entry points | `ai-client.test.ts`, text-batch and text-to-image E2E |
 | OpenAI text/image/video/audio and Ark/Seedance video contracts | `ai-client.test.ts`, `video-generation.test.ts`, image-to-video E2E |
 | Seedance 9 image/3 video/3 audio references, ratios, 480p/720p/1080p and smart/4-15s duration | `NodeActions.tsx`, `BoardNodeView.tsx`, `CreativeWorkbench.tsx`, `video-generation.test.ts` |
 | Assistant selected/upstream context, text/image generation, sessions, retry, insert and single/batch deletion | `AssistantPanel.tsx`, `assistant-sessions.test.ts`, assistant E2E |
@@ -64,9 +66,9 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 187 Bun unit/integration tests; 85.38% lines and 87.43% functions
+- [verified] 193 Bun unit/integration tests; 86.29% lines and 88.35% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
-- [verified] 128 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
+- [verified] 128 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in the latest completed CI run
 - [verified] 34/34 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
@@ -78,7 +80,7 @@ implementation evidence.
 - [verified] Project create, rename, delete, batch delete, JSON and media-bundle import/export
 - [verified] PostgreSQL authoritative persistence, Redis disposable cache, protected filesystem media, and empty-server IndexedDB migration
 - [verified] Pan, wheel/pinch zoom, slider, reset, fit, minimap, backgrounds, themes, culling, and 1k/10k indexes
-- [verified] Marquee/multi-select, copy/paste/duplicate, align/distribute, connections, edge deletion, undo/redo, and shortcuts
+- [verified] Marquee/multi-select, copy/paste/duplicate, align/distribute, drag/click connections, edge deletion, undo/redo, and shortcuts
 - [verified] Text/image/config/video/audio/plugin nodes; ports, drag, resize, preview, metadata inspection, and prompt bars
 - [verified] Titles above nodes with bounded inline edit; blank-canvas double-click node chooser
 - [verified] Group drag-in/out thresholds, hover feedback, 24px automatic bounds, grouped movement, and history
@@ -88,6 +90,7 @@ implementation evidence.
 ## AI and creative tools
 
 - [verified] Independent text/image/video/audio URL, key, protocol, and model settings
+- [verified] Bounded global system prompt applied to all text, image generation, and image editing requests
 - [verified] OpenAI, Ark/Seedance, Gemini, and restricted declarative Template adapters
 - [verified] Authentication, redirect, timeout, cancellation, rate/error, task polling, malformed response, and bounded-download behavior
 - [verified] AES-GCM provider secrets; exported projects and WebDAV backups omit keys

@@ -124,6 +124,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           n: Number(parameters.count ?? count),
           transparentBackground: Boolean(parameters.transparentBackground),
           referenceDataUrls: referenceData.filter((value) => value.startsWith("data:image/")),
+          systemPrompt: config.systemPrompt,
           signal: controller.signal,
         });
         for (const url of urls) {

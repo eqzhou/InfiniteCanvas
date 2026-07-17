@@ -52,6 +52,34 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("generateVideo provider contracts", () => {
+  test("applies a global system prompt to OpenAI text and image requests", async () => {
+    const bodies: unknown[] = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return bodies.length === 1
+        ? json({ output_text: "ok" })
+        : json({ data: [{ url: "https://cdn.example/system.png" }] });
+    }) as typeof fetch;
+
+    await generateText({
+      channel: channel("https://api.example/v1"),
+      model: "text",
+      prompt: "user request",
+      systemPrompt: "Keep the result concise.",
+    });
+    await generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "image",
+      prompt: "draw a lighthouse",
+      systemPrompt: "Use a transparent editorial style.",
+    });
+
+    expect(bodies[0]).toMatchObject({ instructions: "Keep the result concise." });
+    expect(bodies[1]).toMatchObject({
+      prompt: "Use a transparent editorial style.\n\ndraw a lighthouse",
+    });
+  });
+
   test("uses Gemini text and image contracts with header credentials", async () => {
     const requests: Array<{ url: string; apiKey: string | null; body: unknown }> = [];
     globalThis.fetch = mock(async (input, init) => {
@@ -71,10 +99,12 @@ describe("generateVideo provider contracts", () => {
       image: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", apiKey: fixtureCredential, model: "gemini-2.5-flash-image", protocol: "gemini" },
     };
 
-    await expect(generateText({ channel: c, model: c.providers.text.model, prompt: "hello" })).resolves.toBe("gemini text");
-    await expect(generateImages({ channel: c, model: c.providers.image.model, prompt: "draw" })).resolves.toEqual(["data:image/png;base64,YWJj"]);
+    await expect(generateText({ channel: c, model: c.providers.text.model, prompt: "hello", systemPrompt: "Be concise" })).resolves.toBe("gemini text");
+    await expect(generateImages({ channel: c, model: c.providers.image.model, prompt: "draw", systemPrompt: "Use clean lines" })).resolves.toEqual(["data:image/png;base64,YWJj"]);
     expect(requests.map((item) => item.apiKey)).toEqual([fixtureCredential, fixtureCredential]);
     expect(requests[0]?.url).toContain("/models/gemini-2.5-flash:generateContent");
+    expect(requests[0]?.body).toMatchObject({ systemInstruction: { parts: [{ text: "Be concise" }] } });
+    expect(requests[1]?.body).toMatchObject({ contents: [{ parts: [{ text: "Use clean lines\n\ndraw" }] }] });
   });
 
   test("executes a safe image template and rejects unsupported transparency before fetch", async () => {

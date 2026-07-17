@@ -6,17 +6,21 @@ import {
   generateSpeech,
   generateText,
   generateVideo,
-  resolveNodeImageDataUrls,
+  resolveMediaRefs,
 } from "@/services/ai-client";
 import { uploadMedia } from "@/services/storage";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
-import { isSubmitShortcut } from "@/lib/keyboard";
 import { Send } from "lucide-react";
 import { getProvider } from "@/lib/ai-config";
 import { isNodePromptType, nodePromptKind, nodePromptPlaceholder } from "@/lib/node-prompt";
 import {
-  assertResolvedImageReferences,
+  activePromptReferences,
+  buildPromptReferences,
+  type PromptReference,
+} from "@/lib/prompt-references";
+import { PromptChipInput } from "@/components/canvas/PromptChipInput";
+import {
   createImageGenerationMetadata,
 } from "@/lib/image-generation";
 
@@ -30,6 +34,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   const channel =
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
+  const references = buildPromptReferences(project, node.id);
 
   if (!isNodePromptType(node.type)) return null;
   const promptType = node.type;
@@ -55,6 +60,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     setBusy(true);
     updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
     try {
+      const activeReferences = activePromptReferences(text, references);
       if (node.type === "text") {
         const prompt = node.metadata.content
           ? `原文本：\n${node.metadata.content}\n\n修改要求：${text.trim()}`
@@ -63,6 +69,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           channel,
           model: node.metadata.model || getProvider(channel, "text").model,
           prompt,
+          images: await resolvePromptReferences(activeReferences, "image", 9),
+          systemPrompt: config.systemPrompt,
         });
         if (!node.metadata.content) {
           updateNode(node.id, { metadata: { content: out, status: "success" } });
@@ -77,9 +85,23 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           updateNode(node.id, { metadata: { status: "success" } });
         }
       } else if (node.type === "image") {
-        const referenceStorageKeys = node.metadata.storageKey ? [node.metadata.storageKey] : [];
-        const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
-        assertResolvedImageReferences(referenceStorageKeys, refs);
+        const imageReferences: PromptReference[] = [
+          ...(node.metadata.storageKey || node.metadata.content
+            ? [{
+                nodeId: node.id,
+                kind: "image" as const,
+                label: "当前图片",
+                title: node.title,
+                ...(node.metadata.storageKey ? { storageKey: node.metadata.storageKey } : {}),
+                ...(node.metadata.content ? { content: node.metadata.content } : {}),
+              }]
+            : []),
+          ...activeReferences.filter((reference) => reference.kind === "image"),
+        ];
+        const referenceStorageKeys = imageReferences
+          .map((reference) => reference.storageKey)
+          .filter((key): key is string => Boolean(key));
+        const refs = await resolvePromptReferences(imageReferences, "image", 9);
         const generation = createImageGenerationMetadata({
           prompt: text.trim(),
           model: node.metadata.model || getProvider(channel, "image").model,
@@ -98,14 +120,32 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           n: generation.count,
           referenceDataUrls: refs,
           transparentBackground: generation.transparentBackground,
+          systemPrompt: config.systemPrompt,
         });
         await placeImageResults(node, urls, generation, placeRight, updateNode, updateActive);
       } else if (node.type === "video") {
+        const ownVideo: PromptReference[] = node.metadata.storageKey || node.metadata.content
+          ? [{
+              nodeId: node.id,
+              kind: "video",
+              label: "当前视频",
+              title: node.title,
+              ...(node.metadata.storageKey ? { storageKey: node.metadata.storageKey } : {}),
+              ...(node.metadata.content ? { content: node.metadata.content } : {}),
+            }]
+          : [];
         const result = await generateVideo({
           channel,
           model: node.metadata.model || getProvider(channel, "video").model,
           prompt: text.trim(),
           seconds: 5,
+          referenceImages: await resolvePromptReferences(activeReferences, "image", 9),
+          referenceVideos: await resolvePromptReferences(
+            [...ownVideo, ...activeReferences],
+            "video",
+            3,
+          ),
+          referenceAudios: await resolvePromptReferences(activeReferences, "audio", 3),
         });
         let content = result.url;
         let storageKey: string | undefined;
@@ -176,31 +216,17 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   const placeholder = nodePromptPlaceholder(promptType, Boolean(node.metadata.content));
 
-  // silence unused
-  void project;
-
   return (
     <div
       className="absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-2 shadow-[var(--ob-shadow)]"
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <textarea
-        className="min-h-[56px] flex-1 resize-none rounded-md border border-[var(--ob-line)] bg-transparent p-2 text-xs"
+      <PromptChipInput
         placeholder={placeholder}
         value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (
-            isSubmitShortcut({
-              key: e.key,
-              ctrlKey: e.ctrlKey,
-              metaKey: e.metaKey,
-              isComposing: e.nativeEvent.isComposing,
-            })
-          ) {
-            void send();
-          }
-        }}
+        references={references}
+        onChange={setText}
+        onSubmit={() => void send()}
       />
       <button
         type="button"
@@ -213,6 +239,23 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       </button>
     </div>
   );
+}
+
+async function resolvePromptReferences(
+  references: readonly PromptReference[],
+  kind: PromptReference["kind"],
+  limit: number,
+): Promise<string[]> {
+  const selected = references.filter((reference) => reference.kind === kind).slice(0, limit);
+  const resolved = await Promise.all(selected.map((reference) =>
+    resolveMediaRefs([{
+      storageKey: reference.storageKey,
+      content: reference.content,
+    }], 1)));
+  if (resolved.some((items) => items.length !== 1)) {
+    throw new Error("所选媒体引用无法读取，请重新连接或上传素材");
+  }
+  return resolved.flat();
 }
 
 async function placeImageResults(

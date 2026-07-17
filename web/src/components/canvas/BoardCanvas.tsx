@@ -292,9 +292,11 @@ export function BoardCanvas() {
       return;
     }
     if (e.metaKey || e.ctrlKey) {
+      setConnectingFrom(null);
       setDrag({ kind: "marquee", start: p, current: p });
       return;
     }
+    setConnectingFrom(null);
     setSelected([]);
     setSelectedEdgeId(null);
     setDrag({
@@ -450,7 +452,8 @@ export function BoardCanvas() {
         .map((n) => n.id);
       setSelected(ids);
     } else if (drag.kind === "connect") {
-      const world = screenToWorld(localPoint(e), project.viewport);
+      const releasedAt = localPoint(e);
+      const world = screenToWorld(releasedAt, project.viewport);
       const hit = project.nodes.find(
         (n) =>
           n.id !== drag.from &&
@@ -459,8 +462,22 @@ export function BoardCanvas() {
           world.y >= n.position.y &&
           world.y <= n.position.y + n.height,
       );
-      if (hit) connect(drag.from, hit.id);
-      setConnectingFrom(null);
+      if (hit) {
+        connect(drag.from, hit.id);
+        setConnectingFrom(null);
+      } else {
+        const source = project.nodes.find((node) => node.id === drag.from);
+        const port = source ? nodePort(source, "right") : null;
+        const startedAt = port
+          ? {
+              x: port.x * project.viewport.k + project.viewport.x,
+              y: port.y * project.viewport.k + project.viewport.y,
+            }
+          : drag.current;
+        if (Math.hypot(releasedAt.x - startedAt.x, releasedAt.y - startedAt.y) > 6) {
+          setConnectingFrom(null);
+        }
+      }
     } else if (drag.kind === "node") {
       const current = useBoardStore.getState().getActive();
       if (current) {
@@ -757,6 +774,8 @@ export function BoardCanvas() {
               onCompleteConnect={() => {
                 if (connectingFrom && connectingFrom !== node.id) {
                   connect(connectingFrom, node.id);
+                  setConnectingFrom(null);
+                  setDrag(null);
                 }
               }}
               onContextMenu={(e) => {

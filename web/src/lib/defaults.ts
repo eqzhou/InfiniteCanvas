@@ -42,6 +42,7 @@ export function createDefaultConfig(): AppConfig {
   return {
     channels: [channel],
     activeChannelId: channel.id,
+    systemPrompt: "",
     imageSize: "1024x1024",
     imageQuality: "auto",
     imageCount: 1,

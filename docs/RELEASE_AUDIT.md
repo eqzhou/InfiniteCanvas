@@ -20,7 +20,7 @@ not indicate missing local canvas functionality.
 ## Engineering
 
 - [x] Chromium, WebKit, and Firefox Playwright projects are configured.
-- [x] Full CI Playwright suite passes (128 passed, 8 intentional environment skips) across Chromium, WebKit, Firefox, and mobile Chromium.
+- [x] Full CI Playwright suite passes (128 passed, 8 intentional environment skips) across Chromium, WebKit, Firefox, and mobile Chromium in the latest completed run.
 - [x] Production-build Chromium suite passes (34 passed) with isolated Go storage.
 - [x] Touch and mobile flows are covered by mobile Chromium; Firefox desktop touch injection is skipped by design.
 - [x] Bun unit tests, TypeScript build, Go race tests, and `go vet` pass.

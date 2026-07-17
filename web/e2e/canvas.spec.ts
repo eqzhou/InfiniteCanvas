@@ -100,6 +100,49 @@ test("blank canvas double-click opens the node chooser at the pointer", async ({
   await expect(page.locator('[data-node-type="audio"]')).toHaveCount(1);
 });
 
+test("node ports support click-to-connect without requiring a drag", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) < 768,
+    "Desktop node spacing is required for the click-to-connect layout assertion.",
+  );
+  await openFreshBoard(page);
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    name: "connection-source.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  await page.getByTitle("视频").click();
+  const video = page.locator('[data-node-type="video"]');
+  const header = video.locator("[data-node-header]");
+  const box = await header.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + 30, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + 430, box!.y + box!.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  await page.locator('[data-node-type="image"]')
+    .getByTitle("输出端口 / 拖出连线").click();
+  await video.getByTitle("输入端口").click();
+
+  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
+    const open = indexedDB.open("openboard-app");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const request = database.transaction("app_state", "readonly")
+        .objectStore("app_state")
+        .get("openboard:projects");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const projects = Array.isArray(request.result) ? request.result : [];
+        database.close();
+        resolve(projects.reduce((count, project) => count + (project?.edges?.length ?? 0), 0));
+      };
+    };
+  }))).toBe(1);
+});
+
 test("node title, font size, and model overrides are editable and persistent", async ({ page }) => {
   await openFreshBoard(page);
   await page.getByTitle("文本").click();
@@ -165,6 +208,7 @@ test("text-to-image creates a connected config and executes immediately", async 
   await settings.getByLabel("生图 API Key").fill("test-only-key");
   await settings.getByLabel("生图模型").fill("mock-image-model");
   await settings.getByLabel("默认数量").fill("2");
+  await settings.getByLabel("全局系统提示词").fill("Use a crisp editorial style.");
   await settings.getByRole("button", { name: "关闭" }).click();
 
   await page.getByTitle("文本").click();
@@ -176,7 +220,7 @@ test("text-to-image creates a connected config and executes immediately", async 
     .toBeVisible();
   await expect.poll(() => requestBody).toMatchObject({
     model: "mock-image-model",
-    prompt: "a red square",
+    prompt: "Use a crisp editorial style.\n\na red square",
   });
   await expect.poll(() => page.evaluate(
     () => new Promise<boolean>((resolve, reject) => {
@@ -211,11 +255,8 @@ test("text-to-image creates a connected config and executes immediately", async 
 });
 
 test("a configuration node generates the requested text batch", async ({ page }) => {
-  test.skip(
-    test.info().project.name === "mobile-chromium",
-    "The compact mobile canvas does not expose configuration-node action bars reliably.",
-  );
   let requests = 0;
+  const textBodies: Array<Record<string, unknown>> = [];
   await page.route("https://batch.example/v1/images/generations", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -228,6 +269,7 @@ test("a configuration node generates the requested text batch", async ({ page })
   });
   await page.route("https://batch.example/v1/responses", async (route) => {
     requests += 1;
+    textBodies.push(JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>);
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({ output_text: `batch result ${requests}` }),
@@ -243,6 +285,7 @@ test("a configuration node generates the requested text batch", async ({ page })
   await page.getByLabel("生图 API Key").fill("batch-test-key");
   await page.getByLabel("生图模型").fill("batch-image-model");
   await page.getByLabel("默认数量").fill("1");
+  await page.getByLabel("全局系统提示词").fill("Return one concise alternative.");
   await page.getByRole("button", { name: "关闭" }).click();
 
   await page.getByTitle("文本").click();
@@ -253,13 +296,15 @@ test("a configuration node generates the requested text batch", async ({ page })
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
   const config = page.locator('[data-node-type="config"]');
   await expect(config).toHaveCount(1);
-  await config.click({ position: { x: 20, y: 20 } });
+  await config.locator("[data-node-header]").click();
   await expect(config.getByTitle("运行生成")).toBeVisible();
   await config.getByLabel("模式").selectOption("text");
   await config.getByLabel("数量").fill("3");
   await config.getByTitle("运行生成").click();
 
   await expect.poll(() => requests).toBe(3);
+  expect(textBodies).toHaveLength(3);
+  expect(textBodies.every((body) => body.instructions === "Return one concise alternative.")).toBe(true);
   await expect(page.locator('[data-node-type="text"]')).toHaveCount(4);
   for (const index of [1, 2, 3]) {
     await expect(page.getByText(`batch result ${index}`, { exact: true })).toBeVisible();
@@ -613,6 +658,66 @@ test("an image node can create a connected video with itself as reference", asyn
   });
   expect(String(requestBody?.input_reference)).toMatch(/^data:image\/png;base64,/);
   await expect(page.locator('[data-node-type="video"]')).toHaveCount(1);
+});
+
+test("node prompt media chips preserve and submit connected image references", async ({ page }) => {
+  const requestBodies: Array<Record<string, unknown>> = [];
+  await page.route("https://chips.example/v1/videos", async (route) => {
+    requestBodies.push(JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: `video-chip-${requestBodies.length}`,
+        status: "completed",
+        url: `https://cdn.example/chip-${requestBodies.length}.mp4`,
+      }),
+    });
+  });
+  await page.route(/https:\/\/cdn\.example\/chip-\d+\.mp4/, async (route) => {
+    await route.fulfill({ contentType: "video/mp4", body: "video-bytes" });
+  });
+
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("视频 URL").fill("https://chips.example/v1");
+  await page.getByLabel("视频 API Key").fill("chip-test-key");
+  await page.getByLabel("视频模型").fill("chip-video-model");
+  await page.getByRole("button", { name: "关闭" }).click();
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    name: "chip-reference.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  page.once("dialog", async (dialog) => dialog.accept("create the first clip"));
+  await page.getByTitle("生成视频").click();
+  await expect.poll(() => requestBodies).toHaveLength(1);
+
+  await page.getByTitle("适应").click();
+  const videoNode = page.locator('[data-node-type="video"]');
+  await expect(videoNode).toHaveCount(1);
+  await videoNode.locator("[data-node-header]").click();
+  const editor = page.getByRole("textbox", { name: "节点生成提示词" });
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await editor.type("@");
+  const referenceOption = page.getByRole("option", { name: "图片1 图片" });
+  await expect(referenceOption).toBeVisible();
+  await referenceOption.click();
+  const chip = editor.locator('[data-prompt-reference]');
+  await expect(chip).toHaveCount(1);
+  await expect(chip.locator('img[alt="图片1"]')).toBeVisible();
+
+  await editor.press("Backspace");
+  await expect(chip).toHaveCount(0);
+  await editor.fill("");
+  await editor.type("@");
+  await page.getByRole("option", { name: "图片1 图片" }).click();
+  await editor.type(" slow orbit");
+  await page.getByTitle("发送 (Ctrl/Cmd+Enter)").click();
+
+  await expect.poll(() => requestBodies).toHaveLength(2);
+  expect(requestBodies[1]?.prompt).toContain("图片1 slow orbit");
+  expect(String(requestBodies[1]?.input_reference)).toMatch(/^data:image\/png;base64,/);
 });
 
 test("local image upscale creates a lineage-tracked derived node", async ({ page }) => {

@@ -225,6 +225,7 @@ export type AiProviders = Record<AiProviderKind, AiEndpointConfig>;
 export type AppConfig = {
   channels: AiChannel[];
   activeChannelId: string | null;
+  systemPrompt: string;
   imageSize: string;
   imageQuality: string;
   imageCount: number;

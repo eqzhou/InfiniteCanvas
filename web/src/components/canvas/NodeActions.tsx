@@ -25,6 +25,7 @@ import { createOpenAIImageTransformProvider } from "@/services/image-transform/p
 import { createRectEditMaskBlob } from "@/services/image-transform/mask-raster";
 import { resolveNodeImageTransformSource } from "@/services/image-transform/source";
 import { createTransformLineage } from "@/services/image-transform/lineage";
+import { applySystemPrompt } from "@/lib/app-config";
 import { getProvider } from "@/lib/ai-config";
 import { adjustFontSize } from "@/lib/node-format";
 import {
@@ -215,6 +216,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
           model,
           prompt,
           images: await resolveNodeImageDataUrls(imageKeys),
+          systemPrompt: config.systemPrompt,
           count: node.metadata.count || 1,
         });
         const created = outputs.map((content, index) => createNode(
@@ -247,6 +249,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
           n: generation.count,
           referenceDataUrls: refs,
           transparentBackground: generation.transparentBackground,
+          systemPrompt: config.systemPrompt,
         });
         const created: BoardNode[] = [];
         for (const [i, url] of urls.entries()) {
@@ -382,6 +385,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
         quality: generation.quality,
         n: generation.count,
         transparentBackground: generation.transparentBackground,
+        systemPrompt: config.systemPrompt,
       });
       const created: BoardNode[] = [];
       for (const [index, url] of urls.entries()) {
@@ -429,6 +433,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
         channel,
         model: node.metadata.model || getProvider(channel, "text").model,
         prompt: `原文本：\n${node.metadata.content ?? ""}\n\n改写要求：${instruction}`,
+        systemPrompt: config.systemPrompt,
       });
       if (!node.metadata.content) {
         updateNode(node.id, { metadata: { content: out, status: "success" } });
@@ -482,6 +487,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
         n: generation.count,
         referenceDataUrls: refs,
         transparentBackground: generation.transparentBackground,
+        systemPrompt: config.systemPrompt,
       });
       if (urls.length === 1 && !node.metadata.content) {
         const uploaded = await uploadMedia(urls[0], "image");
@@ -589,6 +595,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
         model: getProvider(channel, "text").model,
         prompt: "分析这张图片并输出可复现其主体、构图、光线、色彩和风格的详细生图提示词。只输出提示词。",
         images,
+        systemPrompt: config.systemPrompt,
       });
       const created = createNode(
         "text",
@@ -1010,7 +1017,7 @@ return (
               ? await provider.inpaint?.({
                   image: source.blob,
                   mask: await createRectEditMaskBlob(source.width, source.height, mask),
-                  prompt,
+                  prompt: applySystemPrompt(config.systemPrompt, prompt),
                   width: source.width,
                   height: source.height,
                 }, context)

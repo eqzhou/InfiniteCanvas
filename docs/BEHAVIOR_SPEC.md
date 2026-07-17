@@ -38,6 +38,9 @@ plugins, fixtures, screenshots, or assets as implementation input.
 | 2026-07-18 | Assistant images | Paste, preview, remove, insert, send, and reinsert images | Attachments remain visible and controllable without exposing provider credentials or requiring a chat turn | high |
 | 2026-07-18 | Config text batches | Select text mode and request 1-8 alternatives from a generation config node | The requested number of text calls complete before connected result nodes are committed | high |
 | 2026-07-18 | New API local link | Open a loopback URL containing legacy `apiKey` and `baseUrl` query parameters | The active text provider is populated and the sensitive query is immediately removed; non-loopback deployments require a fragment link | high |
+| 2026-07-18 | Prompt media references | Type `@` in a node prompt with connected media | The menu inserts labeled thumbnail chips; chips delete atomically and serialize into deterministic media labels forwarded with the request | high |
+| 2026-07-18 | Port connections | Click an output port, then click an input port | The pending connection remains armed between clicks and commits one edge; blank click or Escape cancels it | high |
+| 2026-07-18 | Global system prompt | Configure a global instruction, then generate or edit text/images | Every text request receives a system instruction and every image prompt receives the instruction before the user prompt | high |
 
 ## Evidence
 

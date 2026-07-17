@@ -121,6 +121,7 @@ async function executeRuntimeCommand(
           prompt,
           size: typeof command.data.size === "string" ? command.data.size : state.config.imageSize,
           n: Math.min(8, Math.max(1, numberValue(command.data.count, 1))),
+          systemPrompt: state.config.systemPrompt,
         });
         const images: BoardNode[] = [];
         for (const [index, url] of urls.entries()) {

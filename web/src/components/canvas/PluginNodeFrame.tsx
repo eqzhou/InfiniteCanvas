@@ -165,6 +165,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
           model: options.model || getProvider(channel, "text").model,
           prompt: options.prompt,
           images: options.images,
+          systemPrompt: state.config.systemPrompt,
         });
         return { text };
       },
@@ -178,6 +179,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
           prompt: options.prompt,
           size: options.size || state.config.imageSize,
           n: options.count ?? 1,
+          systemPrompt: state.config.systemPrompt,
         });
         const images: string[] = [];
         for (const result of generated) {

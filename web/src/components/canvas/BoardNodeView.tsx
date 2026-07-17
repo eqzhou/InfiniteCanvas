@@ -144,7 +144,7 @@ export function BoardNodeView({
           <span className="block max-w-full truncate" title={node.title}>{node.title}</span>
         )}
       </div>
-      <div className="flex items-center gap-2 border-b border-[var(--ob-line)] px-2 py-1.5 text-xs">
+      <div data-node-header className="flex items-center gap-2 border-b border-[var(--ob-line)] px-2 py-1.5 text-xs">
         <Icon size={14} className="text-[var(--ob-accent)]" />
         <span className="ml-auto text-[var(--ob-muted)]">
           {node.metadata.isBatchRoot ? "batch" : node.type}
@@ -565,6 +565,7 @@ export function BoardNodeView({
               e.stopPropagation();
               onCompleteConnect();
             }}
+            onPointerUp={(e) => e.stopPropagation()}
           />
           <button
             type="button"
@@ -574,6 +575,7 @@ export function BoardNodeView({
               e.stopPropagation();
               onStartConnect();
             }}
+            onPointerUp={(e) => e.stopPropagation()}
           />
         </>
       ) : null}

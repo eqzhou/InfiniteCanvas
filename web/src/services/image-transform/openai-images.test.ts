@@ -30,7 +30,7 @@ describe("OpenAI-compatible image transform provider", () => {
     const result = await provider.inpaint!({
       image,
       mask: image,
-      prompt: "replace the selected area",
+      prompt: "Keep the edit natural.\n\nreplace the selected area",
       width: 8,
       height: 8,
     }, { onProgress: (value) => progress.push(value) });
@@ -40,7 +40,7 @@ describe("OpenAI-compatible image transform provider", () => {
     expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe("Bearer secret");
     const form = calls[0]?.init?.body as FormData;
     expect(form.get("model")).toBe("image-model");
-    expect(form.get("prompt")).toBe("replace the selected area");
+    expect(form.get("prompt")).toBe("Keep the edit natural.\n\nreplace the selected area");
     expect(form.get("image")).toBeInstanceOf(Blob);
     expect(form.get("mask")).toBeInstanceOf(Blob);
     expect(progress).toEqual([...progress].sort((a, b) => a - b));

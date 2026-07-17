@@ -10,6 +10,7 @@ import {
   generateTemplateImages,
   providerJsonFetch,
 } from "@/services/ai-adapters";
+import { applySystemPrompt } from "@/lib/app-config";
 
 function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -83,11 +84,19 @@ export async function generateText(options: {
   model: string;
   prompt: string;
   images?: string[];
+  systemPrompt?: string;
 }): Promise<string> {
-  const { channel, model, prompt, images = [] } = options;
+  const { channel, model, prompt, images = [], systemPrompt = "" } = options;
   const provider = getProvider(channel, "text");
   if (provider.protocol === "gemini") {
-    return generateGeminiText(provider.baseUrl, provider.apiKey, model, prompt, images);
+    return generateGeminiText(
+      provider.baseUrl,
+      provider.apiKey,
+      model,
+      prompt,
+      images,
+      systemPrompt,
+    );
   }
   if (provider.protocol !== "openai") {
     throw new Error(`${provider.protocol} does not support text generation`);
@@ -102,6 +111,7 @@ export async function generateText(options: {
       method: "POST",
       body: JSON.stringify({
         model,
+        ...(systemPrompt.trim() ? { instructions: systemPrompt.trim() } : {}),
         input: [{ role: "user", content }],
       }),
     }, "text");
@@ -123,6 +133,9 @@ export async function generateText(options: {
   }
 
   const messages: Array<{ role: string; content: unknown }> = [
+    ...(systemPrompt.trim()
+      ? [{ role: "system", content: systemPrompt.trim() }]
+      : []),
     {
       role: "user",
       content:
@@ -153,6 +166,7 @@ export async function generateImages(options: {
   n?: number;
   referenceDataUrls?: string[];
   transparentBackground?: boolean;
+  systemPrompt?: string;
   signal?: AbortSignal;
 }): Promise<string[]> {
   const {
@@ -164,12 +178,14 @@ export async function generateImages(options: {
     n = 1,
     referenceDataUrls = [],
     transparentBackground = false,
+    systemPrompt = "",
     signal,
   } = options;
+  const effectivePrompt = applySystemPrompt(systemPrompt, prompt);
   const provider = getProvider(channel, "image");
   if (provider.protocol === "gemini") {
     if (transparentBackground) throw new Error("Gemini image generation does not support transparent background");
-    return generateGeminiImages(provider.baseUrl, provider.apiKey, model, prompt, referenceDataUrls, signal);
+    return generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, referenceDataUrls, signal);
   }
   if (provider.protocol === "template") {
     if (!provider.template) throw new Error("Image template configuration is missing");
@@ -177,7 +193,7 @@ export async function generateImages(options: {
       throw new Error("This image template does not support transparent background");
     }
     return generateTemplateImages(provider, {
-      prompt, model, size, quality, count: n, transparentBackground,
+      prompt: effectivePrompt, model, size, quality, count: n, transparentBackground,
       referenceImages: referenceDataUrls,
     }, signal);
   }
@@ -188,7 +204,7 @@ export async function generateImages(options: {
   if (referenceDataUrls.length > 0) {
     const form = new FormData();
     form.set("model", model);
-    form.set("prompt", prompt);
+    form.set("prompt", effectivePrompt);
     form.set("n", String(n));
     form.set("size", size);
     if (quality) form.set("quality", quality);
@@ -211,7 +227,7 @@ export async function generateImages(options: {
     method: "POST",
     body: JSON.stringify({
       model,
-      prompt,
+      prompt: effectivePrompt,
       n,
       size,
       quality,

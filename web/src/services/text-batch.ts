@@ -6,6 +6,7 @@ export type TextBatchOptions = {
   model: string;
   prompt: string;
   images?: string[];
+  systemPrompt?: string;
   count: number;
 };
 
@@ -18,6 +19,7 @@ export async function generateTextBatch(options: TextBatchOptions): Promise<stri
     model: options.model,
     prompt: options.prompt,
     images: [...(options.images ?? [])],
+    systemPrompt: options.systemPrompt,
   };
   return Promise.all(
     Array.from({ length: options.count }, () => generateText(request)),

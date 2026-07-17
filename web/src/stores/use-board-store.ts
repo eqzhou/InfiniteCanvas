@@ -13,6 +13,7 @@ import type {
   Viewport,
 } from "@/types/board";
 import { createDefaultConfig, createEmptySession, createNode, createProject } from "@/lib/defaults";
+import { normalizeAppConfig } from "@/lib/app-config";
 import { HistoryStack } from "@/lib/history";
 import { nowIso, uid } from "@/lib/id";
 import {
@@ -189,14 +190,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
       const defaults = createDefaultConfig();
       const hydratedConfig = config
-        ? {
+        ? normalizeAppConfig({
             ...defaults,
             ...config,
             plugins: normalizePluginManifests(config.plugins),
             disabledPluginIds: Array.isArray(config.disabledPluginIds)
               ? [...new Set(config.disabledPluginIds.filter((id): id is string => typeof id === "string"))]
               : [],
-          }
+          })
         : defaults;
       set({
         ready: true,
@@ -537,8 +538,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   setConfig: (config) => {
-    set({ config });
-    void saveConfig(config);
+    const normalized = normalizeAppConfig(config);
+    set({ config: normalized });
+    void saveConfig(normalized);
   },
 
   setAssets: (assets) => {

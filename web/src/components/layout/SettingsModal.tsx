@@ -8,6 +8,7 @@ import { getProvider, normalizeChannel } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
 import type { AiTemplateConfig } from "@/types/board";
 import { validateProviderTemplate } from "@/lib/provider-template";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useBoardStore((s) => s.config);
@@ -122,6 +123,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               </div>;
             })}
           </div>
+          <Field label="全局系统提示词">
+            <textarea
+              className="field min-h-24 resize-y"
+              maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+              value={config.systemPrompt}
+              onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
+              placeholder="应用于文本、图片生成和图片编辑请求"
+            />
+          </Field>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="图片尺寸">
               <input

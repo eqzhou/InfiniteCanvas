@@ -38,6 +38,7 @@ export async function generateGeminiText(
   model: string,
   prompt: string,
   images: string[],
+  systemPrompt = "",
 ): Promise<string> {
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
   for (const image of images) {
@@ -49,7 +50,15 @@ export async function generateGeminiText(
     `${normalizeBase(baseUrl)}/models/${encodeURIComponent(model)}:generateContent`,
     apiKey,
     "x-goog-api-key",
-    { method: "POST", body: JSON.stringify({ contents: [{ role: "user", parts }] }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...(systemPrompt.trim()
+          ? { systemInstruction: { parts: [{ text: systemPrompt.trim() }] } }
+          : {}),
+        contents: [{ role: "user", parts }],
+      }),
+    },
   ) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
   return data.candidates?.flatMap((candidate) => candidate.content?.parts ?? [])
     .map((part) => part.text).filter((text): text is string => Boolean(text)).join("\n") ?? "";

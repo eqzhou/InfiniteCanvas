@@ -118,6 +118,7 @@ export function AssistantPanel() {
           model: getProvider(channel, "text").model,
           prompt,
           images: await resolveNodeImageDataUrls(imageKeys),
+          systemPrompt: config.systemPrompt,
         });
         patchSession(
           next.map((m) =>
@@ -135,6 +136,7 @@ export function AssistantPanel() {
           quality: config.imageQuality,
           n: 1,
           referenceDataUrls: await resolveNodeImageDataUrls(imageKeys),
+          systemPrompt: config.systemPrompt,
         });
         const images: AssistantImage[] = [];
         for (const url of urls) {
@@ -245,6 +247,7 @@ export function AssistantPanel() {
           model: getProvider(channel, "text").model,
           prompt: user.text,
           images: await resolveNodeImageDataUrls(imageKeys),
+          systemPrompt: config.systemPrompt,
         });
         patchSession(
           base.map((m) =>
@@ -260,6 +263,7 @@ export function AssistantPanel() {
           quality: config.imageQuality,
           n: 1,
           referenceDataUrls: await resolveNodeImageDataUrls(imageKeys),
+          systemPrompt: config.systemPrompt,
         });
         const images: AssistantImage[] = [];
         for (const url of urls) {
