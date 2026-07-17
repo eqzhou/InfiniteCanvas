@@ -885,6 +885,13 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     approvalBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
+  await page.route("**/api/projects/*", async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "temporary sync failure" }),
+    });
+  });
   await page.route("**/api/codex/events?sessionId=session-e2e", async (route) => {
     eventStreamCount += 1;
     const event = eventStreamCount === 1
@@ -900,6 +907,8 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await page.getByLabel("Local URL").fill("http://127.0.0.1:8790");
   await page.getByRole("button", { name: "连接" }).click();
   await page.getByRole("button", { name: "继续会话" }).click();
+  await expect(page.getByText("Agent project read failed: HTTP 503", { exact: false })).toBeVisible();
+  await expect(page.getByPlaceholder("发送消息")).toBeVisible();
   await expect(page.getByText("hello from Codex")).toBeVisible();
   await expect(page.locator("script").filter({ hasText: "bad()" })).toHaveCount(0);
   await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({

@@ -30,6 +30,7 @@ export function LocalAgentPanel() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState(() => resolveAgentBaseUrl(
     config.localAgentUrl,
     readAgentToken(),
@@ -41,6 +42,7 @@ export function LocalAgentPanel() {
   const refresh = useCallback(async () => {
     setBusy(true);
     setError(null);
+    setSyncError(null);
     try {
       setStatus(await fetchAgentStatus(connection));
       return true;
@@ -100,8 +102,9 @@ export function LocalAgentPanel() {
             }
           }
         }
-      } catch (syncError) {
-        if (active) setError(syncError instanceof Error ? syncError.message : String(syncError));
+        if (active) setSyncError(null);
+      } catch (cause) {
+        if (active) setSyncError(cause instanceof Error ? cause.message : String(cause));
       } finally {
         running = false;
       }
@@ -177,13 +180,14 @@ export function LocalAgentPanel() {
         </button>
       </div>
       {error ? (
-        <p className="text-xs text-[var(--ob-danger)]">
+        <p role="alert" className="text-xs text-[var(--ob-danger)]">
           无法连接 Agent：{error}
           <br />
           请运行 <code>cd server && go run ./cmd/server</code>
         </p>
       ) : (
         <div className="space-y-2 text-xs">
+          {syncError ? <p role="alert" className="text-[var(--ob-danger)]">Agent 同步失败：{syncError}</p> : null}
           <div>
             状态：{" "}
             <span
