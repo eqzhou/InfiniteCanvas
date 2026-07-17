@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,6 +39,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(timeoutRequests(60 * time.Second))
 	r.Use(cors(origins))
+	r.Use(rateLimitRequests(1_200, time.Minute))
 	r.Use(requireToken(token))
 
 	var appServer *api.Server
@@ -73,6 +76,39 @@ func main() {
 	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
+	}
+}
+
+func rateLimitRequests(limit int, window time.Duration) func(http.Handler) http.Handler {
+	if limit < 1 || window <= 0 {
+		panic("rate limit and window must be positive")
+	}
+	var mu sync.Mutex
+	started := time.Now()
+	count := 0
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			now := time.Now()
+			mu.Lock()
+			if now.Sub(started) >= window {
+				started = now
+				count = 0
+			}
+			if count >= limit {
+				remaining := window - now.Sub(started)
+				seconds := int64((remaining + time.Second - 1) / time.Second)
+				if seconds < 1 {
+					seconds = 1
+				}
+				mu.Unlock()
+				w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+				http.Error(w, "request rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			count++
+			mu.Unlock()
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 

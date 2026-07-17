@@ -6,7 +6,8 @@ fixtures, and implementation structure.
 
 ## Frozen baseline
 
-The current engineering baseline is `basketikun/infinite-canvas v0.8.2` as
+The current engineering baseline is `basketikun/infinite-canvas v0.8.2`
+(`0c4288b8325c95a8bdca76e93737d07ffbc55f7e`) as
 described by public documentation and recorded black-box behavior available on
 2026-07-16. Later upstream changes are out of scope until a new baseline is
 explicitly adopted. The implementation team did not use upstream source, CSS,
@@ -35,6 +36,8 @@ plugins, fixtures, screenshots, or assets as implementation input.
 | 2026-07-18 | Prompt catalogs | Filter by tag, save/refresh/remove multiple remote sources, inspect result images | Filters are independent; refreshed entries replace stale cache; bounded HTTPS galleries remain inspectable | high |
 | 2026-07-18 | Video creation | Generate video from text/image nodes with smart or explicit duration | A connected video node is created; image references are forwarded; unsupported Ark duration/resolution combinations fail before request | high |
 | 2026-07-18 | Assistant images | Paste, preview, remove, insert, send, and reinsert images | Attachments remain visible and controllable without exposing provider credentials or requiring a chat turn | high |
+| 2026-07-18 | Config text batches | Select text mode and request 1-8 alternatives from a generation config node | The requested number of text calls complete before connected result nodes are committed | high |
+| 2026-07-18 | New API local link | Open a loopback URL containing legacy `apiKey` and `baseUrl` query parameters | The active text provider is populated and the sensitive query is immediately removed; non-loopback deployments require a fragment link | high |
 
 ## Evidence
 
@@ -51,8 +54,12 @@ plugins, fixtures, screenshots, or assets as implementation input.
 
 | URL | Accessed | Used for |
 |---|---|---|
-| https://github.com/basketikun/infinite-canvas | 2026-07-16 | Public project identity, v0.8.2 feature surface, and black-box target reference |
-| https://github.com/basketikun/infinite-canvas/blob/main/README.md | 2026-07-16 | Publicly described workflows and setup behavior |
+| https://github.com/basketikun/infinite-canvas/tree/v0.8.2 | 2026-07-18 | Frozen public project identity and target commit `0c4288b8325c95a8bdca76e93737d07ffbc55f7e` |
+| https://github.com/basketikun/infinite-canvas/blob/v0.8.2/README.md | 2026-07-18 | Public overview and New API local-link behavior; blob `32c4bf4493788fe0f8a8cbafe146fad04bcf3ea6` |
+| https://github.com/basketikun/infinite-canvas/blob/v0.8.2/docs/content/docs/overview/features.mdx | 2026-07-18 | Public feature inventory; blob `69d5ffc8da68b595bfff9fb13b50063916d4d26b` |
+| https://github.com/basketikun/infinite-canvas/blob/v0.8.2/docs/content/docs/canvas/canvas-node-manual.mdx | 2026-07-18 | Public node workflows; blob `fa09a603765d235080b0977e98930735950dc324` |
+| https://github.com/basketikun/infinite-canvas/blob/v0.8.2/docs/content/docs/canvas/canvas-shortcuts.mdx | 2026-07-18 | Public shortcut behavior; blob `12865173d4e0f190b03d2694de42fb834d0c303a` |
+| https://github.com/basketikun/infinite-canvas/blob/v0.8.2/docs/content/docs/progress/todo.mdx | 2026-07-18 | Publicly declared remaining reference-project work; blob `36ce0801b904de38c7b0a75344f2ee8f11b85c17` |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.8.2 | 2026-07-17 | Frozen release identifier and public release notes; URL availability verified without reading source files |
 | https://spec.modelcontextprotocol.io/ | 2026-07-16 | MCP transport and tool lifecycle interoperability |
 | https://www.jsonrpc.org/specification | 2026-07-16 | JSON-RPC request, notification, response, and error semantics |

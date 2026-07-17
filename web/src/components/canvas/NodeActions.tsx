@@ -11,6 +11,7 @@ import {
   resolveNodeImageDataUrls,
 } from "@/services/ai-client";
 import { downloadStorageKey, uploadMedia } from "@/services/storage";
+import { generateTextBatch } from "@/services/text-batch";
 import { makeCroppedNode, makeRotatedNode } from "@/lib/image-ops";
 import { createNode } from "@/lib/defaults";
 import { nowIso, uid } from "@/lib/id";
@@ -208,18 +209,23 @@ export function NodeActions({ node }: { node: BoardNode }) {
     updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
     try {
       if (mode === "text") {
-        const out = await generateText({
+        const model = node.metadata.model || getProvider(channel, "text").model;
+        const outputs = await generateTextBatch({
           channel,
-          model: node.metadata.model || getProvider(channel, "text").model,
+          model,
           prompt,
           images: await resolveNodeImageDataUrls(imageKeys),
+          count: node.metadata.count || 1,
         });
-        const created = createNode(
+        const created = outputs.map((content, index) => createNode(
           "text",
-          { x: node.position.x + node.width + 60, y: node.position.y },
-          { metadata: { content: out, status: "success" } },
-        );
-        placeRight([created]);
+          {
+            x: node.position.x + node.width + 60,
+            y: node.position.y + index * 40,
+          },
+          { metadata: { content, model, prompt, status: "success" } },
+        ));
+        placeRight(created);
       } else if (mode === "image") {
         const refs = await resolveNodeImageDataUrls(imageKeys);
         assertResolvedImageReferences(imageKeys, refs);

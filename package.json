@@ -14,6 +14,7 @@
     "server": "cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go run ./cmd/server",
     "mcp": "cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go run ./cmd/mcp",
     "audit:licenses": "node scripts/audit-licenses.mjs",
+    "audit:vulnerabilities": "node --test scripts/osv-audit-core.test.mjs && node scripts/audit-vulnerabilities.mjs",
     "audit:cleanroom": "node scripts/audit-cleanroom.mjs",
     "audit:release": "node scripts/check-release-readiness.mjs",
     "test:e2e:formal": "bun run --cwd web test:e2e:formal"

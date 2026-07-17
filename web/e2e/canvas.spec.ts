@@ -24,6 +24,17 @@ test("first launch creates and opens a board project", async ({ page }) => {
   }
 });
 
+test("loopback New API links configure text credentials and scrub the URL", async ({ page }) => {
+  await page.goto("/?apiKey=local-test-key&baseUrl=http%3A%2F%2F127.0.0.1%3A3001%2Fv1");
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
+  await expect(page.getByLabel("文本 URL")).toHaveValue("http://127.0.0.1:3001/v1");
+  await expect(page.getByLabel("文本 API Key")).toHaveValue("local-test-key");
+  await expect(page.getByLabel("生图 API Key")).not.toHaveValue("local-test-key");
+  await expect(page.getByLabel("视频 API Key")).not.toHaveValue("local-test-key");
+  await expect(page.getByLabel("音频 API Key")).not.toHaveValue("local-test-key");
+});
+
 test("a text node and its content survive a reload", async ({ page }) => {
   await openFreshBoard(page);
   await page.getByTitle("文本").click();
@@ -197,6 +208,41 @@ test("text-to-image creates a connected config and executes immediately", async 
       };
     }),
   )).toBe(true);
+});
+
+test("a configuration node generates the requested text batch", async ({ page }) => {
+  let requests = 0;
+  await page.route("https://batch.example/v1/responses", async (route) => {
+    requests += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ output_text: `batch result ${requests}` }),
+    });
+  });
+
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("文本 URL").fill("https://batch.example/v1");
+  await page.getByLabel("文本 API Key").fill("batch-test-key");
+  await page.getByLabel("文本模型").fill("batch-text-model");
+  await page.getByRole("button", { name: "关闭" }).click();
+
+  await page.getByTitle("文本").click();
+  const source = page.locator('[data-node-type="text"]');
+  await source.getByPlaceholder("写下提示词或说明…").fill("three alternatives");
+  await page.getByTitle("配置").click();
+  const config = page.locator('[data-node-type="config"]');
+  await source.getByTitle("输出端口 / 拖出连线").click();
+  await config.getByTitle("输入端口").click();
+  await config.getByLabel("模式").selectOption("text");
+  await config.getByLabel("数量").fill("3");
+  await config.getByTitle("运行生成").click();
+
+  await expect.poll(() => requests).toBe(3);
+  await expect(page.locator('[data-node-type="text"]')).toHaveCount(4);
+  for (const index of [1, 2, 3]) {
+    await expect(page.getByText(`batch result ${index}`, { exact: true })).toBeVisible();
+  }
 });
 
 test("image workbench persists history and inserts a result into the canvas", async ({ page }) => {

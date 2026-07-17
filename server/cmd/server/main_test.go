@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestCORSMiddleware(t *testing.T) {
@@ -75,5 +76,27 @@ func TestLoopbackAddressAndTokenMiddleware(t *testing.T) {
 	handler.ServeHTTP(authorized, authorizedRequest)
 	if authorized.Code != http.StatusNoContent {
 		t.Fatalf("authorized status = %d", authorized.Code)
+	}
+}
+
+func TestRateLimitMiddleware(t *testing.T) {
+	handler := rateLimitRequests(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for attempt := 0; attempt < 2; attempt++ {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("attempt %d status = %d", attempt, response.Code)
+		}
+	}
+	limited := httptest.NewRecorder()
+	handler.ServeHTTP(limited, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("limited status = %d", limited.Code)
+	}
+	if limited.Header().Get("Retry-After") == "" {
+		t.Fatal("rate-limited response must include Retry-After")
 	}
 }

@@ -25,10 +25,10 @@ from the lockfile and package registries before distribution.
 
 | Module | Version | License source |
 |---|---:|---|
-| github.com/go-chi/chi/v5 | 5.2.2 | upstream module metadata; MIT |
+| github.com/go-chi/chi/v5 | 5.3.1 | upstream module metadata; MIT |
 | github.com/coder/websocket | 1.8.15 | upstream module metadata; ISC |
-| github.com/jackc/pgx/v5 | 5.9.2 | upstream module metadata; MIT |
-| github.com/redis/go-redis/v9 | 9.14.0 | upstream module metadata; BSD-2-Clause |
+| github.com/jackc/pgx/v5 | 5.10.0 | upstream module metadata; MIT |
+| github.com/redis/go-redis/v9 | 9.21.0 | upstream module metadata; BSD-2-Clause |
 
 Platform binary packages with no bundled text notice are tracked by
 `docs/LICENSE_REVIEW.json`: `@esbuild/darwin-arm64` (MIT,
@@ -45,6 +45,7 @@ inventory and attribution review.
 ## Release gate
 
 - [x] Generate a preliminary SPDX SBOM from the installed frozen web dependency tree
+- [x] Scan installed npm and Go module versions against OSV in CI
 - [ ] Include complete license texts and notices for shipped dependencies
 - [ ] Inventory container/base-image licenses
 - [ ] Review fonts, icons, screenshots, and generated media

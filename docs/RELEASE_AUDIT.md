@@ -11,7 +11,7 @@ This is a release gate, not a legal opinion.
 - [x] PostgreSQL is authoritative, Redis is disposable, and provider keys are AES-GCM encrypted.
 - [x] Production build, cross-browser E2E, formal-storage E2E, and container smoke pass.
 - [x] Formal tests use isolated PostgreSQL/Redis/media stores and verify zero residue.
-- [x] No known dependency vulnerabilities were reported by `bun audit` on 2026-07-17.
+- [x] The fail-closed OSV audit reported zero active records across 223 installed npm/Go package versions on 2026-07-18.
 
 The personal local single-user target is engineering-ready. The unchecked items
 below intentionally keep commercial/closed-source publication blocked; they do
@@ -20,11 +20,12 @@ not indicate missing local canvas functionality.
 ## Engineering
 
 - [x] Chromium, WebKit, and Firefox Playwright projects are configured.
-- [x] Full CI Playwright suite passes (105 passed, 6 intentional environment skips) across Chromium, WebKit, Firefox, and mobile Chromium.
-- [x] Production-build Chromium suite passes locally (32 passed) with isolated Go storage.
+- [x] Full CI Playwright suite passes (129 passed, 7 intentional environment skips) across Chromium, WebKit, Firefox, and mobile Chromium.
+- [x] Production-build Chromium suite passes (34 passed) with isolated Go storage.
 - [x] Touch and mobile flows are covered by mobile Chromium; Firefox desktop touch injection is skipped by design.
 - [x] Bun unit tests, TypeScript build, Go race tests, and `go vet` pass.
-- [x] Container build and PostgreSQL/Redis smoke pass in GitHub CI run `29587750715`.
+- [x] CI performs a fail-closed OSV batch audit for installed npm and Go module versions.
+- [x] Container build and PostgreSQL/Redis smoke pass in the latest required `main` CI workflow.
 - [x] Formal local PostgreSQL/Redis/media E2E passes and leaves zero temporary databases and zero Redis DB 14 keys.
 - [ ] Independent security and similarity review is signed off.
 

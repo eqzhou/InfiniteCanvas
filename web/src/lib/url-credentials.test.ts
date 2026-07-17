@@ -37,6 +37,19 @@ describe("URL credential consumption", () => {
     });
   });
 
+  test("consumes legacy New API query credentials only on loopback", () => {
+    expect(consumeUrlCredentials(
+      "http://localhost:5173/?apiKey=local-key&baseUrl=http%3A%2F%2F127.0.0.1%3A3001%2Fv1&keep=1",
+    )).toEqual({
+      credentials: {
+        apiKey: "local-key",
+        baseUrl: "http://127.0.0.1:3001/v1",
+      },
+      sanitizedPath: "/?keep=1",
+      hadSensitiveParams: true,
+    });
+  });
+
   test("leaves an unrelated URL unchanged", () => {
     expect(consumeUrlCredentials("https://board.example/?keep=1#hash")).toEqual({
       credentials: {},

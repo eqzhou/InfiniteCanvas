@@ -92,6 +92,7 @@ The detailed evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.m
 bun run test                         # TypeScript unit tests + Go API tests
 bun run build                        # production web build
 bun run benchmark:indexes:assert     # 1k/10k spatial-index performance gate
+bun run audit:vulnerabilities        # fail-closed OSV scan for installed npm and Go modules
 cd web && bun run test:e2e            # Chromium, Firefox, WebKit, mobile Chromium
 cd web && bun run test:e2e:production # production-build SPA + isolated Go data dir
 bun run test:e2e:formal               # temporary PostgreSQL + Redis DB 14 + media
@@ -99,9 +100,9 @@ cd server && go test -race ./... && go vet ./...
 ```
 
 GitHub Actions runs the web tests, typecheck, production build, performance
-assertion, cross-browser and production Playwright suites, Go race
+assertion, OSV dependency audit, cross-browser and production Playwright suites, Go race
 detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The Bun coverage report reaches 84.72% lines and 86.72% functions for covered
+pull requests. The Bun coverage report reaches 85.38% lines and 87.43% functions for covered
 library/service modules; browser-only UI and persistence paths are validated by
 Playwright and are outside that report.
 

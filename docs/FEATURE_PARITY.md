@@ -10,12 +10,64 @@ Status: `verified` means the behavior is implemented and has repeatable unit,
 integration, E2E, or formal-storage evidence in this repository. Provider
 smoke tests that require real paid credentials remain opt-in.
 
+## Public baseline traceability
+
+The frozen public inputs are the immutable v0.8.2 documents and hashes listed
+in `docs/BEHAVIOR_SPEC.md`. This table maps their named behaviors to local
+implementation and verification surfaces; it does not use upstream source as
+implementation evidence.
+
+| Public behavior | Local evidence |
+|---|---|
+| Multi-project create/rename/delete/batch delete and JSON/media import/export | `use-board-store.ts`, `HomePage.tsx`, `board-document.test.ts`, `project-bundle.test.ts`, formal storage E2E |
+| Pan, wheel/pinch/slider zoom, reset, fit, minimap, backgrounds and themes | `gesture.test.ts`, `geometry.test.ts`, `BoardCanvas.tsx`, viewport/mobile E2E |
+| Marquee/additive/all selection, delete, copy/paste with edges, undo/redo and shortcuts | `BoardCanvas.tsx`, `use-board-store.ts`, `history.test.ts`, `keyboard.test.ts` |
+| Selected-node upstream/downstream node and edge highlighting | `BoardCanvas.tsx` related-node/active-edge rendering |
+| Text/image/config/video/audio nodes, drag, resize, ports, metadata and preview | `BoardNodeView.tsx`, `NodeActions.tsx`, canvas E2E |
+| Image proportional/free resizing, replacement, download and asset insertion | `BoardNodeView.tsx`, `NodeActions.tsx`, `AssetsPage.tsx` |
+| Text editing, node model/prompt selection, empty-node fill and connected rewrite | `NodePromptBar.tsx`, `node title, font size, and model overrides` E2E |
+| Text-to-image creates and immediately runs a connected config node | `text-to-image creates a connected config` E2E |
+| Config nodes aggregate ordered text/image/video/audio inputs | `BoardNodeView.tsx` input preview and `NodeActions.tsx` ordered upstream resolver |
+| Config image batches and config text batches of 1-8 results | `image-generation.test.ts`, `text-batch.test.ts`, config text-batch E2E |
+| Image upload/drag, crop, rotate/multi-angle, mask, upscale, split and lineage | image transform unit tests plus split/upscale E2E |
+| Image retry protects missing references; multi-result batches expand and select a primary image | `image-generation.test.ts`, `BatchGroupControls.tsx`, canvas E2E |
+| Independent text/image/video/audio provider URL, key, protocol, model and model listing | `SettingsModal.tsx`, `ai-client.test.ts`, formal storage E2E |
+| OpenAI text/image/video/audio and Ark/Seedance video contracts | `ai-client.test.ts`, `video-generation.test.ts`, image-to-video E2E |
+| Seedance 9 image/3 video/3 audio references, ratios, 480p/720p/1080p and smart/4-15s duration | `NodeActions.tsx`, `BoardNodeView.tsx`, `CreativeWorkbench.tsx`, `video-generation.test.ts` |
+| Assistant selected/upstream context, text/image generation, sessions, retry, insert and single/batch deletion | `AssistantPanel.tsx`, `assistant-sessions.test.ts`, assistant E2E |
+| Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and multiple remote caches | `PromptsPage.tsx`, `PromptDetailDialog.tsx`, `prompt-sources.test.ts`, prompt E2E |
+| Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | `AssetsPage.tsx`, `AssetEditorDialog.tsx`, asset/formal E2E |
+| WebDAV upload/download with media-complete project packages and no exported credentials | `SettingsModal.tsx`, `webdav.test.ts`, `project-bundle.test.ts` |
+| Loopback New API query auto-configuration and remote-safe fragment configuration | `url-credentials.test.ts` and loopback-link E2E |
+| Plugin install/enable/update/rollback/uninstall, sandbox, permissions, SDK and five examples | plugin unit tests plus registry/SVG/panorama E2E |
+| Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, generation-job tests, workbench/formal E2E |
+| Browser runtime, MCP tools, snapshots, Codex continuity, attachments, stop and approvals | Go runtime/MCP/Codex tests plus browser/Codex E2E |
+| PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
+
+## Intentional differences
+
+- OpenBoard formal local mode uses PostgreSQL, Redis and protected media files;
+  the reference v0.8.2 documentation describes browser-local data. IndexedDB
+  remains only the development/offline compatibility implementation.
+- Provider keys are encrypted by the local Go service. Remote deployments use
+  `#connect?...` credentials so secrets do not enter HTTP logs; legacy query
+  links are accepted only on loopback for v0.8.2 New API compatibility.
+- Prompt samples, remote-source defaults, plugin examples, visuals, copy,
+  assets, schemas and product identity are independently authored. The remote
+  source mechanism is compatible, but upstream catalogs and content are not
+  copied or bundled.
+- OpenBoard adds audio nodes, workbenches, plugin isolation, the browser
+  runtime, expanded MCP tools and a production-shaped local backend. These are
+  additive and do not redefine the frozen reference requirements.
+- Hosted accounts, tenants, billing and multi-user authorization are outside
+  both the personal/local target and this v0.8.2 parity claim.
+
 ## Verification summary
 
-- [verified] 184 Bun unit/integration tests; 84.72% lines and 86.72% functions
+- [verified] 187 Bun unit/integration tests; 85.38% lines and 87.43% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
-- [verified] 105 passed and 6 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
-- [verified] 32/32 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 129 passed and 7 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
+- [verified] 34/34 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit

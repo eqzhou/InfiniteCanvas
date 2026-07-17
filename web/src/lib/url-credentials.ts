@@ -10,15 +10,23 @@ export interface ConsumedUrlCredentials {
   hadSensitiveParams: boolean;
 }
 
-/** Consume one-time fragment credentials and scrub legacy query secrets without using them. */
+/** Consume fragment credentials and loopback-only New API query links, then scrub both. */
 export function consumeUrlCredentials(input: string): ConsumedUrlCredentials {
   const url = new URL(input);
   const hadLegacyQuery = url.searchParams.has("apiKey") || url.searchParams.has("baseUrl");
   const credentials: UrlCredentials = {};
+  const loopback = url.hostname === "localhost" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "::1" ||
+    url.hostname === "[::1]";
   const fragmentParams = url.hash.startsWith("#connect?")
     ? new URLSearchParams(url.hash.slice("#connect?".length))
     : null;
 
+  if (loopback && hadLegacyQuery) {
+    if (url.searchParams.has("apiKey")) credentials.apiKey = url.searchParams.get("apiKey") ?? "";
+    if (url.searchParams.has("baseUrl")) credentials.baseUrl = url.searchParams.get("baseUrl") ?? "";
+  }
   if (fragmentParams?.has("apiKey")) credentials.apiKey = fragmentParams.get("apiKey") ?? "";
   if (fragmentParams?.has("baseUrl")) credentials.baseUrl = fragmentParams.get("baseUrl") ?? "";
   const provider = fragmentParams?.get("provider");
