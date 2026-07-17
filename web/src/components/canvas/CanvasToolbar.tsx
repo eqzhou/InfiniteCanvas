@@ -38,7 +38,11 @@ export function CanvasToolbar({
   const setShowMinimap = useBoardStore((s) => s.setShowMinimap);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] py-2 pl-14 pr-3 sm:px-3">
+    <div
+      role="toolbar"
+      aria-label="画布工具栏"
+      className="flex flex-wrap items-center gap-2 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] py-2 pl-14 pr-3 sm:px-3"
+    >
       <Tool label="文本" onClick={() => onAdd("text")}>
         <Type size={16} />
       </Tool>

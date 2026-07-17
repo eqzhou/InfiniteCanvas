@@ -16,6 +16,11 @@ async function openFreshBoard(page: Page) {
   }
 }
 
+async function closeSettings(page: Page) {
+  await page.getByRole("button", { name: "关闭" }).click();
+  await expect(page.getByRole("heading", { name: "设置" })).toHaveCount(0);
+}
+
 test("first launch creates and opens a board project", async ({ page }) => {
   await openFreshBoard(page);
   if ((page.viewportSize()?.width ?? 1440) >= 768) {
@@ -111,7 +116,8 @@ test("node ports support click-to-connect without requiring a drag", async ({ pa
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
   });
-  await page.getByRole("button", { name: "视频", exact: true }).click();
+  await page.getByRole("toolbar", { name: "画布工具栏" })
+    .getByRole("button", { name: "视频", exact: true }).click();
   const video = page.locator('[data-node-type="video"]');
   const header = video.locator("[data-node-header]");
   const box = await header.boundingBox();
@@ -120,6 +126,7 @@ test("node ports support click-to-connect without requiring a drag", async ({ pa
   await page.mouse.down();
   await page.mouse.move(box!.x + 430, box!.y + box!.height / 2, { steps: 8 });
   await page.mouse.up();
+  await page.keyboard.press("Escape");
 
   await page.locator('[data-node-type="image"]')
     .getByTitle("输出端口 / 拖出连线").click();
@@ -209,7 +216,7 @@ test("text-to-image creates a connected config and executes immediately", async 
   await settings.getByLabel("生图模型").fill("mock-image-model");
   await settings.getByLabel("默认数量").fill("2");
   await settings.getByLabel("全局系统提示词").fill("Use a crisp editorial style.");
-  await settings.getByRole("button", { name: "关闭" }).click();
+  await closeSettings(page);
 
   await page.getByTitle("文本").click();
   await page.getByPlaceholder("写下提示词或说明…").fill("a red square");
@@ -286,7 +293,7 @@ test("a configuration node generates the requested text batch", async ({ page })
   await page.getByLabel("生图模型").fill("batch-image-model");
   await page.getByLabel("默认数量").fill("1");
   await page.getByLabel("全局系统提示词").fill("Return one concise alternative.");
-  await page.getByRole("button", { name: "关闭" }).click();
+  await closeSettings(page);
 
   await page.getByTitle("文本").click();
   const source = page.locator('[data-node-type="text"]');
@@ -323,7 +330,7 @@ test("image workbench persists history and inserts a result into the canvas", as
   await page.getByLabel("生图 URL").fill("https://workbench.example/v1");
   await page.getByLabel("生图 API Key").fill("workbench-test-key");
   await page.getByLabel("生图模型").fill("workbench-image");
-  await page.getByRole("button", { name: "关闭" }).click();
+  await closeSettings(page);
 
   await page.goto("/workbench/image");
   await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
@@ -612,7 +619,7 @@ test("image reverse prompt creates a connected text node", async ({ page }) => {
   await page.getByLabel("文本 URL").fill("https://vision.example/v1");
   await page.getByLabel("文本 API Key").fill("vision-test-key");
   await page.getByLabel("文本模型").fill("vision-model");
-  await page.getByRole("button", { name: "关闭" }).click();
+  await closeSettings(page);
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
     name: "vision.png",
     mimeType: "image/png",
@@ -643,7 +650,7 @@ test("an image node can create a connected video with itself as reference", asyn
   await page.getByLabel("视频 URL").fill("https://video.example/v1");
   await page.getByLabel("视频 API Key").fill("video-test-key");
   await page.getByLabel("视频模型").fill("video-model");
-  await page.getByRole("button", { name: "关闭" }).click();
+  await closeSettings(page);
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
     name: "reference.png",
     mimeType: "image/png",
@@ -682,7 +689,7 @@ test("node prompt media chips preserve and submit connected image references", a
   await page.getByLabel("视频 URL").fill("https://chips.example/v1");
   await page.getByLabel("视频 API Key").fill("chip-test-key");
   await page.getByLabel("视频模型").fill("chip-video-model");
-  await page.getByRole("button", { name: "关闭" }).click();
+  await closeSettings(page);
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
     name: "chip-reference.png",
     mimeType: "image/png",
@@ -777,7 +784,10 @@ test("prompt details can insert their content into the active canvas", async ({ 
   await page.goto("/prompts");
   await page.getByRole("button", { name: "恢复内置" }).click();
   const promptCard = page.locator("article").filter({ hasText: "产品棚拍" });
-  await promptCard.getByRole("button", { name: "详情" }).click();
+  const detailButton = promptCard.getByRole("button", { name: "详情" });
+  await expect(detailButton).toBeVisible();
+  await detailButton.focus();
+  await detailButton.press("Enter");
 
   const dialog = page.getByRole("dialog", { name: "产品棚拍" });
   await expect(dialog).toContainText("Studio product photo");

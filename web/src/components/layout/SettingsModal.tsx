@@ -13,8 +13,10 @@ import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useBoardStore((s) => s.config);
   const setConfig = useBoardStore((s) => s.setConfig);
+  const flushConfig = useBoardStore((s) => s.flushConfig);
   const [models, setModels] = useState<Partial<Record<AiProviderKind, string[]>>>({});
   const [busyKind, setBusyKind] = useState<AiProviderKind | null>(null);
+  const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
@@ -54,8 +56,24 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       <div className="max-h-[90vh] w-full max-w-xl overflow-auto rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-shadow)]">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">设置</h2>
-          <button type="button" className="text-[var(--ob-muted)]" onClick={onClose}>
-            关闭
+          <button
+            type="button"
+            className="text-[var(--ob-muted)] disabled:opacity-50"
+            disabled={closing}
+            onClick={() => {
+              setClosing(true);
+              void flushConfig()
+                .then(() => {
+                  setClosing(false);
+                  onClose();
+                })
+                .catch((cause) => {
+                  setClosing(false);
+                  setError(cause instanceof Error ? cause.message : "配置保存失败");
+                });
+            }}
+          >
+            {closing ? "保存中…" : "关闭"}
           </button>
         </div>
 

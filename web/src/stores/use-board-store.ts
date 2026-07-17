@@ -40,6 +40,7 @@ import {
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { collectGenerationStorageKeys } from "@/services/generation-jobs";
+import { LatestWrite } from "@/lib/latest-write";
 
 type Snapshot = {
   nodes: BoardNode[];
@@ -97,6 +98,7 @@ type BoardState = {
   undo: () => void;
   redo: () => void;
   setConfig: (config: AppConfig) => void;
+  flushConfig: () => Promise<void>;
   setAssets: (assets: AssetItem[]) => void;
   setPrompts: (prompts: PromptItem[]) => void;
   addAssetFromNode: (nodeId: string) => Promise<void>;
@@ -151,6 +153,12 @@ function applySnap(project: BoardProject, s: Snapshot): BoardProject {
 
 let persistTimer: number | undefined;
 let hydratePromise: Promise<void> | undefined;
+const configWrites = new LatestWrite(saveConfig, (error) =>
+  console.error("OpenBoard config persistence failed", error));
+const assetWrites = new LatestWrite(saveAssets, (error) =>
+  console.error("OpenBoard asset persistence failed", error));
+const promptWrites = new LatestWrite(savePrompts, (error) =>
+  console.error("OpenBoard prompt persistence failed", error));
 
 export const useBoardStore = create<BoardState>((set, get) => ({
   ready: false,
@@ -540,17 +548,19 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setConfig: (config) => {
     const normalized = normalizeAppConfig(config);
     set({ config: normalized });
-    void saveConfig(normalized);
+    configWrites.enqueue(normalized);
   },
+
+  flushConfig: () => configWrites.flush(),
 
   setAssets: (assets) => {
     set({ assets });
-    void saveAssets(assets);
+    assetWrites.enqueue(assets);
   },
 
   setPrompts: (prompts) => {
     set({ prompts });
-    void savePrompts(prompts);
+    promptWrites.enqueue(prompts);
   },
 
   addAssetFromNode: async (nodeId) => {
