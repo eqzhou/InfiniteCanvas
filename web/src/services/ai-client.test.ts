@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { generateImages, generateSpeech, generateText, generateVideo } from "@/services/ai-client";
+import { generateImages, generateSpeech, generateText, generateVideo, listModels } from "@/services/ai-client";
 import type { AiChannel } from "@/types/board";
 
 const originalFetch = globalThis.fetch;
@@ -29,6 +29,23 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("generateVideo provider contracts", () => {
+  test("lists models from the selected provider endpoint and credentials", async () => {
+    const requests: Array<{ url: string; auth: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({ url: String(input), auth: new Headers(init?.headers).get("Authorization") });
+      return json({ data: [{ id: "video-z" }, { id: "video-a" }] });
+    }) as typeof fetch;
+    const c = { ...channel("https://legacy.example/v1"), providers: {
+      text: { baseUrl: "https://text.example/v1", apiKey: "text-key", model: "text" },
+      image: { baseUrl: "https://image.example/v1", apiKey: "image-key", model: "image" },
+      video: { baseUrl: "https://video.example/v1", apiKey: "video-key", model: "video" },
+      audio: { baseUrl: "https://audio.example/v1", apiKey: "audio-key", model: "audio" },
+    } };
+
+    await expect(listModels(c, "video")).resolves.toEqual(["video-a", "video-z"]);
+    expect(requests).toEqual([{ url: "https://video.example/v1/models", auth: "Bearer video-key" }]);
+  });
+
   test("routes each generation kind to its own URL and API key", async () => {
     const requests: Array<{ url: string; auth: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {

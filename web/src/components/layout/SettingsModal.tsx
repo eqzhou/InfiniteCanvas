@@ -11,8 +11,8 @@ import type { AiProviderKind } from "@/types/board";
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useBoardStore((s) => s.config);
   const setConfig = useBoardStore((s) => s.setConfig);
-  const [models, setModels] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [models, setModels] = useState<Partial<Record<AiProviderKind, string[]>>>({});
+  const [busyKind, setBusyKind] = useState<AiProviderKind | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
@@ -33,17 +33,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     updateChannel({ providers: { ...normalized.providers!, [kind]: { ...normalized.providers![kind], ...patch } } });
   };
 
-  const pullModels = async () => {
-    setBusy(true);
+  const pullModels = async (kind: AiProviderKind) => {
+    setBusyKind(kind);
     setError(null);
     try {
-      const list = await listModels(channel);
-      setModels(list);
-      if (!list.length) setError("未拉取到模型（Agent Plan 等需手动填写）");
+      const list = await listModels(channel, kind);
+      setModels((current) => ({ ...current, [kind]: list }));
+      if (!list.length) setError("未拉取到模型（该服务可能不支持模型列表，请手动填写）");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setBusyKind(null);
     }
   };
 
@@ -76,6 +76,28 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   <input className="field" aria-label={`${labels[kind]} API Key`} type="password" value={provider.apiKey} onChange={(e) => updateProvider(kind, { apiKey: e.target.value })} />
                   <input className="field" aria-label={`${labels[kind]}模型`} value={provider.model} onChange={(e) => updateProvider(kind, { model: e.target.value })} />
                 </div>
+                <button
+                  type="button"
+                  className="btn mt-2"
+                  disabled={busyKind !== null}
+                  onClick={() => void pullModels(kind)}
+                >
+                  {busyKind === kind ? "拉取中…" : `拉取${labels[kind]}模型`}
+                </button>
+                {models[kind]?.length ? (
+                  <div className="mt-2 max-h-28 overflow-auto rounded border border-[var(--ob-line)] p-2 text-xs">
+                    {models[kind]!.map((model) => (
+                      <button
+                        key={model}
+                        type="button"
+                        className="mr-2 mb-1 rounded bg-[var(--ob-accent-soft)] px-2 py-0.5"
+                        onClick={() => updateProvider(kind, { model })}
+                      >
+                        {model}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>;
             })}
           </div>
@@ -189,14 +211,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <button
               type="button"
               className="btn"
-              disabled={busy}
-              onClick={() => void pullModels()}
-            >
-              {busy ? "拉取中…" : "拉取模型列表"}
-            </button>
-            <button
-              type="button"
-              className="btn"
               onClick={() => {
                 const ch = createDefaultChannel();
                 setConfig({
@@ -221,22 +235,11 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </select>
           </div>
           {error ? <p className="text-[var(--ob-danger)]">{error}</p> : null}
-          {models.length ? (
-            <div className="max-h-40 overflow-auto rounded border border-[var(--ob-line)] p-2 text-xs">
-              {models.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className="mr-2 mb-1 rounded bg-[var(--ob-accent-soft)] px-2 py-0.5"
-                  onClick={() => updateProvider("text", { model: m })}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          ) : null}
           <p className="text-xs text-[var(--ob-muted)]">
-            API Key 仅保存在本机浏览器。Seedance / 火山方舟 Agent Plan 请将 Base URL 设为
+            {import.meta.env.VITE_OPENBOARD_STORAGE === "server"
+              ? "API Key 经本地服务加密后存入 PostgreSQL，数据库中不保存明文。"
+              : "API Key 仅保存在本机浏览器会话。"}
+            Seedance / 火山方舟 Agent Plan 请将 Base URL 设为
             `.../api/plan/v3` 并手动填写模型名。渠道 id 占位：{uid("note").slice(0, 8)}…
           </p>
         </div>

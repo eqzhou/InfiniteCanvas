@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
 const apiProxy = {
-  target: "http://127.0.0.1:8790",
+  target: process.env.OPENBOARD_API_TARGET || "http://127.0.0.1:8790",
   changeOrigin: true,
   headers: process.env.OPENBOARD_TOKEN
     ? { Authorization: `Bearer ${process.env.OPENBOARD_TOKEN}` }

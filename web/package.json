@@ -14,6 +14,7 @@
     "benchmark:indexes:assert": "bun run benchmarks/indexes.bench.ts --assert",
     "test:e2e": "playwright test",
     "test:e2e:production": "OPENBOARD_E2E_PRODUCTION=1 playwright test",
+    "test:e2e:formal": "../scripts/run-formal-e2e.sh",
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {

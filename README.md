@@ -122,7 +122,31 @@ and local HTTP session/message/approval/SSE endpoints are available, along with
 a basic browser conversation and approval surface. Advanced app-server methods
 and rich turn rendering remain under active development.
 
-### Optional Go local server
+### Formal local use
+
+After configuring `.env` with the installed PostgreSQL and Redis instances, use:
+
+```bash
+bun run start:local
+```
+
+This command validates the required database, Redis, token, and encryption-key
+settings; builds the SPA with server storage enabled; starts the Go service; and
+serves the production build at http://localhost:5173. Projects and application
+state are stored in PostgreSQL, Redis is used only as a disposable cache, and
+media is stored under the user-scoped OpenBoard data directory. `bun run dev`
+is the frontend development mode and must not be used as the formal local data
+entry point.
+
+The database-backed end-to-end test uses a temporary `openboard_e2e_*` database,
+Redis database 14, and a temporary media directory. It force-cleans all three
+before and after the run:
+
+```bash
+bun run test:e2e:formal
+```
+
+### File-mode Go server
 
 ```bash
 cd server
@@ -130,7 +154,7 @@ go run ./cmd/server
 ```
 
 Default: http://127.0.0.1:8790
-By default, local project data is stored in the user-scoped OpenBoard config
+Without `OPENBOARD_DATABASE_URL`, project data is stored in the user-scoped OpenBoard config
 directory. Set `OPENBOARD_DATA` explicitly to choose another location; the
 container deployment uses its isolated `/data` volume.
 
