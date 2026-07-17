@@ -30,6 +30,77 @@ function fallbackTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(canvas);
 }
 
+function mountCanvasFallback(container: HTMLDivElement, sourceUrl?: string): () => void {
+  const canvas = document.createElement("canvas");
+  canvas.dataset.panoramaCanvas = "true";
+  canvas.dataset.panoramaRenderer = "2d";
+  container.appendChild(canvas);
+  const context = canvas.getContext("2d");
+  if (!context) return () => canvas.remove();
+  let image: HTMLImageElement | undefined;
+  let offset = 0;
+  let pointerX: number | undefined;
+  const draw = () => {
+    const ratio = Math.min(window.devicePixelRatio, 2);
+    const width = Math.max(1, container.clientWidth);
+    const height = Math.max(1, container.clientHeight);
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.fillStyle = "#0f766e";
+    context.fillRect(0, 0, width, height);
+    if (image?.complete && image.naturalWidth > 0) {
+      const scale = Math.max(height / image.naturalHeight, width / image.naturalWidth);
+      const renderedWidth = image.naturalWidth * scale;
+      const renderedHeight = image.naturalHeight * scale;
+      const normalizedOffset = ((offset % renderedWidth) + renderedWidth) % renderedWidth;
+      for (let x = normalizedOffset - renderedWidth; x < width; x += renderedWidth) {
+        context.drawImage(image, x, (height - renderedHeight) / 2, renderedWidth, renderedHeight);
+      }
+    } else {
+      context.fillStyle = "#f4d35e";
+      context.fillRect(0, height * 0.58, width, height * 0.2);
+      context.fillStyle = "#ecfeff";
+      context.beginPath();
+      context.arc(width / 2, height * 0.35, Math.max(18, height * 0.16), 0, Math.PI * 2);
+      context.fill();
+    }
+  };
+  if (sourceUrl) {
+    image = new Image();
+    image.onload = draw;
+    image.src = sourceUrl;
+  }
+  const observer = new ResizeObserver(draw);
+  observer.observe(container);
+  const pointerDown = (event: PointerEvent) => {
+    pointerX = event.clientX;
+    canvas.setPointerCapture(event.pointerId);
+  };
+  const pointerMove = (event: PointerEvent) => {
+    if (pointerX === undefined) return;
+    offset += event.clientX - pointerX;
+    pointerX = event.clientX;
+    draw();
+  };
+  const pointerEnd = () => { pointerX = undefined; };
+  canvas.addEventListener("pointerdown", pointerDown);
+  canvas.addEventListener("pointermove", pointerMove);
+  canvas.addEventListener("pointerup", pointerEnd);
+  canvas.addEventListener("pointercancel", pointerEnd);
+  draw();
+  return () => {
+    observer.disconnect();
+    canvas.removeEventListener("pointerdown", pointerDown);
+    canvas.removeEventListener("pointermove", pointerMove);
+    canvas.removeEventListener("pointerup", pointerEnd);
+    canvas.removeEventListener("pointercancel", pointerEnd);
+    canvas.remove();
+  };
+}
+
 export function PanoramaPluginNode({ node }: { node: BoardNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const updateNode = useBoardStore((state) => state.updateNode);
@@ -66,14 +137,20 @@ export function PanoramaPluginNode({ node }: { node: BoardNode }) {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100);
     camera.position.set(0, 0, 0.1);
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: false,
-      preserveDrawingBuffer: true,
-    });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false,
+        preserveDrawingBuffer: true,
+      });
+    } catch {
+      return mountCanvasFallback(container, sourceUrl);
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x0f766e, 1);
     renderer.domElement.dataset.panoramaCanvas = "true";
+    renderer.domElement.dataset.panoramaRenderer = "webgl";
     container.appendChild(renderer.domElement);
     const geometry = new THREE.SphereGeometry(10, 64, 40);
     geometry.scale(-1, 1, 1);

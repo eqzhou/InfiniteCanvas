@@ -389,8 +389,19 @@ test("Three.js panorama renders nonblank pixels on desktop and mobile", async ({
     };
   }))).toBe(true);
   await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => {
+    if (element.width < 2 || element.height < 2) return 0;
+    if (element.dataset.panoramaRenderer === "2d") {
+      const context = element.getContext("2d");
+      if (!context) return 0;
+      return context.getImageData(
+        Math.max(0, Math.floor(element.width / 2) - 1),
+        Math.max(0, Math.floor(element.height / 2) - 1),
+        3,
+        3,
+      ).data.reduce((sum, value) => sum + value, 0);
+    }
     const context = element.getContext("webgl2") ?? element.getContext("webgl");
-    if (!context || element.width < 2 || element.height < 2) return 0;
+    if (!context) return 0;
     const pixels = new Uint8Array(4 * 9);
     context.readPixels(
       Math.max(0, Math.floor(element.width / 2) - 1),
@@ -406,6 +417,31 @@ test("Three.js panorama renders nonblank pixels on desktop and mobile", async ({
   await page.locator('div[aria-label="3D 全景视图"]').screenshot({
     path: testInfo.outputPath(`panorama-${testInfo.project.name}.png`),
   });
+});
+
+test("panorama falls back to an interactive 2D canvas without WebGL", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "one browser is sufficient for the forced no-WebGL path");
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.getContext;
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value(this: HTMLCanvasElement, type: string, ...args: unknown[]) {
+        if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") return null;
+        return Reflect.apply(original, this, [type, ...args]);
+      },
+    });
+  });
+  await openFreshBoard(page);
+  await page.goto("/plugins");
+  await page.locator("article").filter({ hasText: "openboard.panorama" })
+    .getByRole("button", { name: "添加到画布" }).click();
+  const canvas = page.locator('canvas[data-panorama-renderer="2d"]');
+  await expect(canvas).toBeVisible();
+  await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext("2d");
+    if (!context || element.width < 2 || element.height < 2) return 0;
+    return context.getImageData(0, 0, 2, 2).data.reduce((sum, value) => sum + value, 0);
+  })).toBeGreaterThan(0);
 });
 
 test("double-clicking an image opens and closes the full preview", async ({ page }) => {
