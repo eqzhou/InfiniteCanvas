@@ -732,11 +732,9 @@ test("assistant previews pasted images and inserts them without sending", async 
     );
     const transfer = new DataTransfer();
     transfer.items.add(new File([bytes], "pasted.png", { type: "image/png" }));
-    element.dispatchEvent(new ClipboardEvent("paste", {
-      bubbles: true,
-      cancelable: true,
-      clipboardData: transfer,
-    }));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: transfer });
+    element.dispatchEvent(event);
   });
   const preview = page.getByAltText("待发送图片");
   await expect(preview).toBeVisible();

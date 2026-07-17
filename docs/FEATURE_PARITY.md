@@ -12,7 +12,7 @@ smoke tests that require real paid credentials remain opt-in.
 
 ## Verification summary
 
-- [verified] 183 Bun unit/integration tests; 84.60% lines and 86.50% functions
+- [verified] 184 Bun unit/integration tests; 84.72% lines and 86.72% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 105 passed and 6 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
 - [verified] 32/32 Chromium tests against the production Vite build and isolated Go data directory

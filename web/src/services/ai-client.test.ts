@@ -5,6 +5,7 @@ import {
   generateText,
   generateVideo,
   listModels,
+  resolveMediaRefs,
   resolveNodeImageDataUrl,
 } from "@/services/ai-client";
 import type { AiChannel } from "@/types/board";
@@ -20,6 +21,14 @@ test("uses an inline image when persistent blob storage is unavailable", async (
   const dataUrl = "data:image/png;base64,cGl4ZWw=";
   await expect(resolveNodeImageDataUrl(undefined, dataUrl)).resolves.toBe(dataUrl);
   await expect(resolveNodeImageDataUrl(undefined, "blob:temporary")).resolves.toBeNull();
+});
+
+test("falls back to inline media when a persisted reference is temporarily unavailable", async () => {
+  const dataUrl = "data:image/png;base64,cGl4ZWw=";
+  await expect(resolveMediaRefs([{
+    storageKey: "image:missing",
+    content: dataUrl,
+  }], 1)).resolves.toEqual([dataUrl]);
 });
 
 function channel(baseUrl: string): AiChannel {

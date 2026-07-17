@@ -650,6 +650,9 @@ export function NodeActions({ node }: { node: BoardNode }) {
           3,
         ),
       ]);
+      if (node.type === "image" && !referenceImages.length) {
+        throw new Error("当前图片参考内容不可用，请重新导入图片后再生成视频");
+      }
       const result = await generateVideo({
         channel,
         model: node.metadata.model || getProvider(channel, "video").model,

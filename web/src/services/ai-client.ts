@@ -749,9 +749,15 @@ export async function resolveMediaRefs(
     }
     if (item.storageKey) {
       const kind = item.storageKey.startsWith("media:") ? "media" : "image";
-      const data = await storageKeyToDataUrl(kind, item.storageKey);
-      if (data) out.push(data);
-      continue;
+      try {
+        const data = await storageKeyToDataUrl(kind, item.storageKey);
+        if (data) {
+          out.push(data);
+          continue;
+        }
+      } catch {
+        // A live inline URL may still be usable while local storage is unavailable.
+      }
     }
     if (item.content?.startsWith("data:") || item.content?.startsWith("blob:")) {
       if (item.content.startsWith("blob:")) {
