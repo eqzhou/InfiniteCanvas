@@ -1,95 +1,80 @@
-# Feature parity checklist
+# OpenBoard v0.8.2 behavior parity
 
-This is an implementation inventory, not proof of equivalence. Checked items
-have a code path in this repository; only items listed under **Automated
-verification** have repeatable tests. Target behavior must come from public
-documentation or recorded black-box observation, never upstream source.
+This inventory freezes the engineering target to the publicly documented and
+black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`. It does not
+claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
+an independent implementation with its own architecture, data model, UI,
+plugins, SDK, fixtures, and assets.
 
-Status: `implemented` | `partial` | `planned`
+Status: `verified` means the behavior is implemented and has repeatable unit,
+integration, E2E, or formal-storage evidence in this repository. Provider
+smoke tests that require real paid credentials remain opt-in.
 
-## Automated verification
-- [x] Camera coordinate transforms and fit-to-nodes bounds
-- [x] Undo/redo ordering, redo invalidation, and history limits
-- [x] Imported board validation (geometry, IDs, node types, edge integrity)
-- [x] Go project CRUD, invalid input rejection, and origin allowlist
-- [x] Browser E2E for critical canvas gestures and persistence (full suite: 65 passed, 3 environment-specific skips across configured browser projects)
-- [partial] Cross-browser desktop/mobile visual regression (Playwright behavior suite: 65 passed, 3 environment-specific skips; pixel-baseline review remains separate)
-- [x] 80%+ covered-module unit/integration coverage report (86.02% lines / 88.13% functions; UI-heavy modules remain outside Bun coverage)
+## Verification summary
 
-## Board projects
-- [x] Multiple projects
-- [x] Rename / delete / multi-select batch delete
-- [x] Export / import JSON
-- [x] Formal local PostgreSQL persistence + Redis cache + server media rehydrate
-- [x] Empty-server migration from legacy IndexedDB with post-success browser cleanup
-- [x] Auto-create first project on empty state
+- [verified] 171 Bun unit/integration tests; 83.34% lines and 85.26% functions
+- [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
+- [verified] 105 passed and 6 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
+- [verified] 28/28 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
+- [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
+- [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
 
-## Infinite canvas
-- [x] Pan, wheel zoom, slider, reset, fit-to-nodes
-- [x] Minimap
-- [x] Background: dots / lines / blank
-- [x] Light / dark theme
-- [x] Marquee + multi-select + select all
-- [x] Copy / paste / duplicate (Cmd+D)
-- [x] Align + distribute (context menu, multi-select)
-- [x] Undo / redo (nodes, edges, viewport, background, assistant)
-- [x] Edge highlight / select / delete
-- [x] Context menu (blank + node)
-- [x] Keyboard shortcuts help
+## Data and canvas
 
-## Nodes
-- [x] Image / text / config / video / audio
-- [x] Drag, resize, free vs aspect lock
-- [x] Ports + connections
-- [x] JSON inspect
-- [x] Node prompt bar
-- [x] Image crop / rotate / multi-angle / mask / upscale / split
-- [x] Image replace + download
-- [x] Batch image group stack/expand/primary + delete cascade
-- [x] Config upstream order + video params (ratio/res/duration/audio/watermark)
-- [x] Group node create/ungroup/grouped movement/copy/delete cleanup/undo
-- [x] Sandboxed remote node/plugin runtime (opaque iframe, manifest validation, consent, quota, persistence)
+- [verified] Schema v2 documents; v1/no-version read compatibility and save-time upgrade
+- [verified] Project create, rename, delete, batch delete, JSON and media-bundle import/export
+- [verified] PostgreSQL authoritative persistence, Redis disposable cache, protected filesystem media, and empty-server IndexedDB migration
+- [verified] Pan, wheel/pinch zoom, slider, reset, fit, minimap, backgrounds, themes, culling, and 1k/10k indexes
+- [verified] Marquee/multi-select, copy/paste/duplicate, align/distribute, connections, edge deletion, undo/redo, and shortcuts
+- [verified] Text/image/config/video/audio/plugin nodes; ports, drag, resize, preview, metadata inspection, and prompt bars
+- [verified] Titles above nodes with bounded inline edit; blank-canvas double-click node chooser
+- [verified] Group drag-in/out thresholds, hover feedback, 24px automatic bounds, grouped movement, and history
+- [verified] Text font size 10-72px, prompt selection, node model override, and provider-default inheritance
+- [verified] Immediate text-to-image flow with retained failed config node and retry path
 
-## AI
-- [x] Browser-direct OpenAI-compatible client
-- [x] Text + image generate/edit + models list
-- [x] Video OpenAI-style + Ark/Seedance poll + multi-ref best-effort
-- [x] Speech TTS (`/audio/speech`) for audio nodes
-- [partial] Seedance/Ark vendor matrix (nested IDs/statuses, camelCase aliases, video lists, terminal states, auth/rate/error behavior covered; undocumented vendor-specific fields remain partial)
+## AI and creative tools
 
-## Assistant
-- [x] Ask / image modes
-- [x] Selected + upstream refs
-- [x] Insert results
-- [x] Session history / retry / delete / paste image
+- [verified] Independent text/image/video/audio URL, key, protocol, and model settings
+- [verified] OpenAI, Ark/Seedance, Gemini, and restricted declarative Template adapters
+- [verified] Authentication, redirect, timeout, cancellation, rate/error, task polling, malformed response, and bounded-download behavior
+- [verified] AES-GCM provider secrets; exported projects and WebDAV backups omit keys
+- [verified] Transparent image background capability checks and provider mapping
+- [verified] Image reverse prompting into a connected text node
+- [verified] Draggable image split guides with normalized coordinates and lineage
+- [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
+- [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion
+- [verified] PostgreSQL generation-job migration and paginated CRUD; IndexedDB compatibility in development mode
 
-## Prompts & assets
-- [x] Asset library CRUD + search + pagination + download + complete field edit + image replacement
-- [x] Canvas asset picker
-- [x] Remote prompt URL fetch + cache
-- [x] Search / tags
+## Plugins
 
-## Sync / settings
-- [x] Multi channel config with independent text/image/video/audio URL, key, and model settings
-- [x] WebDAV backup put/get
-- [x] WebDAV current-canvas bundle includes media and refuses non-HTTPS remotes
-- [partial] Credential deep link via one-time `#connect?apiKey=&baseUrl=` fragment; legacy query parameters are scrubbed but never consumed
-- [x] JSON structure export/import + ZIP STORE project bundle with media manifest
+- [verified] Independent HTTPS registry with bounded MIME/size/redirect policy
+- [verified] Manifest v2 and lossless v1 normalization
+- [verified] Eight node/asset/AI/panel permissions with install-time consent
+- [verified] Install, semantic-version update, upgrade notice, persistence rollback, and uninstall
+- [verified] Opaque iframe isolation, CSP, message validation, quota, and state persistence
+- [verified] Host-mediated node/asset/panel/AI calls without provider-key disclosure
+- [verified] Publishable `packages/plugin-sdk` types, protocol, and example
+- [verified] Original sticky-note, Markdown, HTML, SVG, and Three.js panorama examples
+- [verified] Panorama desktop/mobile canvas pixels and interactive 2D fallback without WebGL
 
-## Local agent (Go)
-- [x] Health / version / files / projects API
-- [x] Agent status + live tool list UI panel
-- [x] Validated HTTP board tools + bidirectional browser project synchronization
-- [x] PostgreSQL-backed project/state repository shared by browser, HTTP tools, and MCP; Redis read cache
-- [x] MCP stdio initialize/tools-list/tools-call lifecycle
-- [partial] Codex app-server JSON-RPC transport, HTTP session/message/approval/SSE endpoints, message/item summaries, and approval queue; advanced app-server methods and rich turn rendering remain
+## Agent and MCP
 
-## Remaining non-goals / planned
-- [planned] Hosted multi-user mode with registration/login, project memberships, tenant isolation, Redis job queues, and server-side encrypted provider secrets
-- [x] Plugin catalog install/upgrade/uninstall with HTTPS, size, MIME, redirect, permission-consent boundaries
-- [x] Cloud AI upscale/inpaint provider adapter with bounded multipart, cancellation, progress, fallback policy, and lineage
-- [partial] Mobile canvas-first layout, drawers, single-touch drag and pinch zoom
-- [x] Pinch zoom, touch state machine, pointer cancellation
-- [x] Viewport culling + spatial node index + geometry-aware edge index + rAF input batching
-- [x] Spatial index and reproducible 1k/10k-node performance benchmarks
-- [partial] Mobile asset/prompt/assistant management and automated device E2E (responsive actions, project drawer, assistant open/close, and overflow flows pass on mobile Chromium; advanced drawer ergonomics remain)
+- [verified] Ticket-authenticated browser WebSocket with origin allowlist, state reporting, command IDs, results, timeout, disconnect failure, and no replay
+- [verified] Live state/selection/snapshot/atomic ops/text flow/image flow/asset/prompt/navigation tools
+- [verified] Six persisted `board.*` compatibility tools remain available
+- [verified] Browser-rendered PNG snapshots upload to protected Go file storage
+- [verified] MCP stdio lifecycle and remote execution through an owner-only `0600` connection file
+- [verified] Profile-level Codex thread continuity and explicit new session
+- [verified] Turn interrupt, concurrent-start prevention, turn-ID race handling, and structured logs
+- [verified] Up to ten image attachments/30MB, MIME validation, `0600` files, and completion/failure/close cleanup
+- [verified] Safe Markdown/GFM output, raw-HTML suppression, remote-image suppression, previews, stop, and approvals
+- [verified] Independent `plugins/openboard` installer and Claude standard-MCP instructions
+
+## Product boundary
+
+- [verified] Personal local single-user product with loopback binding and token-protected formal runtime
+- [not targeted] Hosted registration, tenant membership, billing, and multi-user authorization
+- [not targeted] Browser-hosted Claude conversation UI; standard MCP setup is documented
+- [external] Real-provider paid smoke depends on user-supplied credentials and is never a CI fixture
+- [external] Commercial clean-room, trademark/trade-dress, patent, contributor-rights, and market-specific legal sign-off

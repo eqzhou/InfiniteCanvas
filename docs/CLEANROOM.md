@@ -47,7 +47,8 @@ clean-room claims externally.
   source URLs and independent sign-off remain required.
 - [x] Automated implementation scan is available as `bun run audit:cleanroom`
   and runs in CI; it does not replace independent similarity review.
-- [ ] Automated acceptance tests cover every claimed parity item.
+- [x] Every engineering parity category has automated unit, integration, E2E,
+  formal-storage, or CI smoke evidence mapped in `docs/FEATURE_PARITY.md`.
 - [ ] Legal review is complete for the intended markets and distribution.
 
 ## AGPL boundary

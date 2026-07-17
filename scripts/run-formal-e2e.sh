@@ -38,4 +38,18 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd web
+set +e
 OPENBOARD_E2E_FORMAL=1 playwright test
+test_status=$?
+set -e
+cd "$ROOT"
+
+cleanup
+trap - EXIT INT TERM
+database_residue=$(psql "$OPENBOARD_DATABASE_URL" -X -At -c "SELECT count(*) FROM pg_database WHERE datname = '$test_db'")
+redis_residue=$(redis-cli -u "$test_redis_url" DBSIZE 2>/dev/null)
+if [[ "$database_residue" != "0" || "$redis_residue" != "0" ]]; then
+  echo "Formal E2E cleanup verification failed (database=$database_residue redis=$redis_residue)" >&2
+  exit 1
+fi
+exit "$test_status"

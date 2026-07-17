@@ -4,6 +4,14 @@ This log records neutral behavioral requirements used by the implementation.
 It intentionally excludes upstream source, source-derived identifiers, CSS,
 fixtures, and implementation structure.
 
+## Frozen baseline
+
+The current engineering baseline is `basketikun/infinite-canvas v0.8.2` as
+described by public documentation and recorded black-box behavior available on
+2026-07-16. Later upstream changes are out of scope until a new baseline is
+explicitly adopted. The implementation team did not use upstream source, CSS,
+plugins, fixtures, screenshots, or assets as implementation input.
+
 | Date | Surface | Public/observed input | Required observable result | Confidence |
 |---|---|---|---|---|
 | 2026-07-16 | Canvas camera | Pointer drag, wheel, pinch, reset, fit | Viewport translates/scales around the expected anchor and remains bounded | high |
@@ -14,11 +22,21 @@ fixtures, and implementation structure.
 | 2026-07-16 | Plugins | Install manifest, consent, sandbox message, state persistence | Remote executable content requires explicit consent, bounded state/messages, and opaque isolation | medium |
 | 2026-07-16 | Local agent | Go health/status, project sync, MCP, Codex session | Authenticated local APIs expose validated tools; Codex streams notifications and requires explicit approvals | medium |
 | 2026-07-16 | Responsive UI | Desktop, mobile Chromium, Firefox, WebKit | Primary canvas/media/asset/Prompt workflows remain usable without horizontal overflow | high |
+| 2026-07-17 | Versioned canvas | Load v1, edit titles/fonts/models, double-click blank canvas, cross group bounds | Documents upgrade to v2 without loss; interactions persist and participate in history | high |
+| 2026-07-17 | Creative workbenches | Configure four provider protocols, generate/retry/cancel, inspect history | Independent endpoints remain isolated; jobs and results persist and can be inserted into a board | high |
+| 2026-07-17 | Image utilities | Request transparency/reverse prompt, drag split guides | Unsupported capabilities fail before request; derived nodes preserve normalized lineage | high |
+| 2026-07-17 | Plugin lifecycle | Normalize v1 manifest, consent, install/upgrade/rollback/uninstall | Host permissions are explicit; plugins never receive provider secrets | high |
+| 2026-07-17 | Panorama | Load local or generated panorama with and without WebGL | Three.js renders interactive pixels; a 2D interaction fallback remains usable | high |
+| 2026-07-17 | Browser runtime | Connect WebSocket, report state, execute identified commands, disconnect | Commands are validated, atomic where applicable, return structured results, time out, and never replay | high |
+| 2026-07-17 | Codex continuity | Reuse/new thread, attach image, stop turn, approve tool | Profile thread persists; attachments are owner-only and cleaned; approval remains explicit | high |
+| 2026-07-17 | Formal storage | Run isolated PostgreSQL/Redis/media E2E | Data reloads through the production-shaped stack and the temporary test stores are empty afterward | high |
 
 ## Evidence
 
 - Automated evidence is in `web/src/**/*.test.ts`, `web/e2e/canvas.spec.ts`,
   `server/**/**_test.go`, and CI workflow definitions.
+- The feature-to-evidence matrix is maintained in `docs/FEATURE_PARITY.md` and
+  is frozen to the v0.8.2 scope above.
 - Public protocol evidence includes OpenAI-compatible HTTP conventions, MCP
   transport conventions, JSON-RPC, and browser pointer events.
 - Exact reference-project behavior remains an interoperability target, not a
@@ -28,7 +46,7 @@ fixtures, and implementation structure.
 
 | URL | Accessed | Used for |
 |---|---|---|
-| https://github.com/basketikun/infinite-canvas | 2026-07-16 | Public project identity, feature surface, and black-box target reference |
+| https://github.com/basketikun/infinite-canvas | 2026-07-16 | Public project identity, v0.8.2 feature surface, and black-box target reference |
 | https://github.com/basketikun/infinite-canvas/blob/main/README.md | 2026-07-16 | Publicly described workflows and setup behavior |
 | https://spec.modelcontextprotocol.io/ | 2026-07-16 | MCP transport and tool lifecycle interoperability |
 | https://www.jsonrpc.org/specification | 2026-07-16 | JSON-RPC request, notification, response, and error semantics |
