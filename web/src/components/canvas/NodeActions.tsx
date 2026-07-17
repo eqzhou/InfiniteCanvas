@@ -684,7 +684,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
 return (
     <>
       <div
-        className="absolute left-full top-0 z-30 ml-2 flex max-w-[min(520px,70vw)] flex-wrap items-center gap-1 rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
+        className="absolute bottom-full left-0 z-30 mb-8 flex max-w-[min(520px,70vw)] flex-wrap items-center gap-1 rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
         onPointerDown={(e) => e.stopPropagation()}
       >
         {node.type === "text" ? (

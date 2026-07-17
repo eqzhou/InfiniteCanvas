@@ -76,7 +76,14 @@ test("a text node and its content survive a reload", async ({ page }) => {
 test("blank canvas double-click opens the node chooser at the pointer", async ({ page }) => {
   await openFreshBoard(page);
   const surface = page.getByTestId("canvas-surface");
-  await surface.dblclick({ position: { x: 420, y: 300 } });
+  const surfaceBox = await surface.boundingBox();
+  expect(surfaceBox).not.toBeNull();
+  await surface.dblclick({
+    position: {
+      x: Math.min(200, surfaceBox!.width / 2),
+      y: Math.min(300, surfaceBox!.height / 2),
+    },
+  });
   await expect(page.getByRole("button", { name: "新建文本" })).toBeVisible();
   await page.getByRole("button", { name: "新建音频" }).click();
   await expect(page.locator('[data-node-type="audio"]')).toHaveCount(1);
@@ -153,11 +160,31 @@ test("text-to-image creates a connected config and executes immediately", async 
   await page.getByTitle("生图").click();
 
   await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
-  await expect(page.locator('[data-node-type="image"] img')).toHaveCount(1);
   await expect.poll(() => requestBody).toMatchObject({
     model: "mock-image-model",
     prompt: "a red square",
   });
+  await expect.poll(() => page.evaluate(
+    () => new Promise<boolean>((resolve, reject) => {
+      const open = indexedDB.open("openboard-app");
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const database = open.result;
+        const request = database.transaction("app_state", "readonly")
+          .objectStore("app_state")
+          .get("openboard:projects");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const projects = Array.isArray(request.result) ? request.result : [];
+          resolve(projects.some((project) => project?.nodes?.some(
+            (item: { type?: string; metadata?: { status?: string } }) =>
+              item.type === "image" && item.metadata?.status === "success",
+          )));
+          database.close();
+        };
+      };
+    }),
+  )).toBe(true);
 });
 
 test("a sandboxed plugin node persists its state across reloads", async ({ page }) => {
