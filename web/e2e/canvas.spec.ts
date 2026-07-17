@@ -717,6 +717,7 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   let messageBody: Record<string, unknown> | null = null;
   let interrupted = false;
   const sessionBodies: Record<string, unknown>[] = [];
+  let eventStreamCount = 0;
   await page.route("**/api/agent/status", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -751,12 +752,13 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
   await page.route("**/api/codex/events?sessionId=session-e2e", async (route) => {
+    eventStreamCount += 1;
+    const event = eventStreamCount === 1
+      ? { type: "notification", method: "agent_message_delta", params: { delta: "**hello from Codex** <script>bad()</script>" } }
+      : { type: "approval", method: "item/tool/call", id: "approval-e2e", params: { tool: "board.add_node" } };
     await route.fulfill({
       contentType: "text/event-stream",
-      body: [
-        `event: notification\ndata: ${JSON.stringify({ type: "notification", method: "agent_message_delta", params: { delta: "**hello from Codex** <script>bad()</script>" } })}\n\n`,
-        'event: approval\ndata: {"type":"approval","method":"item/tool/call","id":"approval-e2e","params":{"tool":"board.add_node"}}\n\n',
-      ].join(""),
+      body: `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
     });
   });
 
@@ -766,7 +768,6 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await page.getByRole("button", { name: "继续会话" }).click();
   await expect(page.getByText("hello from Codex")).toBeVisible();
   await expect(page.locator("script").filter({ hasText: "bad()" })).toHaveCount(0);
-  await expect(page.getByText("Codex 请求审批")).toBeVisible();
   await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({
     name: "pixel.png",
     mimeType: "image/png",
@@ -782,15 +783,16 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   });
   await page.getByTitle("停止").click();
   await expect.poll(() => interrupted).toBe(true);
+  expect(sessionBodies[0]).toEqual({ profile: "default", fresh: false });
+  await page.getByRole("button", { name: "新会话" }).last().click();
+  await expect.poll(() => sessionBodies.at(-1)).toEqual({ profile: "default", fresh: true });
+  await expect(page.getByText("Codex 请求审批")).toBeVisible();
   await page.getByTitle("允许").click();
   await expect.poll(() => approvalBody).toMatchObject({
     sessionId: "session-e2e",
     id: "approval-e2e",
     approve: true,
   });
-  expect(sessionBodies[0]).toEqual({ profile: "default", fresh: false });
-  await page.getByRole("button", { name: "新会话" }).last().click();
-  await expect.poll(() => sessionBodies.at(-1)).toEqual({ profile: "default", fresh: true });
 });
 
 test("mobile asset and prompt pages keep primary actions usable", async ({ page }) => {
