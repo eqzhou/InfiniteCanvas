@@ -4,6 +4,7 @@ import { Download, ImagePlus, RefreshCw, Square, Trash2, Video } from "lucide-re
 import type { GenerationJob, GenerationKind } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { getProvider } from "@/lib/ai-config";
+import { resolveVideoDuration } from "@/lib/video-generation";
 import { generateImages, generateVideo } from "@/services/ai-client";
 import {
   createGenerationJob,
@@ -42,6 +43,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
   const [count, setCount] = useState(config.imageCount);
   const [transparent, setTransparent] = useState(false);
   const [seconds, setSeconds] = useState(5);
+  const [smartDuration, setSmartDuration] = useState(false);
   const [ratio, setRatio] = useState("16:9");
   const [resolution, setResolution] = useState("720p");
   const [references, setReferences] = useState<File[]>([]);
@@ -100,7 +102,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
       }
       const parameters = source?.parameters ?? (kind === "image"
         ? { size, quality, count, transparentBackground: transparent, referenceStorageKeys }
-        : { seconds, ratio, resolution, referenceStorageKeys });
+        : { seconds, smartDuration, ratio, resolution, referenceStorageKeys });
       job = await createGenerationJob({
         projectId: project?.id,
         kind,
@@ -133,7 +135,10 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           channel: runChannel,
           model: runModel,
           prompt: runPrompt.trim(),
-          seconds: Number(parameters.seconds ?? seconds),
+          seconds: resolveVideoDuration(
+            Boolean(parameters.smartDuration),
+            Number(parameters.seconds ?? seconds),
+          ),
           ratio: String(parameters.ratio ?? ratio),
           resolution: String(parameters.resolution ?? resolution),
           referenceImages: referenceData.filter((value) => value.startsWith("data:image/")),
@@ -211,10 +216,11 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                 <label className="flex items-center gap-2 self-end pb-2"><input type="checkbox" checked={transparent} onChange={(event) => setTransparent(event.target.checked)} />透明背景</label>
               </div>
             ) : (
-              <div className="grid grid-cols-3 gap-2">
-                <label>秒数<input type="number" min={1} max={60} className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={seconds} onChange={(event) => setSeconds(Number(event.target.value) || 5)} /></label>
+              <div className="grid grid-cols-2 gap-2">
+                <label>秒数<input type="number" min={4} max={15} disabled={smartDuration} className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2 disabled:opacity-50" value={seconds} onChange={(event) => setSeconds(Number(event.target.value) || 5)} /></label>
                 <label>比例<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={ratio} onChange={(event) => setRatio(event.target.value)} /></label>
                 <label>清晰度<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label>
+                <label className="flex items-center gap-2 self-end pb-2"><input type="checkbox" checked={smartDuration} onChange={(event) => setSmartDuration(event.target.checked)} />智能时长</label>
               </div>
             )}
             <label className="block">参考素材<input type="file" multiple accept="image/*,video/*,audio/*" className="mt-1 block w-full text-xs" onChange={(event) => setReferences(Array.from(event.target.files ?? []))} /></label>

@@ -15,6 +15,10 @@ import { isSubmitShortcut } from "@/lib/keyboard";
 import { Send } from "lucide-react";
 import { getProvider } from "@/lib/ai-config";
 import { isNodePromptType, nodePromptKind, nodePromptPlaceholder } from "@/lib/node-prompt";
+import {
+  assertResolvedImageReferences,
+  createImageGenerationMetadata,
+} from "@/lib/image-generation";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
   const config = useBoardStore((s) => s.config);
@@ -73,19 +77,29 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           updateNode(node.id, { metadata: { status: "success" } });
         }
       } else if (node.type === "image") {
-        const refs = node.metadata.storageKey
-          ? await resolveNodeImageDataUrls([node.metadata.storageKey])
-          : [];
-        const urls = await generateImages({
-          channel,
-          model: node.metadata.model || getProvider(channel, "image").model,
+        const referenceStorageKeys = node.metadata.storageKey ? [node.metadata.storageKey] : [];
+        const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
+        assertResolvedImageReferences(referenceStorageKeys, refs);
+        const generation = createImageGenerationMetadata({
           prompt: text.trim(),
+          model: node.metadata.model || getProvider(channel, "image").model,
           size: config.imageSize,
           quality: config.imageQuality,
-          n: config.imageCount,
-          referenceDataUrls: refs,
+          count: config.imageCount,
+          transparentBackground: Boolean(node.metadata.transparentBackground),
+          referenceStorageKeys,
         });
-        await placeImageResults(node, urls, text.trim(), placeRight, updateNode, updateActive);
+        const urls = await generateImages({
+          channel,
+          model: generation.model,
+          prompt: generation.prompt,
+          size: generation.size,
+          quality: generation.quality,
+          n: generation.count,
+          referenceDataUrls: refs,
+          transparentBackground: generation.transparentBackground,
+        });
+        await placeImageResults(node, urls, generation, placeRight, updateNode, updateActive);
       } else if (node.type === "video") {
         const result = await generateVideo({
           channel,
@@ -204,7 +218,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 async function placeImageResults(
   node: BoardNode,
   urls: string[],
-  prompt: string,
+  generation: ReturnType<typeof createImageGenerationMetadata>,
   placeRight: (nodes: BoardNode[]) => void,
   updateNode: ReturnType<typeof useBoardStore.getState>["updateNode"],
   updateActive: ReturnType<typeof useBoardStore.getState>["updateActive"],
@@ -220,7 +234,7 @@ async function placeImageResults(
         bytes: uploaded.bytes,
         mimeType: uploaded.mimeType,
         status: "success",
-        prompt,
+        ...generation,
       },
     });
     return;
@@ -246,7 +260,7 @@ async function placeImageResults(
             bytes: uploaded.bytes,
             mimeType: uploaded.mimeType,
             status: "success",
-            prompt,
+            ...generation,
             batchRootId: node.id,
           },
           width: Math.min(280, uploaded.width || 240),
@@ -274,7 +288,7 @@ async function placeImageResults(
                 primaryImageId: childIds[0],
                 imageBatchExpanded: true,
                 status: "success" as const,
-                prompt,
+                ...generation,
               },
             }
           : n,
@@ -290,6 +304,6 @@ async function placeImageResults(
     });
   } else {
     placeRight(created);
-    updateNode(node.id, { metadata: { status: "success", prompt } });
+    updateNode(node.id, { metadata: { status: "success", ...generation } });
   }
 }

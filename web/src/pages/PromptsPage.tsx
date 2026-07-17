@@ -2,9 +2,12 @@ import { useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { PromptItem } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
-import { fetchPromptSource } from "@/services/prompt-sources";
+import {
+  fetchPromptSource,
+  mergePromptSourceItems,
+} from "@/services/prompt-sources";
 import { PromptDetailDialog } from "@/components/prompts/PromptDetailDialog";
-import { Eye } from "lucide-react";
+import { Eye, RefreshCw, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 const BUILTIN: PromptItem[] = [
@@ -47,6 +50,7 @@ export function PromptsPage() {
   const setConfig = useBoardStore((s) => s.setConfig);
   const [q, setQ] = useState("");
   const [source, setSource] = useState("all");
+  const [tag, setTag] = useState("all");
   const [remoteUrl, setRemoteUrl] = useState(
     config.promptSources?.[0] ?? "",
   );
@@ -60,6 +64,7 @@ export function PromptsPage() {
   const filtered = useMemo(() => {
     return all.filter((p) => {
       if (source !== "all" && p.source !== source) return false;
+      if (tag !== "all" && !p.tags.includes(tag)) return false;
       if (!q.trim()) return true;
       const s = q.toLowerCase();
       return (
@@ -68,12 +73,24 @@ export function PromptsPage() {
         p.tags.some((t) => t.toLowerCase().includes(s))
       );
     });
-  }, [all, q, source]);
+  }, [all, q, source, tag]);
 
   const sources = useMemo(
     () => ["all", ...Array.from(new Set(all.map((p) => p.source)))],
     [all],
   );
+  const tags = useMemo(
+    () => ["all", ...Array.from(new Set(all.flatMap((prompt) => prompt.tags))).sort()],
+    [all],
+  );
+  const savedSources = config.promptSources ?? [];
+
+  const mergeRemoteSource = async (url: string) => {
+    const items = await fetchPromptSource(url);
+    if (!items.length) throw new Error("未解析到提示词");
+    const latest = useBoardStore.getState();
+    setPrompts(mergePromptSourceItems(latest.prompts, items));
+  };
 
   const pullRemote = async () => {
     if (!remoteUrl.trim()) {
@@ -83,14 +100,8 @@ export function PromptsPage() {
     setBusy(true);
     setErr(null);
     try {
-      const items = await fetchPromptSource(remoteUrl.trim());
-      if (!items.length) throw new Error("未解析到提示词");
+      await mergeRemoteSource(remoteUrl.trim());
       const latest = useBoardStore.getState();
-      // merge by title+body
-      const key = (p: PromptItem) => `${p.title}::${p.body}`;
-      const map = new Map<string, PromptItem>();
-      for (const p of [...items, ...latest.prompts]) map.set(key(p), p);
-      setPrompts([...map.values()]);
       const sources = Array.from(
         new Set([...(latest.config.promptSources ?? []), remoteUrl.trim()]),
       );
@@ -100,6 +111,39 @@ export function PromptsPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const refreshRemote = async (url: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await mergeRemoteSource(url);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshAllRemote = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      for (const url of savedSources) await mergeRemoteSource(url);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeRemote = (url: string) => {
+    const latest = useBoardStore.getState().config;
+    setConfig({
+      ...latest,
+      promptSources: (latest.promptSources ?? []).filter((sourceUrl) => sourceUrl !== url),
+    });
+    if (remoteUrl === url) setRemoteUrl("");
   };
 
   const addPromptAsset = (prompt: PromptItem) => {
@@ -144,6 +188,7 @@ export function PromptsPage() {
           onChange={(e) => setQ(e.target.value)}
         />
         <select
+          aria-label="提示词来源"
           className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
           value={source}
           onChange={(e) => setSource(e.target.value)}
@@ -152,6 +197,16 @@ export function PromptsPage() {
             <option key={s} value={s}>
               {s}
             </option>
+          ))}
+        </select>
+        <select
+          aria-label="提示词标签"
+          className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
+          value={tag}
+          onChange={(event) => setTag(event.target.value)}
+        >
+          {tags.map((value) => (
+            <option key={value} value={value}>{value === "all" ? "全部标签" : value}</option>
           ))}
         </select>
         <button
@@ -178,7 +233,44 @@ export function PromptsPage() {
         >
           {busy ? "拉取中…" : "拉取远程提示词"}
         </button>
+        {savedSources.length ? (
+          <button
+            type="button"
+            className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm disabled:opacity-50"
+            disabled={busy}
+            onClick={() => void refreshAllRemote()}
+          >
+            刷新全部来源
+          </button>
+        ) : null}
         {err ? <p className="w-full text-sm text-[var(--ob-danger)]">{err}</p> : null}
+        {savedSources.length ? (
+          <ul className="w-full divide-y divide-[var(--ob-line)] text-xs">
+            {savedSources.map((url) => (
+              <li key={url} className="flex min-w-0 items-center gap-2 py-2">
+                <span className="min-w-0 flex-1 truncate" title={url}>{url}</span>
+                <button
+                  type="button"
+                  title="刷新提示词源"
+                  className="rounded p-1 text-[var(--ob-muted)]"
+                  disabled={busy}
+                  onClick={() => void refreshRemote(url)}
+                >
+                  <RefreshCw size={14} />
+                </button>
+                <button
+                  type="button"
+                  title="移除提示词源"
+                  className="rounded p-1 text-[var(--ob-danger)]"
+                  disabled={busy}
+                  onClick={() => removeRemote(url)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

@@ -237,3 +237,22 @@ export function normalizePluginManifests(value: unknown): PluginManifest[] {
   }
   return [...manifests.values()];
 }
+
+export function enabledPluginManifests(
+  installed: readonly PluginManifest[],
+  disabledPluginIds: readonly string[] = [],
+): PluginManifest[] {
+  const disabled = new Set(disabledPluginIds);
+  return installed.filter((plugin) => !disabled.has(plugin.id));
+}
+
+export function setPluginEnabled(
+  disabledPluginIds: readonly string[],
+  pluginId: string,
+  enabled: boolean,
+): string[] {
+  if (enabled) return disabledPluginIds.filter((id) => id !== pluginId);
+  return disabledPluginIds.includes(pluginId)
+    ? [...disabledPluginIds]
+    : [...disabledPluginIds, pluginId];
+}

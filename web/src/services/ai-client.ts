@@ -1,5 +1,6 @@
 import type { AiChannel } from "@/types/board";
 import { getBlob, storageKeyToDataUrl } from "@/services/storage";
+import { validateArkVideoRequest } from "@/lib/video-generation";
 import { getProvider } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
 import { compileProviderTemplate, readTemplatePath, resolveTemplateEndpoint } from "@/lib/provider-template";
@@ -453,9 +454,11 @@ export async function generateVideo(
     pollIntervalMs = VIDEO_POLL_INTERVAL_MS,
   } = options;
   validateTiming(timeoutMs, pollIntervalMs);
-  const deadline = createVideoSignal(externalSignal, timeoutMs);
   const provider = getProvider(channel, "video");
   const base = normalizeBase(provider.baseUrl);
+  const arkProtocol = provider.protocol === "ark" || base.includes("/api/plan/v3") || base.endsWith("/api/v3");
+  if (arkProtocol) validateArkVideoRequest(model, resolution, seconds);
+  const deadline = createVideoSignal(externalSignal, timeoutMs);
 
   try {
     if (provider.protocol === "template") {
@@ -489,7 +492,7 @@ export async function generateVideo(
     if (provider.protocol === "gemini") {
       throw new Error("Gemini does not support video generation in OpenBoard");
     }
-    if (provider.protocol === "ark" || base.includes("/api/plan/v3") || base.endsWith("/api/v3")) {
+    if (arkProtocol) {
       return await generateArkVideo({
         channel,
         model,

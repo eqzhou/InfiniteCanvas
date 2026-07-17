@@ -51,7 +51,9 @@ export function BoardNodeView({
     (channel) => channel.id === config.activeChannelId,
   );
   const pluginManifest = node.type === "plugin"
-    ? findPluginManifest(node.metadata.pluginId, installedPlugins)
+    ? config.disabledPluginIds?.includes(node.metadata.pluginId ?? "")
+      ? undefined
+      : findPluginManifest(node.metadata.pluginId, installedPlugins)
     : undefined;
   const Icon =
     node.type === "text"
@@ -353,6 +355,7 @@ export function BoardNodeView({
                     type="number"
                     min={4}
                     max={15}
+                    disabled={Boolean(node.metadata.smartDuration)}
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                     value={node.metadata.duration ?? 5}
                     onChange={(e) =>
@@ -361,6 +364,16 @@ export function BoardNodeView({
                       })
                     }
                   />
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(node.metadata.smartDuration)}
+                    onChange={(event) => updateNode(node.id, {
+                      metadata: { smartDuration: event.target.checked },
+                    })}
+                  />
+                  智能时长
                 </label>
                 <label className="flex items-center gap-2">
                   <input
@@ -404,10 +417,40 @@ export function BoardNodeView({
                       const n = project.nodes.find((x) => x.id === id);
                       if (!n) return null;
                       return (
-                        <li key={id} className="flex items-center gap-1">
-                          <span className="min-w-0 flex-1 truncate">
-                            {idx + 1}. {n.type}:{n.title}
-                          </span>
+                        <li key={id} className="flex items-start gap-1">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate">{idx + 1}. {n.type}:{n.title}</div>
+                            {n.type === "text" && n.metadata.content ? (
+                              <p className="line-clamp-2 text-[10px] text-[var(--ob-muted)]">
+                                {n.metadata.content}
+                              </p>
+                            ) : null}
+                            {n.type === "image" && n.metadata.content ? (
+                              <img
+                                src={n.metadata.content}
+                                alt="参考图片"
+                                className="mt-1 h-12 w-16 rounded object-contain bg-[var(--ob-canvas)]"
+                              />
+                            ) : null}
+                            {n.type === "video" && n.metadata.content ? (
+                              <video
+                                src={n.metadata.content}
+                                aria-label="参考视频"
+                                muted
+                                preload="metadata"
+                                className="mt-1 h-12 w-20 rounded bg-black object-contain"
+                              />
+                            ) : null}
+                            {n.type === "audio" && n.metadata.content ? (
+                              <audio
+                                src={n.metadata.content}
+                                aria-label="参考音频"
+                                controls
+                                preload="none"
+                                className="mt-1 h-8 w-full max-w-44"
+                              />
+                            ) : null}
+                          </div>
                           <button
                             type="button"
                             className="rounded px-1 hover:bg-[var(--ob-accent-soft)]"

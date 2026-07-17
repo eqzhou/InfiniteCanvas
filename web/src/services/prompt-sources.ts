@@ -13,6 +13,8 @@ export const PROMPT_SOURCE_LIMITS = {
   maxTagChars: 64,
   maxSourceChars: 512,
   maxCoverUrlChars: 2048,
+  maxResultUrls: 12,
+  maxResultUrlChars: 2048,
 } as const;
 
 const PROMPT_MIME_TYPES = [
@@ -89,6 +91,25 @@ export function demoPromptCatalog(): PromptItem[] {
       source: "openboard-demo",
     },
   ];
+}
+
+function clonePromptItem(item: PromptItem): PromptItem {
+  return {
+    ...item,
+    tags: [...item.tags],
+    resultUrls: item.resultUrls ? [...item.resultUrls] : undefined,
+  };
+}
+
+export function mergePromptSourceItems(
+  cached: readonly PromptItem[],
+  refreshed: readonly PromptItem[],
+): PromptItem[] {
+  const key = (item: PromptItem) => `${item.title}::${item.body}`;
+  const merged = new Map<string, PromptItem>();
+  for (const item of cached) merged.set(key(item), clonePromptItem(item));
+  for (const item of refreshed) merged.set(key(item), clonePromptItem(item));
+  return [...merged.values()];
 }
 
 /** Clean-room remote prompt fetch: user-configured raw JSON/text URLs. */
@@ -172,6 +193,11 @@ function normalizePromptJson(data: unknown, url: string): PromptItem[] {
       : typeof o.tags === "string"
         ? o.tags.split(/[,，\s]+/).filter(Boolean)
         : [];
+    const rawResultUrls = Array.isArray(o.resultUrls)
+      ? o.resultUrls
+      : Array.isArray(o.images)
+        ? o.images
+        : [];
     out.push(validatePromptItem({
       id: String(o.id ?? uid("prompt")),
       title,
@@ -179,6 +205,9 @@ function normalizePromptJson(data: unknown, url: string): PromptItem[] {
       tags,
       source: String(o.source ?? source),
       coverUrl: typeof o.coverUrl === "string" ? normalizeExternalHttpsUrl(o.coverUrl) : undefined,
+      resultUrls: rawResultUrls
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => normalizeExternalHttpsUrl(value)),
     }));
   }
   return out;
@@ -197,6 +226,11 @@ function validatePromptItem(item: PromptItem): PromptItem {
   }
   const tags = item.tags.map((tag) =>
     assertField(tag, "tag", PROMPT_SOURCE_LIMITS.maxTagChars));
+  if ((item.resultUrls?.length ?? 0) > PROMPT_SOURCE_LIMITS.maxResultUrls) {
+    throw new Error(`Prompt result images exceed ${PROMPT_SOURCE_LIMITS.maxResultUrls} entries`);
+  }
+  const resultUrls = item.resultUrls?.map((url) =>
+    assertField(url, "result image URL", PROMPT_SOURCE_LIMITS.maxResultUrlChars));
   return {
     ...item,
     id: assertField(item.id, "id", PROMPT_SOURCE_LIMITS.maxIdChars),
@@ -209,5 +243,6 @@ function validatePromptItem(item: PromptItem): PromptItem {
     coverUrl: item.coverUrl
       ? assertField(item.coverUrl, "cover URL", PROMPT_SOURCE_LIMITS.maxCoverUrlChars)
       : item.coverUrl,
+    resultUrls,
   };
 }

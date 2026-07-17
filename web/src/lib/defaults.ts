@@ -51,6 +51,7 @@ export function createDefaultConfig(): AppConfig {
     webdavPass: "",
     promptSources: [],
     plugins: [],
+    disabledPluginIds: [],
     localAgentUrl: "http://127.0.0.1:8790",
   };
 }

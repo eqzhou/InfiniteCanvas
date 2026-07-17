@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   comparePluginVersions,
+  enabledPluginManifests,
   fetchPluginRegistry,
   fetchPluginManifest,
   installPluginManifest,
   normalizePluginManifests,
   persistPluginUpgrade,
+  setPluginEnabled,
   uninstallPluginManifest,
 } from "./plugin-catalog";
 
@@ -62,6 +64,18 @@ describe("plugin catalog", () => {
       null,
     ])).toEqual([manifest("1.1.0")]);
     expect(normalizePluginManifests({})).toEqual([]);
+  });
+
+  test("filters disabled plugins without mutating persisted inputs", () => {
+    const installed = [manifest(), { ...manifest(), id: "example.clock", name: "Clock" }];
+    const disabled = ["example.clock"];
+    expect(enabledPluginManifests(installed, disabled).map((item) => item.id))
+      .toEqual(["example.timer"]);
+    expect(setPluginEnabled(disabled, "example.clock", true)).toEqual([]);
+    expect(setPluginEnabled(disabled, "example.timer", false))
+      .toEqual(["example.clock", "example.timer"]);
+    expect(installed).toHaveLength(2);
+    expect(disabled).toEqual(["example.clock"]);
   });
 
   test("fetches only bounded HTTPS manifests without following redirects", async () => {

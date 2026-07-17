@@ -27,6 +27,11 @@ import { createTransformLineage } from "@/services/image-transform/lineage";
 import { getProvider } from "@/lib/ai-config";
 import { adjustFontSize } from "@/lib/node-format";
 import {
+  assertResolvedImageReferences,
+  createImageGenerationMetadata,
+} from "@/lib/image-generation";
+import { resolveVideoDuration } from "@/lib/video-generation";
+import {
   BookmarkPlus,
   Crop,
   Download,
@@ -126,6 +131,67 @@ export function NodeActions({ node }: { node: BoardNode }) {
     });
   };
 
+  const placeImageBatch = (
+    rootId: string,
+    created: BoardNode[],
+    generation: ReturnType<typeof createImageGenerationMetadata>,
+  ) => {
+    if (created.length <= 1) {
+      updateActive((project) => ({
+        ...project,
+        nodes: [
+          ...project.nodes.map((item) => item.id === rootId
+            ? {
+                ...item,
+                metadata: {
+                  ...item.metadata,
+                  ...generation,
+                  status: "success" as const,
+                  errorDetails: undefined,
+                },
+              }
+            : item),
+          ...created,
+        ],
+        edges: [
+          ...project.edges,
+          ...created.map((item) => ({ id: uid("edge"), from: rootId, to: item.id })),
+        ],
+      }));
+      return;
+    }
+    updateActive((project) => {
+      const childIds = created.map((item) => item.id);
+      return {
+        ...project,
+        nodes: [
+          ...project.nodes.map((item) => item.id === rootId
+            ? {
+                ...item,
+                metadata: {
+                  ...item.metadata,
+                  ...generation,
+                  status: "success" as const,
+                  isBatchRoot: true,
+                  batchChildIds: [...(item.metadata.batchChildIds ?? []), ...childIds],
+                  primaryImageId: item.metadata.primaryImageId ?? childIds[0],
+                  imageBatchExpanded: true,
+                },
+              }
+            : item),
+          ...created.map((item) => ({
+            ...item,
+            metadata: { ...item.metadata, batchRootId: rootId },
+          })),
+        ],
+        edges: [
+          ...project.edges,
+          ...created.map((item) => ({ id: uid("edge"), from: rootId, to: item.id })),
+        ],
+      };
+    });
+  };
+
   const runConfigGenerate = async () => {
     const mode = node.metadata.generationMode ?? "image";
     if (!channel || !getProvider(channel, mode === "text" ? "text" : mode === "video" ? "video" : "image").apiKey) {
@@ -156,15 +222,25 @@ export function NodeActions({ node }: { node: BoardNode }) {
         placeRight([created]);
       } else if (mode === "image") {
         const refs = await resolveNodeImageDataUrls(imageKeys);
-        const urls = await generateImages({
-          channel,
-          model: node.metadata.model || getProvider(channel, "image").model,
+        assertResolvedImageReferences(imageKeys, refs);
+        const generation = createImageGenerationMetadata({
           prompt: prompt || "a clean product photo",
+          model: node.metadata.model || getProvider(channel, "image").model,
           size: node.metadata.size || config.imageSize,
           quality: node.metadata.quality || config.imageQuality,
-          n: node.metadata.count || config.imageCount,
-          referenceDataUrls: refs,
+          count: node.metadata.count || config.imageCount,
           transparentBackground: Boolean(node.metadata.transparentBackground),
+          referenceStorageKeys: imageKeys,
+        });
+        const urls = await generateImages({
+          channel,
+          model: generation.model,
+          prompt: generation.prompt,
+          size: generation.size,
+          quality: generation.quality,
+          n: generation.count,
+          referenceDataUrls: refs,
+          transparentBackground: generation.transparentBackground,
         });
         const created: BoardNode[] = [];
         for (const [i, url] of urls.entries()) {
@@ -185,8 +261,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
                   bytes: uploaded.bytes,
                   mimeType: uploaded.mimeType,
                   status: "success",
-                  prompt,
-                  model: node.metadata.model || getProvider(channel, "image").model,
+                  ...generation,
                 },
                 width: Math.min(360, uploaded.width || 320),
                 height: Math.min(360, uploaded.height || 320),
@@ -194,7 +269,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
             ),
           );
         }
-        placeRight(created);
+        placeImageBatch(node.id, created, generation);
       } else {
         const { images, videos, audios } = upstream();
         const [referenceImages, referenceVideos, referenceAudios] = await Promise.all([
@@ -207,7 +282,10 @@ export function NodeActions({ node }: { node: BoardNode }) {
           model: node.metadata.model || getProvider(channel, "video").model,
           prompt,
           size: node.metadata.size,
-          seconds: node.metadata.duration,
+          seconds: resolveVideoDuration(
+            Boolean(node.metadata.smartDuration),
+            node.metadata.duration ?? 5,
+          ),
           ratio: node.metadata.videoRatio || "16:9",
           resolution: node.metadata.resolution || "720p",
           generateAudio: Boolean(node.metadata.generateAudio),
@@ -281,14 +359,23 @@ export function NodeActions({ node }: { node: BoardNode }) {
         throw new Error("请先在设置中配置图片模型服务的 API Key");
       }
       const prompt = node.metadata.content?.trim() || "a clean product photo";
+      const generation = createImageGenerationMetadata({
+        prompt,
+        model: getProvider(channel, "image").model,
+        size: cfg.metadata.size || config.imageSize,
+        quality: config.imageQuality,
+        count: cfg.metadata.count || config.imageCount,
+        transparentBackground: Boolean(cfg.metadata.transparentBackground),
+        referenceStorageKeys: [],
+      });
       const urls = await generateImages({
         channel,
-        model: getProvider(channel, "image").model,
-        prompt,
-        size: cfg.metadata.size,
-        quality: config.imageQuality,
-        n: cfg.metadata.count,
-        transparentBackground: Boolean(cfg.metadata.transparentBackground),
+        model: generation.model,
+        prompt: generation.prompt,
+        size: generation.size,
+        quality: generation.quality,
+        n: generation.count,
+        transparentBackground: generation.transparentBackground,
       });
       const created: BoardNode[] = [];
       for (const [index, url] of urls.entries()) {
@@ -305,27 +392,14 @@ export function NodeActions({ node }: { node: BoardNode }) {
               bytes: uploaded.bytes,
               mimeType: uploaded.mimeType,
               status: "success",
-              prompt,
-              model: getProvider(channel, "image").model,
+              ...generation,
             },
             width: Math.min(360, uploaded.width || 320),
             height: Math.min(360, uploaded.height || 320),
           },
         ));
       }
-      updateActive((project) => ({
-        ...project,
-        nodes: [
-          ...project.nodes.map((item) => item.id === cfg.id
-            ? { ...item, metadata: { ...item.metadata, status: "success" as const, errorDetails: undefined } }
-            : item),
-          ...created,
-        ],
-        edges: [
-          ...project.edges,
-          ...created.map((item) => ({ id: uid("edge"), from: cfg.id, to: item.id })),
-        ],
-      }));
+      placeImageBatch(cfg.id, created, generation);
     } catch (error) {
       updateNode(cfg.id, {
         metadata: {
@@ -381,18 +455,27 @@ export function NodeActions({ node }: { node: BoardNode }) {
     if (!prompt) return;
     updateNode(node.id, { metadata: { status: "loading", prompt } });
     try {
-      const refs = node.metadata.storageKey
-        ? await resolveNodeImageDataUrls([node.metadata.storageKey])
-        : [];
-      const urls = await generateImages({
-        channel,
-        model: node.metadata.model || getProvider(channel, "image").model,
+      const referenceStorageKeys = node.metadata.storageKey ? [node.metadata.storageKey] : [];
+      const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
+      assertResolvedImageReferences(referenceStorageKeys, refs);
+      const generation = createImageGenerationMetadata({
         prompt,
+        model: node.metadata.model || getProvider(channel, "image").model,
         size: config.imageSize,
         quality: config.imageQuality,
-        n: config.imageCount,
-        referenceDataUrls: refs,
+        count: config.imageCount,
         transparentBackground: Boolean(node.metadata.transparentBackground),
+        referenceStorageKeys,
+      });
+      const urls = await generateImages({
+        channel,
+        model: generation.model,
+        prompt: generation.prompt,
+        size: generation.size,
+        quality: generation.quality,
+        n: generation.count,
+        referenceDataUrls: refs,
+        transparentBackground: generation.transparentBackground,
       });
       if (urls.length === 1 && !node.metadata.content) {
         const uploaded = await uploadMedia(urls[0], "image");
@@ -405,7 +488,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
             bytes: uploaded.bytes,
             mimeType: uploaded.mimeType,
             status: "success",
-            prompt,
+            ...generation,
           },
         });
       } else {
@@ -424,7 +507,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
                   content: uploaded.url,
                   storageKey: uploaded.storageKey,
                   status: "success",
-                  prompt,
+                  ...generation,
                 },
               },
             ),
@@ -447,7 +530,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
                           primaryImageId: childIds[0],
                           imageBatchExpanded: true,
                           status: "success" as const,
-                          prompt,
+                          ...generation,
                         },
                       }
                     : n,
@@ -469,7 +552,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
           });
         } else {
           placeRight(created);
-          updateNode(node.id, { metadata: { status: "success" } });
+          updateNode(node.id, { metadata: { status: "success", ...generation } });
         }
       }
     } catch (err) {
@@ -524,17 +607,26 @@ export function NodeActions({ node }: { node: BoardNode }) {
       return;
     }
     const prompt =
-      window.prompt("视频提示词", node.metadata.prompt || "cinematic short clip") ||
+      window.prompt(
+        "视频提示词",
+        node.type === "text"
+          ? node.metadata.content || "cinematic short clip"
+          : node.metadata.prompt || "cinematic short clip",
+      ) ||
       "";
     if (!prompt) return;
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
     try {
-      const refs = project
+      const upstreamRefs = project
         ? project.edges
             .filter((e) => e.to === node.id)
             .map((e) => project.nodes.find((n) => n.id === e.from))
             .filter((n): n is NonNullable<typeof n> => Boolean(n))
         : [];
+      const refs = [
+        ...upstreamRefs,
+        ...(node.type === "image" || node.type === "video" || node.type === "audio" ? [node] : []),
+      ];
       const [referenceImages, referenceVideos, referenceAudios] = await Promise.all([
         resolveMediaRefs(
           refs.filter((n) => n.type === "image").map((n) => ({
@@ -563,7 +655,10 @@ export function NodeActions({ node }: { node: BoardNode }) {
         model: node.metadata.model || getProvider(channel, "video").model,
         prompt,
         size: node.metadata.size,
-        seconds: node.metadata.duration ?? 5,
+        seconds: resolveVideoDuration(
+          Boolean(node.metadata.smartDuration),
+          node.metadata.duration ?? 5,
+        ),
         ratio: node.metadata.videoRatio || "16:9",
         resolution: node.metadata.resolution || "720p",
         generateAudio: Boolean(node.metadata.generateAudio),
@@ -587,7 +682,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
           // keep remote
         }
       }
-      if (!node.metadata.content) {
+      if (node.type === "video" && !node.metadata.content) {
         updateNode(node.id, {
           metadata: {
             content,
@@ -736,6 +831,9 @@ return (
             <IconBtn title="生图" onClick={() => void textToImage()}>
               <ImagePlus size={14} />
             </IconBtn>
+            <IconBtn title="生成视频" onClick={() => void generateOnVideo()}>
+              <Sparkles size={14} />
+            </IconBtn>
             <IconBtn
               title="减小字号"
               onClick={() =>
@@ -762,6 +860,9 @@ return (
           <>
             <IconBtn title="生成/重试" onClick={() => void generateOnImage()}>
               <Sparkles size={14} />
+            </IconBtn>
+            <IconBtn title="生成视频" onClick={() => void generateOnVideo()}>
+              <span className="text-[10px] font-semibold">视频</span>
             </IconBtn>
             <IconBtn title="反推提示词" onClick={() => void reversePrompt()}>
               <Type size={14} />

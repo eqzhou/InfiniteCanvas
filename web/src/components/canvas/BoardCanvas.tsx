@@ -33,6 +33,8 @@ import {
 } from "@/lib/gesture";
 import { createNodeSpatialIndex } from "@/lib/spatial-index";
 import { createEdgeGeometryIndex } from "@/lib/edge-index";
+import { enabledPluginManifests } from "@/lib/plugin-catalog";
+import { BUILTIN_PLUGINS } from "@/plugins/builtins";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -67,7 +69,12 @@ export function BoardCanvas() {
   const redo = useBoardStore((s) => s.redo);
   const selectAll = useBoardStore((s) => s.selectAll);
   const addNode = useBoardStore((s) => s.addNode);
-  const installedPlugins = useBoardStore((s) => s.config.plugins ?? []);
+  const configuredPlugins = useBoardStore((s) => s.config.plugins ?? []);
+  const disabledPluginIds = useBoardStore((s) => s.config.disabledPluginIds ?? []);
+  const installedPlugins = useMemo(
+    () => enabledPluginManifests([...BUILTIN_PLUGINS, ...configuredPlugins], disabledPluginIds),
+    [configuredPlugins, disabledPluginIds],
+  );
   const alignSelected = useBoardStore((s) => s.alignSelected);
   const distributeSelected = useBoardStore((s) => s.distributeSelected);
   const duplicateSelected = useBoardStore((s) => s.duplicateSelected);

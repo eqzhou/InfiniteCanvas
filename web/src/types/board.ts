@@ -59,11 +59,14 @@ export type NodeMetadata = {
   bytes?: number;
   inputOrder?: string[];
   duration?: number;
+  smartDuration?: boolean;
   videoRatio?: string;
   resolution?: string;
   generateAudio?: boolean;
   watermark?: boolean;
   transparentBackground?: boolean;
+  generationType?: "text-to-image" | "image-to-image";
+  referenceStorageKeys?: string[];
   voice?: string;
   isBatchRoot?: boolean;
   batchRootId?: string;
@@ -182,6 +185,7 @@ export type PromptItem = {
   tags: string[];
   source: string;
   coverUrl?: string;
+  resultUrls?: string[];
 };
 
 export type AiChannel = {
@@ -230,6 +234,7 @@ export type AppConfig = {
   webdavPass?: string;
   promptSources?: string[];
   plugins?: PluginManifest[];
+  disabledPluginIds?: string[];
   pluginRegistryUrl?: string;
   localAgentUrl?: string;
 };

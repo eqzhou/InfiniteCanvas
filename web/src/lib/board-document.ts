@@ -80,7 +80,15 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   optionalString(input.content, `${path}.content`, 20_000_000);
   optionalString(input.prompt, `${path}.prompt`, 100_000);
   optionalString(input.model, `${path}.model`, 500);
+  optionalString(input.size, `${path}.size`, 100);
+  optionalString(input.quality, `${path}.quality`, 100);
   optionalString(input.storageKey, `${path}.storageKey`, 512);
+  if (input.count !== undefined) {
+    const count = finite(input.count, `${path}.count`);
+    if (!Number.isSafeInteger(count) || count < 1 || count > 8) {
+      throw new Error(`${path}.count is outside the supported range`);
+    }
+  }
   if (input.fontSize !== undefined) {
     const fontSize = finite(input.fontSize, `${path}.fontSize`);
     if (fontSize < 10 || fontSize > 72) throw new Error(`${path}.fontSize is outside the supported range`);
@@ -99,6 +107,18 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   }
   if (input.transparentBackground !== undefined && typeof input.transparentBackground !== "boolean") {
     throw new Error(`${path}.transparentBackground must be a boolean`);
+  }
+  if (input.smartDuration !== undefined && typeof input.smartDuration !== "boolean") {
+    throw new Error(`${path}.smartDuration must be a boolean`);
+  }
+  if (input.generationType !== undefined &&
+      input.generationType !== "text-to-image" && input.generationType !== "image-to-image") {
+    throw new Error(`${path}.generationType is invalid`);
+  }
+  if (input.referenceStorageKeys !== undefined) {
+    array(input.referenceStorageKeys, `${path}.referenceStorageKeys`, 20).forEach((item, index) =>
+      string(item, `${path}.referenceStorageKeys[${index}]`, 512),
+    );
   }
   if (input.inputOrder !== undefined) {
     array(input.inputOrder, `${path}.inputOrder`, MAX_NODES).forEach((item, index) =>

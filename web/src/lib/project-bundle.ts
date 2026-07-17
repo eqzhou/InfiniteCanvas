@@ -46,6 +46,7 @@ function collectProjectKeys(project: BoardProject): string[] {
   const keys = new Set<string>();
   for (const node of project.nodes) {
     if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
+    for (const storageKey of node.metadata.referenceStorageKeys ?? []) keys.add(storageKey);
   }
   for (const session of project.chatSessions) {
     for (const message of session.messages) {
@@ -195,6 +196,8 @@ function remapProject(
       node.metadata.storageKey = result.storageKey;
       node.metadata.content = result.url;
     }
+    node.metadata.referenceStorageKeys = node.metadata.referenceStorageKeys?.map((storageKey) =>
+      replace(storageKey)!.storageKey);
   }
   for (const session of copy.chatSessions) {
     for (const message of session.messages) {

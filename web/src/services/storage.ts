@@ -642,6 +642,7 @@ export function collectStorageKeys(
   for (const p of projects) {
     for (const n of p.nodes) {
       if (n.metadata.storageKey) keys.add(n.metadata.storageKey);
+      for (const storageKey of n.metadata.referenceStorageKeys ?? []) keys.add(storageKey);
     }
     for (const s of p.chatSessions) {
       for (const m of s.messages) {

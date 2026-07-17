@@ -30,6 +30,11 @@ plugins, fixtures, screenshots, or assets as implementation input.
 | 2026-07-17 | Browser runtime | Connect WebSocket, report state, execute identified commands, disconnect | Commands are validated, atomic where applicable, return structured results, time out, and never replay | high |
 | 2026-07-17 | Codex continuity | Reuse/new thread, attach image, stop turn, approve tool | Profile thread persists; attachments are owner-only and cleaned; approval remains explicit | high |
 | 2026-07-17 | Formal storage | Run isolated PostgreSQL/Redis/media E2E | Data reloads through the production-shaped stack and the temporary test stores are empty afterward | high |
+| 2026-07-18 | Image generation replay | Generate one/many images, retry after reference loss | Requests retain model/size/quality/count/transparency/reference lineage; missing references fail before network use; multiple results remain grouped | high |
+| 2026-07-18 | Plugin lifecycle | Disable and re-enable installed or built-in plugins | Disabled plugins cannot be added or executed; existing node state remains intact and becomes available after re-enable | high |
+| 2026-07-18 | Prompt catalogs | Filter by tag, save/refresh/remove multiple remote sources, inspect result images | Filters are independent; refreshed entries replace stale cache; bounded HTTPS galleries remain inspectable | high |
+| 2026-07-18 | Video creation | Generate video from text/image nodes with smart or explicit duration | A connected video node is created; image references are forwarded; unsupported Ark duration/resolution combinations fail before request | high |
+| 2026-07-18 | Assistant images | Paste, preview, remove, insert, send, and reinsert images | Attachments remain visible and controllable without exposing provider credentials or requiring a chat turn | high |
 
 ## Evidence
 

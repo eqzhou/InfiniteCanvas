@@ -141,9 +141,9 @@ test("text-to-image creates a connected config and executes immediately", async 
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
-        data: [{
+        data: Array.from({ length: 2 }, () => ({
           b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC",
-        }],
+        })),
       }),
     });
   });
@@ -153,6 +153,7 @@ test("text-to-image creates a connected config and executes immediately", async 
   await settings.getByLabel("生图 URL").fill("https://mock.example/v1");
   await settings.getByLabel("生图 API Key").fill("test-only-key");
   await settings.getByLabel("生图模型").fill("mock-image-model");
+  await settings.getByLabel("默认数量").fill("2");
   await settings.getByRole("button", { name: "关闭" }).click();
 
   await page.getByTitle("文本").click();
@@ -160,6 +161,8 @@ test("text-to-image creates a connected config and executes immediately", async 
   await page.getByTitle("生图").click();
 
   await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
+  await expect(page.locator('[data-node-type="config"]').getByText("a red square", { exact: true }))
+    .toBeVisible();
   await expect.poll(() => requestBody).toMatchObject({
     model: "mock-image-model",
     prompt: "a red square",
@@ -176,10 +179,19 @@ test("text-to-image creates a connected config and executes immediately", async 
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
           const projects = Array.isArray(request.result) ? request.result : [];
-          resolve(projects.some((project) => project?.nodes?.some(
-            (item: { type?: string; metadata?: { status?: string } }) =>
-              item.type === "image" && item.metadata?.status === "success",
-          )));
+          resolve(projects.some((project) => {
+            const config = project?.nodes?.find((item: { type?: string }) => item.type === "config");
+            const images = project?.nodes?.filter((item: { type?: string }) => item.type === "image") ?? [];
+            return config?.metadata?.batchChildIds?.length === 2 && images.length === 2 &&
+              images.every((item: { metadata?: Record<string, unknown> }) =>
+                item.metadata?.status === "success" &&
+                item.metadata?.generationType === "text-to-image" &&
+                item.metadata?.model === "mock-image-model" &&
+                item.metadata?.size === "1024x1024" &&
+                item.metadata?.quality === "auto" &&
+                item.metadata?.count === 2 &&
+                Array.isArray(item.metadata?.referenceStorageKeys));
+          }));
           database.close();
         };
       };
@@ -300,6 +312,21 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await expect(
     page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"),
   ).toHaveValue("plugin state from Playwright");
+
+  await page.goto("/plugins");
+  const enabled = page.getByLabel("便签 已启用");
+  await enabled.uncheck();
+  await expect(stickyCard.getByRole("button", { name: "添加到画布" })).toBeDisabled();
+  await page.goto("/");
+  await expect(page.getByText("插件不可用", { exact: true })).toBeVisible();
+  await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容")).toHaveCount(0);
+
+  await page.goto("/plugins");
+  await expect(page.getByLabel("便签 已启用")).not.toBeChecked();
+  await page.getByLabel("便签 已启用").check();
+  await page.goto("/");
+  await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"))
+    .toHaveValue("plugin state from Playwright");
 });
 
 test("plugin registry installation requires consent for every permission", async ({ page }) => {
@@ -483,6 +510,44 @@ test("image reverse prompt creates a connected text node", async ({ page }) => {
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("studio light, red square");
 });
 
+test("an image node can create a connected video with itself as reference", async ({ page }) => {
+  let requestBody: Record<string, unknown> | null = null;
+  await page.route("https://video.example/v1/videos", async (route) => {
+    requestBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "video-direct",
+        status: "completed",
+        url: "https://cdn.example/result.mp4",
+      }),
+    });
+  });
+  await page.route("https://cdn.example/result.mp4", async (route) => {
+    await route.fulfill({ contentType: "video/mp4", body: "video-bytes" });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("视频 URL").fill("https://video.example/v1");
+  await page.getByLabel("视频 API Key").fill("video-test-key");
+  await page.getByLabel("视频模型").fill("video-model");
+  await page.getByRole("button", { name: "关闭" }).click();
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    name: "reference.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  page.once("dialog", async (dialog) => dialog.accept("animate this reference"));
+  await page.getByTitle("生成视频").click();
+
+  await expect.poll(() => requestBody).toMatchObject({
+    model: "video-model",
+    prompt: "animate this reference",
+  });
+  expect(String(requestBody?.input_reference)).toMatch(/^data:image\/png;base64,/);
+  await expect(page.locator('[data-node-type="video"]')).toHaveCount(1);
+});
+
 test("local image upscale creates a lineage-tracked derived node", async ({ page }) => {
   await openFreshBoard(page);
   const imageInput = page.locator('input[type="file"][accept="image/*"]').first();
@@ -552,6 +617,43 @@ test("prompt details can insert their content into the active canvas", async ({ 
   );
 });
 
+test("prompt library filters tags and manages multiple persisted remote sources", async ({ page }) => {
+  const sources = ["https://prompts-one.example/catalog.json", "https://prompts-two.example/catalog.json"];
+  await page.route(sources[0], async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([{ title: "Remote Product", prompt: "product prompt", tags: ["product"] }]),
+  }));
+  await page.route(sources[1], async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([{
+      title: "Remote Portrait",
+      prompt: "portrait prompt",
+      tags: ["portrait"],
+      images: ["https://cdn.example/portrait.png"],
+    }]),
+  }));
+  await openFreshBoard(page);
+  await page.goto("/prompts");
+  const sourceInput = page.getByPlaceholder("远程源 URL（raw JSON / Markdown）");
+  for (const source of sources) {
+    await sourceInput.fill(source);
+    await page.getByRole("button", { name: "拉取远程提示词" }).click();
+  }
+
+  await page.getByLabel("提示词标签").selectOption("portrait");
+  await expect(page.getByText("Remote Portrait", { exact: true })).toBeVisible();
+  await expect(page.getByText("Remote Product", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "详情" }).click();
+  await expect(page.getByAltText("结果图 1")).toBeVisible();
+  await page.getByTitle("关闭详情").click();
+
+  const firstSource = page.locator("li").filter({ hasText: sources[0] });
+  await firstSource.getByTitle("移除提示词源").click();
+  await page.reload();
+  await expect(page.locator("li").filter({ hasText: sources[0] })).toHaveCount(0);
+  await expect(page.locator("li").filter({ hasText: sources[1] })).toBeVisible();
+});
+
 test("asset editor updates title, source, tags, notes, and text content", async ({ page }) => {
   await openFreshBoard(page);
   await page.goto("/assets");
@@ -617,6 +719,31 @@ test("assistant ignores the submit shortcut while IME composition is active", as
     isComposing: false,
   });
   await expect.poll(() => dialogs).toBe(1);
+});
+
+test("assistant previews pasted images and inserts them without sending", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "desktop assistant paste flow is covered here");
+  await openFreshBoard(page);
+  const input = page.getByPlaceholder("问点什么…（可粘贴图片）");
+  await input.evaluate((element) => {
+    const bytes = Uint8Array.from(
+      atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC"),
+      (character) => character.charCodeAt(0),
+    );
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], "pasted.png", { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: transfer,
+    }));
+  });
+  const preview = page.getByAltText("待发送图片");
+  await expect(preview).toBeVisible();
+  const assistant = page.locator("aside").filter({ hasText: "画布助手" });
+  await assistant.getByRole("button", { name: "插入画布", exact: true }).click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+  await expect(preview).toHaveCount(0);
 });
 
 test("local Agent connects to the real Go service with a session token", async ({ page }) => {

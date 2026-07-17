@@ -12,10 +12,10 @@ smoke tests that require real paid credentials remain opt-in.
 
 ## Verification summary
 
-- [verified] 171 Bun unit/integration tests; 83.34% lines and 85.26% functions
+- [verified] 183 Bun unit/integration tests; 84.60% lines and 86.50% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 105 passed and 6 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI
-- [verified] 28/28 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 32/32 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
@@ -41,6 +41,7 @@ smoke tests that require real paid credentials remain opt-in.
 - [verified] AES-GCM provider secrets; exported projects and WebDAV backups omit keys
 - [verified] Transparent image background capability checks and provider mapping
 - [verified] Image reverse prompting into a connected text node
+- [verified] Reproducible image request metadata, missing-reference preflight failure, and expandable multi-result batches
 - [verified] Draggable image split guides with normalized coordinates and lineage
 - [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
 - [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion
@@ -51,12 +52,21 @@ smoke tests that require real paid credentials remain opt-in.
 - [verified] Independent HTTPS registry with bounded MIME/size/redirect policy
 - [verified] Manifest v2 and lossless v1 normalization
 - [verified] Eight node/asset/AI/panel permissions with install-time consent
-- [verified] Install, semantic-version update, upgrade notice, persistence rollback, and uninstall
+- [verified] Install, enable/disable with preserved node state, semantic-version update, upgrade notice, persistence rollback, and uninstall
 - [verified] Opaque iframe isolation, CSP, message validation, quota, and state persistence
 - [verified] Host-mediated node/asset/panel/AI calls without provider-key disclosure
 - [verified] Publishable `packages/plugin-sdk` types, protocol, and example
 - [verified] Original sticky-note, Markdown, HTML, SVG, and Three.js panorama examples
 - [verified] Panorama desktop/mobile canvas pixels and interactive 2D fallback without WebGL
+
+## Prompt, video, and assistant workflows
+
+- [verified] Prompt search plus independent source/tag filters, multiple saved HTTPS sources, per-source/all refresh, and source removal
+- [verified] Prompt cover and bounded result-image galleries with detail preview and canvas insertion
+- [verified] Text/image nodes create connected video nodes; image-to-video includes the source image reference
+- [verified] Smart Seedance duration and Ark fast-model `1080p` preflight rejection
+- [verified] Config nodes preview ordered text, image, video, and audio inputs
+- [verified] Assistant pasted-image preview, removal, direct insertion, and later message-image reinsertion
 
 ## Agent and MCP
 

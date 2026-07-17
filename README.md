@@ -68,12 +68,15 @@ canvas.
 - Independent text/image/video/audio endpoints and encrypted credentials
 - OpenAI, Ark/Seedance, Gemini, and restricted Template protocols
 - Transparent images, reverse prompting, adjustable split guides, and lineage
+- Reproducible image retries with reference protection and expandable result batches
+- Direct text/image-to-video creation with smart duration and provider preflight validation
 - Persistent image/video generation jobs, history, retry, cancel, and canvas insertion
 
 ### Phase 3 — Independent plugins
-- Manifest v2 permissions, registry install/upgrade/rollback/uninstall
+- Manifest v2 permissions, registry install/enable/disable/upgrade/rollback/uninstall
 - Host-mediated node, asset, panel, and AI APIs without key exposure
 - Plugin SDK plus sticky-note, Markdown, HTML, SVG, and Three.js panorama examples
+- Prompt tags, multiple refreshable remote sources, cover/result galleries, and canvas insertion
 
 ### Phase 4 — Browser and Codex agent runtime
 - Ticketed WebSocket with live state, atomic operations, snapshots, assets, prompts, and navigation
@@ -98,7 +101,7 @@ cd server && go test -race ./... && go vet ./...
 GitHub Actions runs the web tests, typecheck, production build, performance
 assertion, cross-browser and production Playwright suites, Go race
 detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The Bun coverage report reaches 83.34% lines and 85.26% functions for covered
+pull requests. The Bun coverage report reaches 84.60% lines and 86.50% functions for covered
 library/service modules; browser-only UI and persistence paths are validated by
 Playwright and are outside that report.
 

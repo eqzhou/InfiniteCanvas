@@ -193,6 +193,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
             ...defaults,
             ...config,
             plugins: normalizePluginManifests(config.plugins),
+            disabledPluginIds: Array.isArray(config.disabledPluginIds)
+              ? [...new Set(config.disabledPluginIds.filter((id): id is string => typeof id === "string"))]
+              : [],
           }
         : defaults;
       set({

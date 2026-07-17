@@ -447,15 +447,17 @@ export function AssistantPanel() {
               />
             ))}
             <div className="mt-2 flex flex-wrap gap-2">
+              {!m.isLoading && (m.role === "assistant" || m.images?.length) ? (
+                <button
+                  type="button"
+                  className="text-xs text-[var(--ob-accent)]"
+                  onClick={() => insertMessage(m)}
+                >
+                  插入画布
+                </button>
+              ) : null}
               {m.role === "assistant" && !m.isLoading ? (
                 <>
-                  <button
-                    type="button"
-                    className="text-xs text-[var(--ob-accent)]"
-                    onClick={() => insertMessage(m)}
-                  >
-                    插入画布
-                  </button>
                   <button
                     type="button"
                     className="text-xs text-[var(--ob-muted)]"
@@ -510,6 +512,42 @@ export function AssistantPanel() {
             生图
           </button>
         </div>
+        {pastedImages.length ? (
+          <div className="mb-2 rounded-md border border-[var(--ob-line)] p-2">
+            <div className="flex flex-wrap gap-2">
+              {pastedImages.map((image) => (
+                <div key={image.id} className="relative h-16 w-16">
+                  <img src={image.url} alt="待发送图片" className="h-full w-full rounded object-cover" />
+                  <button
+                    type="button"
+                    title="移除附件"
+                    className="absolute right-0 top-0 grid h-5 w-5 place-items-center rounded-bl bg-black/70 text-white"
+                    onClick={() => setPastedImages((current) =>
+                      current.filter((item) => item.id !== image.id))}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="mt-2 text-xs text-[var(--ob-accent)]"
+              onClick={() => {
+                insertMessage({
+                  id: uid("msg"),
+                  role: "user",
+                  mode,
+                  text: "",
+                  images: pastedImages,
+                });
+                setPastedImages([]);
+              }}
+            >
+              插入画布
+            </button>
+          </div>
+        ) : null}
         <div className="flex gap-2">
           <textarea
             className="min-h-[72px] flex-1 resize-none rounded-md border border-[var(--ob-line)] bg-transparent p-2 text-sm"

@@ -43,6 +43,20 @@ export function PromptDetailDialog({
             className="mb-3 max-h-56 w-full rounded-md object-contain bg-[var(--ob-canvas)]"
           />
         ) : null}
+        {prompt.resultUrls?.length ? (
+          <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {prompt.resultUrls.map((url, index) => (
+              <img
+                key={url}
+                src={url}
+                alt={`结果图 ${index + 1}`}
+                crossOrigin="anonymous"
+                referrerPolicy="no-referrer"
+                className="aspect-square w-full rounded-md bg-[var(--ob-canvas)] object-contain"
+              />
+            ))}
+          </div>
+        ) : null}
         <pre className="whitespace-pre-wrap rounded-md border border-[var(--ob-line)] bg-[var(--ob-canvas)] p-3 text-sm leading-relaxed">
           {prompt.body}
         </pre>

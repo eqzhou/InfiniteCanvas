@@ -37,6 +37,7 @@ const project = (): BoardProject => ({
       metadata: {
         content: "blob:local-video",
         storageKey: "media:original",
+        referenceStorageKeys: ["image:original"],
         mimeType: "video/mp4",
       },
     },
@@ -107,6 +108,7 @@ describe("project media bundle", () => {
       "image:imported-1",
     );
     expect(restored.nodes[1]?.metadata.storageKey).toBe("media:imported-2");
+    expect(restored.nodes[1]?.metadata.referenceStorageKeys).toEqual(["image:imported-1"]);
   });
 
   test("refuses export when a referenced blob is missing", async () => {

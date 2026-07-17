@@ -6,6 +6,7 @@ import {
   fetchPluginRegistry,
   fetchPluginManifest,
   persistPluginUpgrade,
+  setPluginEnabled,
   uninstallPluginManifest,
 } from "@/lib/plugin-catalog";
 import { saveConfig } from "@/services/storage";
@@ -20,6 +21,8 @@ function PluginCard({
   onRemove,
   update,
   onUpdate,
+  enabled,
+  onEnabledChange,
 }: {
   manifest: PluginManifest;
   builtin: boolean;
@@ -27,6 +30,8 @@ function PluginCard({
   onRemove?: () => void;
   update?: PluginRegistryEntry;
   onUpdate?: () => void;
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
 }) {
   return (
     <article className="flex min-h-48 flex-col rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
@@ -36,11 +41,20 @@ function PluginCard({
         </span>
         <div className="min-w-0">
           <h2 className="truncate font-medium">{manifest.name}</h2>
-          <p className="text-xs text-[var(--ob-muted)]">{manifest.id} · v{manifest.version}</p>
+          <p className="text-xs text-[var(--ob-muted)]">
+            {builtin ? "内置" : "已安装"} · {manifest.id} · v{manifest.version}
+          </p>
         </div>
-        <span className="ml-auto shrink-0 text-xs text-[var(--ob-muted)]">
-          {builtin ? "内置" : "已安装"}
-        </span>
+        <label className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-[var(--ob-muted)]">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label={`${manifest.name} 已启用`}
+            checked={enabled}
+            onChange={(event) => onEnabledChange(event.target.checked)}
+          />
+          {enabled ? "已启用" : "已停用"}
+        </label>
       </div>
       <p className="mt-3 line-clamp-3 text-sm text-[var(--ob-muted)]">{manifest.description}</p>
       <p className="mt-2 text-xs text-[var(--ob-muted)]">
@@ -49,7 +63,8 @@ function PluginCard({
       <div className="mt-auto flex items-center gap-2 pt-4">
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white"
+          className="inline-flex items-center gap-1 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          disabled={!enabled}
           onClick={onAdd}
         >
           <Plus size={15} /> 添加到画布
@@ -85,6 +100,7 @@ export function PluginsPage() {
   const active = useBoardStore((state) => state.getActive());
   const addNode = useBoardStore((state) => state.addNode);
   const installed = config.plugins ?? [];
+  const disabledPluginIds = config.disabledPluginIds ?? [];
   const [source, setSource] = useState("");
   const [registrySource, setRegistrySource] = useState(config.pluginRegistryUrl ?? "");
   const [registry, setRegistry] = useState<PluginRegistryEntry[]>([]);
@@ -254,13 +270,42 @@ export function PluginsPage() {
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {BUILTIN_PLUGINS.map((manifest) => (
-          <PluginCard key={manifest.id} manifest={manifest} builtin onAdd={() => addToCanvas(manifest)} />
+          <PluginCard
+            key={manifest.id}
+            manifest={manifest}
+            builtin
+            enabled={!disabledPluginIds.includes(manifest.id)}
+            onEnabledChange={(enabled) => {
+              const current = useBoardStore.getState().config;
+              setConfig({
+                ...current,
+                disabledPluginIds: setPluginEnabled(
+                  current.disabledPluginIds ?? [],
+                  manifest.id,
+                  enabled,
+                ),
+              });
+            }}
+            onAdd={() => addToCanvas(manifest)}
+          />
         ))}
         {installed.map((manifest) => (
           <PluginCard
             key={manifest.id}
             manifest={manifest}
             builtin={false}
+            enabled={!disabledPluginIds.includes(manifest.id)}
+            onEnabledChange={(enabled) => {
+              const current = useBoardStore.getState().config;
+              setConfig({
+                ...current,
+                disabledPluginIds: setPluginEnabled(
+                  current.disabledPluginIds ?? [],
+                  manifest.id,
+                  enabled,
+                ),
+              });
+            }}
             update={updates.get(manifest.id)}
             onUpdate={updates.has(manifest.id)
               ? () => void prepareRegistryInstall(updates.get(manifest.id)!)
@@ -272,6 +317,11 @@ export function PluginsPage() {
               setConfig({
                 ...current,
                 plugins: uninstallPluginManifest(current.plugins ?? [], manifest.id),
+                disabledPluginIds: setPluginEnabled(
+                  current.disabledPluginIds ?? [],
+                  manifest.id,
+                  true,
+                ),
               });
             }}
           />
