@@ -86,7 +86,34 @@ jobs:
   e2e:
     name: Cross-browser and production E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    env:
+      OPENBOARD_DATABASE_URL: postgres://openboard_e2e:openboard_e2e@127.0.0.1:5432/openboard_e2e?sslmode=disable
+      OPENBOARD_REDIS_URL: redis://127.0.0.1:6379/0
+      OPENBOARD_MASTER_KEY: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: openboard_e2e
+          POSTGRES_USER: openboard_e2e
+          POSTGRES_PASSWORD: openboard_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openboard_e2e -d openboard_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: web
@@ -99,10 +126,13 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
+      - name: Install formal E2E database clients
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client redis-tools
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium firefox webkit
       - run: bun run test:e2e
       - run: bun run test:e2e:production --project=chromium --workers=1
+      - run: bun run test:e2e:formal
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

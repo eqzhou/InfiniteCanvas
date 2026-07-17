@@ -6,14 +6,12 @@ ORIGIN=${2:?web origin is required}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
-if [[ ! -f .env ]]; then
-  echo "Formal E2E requires $ROOT/.env" >&2
-  exit 1
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
 fi
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
 
 for name in OPENBOARD_DATABASE_URL OPENBOARD_REDIS_URL OPENBOARD_MASTER_KEY; do
   [[ -n "${!name:-}" ]] || { echo "$name is required" >&2; exit 1; }

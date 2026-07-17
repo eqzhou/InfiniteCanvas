@@ -212,6 +212,16 @@ test("text-to-image creates a connected config and executes immediately", async 
 
 test("a configuration node generates the requested text batch", async ({ page }) => {
   let requests = 0;
+  await page.route("https://batch.example/v1/images/generations", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{
+          b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC",
+        }],
+      }),
+    });
+  });
   await page.route("https://batch.example/v1/responses", async (route) => {
     requests += 1;
     await route.fulfill({
@@ -225,15 +235,20 @@ test("a configuration node generates the requested text batch", async ({ page })
   await page.getByLabel("文本 URL").fill("https://batch.example/v1");
   await page.getByLabel("文本 API Key").fill("batch-test-key");
   await page.getByLabel("文本模型").fill("batch-text-model");
+  await page.getByLabel("生图 URL").fill("https://batch.example/v1");
+  await page.getByLabel("生图 API Key").fill("batch-test-key");
+  await page.getByLabel("生图模型").fill("batch-image-model");
+  await page.getByLabel("默认数量").fill("1");
   await page.getByRole("button", { name: "关闭" }).click();
 
   await page.getByTitle("文本").click();
   const source = page.locator('[data-node-type="text"]');
   await source.getByPlaceholder("写下提示词或说明…").fill("three alternatives");
-  await page.getByTitle("配置").click();
+  await source.getByTitle("生图").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+  await page.getByTitle("适应").click();
   const config = page.locator('[data-node-type="config"]');
-  await source.getByTitle("输出端口 / 拖出连线").click();
-  await config.getByTitle("输入端口").click();
+  await expect(config).toHaveCount(1);
   await config.getByLabel("模式").selectOption("text");
   await config.getByLabel("数量").fill("3");
   await config.getByTitle("运行生成").click();
