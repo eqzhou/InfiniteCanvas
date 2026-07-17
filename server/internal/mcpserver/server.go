@@ -21,9 +21,13 @@ var supportedProtocolVersions = map[string]struct{}{
 }
 
 type Server struct {
-	tools               *api.Server
+	tools               toolExecutor
 	initializeResponded bool
 	ready               bool
+}
+
+type toolExecutor interface {
+	ExecuteTool(string, json.RawMessage) (any, error)
 }
 
 type rpcRequest struct {
@@ -60,9 +64,13 @@ func New(dataDir string) *Server {
 	return &Server{tools: api.NewServer(dataDir)}
 }
 
+func newWithExecutor(executor toolExecutor) *Server {
+	return &Server{tools: executor}
+}
+
 func (s *Server) Run(ctx context.Context, input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), 32*1024*1024)
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)
 	for scanner.Scan() {

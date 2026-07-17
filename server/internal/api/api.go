@@ -31,12 +31,14 @@ const (
 var projectIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 type Server struct {
-	dataDir string
-	mu      sync.Mutex
-	uploads chan struct{}
-	codex   *codexManager
-	store   store.Store
-	secrets cipher.AEAD
+	dataDir        string
+	mu             sync.Mutex
+	uploads        chan struct{}
+	codex          *codexManager
+	runtime        *runtimeHub
+	runtimeOrigins map[string]struct{}
+	store          store.Store
+	secrets        cipher.AEAD
 }
 
 func Mount(r chi.Router, dataDir string) {
@@ -46,8 +48,13 @@ func Mount(r chi.Router, dataDir string) {
 		r.Get("/version", s.version)
 		r.Get("/agent/status", s.agentStatus)
 		r.Post("/agent/execute", s.executeAgentTool)
+		r.Post("/runtime/ticket", s.runtimeTicket)
+		r.Get("/runtime/ws", s.runtimeSocket)
+		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
 		r.Post("/codex/message", s.sendCodexMessage)
+		r.Post("/codex/interrupt", s.interruptCodex)
+		r.Post("/codex/attachments", s.uploadCodexAttachments)
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
@@ -73,7 +80,23 @@ func Mount(r chi.Router, dataDir string) {
 }
 
 func NewServer(dataDir string) *Server {
-	return &Server{dataDir: dataDir, uploads: make(chan struct{}, 2), codex: newCodexManager()}
+	return &Server{
+		dataDir: dataDir,
+		uploads: make(chan struct{}, 2),
+		codex:   newCodexManager(),
+		runtime: newRuntimeHub(),
+		runtimeOrigins: map[string]struct{}{
+			"http://localhost:5173": {},
+			"http://127.0.0.1:5173": {},
+		},
+	}
+}
+
+func (s *Server) SetRuntimeOrigins(origins map[string]struct{}) {
+	s.runtimeOrigins = make(map[string]struct{}, len(origins))
+	for origin := range origins {
+		s.runtimeOrigins[origin] = struct{}{}
+	}
 }
 
 func NewServerWithStore(dataDir string, backend store.Store) *Server {
@@ -88,8 +111,13 @@ func MountServer(r chi.Router, s *Server) {
 		r.Get("/version", s.version)
 		r.Get("/agent/status", s.agentStatus)
 		r.Post("/agent/execute", s.executeAgentTool)
+		r.Post("/runtime/ticket", s.runtimeTicket)
+		r.Get("/runtime/ws", s.runtimeSocket)
+		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
 		r.Post("/codex/message", s.sendCodexMessage)
+		r.Post("/codex/interrupt", s.interruptCodex)
+		r.Post("/codex/attachments", s.uploadCodexAttachments)
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
@@ -162,10 +190,22 @@ func (s *Server) version(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) agentStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
 		"connected": true,
+		"runtime":   map[string]any{"connected": s.runtime.connected()},
 		"bridges":   []string{"http-json", "mcp-stdio"},
 		"message":   "Local board tools and optional Codex app-server sessions are available.",
 		"codex":     map[string]any{"available": true, "sessionEndpoint": "/api/codex/session", "eventsEndpoint": "/api/codex/events"},
 		"tools": []string{
+			"board.get_state",
+			"board.get_selection",
+			"board.export_snapshot",
+			"board.apply_ops",
+			"board.create_text_node",
+			"board.create_image_prompt_flow",
+			"asset.search",
+			"asset.insert",
+			"prompt.search",
+			"prompt.insert",
+			"site.navigate",
 			"board.list_nodes",
 			"board.add_node",
 			"board.update_node",

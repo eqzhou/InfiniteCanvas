@@ -78,3 +78,57 @@ func TestCodexSessionReplaysBoundedHistoryToNewSubscribers(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexTurnCompletionCleansActiveAttachments(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "image.png")
+	if err := os.WriteFile(path, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := &codexSession{
+		subs:               make(map[chan codexEvent]struct{}),
+		pendingAttachments: make(map[string]codexAttachment),
+		activeAttachments:  []codexAttachment{{ID: "image-1", Path: path}},
+		turnID:             "turn-1",
+	}
+	session.trackTurnNotification("turn/completed", json.RawMessage(`{"turn":{"id":"turn-1"}}`))
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("completed attachment still exists: %v", err)
+	}
+	if session.turnID != "" || len(session.activeAttachments) != 0 {
+		t.Fatal("completed turn state was not cleared")
+	}
+}
+
+func TestCodexDelayedCompletionDoesNotClearNewTurn(t *testing.T) {
+	session := &codexSession{
+		subs:               make(map[chan codexEvent]struct{}),
+		pendingAttachments: make(map[string]codexAttachment),
+		turnID:             "turn-new",
+	}
+	session.trackTurnNotification("turn/completed", json.RawMessage(`{"turn":{"id":"turn-old"}}`))
+	if session.turnID != "turn-new" {
+		t.Fatal("a delayed completion cleared the active turn")
+	}
+}
+
+func TestCodexCompletionBeforeActivationCleansAttachments(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "image.png")
+	if err := os.WriteFile(path, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session := &codexSession{
+		subs:               make(map[chan codexEvent]struct{}),
+		pendingAttachments: make(map[string]codexAttachment),
+		turnStarting:       true,
+	}
+	session.trackTurnNotification("turn/completed", json.RawMessage(`{"turn":{"id":"turn-fast"}}`))
+	session.activateTurn(map[string]any{"turn": map[string]any{"id": "turn-fast"}}, []codexAttachment{{ID: "image-1", Path: path}})
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("early-completed attachment still exists: %v", err)
+	}
+	if session.turnID != "" || len(session.activeAttachments) != 0 {
+		t.Fatal("early-completed turn was reactivated")
+	}
+}

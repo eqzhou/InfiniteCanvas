@@ -27,6 +27,99 @@ func projectIDProperty() map[string]any {
 
 var boardTools = []toolDefinition{
 	{
+		Name:        "board.get_state",
+		Title:       "Get live board state",
+		Description: "Return the active browser route, project, selection, and viewport.",
+		InputSchema: objectSchema(map[string]any{}),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name:        "board.get_selection",
+		Title:       "Get live selection",
+		Description: "Return selected node ids and complete selected nodes from the browser.",
+		InputSchema: objectSchema(map[string]any{}),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name:        "board.export_snapshot",
+		Title:       "Export board PNG",
+		Description: "Render the visible browser canvas to PNG and return a protected local URL.",
+		InputSchema: objectSchema(map[string]any{}),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name:        "board.apply_ops",
+		Title:       "Apply atomic board operations",
+		Description: "Validate a complete operation batch in the browser and commit it atomically.",
+		InputSchema: objectSchema(map[string]any{
+			"operations": map[string]any{
+				"type": "array", "minItems": 1, "maxItems": 1000,
+				"items": map[string]any{"type": "object"},
+			},
+		}, "operations"),
+	},
+	{
+		Name:        "board.create_text_node",
+		Title:       "Create text node",
+		Description: "Create and select a text node in the active browser canvas.",
+		InputSchema: objectSchema(map[string]any{
+			"id":      map[string]any{"type": "string"},
+			"title":   map[string]any{"type": "string", "maxLength": 500},
+			"content": map[string]any{"type": "string", "maxLength": 512000},
+			"x":       map[string]any{"type": "number"},
+			"y":       map[string]any{"type": "number"},
+		}, "content"),
+	},
+	{
+		Name:        "board.create_image_prompt_flow",
+		Title:       "Create image prompt flow",
+		Description: "Create a configuration node, execute image generation, and connect the results.",
+		InputSchema: objectSchema(map[string]any{
+			"prompt": map[string]any{"type": "string", "maxLength": 32000},
+			"model":  map[string]any{"type": "string", "maxLength": 200},
+			"size":   map[string]any{"type": "string", "maxLength": 50},
+			"count":  map[string]any{"type": "integer", "minimum": 1, "maximum": 8},
+			"x":      map[string]any{"type": "number"},
+			"y":      map[string]any{"type": "number"},
+		}, "prompt"),
+	},
+	{
+		Name:        "asset.search",
+		Title:       "Search assets",
+		Description: "Search the OpenBoard asset library in the connected browser.",
+		InputSchema: objectSchema(map[string]any{"query": map[string]any{"type": "string", "maxLength": 200}}),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name:        "asset.insert",
+		Title:       "Insert asset",
+		Description: "Insert an asset into the active browser canvas.",
+		InputSchema: objectSchema(map[string]any{
+			"id": projectIDProperty(), "x": map[string]any{"type": "number"}, "y": map[string]any{"type": "number"},
+		}, "id"),
+	},
+	{
+		Name:        "prompt.search",
+		Title:       "Search prompts",
+		Description: "Search the OpenBoard prompt library in the connected browser.",
+		InputSchema: objectSchema(map[string]any{"query": map[string]any{"type": "string", "maxLength": 200}}),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name:        "prompt.insert",
+		Title:       "Insert prompt",
+		Description: "Insert a prompt as a text node in the active browser canvas.",
+		InputSchema: objectSchema(map[string]any{
+			"id": projectIDProperty(), "x": map[string]any{"type": "number"}, "y": map[string]any{"type": "number"},
+		}, "id"),
+	},
+	{
+		Name:        "site.navigate",
+		Title:       "Navigate OpenBoard",
+		Description: "Navigate the connected OpenBoard browser to an allowed application route.",
+		InputSchema: objectSchema(map[string]any{"path": map[string]any{"type": "string", "maxLength": 200}}, "path"),
+	},
+	{
 		Name:        "board.list_nodes",
 		Title:       "List board nodes",
 		Description: "List every node in a persisted OpenBoard project.",

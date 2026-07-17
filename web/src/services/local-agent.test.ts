@@ -5,10 +5,12 @@ import {
   createCodexSession,
   decideProjectSync,
   fetchAgentStatus,
+  interruptCodexTurn,
   normalizeAgentBaseUrl,
   parseCodexSseRecords,
   respondCodexApproval,
   sendCodexMessage,
+  uploadCodexAttachments,
 } from "./local-agent";
 
 describe("local agent project synchronization", () => {
@@ -89,24 +91,35 @@ describe("local agent connection", () => {
           headers: { "content-type": "application/json" },
         });
       }
+      if (String(input).endsWith("/api/codex/attachments")) {
+        return new Response(JSON.stringify({
+          attachments: [{ id: "image-1", name: "pixel.png", mimeType: "image/png", bytes: 5 }],
+        }), { headers: { "content-type": "application/json" } });
+      }
       return new Response(JSON.stringify({ ok: true }), {
         headers: { "content-type": "application/json" },
       });
     };
     const connection = { baseUrl: "http://127.0.0.1:8790", token: "secret" };
     const session = await createCodexSession(connection, "/tmp/board", fetcher);
-    await sendCodexMessage(connection, session.id, "hello", fetcher);
+    const attachments = await uploadCodexAttachments(connection, session.id, [
+      new File(["pixel"], "pixel.png", { type: "image/png" }),
+    ], fetcher);
+    await sendCodexMessage(connection, session.id, "hello", fetcher, attachments.map((item) => item.id));
+    await interruptCodexTurn(connection, session.id, fetcher);
     await respondCodexApproval(connection, session.id, 7, true, fetcher);
     await closeCodexSession(connection, session.id, fetcher);
     expect(requests.map((request) => request.url)).toEqual([
       "http://127.0.0.1:8790/api/codex/session",
+      "http://127.0.0.1:8790/api/codex/attachments",
       "http://127.0.0.1:8790/api/codex/message",
+      "http://127.0.0.1:8790/api/codex/interrupt",
       "http://127.0.0.1:8790/api/codex/approval",
       "http://127.0.0.1:8790/api/codex/session/session-1",
     ]);
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({ cwd: "/tmp/board" });
-    expect(JSON.parse(String(requests[1].init?.body))).toEqual({ sessionId: "session-1", text: "hello" });
-    expect(JSON.parse(String(requests[2].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
-    expect(new Headers(requests[1].init?.headers).get("Authorization")).toBe("Bearer secret");
+    expect(JSON.parse(String(requests[2].init?.body))).toEqual({ sessionId: "session-1", text: "hello", attachmentIds: ["image-1"] });
+    expect(JSON.parse(String(requests[4].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
+    expect(new Headers(requests[2].init?.headers).get("Authorization")).toBe("Bearer secret");
   });
 });

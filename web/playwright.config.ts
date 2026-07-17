@@ -59,10 +59,10 @@ export default defineConfig({
   webServer: [
     {
       command: production
-        ? `bun run build && bun run preview --host 127.0.0.1 --port ${webPort}`
+        ? `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`
         : formal
           ? `VITE_OPENBOARD_STORAGE=server bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`
-        : "bun run dev --host 127.0.0.1",
+        : `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run dev --host 127.0.0.1`,
       url: origin,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,

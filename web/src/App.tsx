@@ -5,6 +5,7 @@ import { TopNav } from "@/components/layout/TopNav";
 import { SettingsModal } from "@/components/layout/SettingsModal";
 import { ShortcutsModal } from "@/components/layout/ShortcutsModal";
 import { LocalAgentPanel } from "@/components/agent/LocalAgentPanel";
+import { BrowserRuntime } from "@/components/agent/BrowserRuntime";
 import { HomePage } from "@/pages/HomePage";
 import { AssetsPage } from "@/pages/AssetsPage";
 import { PromptsPage } from "@/pages/PromptsPage";
@@ -108,6 +109,7 @@ export function App() {
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ShortcutsModal />
       <LocalAgentPanel />
+      <BrowserRuntime />
     </div>
   );
 }

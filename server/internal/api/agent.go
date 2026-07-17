@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const maxAgentRequestBytes = 1 << 20
+const maxAgentRequestBytes = 32 << 20
 
 type agentRequest struct {
 	Tool      string          `json:"tool"`
@@ -87,6 +87,19 @@ func (s *Server) executeAgentTool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ExecuteTool(tool string, arguments json.RawMessage) (any, error) {
+	if isBrowserRuntimeTool(tool) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result, err := s.runtime.command(ctx, tool, arguments)
+		if err != nil {
+			return nil, err
+		}
+		var decoded any
+		if err := json.Unmarshal(result, &decoded); err != nil {
+			return nil, fmt.Errorf("decode browser runtime result: %w", err)
+		}
+		return decoded, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	release, err := s.acquireWriteLock()
@@ -95,6 +108,17 @@ func (s *Server) ExecuteTool(tool string, arguments json.RawMessage) (any, error
 	}
 	defer release()
 	return s.runAgentTool(tool, arguments)
+}
+
+func isBrowserRuntimeTool(tool string) bool {
+	switch tool {
+	case "board.get_state", "board.get_selection", "board.export_snapshot", "board.apply_ops",
+		"board.create_text_node", "board.create_image_prompt_flow", "asset.search", "asset.insert",
+		"prompt.search", "prompt.insert", "site.navigate":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {

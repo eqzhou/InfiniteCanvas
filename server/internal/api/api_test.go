@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,7 +23,8 @@ func fakeCodexBinary(t *testing.T) string {
 		"  case \"$method\" in\n" +
 		"    initialize) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
 		"    thread/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread-test\"}}}\\n' \"$id\" ;;\n" +
-		"    turn/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
+		"    turn/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"turn\":{\"id\":\"turn-test\"}}}\\n' \"$id\" ;;\n" +
+		"    turn/interrupt) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
 		"  esac\n" +
 		"done\n"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
@@ -43,13 +46,106 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &session); err != nil || session.ID == "" {
 		t.Fatalf("session=%s", created.Body.String())
 	}
+	reused := request(t, handler, http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var reusedSession struct {
+		ID     string `json:"id"`
+		Reused bool   `json:"reused"`
+	}
+	if json.Unmarshal(reused.Body.Bytes(), &reusedSession) != nil || reusedSession.ID != session.ID || !reusedSession.Reused {
+		t.Fatalf("session was not reused: %s", reused.Body.String())
+	}
 	message := request(t, handler, http.MethodPost, "/api/codex/message", []byte(`{"sessionId":"`+session.ID+`","text":"hello"}`))
 	if message.Code != http.StatusOK {
 		t.Fatalf("message status=%d body=%s", message.Code, message.Body.String())
 	}
-	closed := request(t, handler, http.MethodDelete, "/api/codex/session/"+session.ID, nil)
+	interrupted := request(t, handler, http.MethodPost, "/api/codex/interrupt", []byte(`{"sessionId":"`+session.ID+`"}`))
+	if interrupted.Code != http.StatusOK {
+		t.Fatalf("interrupt status=%d body=%s", interrupted.Code, interrupted.Body.String())
+	}
+	fresh := request(t, handler, http.MethodPost, "/api/codex/session", []byte(`{"fresh":true}`))
+	var freshSession struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(fresh.Body.Bytes(), &freshSession) != nil || freshSession.ID == "" || freshSession.ID == session.ID {
+		t.Fatalf("fresh session was not created: %s", fresh.Body.String())
+	}
+	closed := request(t, handler, http.MethodDelete, "/api/codex/session/"+freshSession.ID, nil)
 	if closed.Code != http.StatusNoContent {
 		t.Fatalf("close status=%d", closed.Code)
+	}
+}
+
+func TestCodexImageAttachmentsAreOwnerOnlyAndCleanedOnClose(t *testing.T) {
+	t.Setenv("OPENBOARD_CODEX_BIN", fakeCodexBinary(t))
+	dataDir := t.TempDir()
+	server := NewServer(dataDir)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	created := request(t, router, http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var session struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(created.Body.Bytes(), &session) != nil || session.ID == "" {
+		t.Fatalf("session=%s", created.Body.String())
+	}
+
+	pixel, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC")
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("sessionId", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile("files", "pixel.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(pixel); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/codex/attachments", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	uploaded := httptest.NewRecorder()
+	router.ServeHTTP(uploaded, req)
+	if uploaded.Code != http.StatusOK {
+		t.Fatalf("upload status=%d body=%s", uploaded.Code, uploaded.Body.String())
+	}
+	var response struct {
+		Attachments []codexAttachment `json:"attachments"`
+	}
+	if json.Unmarshal(uploaded.Body.Bytes(), &response) != nil || len(response.Attachments) != 1 {
+		t.Fatalf("attachments=%s", uploaded.Body.String())
+	}
+	stored, err := filepath.Glob(filepath.Join(dataDir, "codex-attachments", session.ID, "*"))
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("stored attachments=%v err=%v", stored, err)
+	}
+	info, err := os.Stat(stored[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("attachment mode=%v", info.Mode().Perm())
+	}
+
+	messageBody, _ := json.Marshal(map[string]any{
+		"sessionId":     session.ID,
+		"text":          "inspect",
+		"attachmentIds": []string{response.Attachments[0].ID},
+	})
+	message := request(t, router, http.MethodPost, "/api/codex/message", messageBody)
+	if message.Code != http.StatusOK {
+		t.Fatalf("message status=%d body=%s", message.Code, message.Body.String())
+	}
+	closed := request(t, router, http.MethodDelete, "/api/codex/session/"+session.ID, nil)
+	if closed.Code != http.StatusNoContent {
+		t.Fatalf("close status=%d", closed.Code)
+	}
+	stored, _ = filepath.Glob(filepath.Join(dataDir, "codex-attachments", session.ID, "*"))
+	if len(stored) != 0 {
+		t.Fatalf("attachments were not cleaned: %v", stored)
 	}
 }
 

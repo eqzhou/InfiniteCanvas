@@ -19,7 +19,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := mcpserver.New(dataDir).Run(context.Background(), os.Stdin, os.Stdout); err != nil {
+	server := mcpserver.New(dataDir)
+	if connectionFile := os.Getenv("OPENBOARD_CONNECTION_FILE"); connectionFile != "" {
+		remote, err := mcpserver.NewRemote(connectionFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		server = remote
+	}
+	if err := server.Run(context.Background(), os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

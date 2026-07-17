@@ -629,6 +629,52 @@ test("local Agent connects to the real Go service with a session token", async (
   await expect(page.getByText("board.list_nodes", { exact: true })).toBeVisible();
 });
 
+test("browser runtime executes board commands, navigation, and protected snapshots", async ({ page, request }) => {
+  await openFreshBoard(page);
+  await expect.poll(async () => {
+    const response = await request.get(`${agentUrl}/api/agent/status`, {
+      headers: { Authorization: "Bearer e2e-token" },
+    });
+    return (await response.json() as { runtime?: { connected?: boolean } }).runtime?.connected;
+  }).toBe(true);
+
+  const command = async (method: string, params: Record<string, unknown> = {}) => {
+    const response = await request.post(`${agentUrl}/api/runtime/command`, {
+      headers: { Authorization: "Bearer e2e-token" },
+      data: { method, params, timeoutMs: 10_000 },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json() as Promise<Record<string, unknown>>;
+  };
+  const state = await command("board.get_state");
+  expect((state.project as { id?: string } | null)?.id).toBeTruthy();
+
+  const created = await command("board.create_text_node", {
+    title: "Runtime Note",
+    content: "created through runtime",
+    x: 120,
+    y: 160,
+  });
+  expect(created.title).toBe("Runtime Note");
+  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("created through runtime");
+
+  const snapshot = await command("board.export_snapshot");
+  const snapshotUrl = new URL(String(snapshot.url));
+  expect(snapshotUrl.origin).toBe(await page.evaluate(() => window.location.origin));
+  expect(snapshotUrl.pathname).toMatch(/^\/api\/files\//);
+  const protectedUrl = new URL(new URL(String(snapshot.url)).pathname, agentUrl).toString();
+  const denied = await request.get(protectedUrl);
+  expect(denied.status()).toBe(401);
+  const image = await request.get(protectedUrl, {
+    headers: { Authorization: "Bearer e2e-token" },
+  });
+  expect(image.ok()).toBe(true);
+  expect(image.headers()["content-type"]).toBe("image/png");
+
+  await command("site.navigate", { path: "/assets" });
+  await expect(page).toHaveURL("/assets");
+});
+
 test("remote plugin installation requires explicit permission consent", async ({ page }) => {
   await page.route("https://plugins.example/note.json", async (route) => {
     await route.fulfill({
@@ -668,6 +714,9 @@ test("remote plugin installation requires explicit permission consent", async ({
 test("Codex panel streams a message and handles explicit approval", async ({ page }) => {
   await openFreshBoard(page);
   let approvalBody: Record<string, unknown> | null = null;
+  let messageBody: Record<string, unknown> | null = null;
+  let interrupted = false;
+  const sessionBodies: Record<string, unknown>[] = [];
   await page.route("**/api/agent/status", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -675,12 +724,26 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     });
   });
   await page.route("**/api/codex/session", async (route) => {
+    if (route.request().method() === "POST") {
+      sessionBodies.push(JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>);
+    }
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({ id: "session-e2e", threadId: "thread-e2e" }),
     });
   });
   await page.route("**/api/codex/message", async (route) => {
+    messageBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
+  await page.route("**/api/codex/attachments", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ attachments: [{ id: "image-e2e", name: "pixel.png", mimeType: "image/png", bytes: 68 }] }),
+    });
+  });
+  await page.route("**/api/codex/interrupt", async (route) => {
+    interrupted = true;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
   await page.route("**/api/codex/approval", async (route) => {
@@ -691,7 +754,7 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     await route.fulfill({
       contentType: "text/event-stream",
       body: [
-        'event: notification\ndata: {"type":"notification","method":"agent_message_delta","params":{"delta":"hello from Codex"}}\n\n',
+        `event: notification\ndata: ${JSON.stringify({ type: "notification", method: "agent_message_delta", params: { delta: "**hello from Codex** <script>bad()</script>" } })}\n\n`,
         'event: approval\ndata: {"type":"approval","method":"item/tool/call","id":"approval-e2e","params":{"tool":"board.add_node"}}\n\n',
       ].join(""),
     });
@@ -700,15 +763,34 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await page.getByTitle("本地 Agent").click();
   await page.getByLabel("Local URL").fill("http://127.0.0.1:8790");
   await page.getByRole("button", { name: "连接" }).click();
-  await page.getByRole("button", { name: "开始会话" }).click();
+  await page.getByRole("button", { name: "继续会话" }).click();
   await expect(page.getByText("hello from Codex")).toBeVisible();
+  await expect(page.locator("script").filter({ hasText: "bad()" })).toHaveCount(0);
   await expect(page.getByText("Codex 请求审批")).toBeVisible();
+  await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({
+    name: "pixel.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  await expect(page.getByAltText("pixel.png")).toBeVisible();
+  await page.getByPlaceholder("发送消息").fill("inspect this image");
+  await page.getByTitle("发送").click();
+  await expect.poll(() => messageBody).toMatchObject({
+    sessionId: "session-e2e",
+    text: "inspect this image",
+    attachmentIds: ["image-e2e"],
+  });
+  await page.getByTitle("停止").click();
+  await expect.poll(() => interrupted).toBe(true);
   await page.getByTitle("允许").click();
   await expect.poll(() => approvalBody).toMatchObject({
     sessionId: "session-e2e",
     id: "approval-e2e",
     approve: true,
   });
+  expect(sessionBodies[0]).toEqual({ profile: "default", fresh: false });
+  await page.getByRole("button", { name: "新会话" }).last().click();
+  await expect.poll(() => sessionBodies.at(-1)).toEqual({ profile: "default", fresh: true });
 });
 
 test("mobile asset and prompt pages keep primary actions usable", async ({ page }) => {

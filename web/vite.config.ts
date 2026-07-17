@@ -6,6 +6,7 @@ import path from "node:path";
 const apiProxy = {
   target: process.env.OPENBOARD_API_TARGET || "http://127.0.0.1:8790",
   changeOrigin: true,
+  ws: true,
   headers: process.env.OPENBOARD_TOKEN
     ? { Authorization: `Bearer ${process.env.OPENBOARD_TOKEN}` }
     : undefined,

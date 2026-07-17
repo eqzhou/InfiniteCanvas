@@ -5,6 +5,15 @@ import { readBoundedResponse } from "@/services/remote-content";
 export type SyncDirection = "push" | "pull" | "none";
 
 export const DEFAULT_AGENT_BASE_URL = "http://127.0.0.1:8790";
+export const AGENT_TOKEN_KEY = "openboard:agent-token";
+
+export function readAgentToken(): string {
+  try {
+    return sessionStorage.getItem(AGENT_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 export type AgentConnection = {
   baseUrl: string;
@@ -13,12 +22,24 @@ export type AgentConnection = {
 
 export type AgentStatus = {
   connected: boolean;
+  runtime?: { connected?: boolean };
   bridges?: string[];
   message?: string;
   tools?: string[];
 };
 
-export type CodexSession = { id: string; threadId?: string };
+export type CodexSession = {
+  id: string;
+  threadId?: string;
+  profile?: string;
+  reused?: boolean;
+};
+export type CodexAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  bytes: number;
+};
 export type CodexEvent = {
   type: "notification" | "approval" | "error";
   method?: string;
@@ -104,13 +125,14 @@ async function boundedJSON(response: Response, maxBytes: number): Promise<unknow
 
 export async function createCodexSession(
   connection: AgentConnection,
-  cwd?: string,
+  cwdOrOptions?: string | { cwd?: string; profile?: string; fresh?: boolean },
   fetcher: Fetcher = fetch,
 ): Promise<CodexSession> {
+  const options = typeof cwdOrOptions === "string" ? { cwd: cwdOrOptions } : (cwdOrOptions ?? {});
   const response = await agentFetch(connection, "api/codex/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(cwd ? { cwd } : {}),
+    body: JSON.stringify(options),
   }, fetcher);
   if (!response.ok) throw new Error(`Codex session failed: HTTP ${response.status}`);
   const value = await boundedJSON(response, 64 * 1024);
@@ -125,13 +147,56 @@ export async function sendCodexMessage(
   sessionId: string,
   text: string,
   fetcher: Fetcher = fetch,
+  attachmentIds: string[] = [],
 ): Promise<void> {
   const response = await agentFetch(connection, "api/codex/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, text }),
+    body: JSON.stringify({ sessionId, text, ...(attachmentIds.length ? { attachmentIds } : {}) }),
   }, fetcher);
   if (!response.ok) throw new Error(`Codex message failed: HTTP ${response.status}`);
+}
+
+export async function interruptCodexTurn(
+  connection: AgentConnection,
+  sessionId: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  const response = await agentFetch(connection, "api/codex/interrupt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex interrupt failed: HTTP ${response.status}`);
+}
+
+export async function uploadCodexAttachments(
+  connection: AgentConnection,
+  sessionId: string,
+  files: readonly File[],
+  fetcher: Fetcher = fetch,
+): Promise<CodexAttachment[]> {
+  if (!files.length || files.length > 10) throw new Error("Select between 1 and 10 images");
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  if (total > 30 * 1024 * 1024) throw new Error("Codex images exceed the 30MB limit");
+  if (files.some((file) => !file.type.startsWith("image/"))) throw new Error("Codex attachments must be images");
+  const body = new FormData();
+  body.append("sessionId", sessionId);
+  for (const file of files) body.append("files", file, file.name);
+  const response = await agentFetch(connection, "api/codex/attachments", {
+    method: "POST",
+    body,
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex attachment upload failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 128 * 1024);
+  const attachments = (value as { attachments?: unknown })?.attachments;
+  if (!Array.isArray(attachments) || attachments.some((attachment) =>
+    !attachment || typeof attachment !== "object" || typeof (attachment as CodexAttachment).id !== "string" ||
+    typeof (attachment as CodexAttachment).name !== "string" || typeof (attachment as CodexAttachment).mimeType !== "string" ||
+    typeof (attachment as CodexAttachment).bytes !== "number")) {
+    throw new Error("Agent returned invalid Codex attachments");
+  }
+  return attachments as CodexAttachment[];
 }
 
 export async function respondCodexApproval(

@@ -35,7 +35,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(timeoutRequests(60 * time.Second))
 	r.Use(cors(origins))
 	r.Use(requireToken(token))
 
@@ -55,6 +55,10 @@ func main() {
 	} else {
 		appServer = api.NewServer(dataDir)
 	}
+	appServer.SetRuntimeOrigins(origins)
+	if _, err := api.WriteConnectionFile(dataDir, "http://"+addr, token); err != nil {
+		log.Fatal(err)
+	}
 	api.MountServer(r, appServer)
 
 	log.Printf("OpenBoard local server listening on %s (data=%s)", addr, dataDir)
@@ -69,6 +73,20 @@ func main() {
 	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
+	}
+}
+
+func timeoutRequests(timeout time.Duration) func(http.Handler) http.Handler {
+	withTimeout := middleware.Timeout(timeout)
+	return func(next http.Handler) http.Handler {
+		timed := withTimeout(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/runtime/ws" || r.URL.Path == "/api/codex/events" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timed.ServeHTTP(w, r)
+		})
 	}
 }
 
@@ -130,6 +148,10 @@ func requireToken(token string) func(http.Handler) http.Handler {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/runtime/ws" && r.URL.Query().Get("ticket") != "" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if len(provided) != len(token) || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)

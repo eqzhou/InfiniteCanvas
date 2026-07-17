@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "openboard.local",
+  "name": "OpenBoard",
+  "version": "0.1.0",
+  "description": "Local OpenBoard browser and MCP integration.",
+  "mcpServer": "openboard",
+  "permissions": [
+    "network:loopback"
+  ]
+}
