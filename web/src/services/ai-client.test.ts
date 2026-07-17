@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { generateImages, generateSpeech, generateText, generateVideo, listModels } from "@/services/ai-client";
+import {
+  generateImages,
+  generateSpeech,
+  generateText,
+  generateVideo,
+  listModels,
+  resolveNodeImageDataUrl,
+} from "@/services/ai-client";
 import type { AiChannel } from "@/types/board";
 
 const originalFetch = globalThis.fetch;
@@ -7,6 +14,12 @@ const fixtureCredential = ["test", "credential"].join("-");
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("uses an inline image when persistent blob storage is unavailable", async () => {
+  const dataUrl = "data:image/png;base64,cGl4ZWw=";
+  await expect(resolveNodeImageDataUrl(undefined, dataUrl)).resolves.toBe(dataUrl);
+  await expect(resolveNodeImageDataUrl(undefined, "blob:temporary")).resolves.toBeNull();
 });
 
 function channel(baseUrl: string): AiChannel {

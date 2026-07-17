@@ -718,6 +718,17 @@ export async function resolveNodeImageDataUrls(
   return out;
 }
 
+export async function resolveNodeImageDataUrl(
+  storageKey: string | undefined,
+  fallbackContent: string | undefined,
+): Promise<string | null> {
+  if (storageKey) {
+    const [stored] = await resolveNodeImageDataUrls([storageKey]);
+    if (stored) return stored;
+  }
+  return fallbackContent?.startsWith("data:image/") ? fallbackContent : null;
+}
+
 /**
  * Prefer public http(s) URLs if already available on node content;
  * else convert local storageKey blobs to data URLs for upstreams that accept them.

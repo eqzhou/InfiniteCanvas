@@ -7,6 +7,7 @@ import {
   generateText,
   generateVideo,
   resolveMediaRefs,
+  resolveNodeImageDataUrl,
   resolveNodeImageDataUrls,
 } from "@/services/ai-client";
 import { downloadStorageKey, uploadMedia } from "@/services/storage";
@@ -488,9 +489,11 @@ export function NodeActions({ node }: { node: BoardNode }) {
     }
     updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
     try {
-      const images = node.metadata.storageKey
-        ? await resolveNodeImageDataUrls([node.metadata.storageKey])
-        : node.metadata.content ? [node.metadata.content] : [];
+      const image = await resolveNodeImageDataUrl(
+        node.metadata.storageKey,
+        node.metadata.content,
+      );
+      const images = image ? [image] : [];
       if (!images.length) throw new Error("当前图片没有可读取的内容");
       const text = await generateText({
         channel,
