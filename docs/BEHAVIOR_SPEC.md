@@ -48,6 +48,7 @@ plugins, fixtures, screenshots, or assets as implementation input.
 |---|---|---|
 | https://github.com/basketikun/infinite-canvas | 2026-07-16 | Public project identity, v0.8.2 feature surface, and black-box target reference |
 | https://github.com/basketikun/infinite-canvas/blob/main/README.md | 2026-07-16 | Publicly described workflows and setup behavior |
+| https://github.com/basketikun/infinite-canvas/releases/tag/v0.8.2 | 2026-07-17 | Frozen release identifier and public release notes; URL availability verified without reading source files |
 | https://spec.modelcontextprotocol.io/ | 2026-07-16 | MCP transport and tool lifecycle interoperability |
 | https://www.jsonrpc.org/specification | 2026-07-16 | JSON-RPC request, notification, response, and error semantics |
 | https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events | 2026-07-16 | Browser pointer and touch event semantics |

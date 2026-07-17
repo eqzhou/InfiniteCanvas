@@ -44,7 +44,7 @@ clean-room claims externally.
 - [x] Public behavior specifications cite source URLs and observation dates in
   `docs/BEHAVIOR_SPEC.md`.
 - [x] Neutral behavior specification log exists in `docs/BEHAVIOR_SPEC.md`;
-  source URLs and independent sign-off remain required.
+  independent reviewer sign-off remains required.
 - [x] Automated implementation scan is available as `bun run audit:cleanroom`
   and runs in CI; it does not replace independent similarity review.
 - [x] Every engineering parity category has automated unit, integration, E2E,

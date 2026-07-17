@@ -14,7 +14,11 @@ from the lockfile and package registries before distribution.
 | lucide-react | 0.525.x | npm package metadata; ISC |
 | nanoid | 5.1.16 | npm package metadata; MIT |
 | clsx | 2.1.x | npm package metadata; MIT |
+| html-to-image | 1.11.13 | npm package metadata; MIT |
 | idb-keyval | 6.3.0 | npm package metadata; Apache-2.0 |
+| react-markdown | 10.1.0 | npm package metadata; MIT |
+| remark-gfm | 4.0.1 | npm package metadata; MIT |
+| Three.js / types | 0.185.1 | npm package metadata; MIT |
 | Vite / TypeScript / Playwright | dev dependencies | verify exact package metadata before release |
 
 ## Go dependencies
@@ -22,6 +26,9 @@ from the lockfile and package registries before distribution.
 | Module | Version | License source |
 |---|---:|---|
 | github.com/go-chi/chi/v5 | 5.2.2 | upstream module metadata; MIT |
+| github.com/coder/websocket | 1.8.15 | upstream module metadata; ISC |
+| github.com/jackc/pgx/v5 | 5.9.2 | upstream module metadata; MIT |
+| github.com/redis/go-redis/v9 | 9.14.0 | upstream module metadata; BSD-2-Clause |
 
 Platform binary packages with no bundled text notice are tracked by
 `docs/LICENSE_REVIEW.json`: `@esbuild/darwin-arm64` (MIT,
