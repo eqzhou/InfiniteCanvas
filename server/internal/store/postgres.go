@@ -34,7 +34,27 @@ CREATE TABLE IF NOT EXISTS openboard_state (
   updated_at timestamptz NOT NULL DEFAULT now()
 );`
 
-const currentSchemaVersion = 1
+const migrationV2 = `
+CREATE TABLE IF NOT EXISTS openboard_generation_jobs (
+  id text PRIMARY KEY,
+  project_id text,
+  kind text NOT NULL CHECK (kind IN ('image', 'video')),
+  status text NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  prompt text NOT NULL,
+  provider_id text NOT NULL DEFAULT '',
+  model text NOT NULL DEFAULT '',
+  parameters jsonb NOT NULL DEFAULT '{}'::jsonb,
+  result jsonb NOT NULL DEFAULT '{}'::jsonb,
+  error text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS openboard_generation_jobs_created_idx
+  ON openboard_generation_jobs (created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS openboard_generation_jobs_project_kind_idx
+  ON openboard_generation_jobs (project_id, kind, created_at DESC);`
+
+const currentSchemaVersion = 2
 
 type PostgresStore struct {
 	pool  *pgxpool.Pool
@@ -95,6 +115,22 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit schema migration 1: %w", err)
+		}
+	}
+	if version < 2 {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin schema migration 2: %w", err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, migrationV2); err != nil {
+			return fmt.Errorf("apply schema migration 2: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_schema_migrations (version) VALUES (2)`); err != nil {
+			return fmt.Errorf("record schema migration 2: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit schema migration 2: %w", err)
 		}
 	}
 	return nil
@@ -202,4 +238,89 @@ func (s *PostgresStore) PutState(ctx context.Context, key string, value []byte) 
 	_, err := s.pool.Exec(ctx, `INSERT INTO openboard_state (key,value,updated_at) VALUES ($1,$2,now())
 		ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, key, value)
 	return err
+}
+
+func (s *PostgresStore) ListGenerationJobs(ctx context.Context, query GenerationJobQuery) (GenerationJobPage, error) {
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
+		WHERE ($1='' OR project_id=$1) AND ($2='' OR kind=$2)`, query.ProjectID, query.Kind).Scan(&total); err != nil {
+		return GenerationJobPage{}, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+		provider_id, model, parameters, result, error, created_at, updated_at
+		FROM openboard_generation_jobs
+		WHERE ($1='' OR project_id=$1) AND ($2='' OR kind=$2)
+		ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`,
+		query.ProjectID, query.Kind, query.PageSize, (query.Page-1)*query.PageSize)
+	if err != nil {
+		return GenerationJobPage{}, err
+	}
+	defer rows.Close()
+	items := make([]GenerationJob, 0)
+	for rows.Next() {
+		var job GenerationJob
+		var created, updated time.Time
+		if err := rows.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt,
+			&job.ProviderID, &job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated); err != nil {
+			return GenerationJobPage{}, err
+		}
+		job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+		job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+		items = append(items, job)
+	}
+	if err := rows.Err(); err != nil {
+		return GenerationJobPage{}, err
+	}
+	return GenerationJobPage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
+}
+
+func (s *PostgresStore) GetGenerationJob(ctx context.Context, id string) (GenerationJob, error) {
+	var job GenerationJob
+	var created, updated time.Time
+	err := s.pool.QueryRow(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+		provider_id, model, parameters, result, error, created_at, updated_at
+		FROM openboard_generation_jobs WHERE id=$1`, id).Scan(
+		&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
+		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GenerationJob{}, ErrNotFound
+	}
+	if err != nil {
+		return GenerationJob{}, err
+	}
+	job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+	job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+	return job, nil
+}
+
+func (s *PostgresStore) PutGenerationJob(ctx context.Context, job GenerationJob) error {
+	created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("invalid generation createdAt: %w", err)
+	}
+	updated, err := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("invalid generation updatedAt: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO openboard_generation_jobs
+		(id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+		VALUES ($1,NULLIF($2,''),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id, kind=EXCLUDED.kind,
+		status=EXCLUDED.status, prompt=EXCLUDED.prompt, provider_id=EXCLUDED.provider_id,
+		model=EXCLUDED.model, parameters=EXCLUDED.parameters, result=EXCLUDED.result,
+		error=EXCLUDED.error, updated_at=EXCLUDED.updated_at`, job.ID, job.ProjectID, job.Kind,
+		job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error,
+		created, updated)
+	return err
+}
+
+func (s *PostgresStore) DeleteGenerationJob(ctx context.Context, id string) error {
+	result, err := s.pool.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

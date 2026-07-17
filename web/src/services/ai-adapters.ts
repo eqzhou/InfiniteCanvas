@@ -1,0 +1,109 @@
+import type { AiEndpointConfig } from "@/types/board";
+import {
+  compileProviderTemplate,
+  readTemplatePath,
+  resolveTemplateEndpoint,
+  validateProviderTemplate,
+} from "@/lib/provider-template";
+
+function normalizeBase(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "");
+}
+
+export async function providerJsonFetch(
+  url: string,
+  apiKey: string,
+  auth: "bearer" | "x-api-key" | "x-goog-api-key",
+  init: RequestInit,
+): Promise<unknown> {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "application/json");
+  if (apiKey) {
+    headers.set(
+      auth === "bearer" ? "Authorization" : auth,
+      auth === "bearer" ? `Bearer ${apiKey}` : apiKey,
+    );
+  }
+  const response = await fetch(url, { ...init, headers, redirect: "error" });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`AI ${response.status}: ${detail || response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function generateGeminiText(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  images: string[],
+): Promise<string> {
+  const parts: Array<Record<string, unknown>> = [{ text: prompt }];
+  for (const image of images) {
+    const match = /^data:([^;,]+);base64,(.+)$/i.exec(image);
+    if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+    else parts.push({ fileData: { mimeType: "image/*", fileUri: image } });
+  }
+  const data = await providerJsonFetch(
+    `${normalizeBase(baseUrl)}/models/${encodeURIComponent(model)}:generateContent`,
+    apiKey,
+    "x-goog-api-key",
+    { method: "POST", body: JSON.stringify({ contents: [{ role: "user", parts }] }) },
+  ) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  return data.candidates?.flatMap((candidate) => candidate.content?.parts ?? [])
+    .map((part) => part.text).filter((text): text is string => Boolean(text)).join("\n") ?? "";
+}
+
+export async function generateGeminiImages(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  references: string[],
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const parts: Array<Record<string, unknown>> = [{ text: prompt }];
+  for (const image of references) {
+    const match = /^data:([^;,]+);base64,(.+)$/i.exec(image);
+    if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+  }
+  const data = await providerJsonFetch(
+    `${normalizeBase(baseUrl)}/models/${encodeURIComponent(model)}:generateContent`,
+    apiKey,
+    "x-goog-api-key",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        contents: [{ role: "user", parts }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+      }),
+      signal,
+    },
+  ) as { candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> } }> };
+  return (data.candidates ?? []).flatMap((candidate) => candidate.content?.parts ?? [])
+    .map((part) => part.inlineData?.data
+      ? `data:${part.inlineData.mimeType || "image/png"};base64,${part.inlineData.data}`
+      : undefined)
+    .filter((value): value is string => Boolean(value));
+}
+
+export async function generateTemplateImages(
+  provider: AiEndpointConfig,
+  values: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const template = provider.template!;
+  validateProviderTemplate(template);
+  const data = await providerJsonFetch(
+    resolveTemplateEndpoint(provider.baseUrl, template),
+    provider.apiKey,
+    template.auth,
+    { method: template.method, body: JSON.stringify(compileProviderTemplate(template, values)), signal },
+  );
+  const output = readTemplatePath(data, template.responsePath);
+  if (!Array.isArray(output) || output.some((item) => typeof item !== "string")) {
+    throw new Error("Image template response must resolve to a string array");
+  }
+  return output as string[];
+}

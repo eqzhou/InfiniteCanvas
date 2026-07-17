@@ -437,6 +437,14 @@ export async function downloadStorageKey(
   URL.revokeObjectURL(url);
 }
 
+export async function deleteStorageKey(storageKey: string): Promise<void> {
+  const kind = mediaKindFromKey(storageKey);
+  await deleteBlob(kind, storageKey);
+  const url = objectUrls.get(storageKey);
+  if (url) URL.revokeObjectURL(url);
+  objectUrls.delete(storageKey);
+}
+
 /** Restore displayable blob: URLs after page reload. */
 export async function rehydrateProjects(
   projects: BoardProject[],

@@ -54,7 +54,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           : text.trim();
         const out = await generateText({
           channel,
-          model: getProvider(channel, "text").model,
+          model: node.metadata.model || getProvider(channel, "text").model,
           prompt,
         });
         if (!node.metadata.content) {
@@ -75,7 +75,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           : [];
         const urls = await generateImages({
           channel,
-          model: getProvider(channel, "image").model,
+          model: node.metadata.model || getProvider(channel, "image").model,
           prompt: text.trim(),
           size: config.imageSize,
           quality: config.imageQuality,
@@ -86,7 +86,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       } else if (node.type === "video") {
         const result = await generateVideo({
           channel,
-          model: getProvider(channel, "video").model,
+          model: node.metadata.model || getProvider(channel, "video").model,
           prompt: text.trim(),
           seconds: 5,
         });

@@ -170,4 +170,16 @@ describe("parseBoardProject", () => {
     input.nodes[0]!.metadata.content = "javascript:alert(1)";
     expect(() => parseBoardProject(input)).toThrow("unsafe media URL");
   });
+
+  test("validates font, transparency, model, and normalized split metadata", () => {
+    const input = validProject();
+    input.nodes[0]!.metadata = { fontSize: 9 };
+    expect(() => parseBoardProject(input)).toThrow("fontSize");
+    input.nodes[0]!.metadata = { transparentBackground: "yes" };
+    expect(() => parseBoardProject(input)).toThrow("transparentBackground");
+    input.nodes[0]!.metadata = { splitVertical: [0.7, 0.2] };
+    expect(() => parseBoardProject(input)).toThrow("sorted normalized");
+    input.nodes[0]!.metadata = { model: "x".repeat(501) };
+    expect(() => parseBoardProject(input)).toThrow("model");
+  });
 });

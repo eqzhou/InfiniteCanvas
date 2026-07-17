@@ -67,4 +67,24 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   const health = await request.get("/api/health");
   await expect(health).toBeOK();
   await expect(health.json()).resolves.toMatchObject({ storage: "postgresql+redis" });
+
+  const generation = {
+    id: "formal-job-1",
+    projectId: "formal-project",
+    kind: "image",
+    status: "succeeded",
+    prompt: "formal generation",
+    providerId: "mock-provider",
+    model: "mock-image",
+    parameters: { size: "1024x1024" },
+    result: { items: [] },
+  };
+  const created = await request.post("/api/generation-jobs", { data: generation });
+  await expect(created).toBeOK();
+  expect(created.status()).toBe(201);
+  const listed = await request.get("/api/generation-jobs?projectId=formal-project&kind=image&page=1&pageSize=10");
+  await expect(listed).toBeOK();
+  await expect(listed.json()).resolves.toMatchObject({ page: 1, pageSize: 10, total: 1 });
+  const deleted = await request.delete("/api/generation-jobs/formal-job-1");
+  expect(deleted.status()).toBe(204);
 });

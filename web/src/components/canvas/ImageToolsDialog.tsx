@@ -31,7 +31,7 @@ export function ImageToolsDialog({
     context: ImageTransformContext,
   ) => Promise<void>;
   onUpscale: (scale: number, providerId: string, context: ImageTransformContext) => Promise<void>;
-  onSplit: (rows: number, cols: number) => Promise<void>;
+  onSplit: (vertical: number[], horizontal: number[]) => Promise<void>;
   providers: ImageToolProviderOption[];
 }) {
   const [x, setX] = useState(0.15);
@@ -40,14 +40,16 @@ export function ImageToolsDialog({
   const [h, setH] = useState(0.7);
   const [keep, setKeep] = useState(true);
   const [scale, setScale] = useState(2);
-  const [rows, setRows] = useState(2);
-  const [cols, setCols] = useState(2);
+  const [vertical, setVertical] = useState([0.5]);
+  const [horizontal, setHorizontal] = useState([0.5]);
+  const [selectedGuide, setSelectedGuide] = useState<{ axis: "vertical" | "horizontal"; index: number } | null>(null);
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "local-canvas");
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!providers.some((provider) => provider.id === providerId)) {
@@ -73,7 +75,7 @@ export function ImageToolsDialog({
     try {
       if (mode === "mask") await onMask({ x, y, w, h }, keep, providerId, prompt, context);
       else if (mode === "upscale") await onUpscale(scale, providerId, context);
-      else await onSplit(rows, cols);
+      else await onSplit(vertical, horizontal);
     } catch (cause) {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -97,7 +99,7 @@ export function ImageToolsDialog({
           </button>
         </div>
         {node.metadata.content ? (
-          <div className="relative mb-3 overflow-hidden rounded-lg bg-[var(--ob-canvas)] p-2">
+          <div ref={previewRef} className="relative mb-3 overflow-hidden rounded-lg bg-[var(--ob-canvas)] p-2">
             <img src={node.metadata.content} alt="" className="mx-auto max-h-48 object-contain" />
             {mode === "mask" ? (
               <div
@@ -109,6 +111,48 @@ export function ImageToolsDialog({
                   height: `${h * 100}%`,
                 }}
               />
+            ) : null}
+            {mode === "split" ? (
+              <>
+                {vertical.map((value, index) => (
+                  <button
+                    key={`v-${index}`}
+                    type="button"
+                    aria-label={`纵向分割线 ${index + 1}`}
+                    className="absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:bg-[var(--ob-select)]"
+                    style={{ left: `${value * 100}%` }}
+                    onPointerDown={(event) => {
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      setSelectedGuide({ axis: "vertical", index });
+                    }}
+                    onPointerMove={(event) => {
+                      if (!event.currentTarget.hasPointerCapture(event.pointerId) || !previewRef.current) return;
+                      const rect = previewRef.current.getBoundingClientRect();
+                      const next = Math.min(0.99, Math.max(0.01, (event.clientX - rect.left) / rect.width));
+                      setVertical((current) => current.map((item, itemIndex) => itemIndex === index ? next : item));
+                    }}
+                  />
+                ))}
+                {horizontal.map((value, index) => (
+                  <button
+                    key={`h-${index}`}
+                    type="button"
+                    aria-label={`横向分割线 ${index + 1}`}
+                    className="absolute inset-x-0 z-10 h-3 -translate-y-1/2 cursor-row-resize bg-transparent after:absolute after:inset-x-0 after:top-1/2 after:h-0.5 after:bg-[var(--ob-select)]"
+                    style={{ top: `${value * 100}%` }}
+                    onPointerDown={(event) => {
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      setSelectedGuide({ axis: "horizontal", index });
+                    }}
+                    onPointerMove={(event) => {
+                      if (!event.currentTarget.hasPointerCapture(event.pointerId) || !previewRef.current) return;
+                      const rect = previewRef.current.getBoundingClientRect();
+                      const next = Math.min(0.99, Math.max(0.01, (event.clientY - rect.top) / rect.height));
+                      setHorizontal((current) => current.map((item, itemIndex) => itemIndex === index ? next : item));
+                    }}
+                  />
+                ))}
+              </>
             ) : null}
           </div>
         ) : null}
@@ -176,9 +220,36 @@ export function ImageToolsDialog({
         ) : null}
 
         {mode === "split" ? (
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <Num label="行" value={rows} onChange={(n) => setRows(Math.max(1, Math.round(n)))} step={1} min={1} max={6} />
-            <Num label="列" value={cols} onChange={(n) => setCols(Math.max(1, Math.round(n)))} step={1} min={1} max={6} />
+          <div className="flex flex-wrap gap-2 text-sm">
+            <button type="button" className="rounded border border-[var(--ob-line)] px-2 py-1" onClick={() => setVertical((current) => [...current, 0.5])}>
+              新增纵线
+            </button>
+            <button type="button" className="rounded border border-[var(--ob-line)] px-2 py-1" onClick={() => setHorizontal((current) => [...current, 0.5])}>
+              新增横线
+            </button>
+            <button
+              type="button"
+              className="rounded border border-[var(--ob-line)] px-2 py-1 disabled:opacity-40"
+              disabled={!selectedGuide}
+              onClick={() => {
+                if (!selectedGuide) return;
+                if (selectedGuide.axis === "vertical") {
+                  setVertical((current) => current.filter((_, index) => index !== selectedGuide.index));
+                } else {
+                  setHorizontal((current) => current.filter((_, index) => index !== selectedGuide.index));
+                }
+                setSelectedGuide(null);
+              }}
+            >
+              删除选中线
+            </button>
+            <button type="button" className="rounded border border-[var(--ob-line)] px-2 py-1" onClick={() => {
+              setVertical([0.5]);
+              setHorizontal([0.5]);
+              setSelectedGuide(null);
+            }}>
+              重置
+            </button>
           </div>
         ) : null}
 

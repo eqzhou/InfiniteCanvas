@@ -269,6 +269,18 @@ export function BoardNodeView({
                 <option value="video">视频</option>
               </select>
             </label>
+            {(node.metadata.generationMode ?? "image") === "image" ? (
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(node.metadata.transparentBackground)}
+                  onChange={(event) => updateNode(node.id, {
+                    metadata: { transparentBackground: event.target.checked },
+                  })}
+                />
+                透明背景
+              </label>
+            ) : null}
             <label className="flex flex-col gap-1">
               模型
               <input

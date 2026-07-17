@@ -64,6 +64,11 @@ func Mount(r chi.Router, dataDir string) {
 		r.Delete("/blobs/{key}", s.deleteBlob)
 		r.Get("/secrets/config", s.getSecrets)
 		r.Put("/secrets/config", s.putSecrets)
+		r.Get("/generation-jobs", s.listGenerationJobs)
+		r.Post("/generation-jobs", s.createGenerationJob)
+		r.Get("/generation-jobs/{id}", s.getGenerationJob)
+		r.Put("/generation-jobs/{id}", s.updateGenerationJob)
+		r.Delete("/generation-jobs/{id}", s.deleteGenerationJob)
 	})
 }
 
@@ -101,6 +106,11 @@ func MountServer(r chi.Router, s *Server) {
 		r.Delete("/blobs/{key}", s.deleteBlob)
 		r.Get("/secrets/config", s.getSecrets)
 		r.Put("/secrets/config", s.putSecrets)
+		r.Get("/generation-jobs", s.listGenerationJobs)
+		r.Post("/generation-jobs", s.createGenerationJob)
+		r.Get("/generation-jobs/{id}", s.getGenerationJob)
+		r.Put("/generation-jobs/{id}", s.updateGenerationJob)
+		r.Delete("/generation-jobs/{id}", s.deleteGenerationJob)
 	})
 }
 

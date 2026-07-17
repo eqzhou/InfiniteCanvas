@@ -29,10 +29,10 @@ export function createDefaultChannel(): AiChannel {
     defaultVideoModel: "sora-2",
     defaultAudioModel: "gpt-4o-mini-tts",
     providers: {
-      text: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o-mini" },
-      image: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-image-1" },
-      video: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "sora-2" },
-      audio: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o-mini-tts" },
+      text: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o-mini", protocol: "openai" },
+      image: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-image-1", protocol: "openai" },
+      video: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "sora-2", protocol: "openai" },
+      audio: { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o-mini-tts", protocol: "openai" },
     },
   };
 }

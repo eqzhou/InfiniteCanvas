@@ -16,10 +16,11 @@ import (
 type memoryStore struct {
 	projects map[string][]byte
 	state    map[string][]byte
+	jobs     map[string]store.GenerationJob
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{projects: map[string][]byte{}, state: map[string][]byte{}}
+	return &memoryStore{projects: map[string][]byte{}, state: map[string][]byte{}, jobs: map[string]store.GenerationJob{}}
 }
 
 func (*memoryStore) Close()                     {}
@@ -58,6 +59,38 @@ func (m *memoryStore) PutState(_ context.Context, key string, value []byte) erro
 		return errors.New("invalid json")
 	}
 	m.state[key] = append([]byte(nil), value...)
+	return nil
+}
+
+func (m *memoryStore) ListGenerationJobs(_ context.Context, query store.GenerationJobQuery) (store.GenerationJobPage, error) {
+	items := make([]store.GenerationJob, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		if query.ProjectID != "" && job.ProjectID != query.ProjectID {
+			continue
+		}
+		if query.Kind != "" && job.Kind != query.Kind {
+			continue
+		}
+		items = append(items, job)
+	}
+	return store.PaginateGenerationJobs(items, query.Page, query.PageSize), nil
+}
+
+func (m *memoryStore) GetGenerationJob(_ context.Context, id string) (store.GenerationJob, error) {
+	job, ok := m.jobs[id]
+	if !ok {
+		return store.GenerationJob{}, store.ErrNotFound
+	}
+	return job, nil
+}
+
+func (m *memoryStore) PutGenerationJob(_ context.Context, job store.GenerationJob) error {
+	m.jobs[job.ID] = job
+	return nil
+}
+
+func (m *memoryStore) DeleteGenerationJob(_ context.Context, id string) error {
+	delete(m.jobs, id)
 	return nil
 }
 
@@ -146,5 +179,49 @@ func TestEncryptedSecretLifecycle(t *testing.T) {
 	}
 	if got.Header().Get("Cache-Control") != "no-store" || got.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("secret cache headers = %#v", got.Header())
+	}
+}
+
+func TestGenerationJobPaginatedCRUD(t *testing.T) {
+	handler := persistentHandler(t)
+	created := request(t, handler, http.MethodPost, "/api/generation-jobs", []byte(`{
+		"id":"job-1","projectId":"board-1","kind":"image","status":"running",
+		"prompt":"a red square","providerId":"image-main","model":"mock-image",
+		"parameters":{"size":"1024x1024"},"result":{}
+	}`))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create job: %d %s", created.Code, created.Body.String())
+	}
+	updated := request(t, handler, http.MethodPut, "/api/generation-jobs/job-1", []byte(`{
+		"id":"job-1","projectId":"board-1","kind":"image","status":"succeeded",
+		"prompt":"a red square","providerId":"image-main","model":"mock-image",
+		"parameters":{"size":"1024x1024"},"result":{"storageKeys":["image:one"]}
+	}`))
+	if updated.Code != http.StatusOK || !bytes.Contains(updated.Body.Bytes(), []byte(`"succeeded"`)) {
+		t.Fatalf("update job: %d %s", updated.Code, updated.Body.String())
+	}
+	listed := request(t, handler, http.MethodGet, "/api/generation-jobs?projectId=board-1&kind=image&page=1&pageSize=10", nil)
+	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(`"total": 1`)) {
+		t.Fatalf("list jobs: %d %s", listed.Code, listed.Body.String())
+	}
+	if got := request(t, handler, http.MethodDelete, "/api/generation-jobs/job-1", nil); got.Code != http.StatusNoContent {
+		t.Fatalf("delete job: %d", got.Code)
+	}
+}
+
+func TestGenerationJobRejectsInvalidInput(t *testing.T) {
+	handler := persistentHandler(t)
+	for _, body := range [][]byte{
+		[]byte(`{"id":"../bad","kind":"image","status":"running","prompt":"x","parameters":{},"result":{}}`),
+		[]byte(`{"id":"job-1","kind":"audio","status":"running","prompt":"x","parameters":{},"result":{}}`),
+		[]byte(`{"id":"job-1","kind":"image","status":"unknown","prompt":"x","parameters":{},"result":{}}`),
+		[]byte(`{"id":"job-1","kind":"image","status":"running","prompt":"x","parameters":[],"result":{}}`),
+	} {
+		if got := request(t, handler, http.MethodPost, "/api/generation-jobs", body); got.Code != http.StatusBadRequest {
+			t.Fatalf("invalid job accepted: %d %s", got.Code, got.Body.String())
+		}
+	}
+	if got := request(t, handler, http.MethodGet, "/api/generation-jobs?page=0&pageSize=1000", nil); got.Code != http.StatusBadRequest {
+		t.Fatalf("invalid pagination accepted: %d", got.Code)
 	}
 }

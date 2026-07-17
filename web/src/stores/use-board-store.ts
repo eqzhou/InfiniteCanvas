@@ -38,6 +38,7 @@ import {
 } from "@/services/storage";
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
 import { fitMediaDisplaySize } from "@/lib/geometry";
+import { collectGenerationStorageKeys } from "@/services/generation-jobs";
 
 type Snapshot = {
   nodes: BoardNode[];
@@ -109,6 +110,7 @@ type BoardState = {
   groupSelected: () => void;
   ungroupSelected: () => void;
   persist: () => Promise<void>;
+  persistNow: () => Promise<void>;
 };
 
 const histories = new Map<string, HistoryStack<Snapshot>>();
@@ -710,11 +712,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   persist: async () => {
     window.clearTimeout(persistTimer);
     persistTimer = window.setTimeout(async () => {
-      const { projects, assets } = get();
-      await saveProjects(projects);
-      const keys = collectStorageKeys(projects, assets);
-      await cleanupUnusedMedia(keys);
+      await get().persistNow();
     }, 250);
+  },
+
+  persistNow: async () => {
+    window.clearTimeout(persistTimer);
+    const { projects, assets } = get();
+    await saveProjects(projects);
+    const keys = collectStorageKeys(projects, assets);
+    for (const key of await collectGenerationStorageKeys()) keys.add(key);
+    await cleanupUnusedMedia(keys);
   },
 }));
 

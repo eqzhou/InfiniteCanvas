@@ -2,6 +2,13 @@ import type { AiChannel } from "@/types/board";
 import { getBlob, storageKeyToDataUrl } from "@/services/storage";
 import { getProvider } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
+import { compileProviderTemplate, readTemplatePath, resolveTemplateEndpoint } from "@/lib/provider-template";
+import {
+  generateGeminiImages,
+  generateGeminiText,
+  generateTemplateImages,
+  providerJsonFetch,
+} from "@/services/ai-adapters";
 
 function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -31,11 +38,16 @@ async function authFetch(
   }
   const headers = new Headers(init.headers);
   const provider = getProvider(channel, kind);
-  if (provider.apiKey) headers.set("Authorization", `Bearer ${provider.apiKey}`);
+  if (provider.apiKey) {
+    if (provider.protocol === "gemini") headers.set("x-goog-api-key", provider.apiKey);
+    else if (provider.protocol === "template" && provider.template?.auth === "x-api-key") {
+      headers.set("x-api-key", provider.apiKey);
+    } else headers.set("Authorization", `Bearer ${provider.apiKey}`);
+  }
   if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(joinUrl(provider.baseUrl, path), { ...init, headers });
+  const res = await fetch(joinUrl(provider.baseUrl, path), { ...init, headers, redirect: "error" });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`AI ${res.status}: ${text || res.statusText}`);
@@ -44,7 +56,19 @@ async function authFetch(
 }
 
 export async function listModels(channel: AiChannel, kind: AiProviderKind = "text"): Promise<string[]> {
+  const provider = getProvider(channel, kind);
+  if (provider.protocol === "template") return [];
   try {
+    if (provider.protocol === "gemini") {
+      const data = await providerJsonFetch(
+        `${normalizeBase(provider.baseUrl)}/models`,
+        provider.apiKey,
+        "x-goog-api-key",
+        {},
+      ) as { models?: Array<{ name?: string }> };
+      return (data.models ?? []).map((item) => item.name?.replace(/^models\//, ""))
+        .filter((item): item is string => Boolean(item)).sort();
+    }
     const res = await authFetch(channel, "/models", {}, kind);
     const data = (await res.json()) as { data?: Array<{ id: string }> };
     return (data.data ?? []).map((m) => m.id).sort();
@@ -60,6 +84,13 @@ export async function generateText(options: {
   images?: string[];
 }): Promise<string> {
   const { channel, model, prompt, images = [] } = options;
+  const provider = getProvider(channel, "text");
+  if (provider.protocol === "gemini") {
+    return generateGeminiText(provider.baseUrl, provider.apiKey, model, prompt, images);
+  }
+  if (provider.protocol !== "openai") {
+    throw new Error(`${provider.protocol} does not support text generation`);
+  }
   const content: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
   for (const img of images) {
     content.push({ type: "input_image", image_url: img });
@@ -120,6 +151,8 @@ export async function generateImages(options: {
   quality?: string;
   n?: number;
   referenceDataUrls?: string[];
+  transparentBackground?: boolean;
+  signal?: AbortSignal;
 }): Promise<string[]> {
   const {
     channel,
@@ -129,7 +162,27 @@ export async function generateImages(options: {
     quality = "auto",
     n = 1,
     referenceDataUrls = [],
+    transparentBackground = false,
+    signal,
   } = options;
+  const provider = getProvider(channel, "image");
+  if (provider.protocol === "gemini") {
+    if (transparentBackground) throw new Error("Gemini image generation does not support transparent background");
+    return generateGeminiImages(provider.baseUrl, provider.apiKey, model, prompt, referenceDataUrls, signal);
+  }
+  if (provider.protocol === "template") {
+    if (!provider.template) throw new Error("Image template configuration is missing");
+    if (transparentBackground && !provider.template.supportsTransparentBackground) {
+      throw new Error("This image template does not support transparent background");
+    }
+    return generateTemplateImages(provider, {
+      prompt, model, size, quality, count: n, transparentBackground,
+      referenceImages: referenceDataUrls,
+    }, signal);
+  }
+  if (provider.protocol !== "openai") {
+    throw new Error(`${provider.protocol} does not support image generation`);
+  }
 
   if (referenceDataUrls.length > 0) {
     const form = new FormData();
@@ -142,7 +195,7 @@ export async function generateImages(options: {
       const blob = await (await fetch(dataUrl)).blob();
       form.append("image", blob, `ref-${i}.png`);
     }
-    const res = await authFetch(channel, "/images/edits", { method: "POST", body: form }, "image");
+    const res = await authFetch(channel, "/images/edits", { method: "POST", body: form, signal }, "image");
     const data = (await res.json()) as {
       data?: Array<{ b64_json?: string; url?: string }>;
     };
@@ -155,7 +208,15 @@ export async function generateImages(options: {
 
   const res = await authFetch(channel, "/images/generations", {
     method: "POST",
-    body: JSON.stringify({ model, prompt, n, size, quality }),
+    body: JSON.stringify({
+      model,
+      prompt,
+      n,
+      size,
+      quality,
+      ...(transparentBackground ? { background: "transparent" } : {}),
+    }),
+    signal,
   }, "image");
   const data = (await res.json()) as {
     data?: Array<{ b64_json?: string; url?: string }>;
@@ -393,10 +454,42 @@ export async function generateVideo(
   } = options;
   validateTiming(timeoutMs, pollIntervalMs);
   const deadline = createVideoSignal(externalSignal, timeoutMs);
-  const base = normalizeBase(getProvider(channel, "video").baseUrl);
+  const provider = getProvider(channel, "video");
+  const base = normalizeBase(provider.baseUrl);
 
   try {
-    if (base.includes("/api/plan/v3") || base.endsWith("/api/v3")) {
+    if (provider.protocol === "template") {
+      if (!provider.template) throw new Error("Video template configuration is missing");
+      const data = await providerJsonFetch(
+        resolveTemplateEndpoint(provider.baseUrl, provider.template),
+        provider.apiKey,
+        provider.template.auth,
+        {
+          method: provider.template.method,
+          body: JSON.stringify(compileProviderTemplate(provider.template, {
+            prompt,
+            model,
+            size,
+            duration: seconds,
+            ratio,
+            resolution,
+            referenceImages,
+            referenceVideos,
+            referenceAudios,
+          })),
+          signal: deadline.signal,
+        },
+      );
+      const url = readTemplatePath(data, provider.template.responsePath);
+      if (typeof url !== "string" || !/^https:\/\//i.test(url)) {
+        throw new Error("Video template response must resolve to an HTTPS URL");
+      }
+      return { id: parseTaskId(data) ?? `template-${Date.now()}`, status: "succeeded", url };
+    }
+    if (provider.protocol === "gemini") {
+      throw new Error("Gemini does not support video generation in OpenBoard");
+    }
+    if (provider.protocol === "ark" || base.includes("/api/plan/v3") || base.endsWith("/api/v3")) {
       return await generateArkVideo({
         channel,
         model,
@@ -591,6 +684,10 @@ export async function generateSpeech(options: {
     voice = "alloy",
     format = "mp3",
   } = options;
+  const provider = getProvider(channel, "audio");
+  if (provider.protocol !== "openai") {
+    throw new Error(`${provider.protocol} does not support audio generation`);
+  }
 
   const res = await authFetch(channel, "/audio/speech", {
     method: "POST",

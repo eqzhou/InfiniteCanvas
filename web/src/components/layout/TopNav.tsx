@@ -11,6 +11,7 @@ import {
   Settings,
   Sun,
   Sparkles,
+  WandSparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -40,6 +41,7 @@ export function TopNav({
     { to: "/assets", label: "素材", icon: Bookmark },
     { to: "/prompts", label: "提示词", icon: Sparkles },
     { to: "/plugins", label: "插件", icon: Puzzle },
+    { to: "/workbench/image", label: "工作台", icon: WandSparkles },
   ];
 
   return (
@@ -53,7 +55,7 @@ export function TopNav({
       <nav className="flex items-center gap-0.5 sm:ml-4 sm:gap-1">
         {links.map((l) => {
           const Icon = l.icon;
-          const active = location.pathname === l.to;
+          const active = location.pathname === l.to || (l.to.startsWith("/workbench") && location.pathname.startsWith("/workbench"));
           return (
             <Link
               key={l.to}

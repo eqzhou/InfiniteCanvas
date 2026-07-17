@@ -79,7 +79,27 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   const input = record(value, path);
   optionalString(input.content, `${path}.content`, 20_000_000);
   optionalString(input.prompt, `${path}.prompt`, 100_000);
+  optionalString(input.model, `${path}.model`, 500);
   optionalString(input.storageKey, `${path}.storageKey`, 512);
+  if (input.fontSize !== undefined) {
+    const fontSize = finite(input.fontSize, `${path}.fontSize`);
+    if (fontSize < 10 || fontSize > 72) throw new Error(`${path}.fontSize is outside the supported range`);
+  }
+  for (const key of ["splitVertical", "splitHorizontal"] as const) {
+    if (input[key] === undefined) continue;
+    const guides = array(input[key], `${path}.${key}`, 100);
+    let previous = 0;
+    for (const [index, guide] of guides.entries()) {
+      const value = finite(guide, `${path}.${key}[${index}]`);
+      if (value <= 0 || value >= 1 || value <= previous) {
+        throw new Error(`${path}.${key} must contain sorted normalized coordinates`);
+      }
+      previous = value;
+    }
+  }
+  if (input.transparentBackground !== undefined && typeof input.transparentBackground !== "boolean") {
+    throw new Error(`${path}.transparentBackground must be a boolean`);
+  }
   if (input.inputOrder !== undefined) {
     array(input.inputOrder, `${path}.inputOrder`, MAX_NODES).forEach((item, index) =>
       id(item, `${path}.inputOrder[${index}]`),

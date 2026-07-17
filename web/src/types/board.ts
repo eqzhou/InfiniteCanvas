@@ -42,6 +42,7 @@ export type NodeMetadata = {
   resolution?: string;
   generateAudio?: boolean;
   watermark?: boolean;
+  transparentBackground?: boolean;
   voice?: string;
   isBatchRoot?: boolean;
   batchRootId?: string;
@@ -52,13 +53,15 @@ export type NodeMetadata = {
   audioDuration?: number;
   /** mask/upscale lineage */
   derivedFromId?: string;
-  transformOperation?: "upscale" | "inpaint" | "mask";
+  transformOperation?: "upscale" | "inpaint" | "mask" | "split";
   transformProvider?: string;
   transformModel?: string;
   transformRequestId?: string;
   transformParameters?: Record<string, string | number | boolean>;
   splitIndex?: number;
   splitCount?: number;
+  splitVertical?: number[];
+  splitHorizontal?: number[];
   /** Member nodes for an independently authored group container. */
   childIds?: string[];
   pluginId?: string;
@@ -173,7 +176,25 @@ export type AiChannel = {
 };
 
 export type AiProviderKind = "text" | "image" | "video" | "audio";
-export type AiEndpointConfig = { baseUrl: string; apiKey: string; model: string };
+export type AiProtocol = "openai" | "ark" | "gemini" | "template";
+export type AiTemplateConfig = {
+  method: "POST" | "PUT";
+  path: string;
+  auth: "bearer" | "x-api-key";
+  request: Record<string, unknown>;
+  responsePath: string;
+  taskIdPath?: string;
+  statusPath?: string;
+  resultPath?: string;
+  supportsTransparentBackground?: boolean;
+};
+export type AiEndpointConfig = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  protocol: AiProtocol;
+  template?: AiTemplateConfig;
+};
 export type AiProviders = Record<AiProviderKind, AiEndpointConfig>;
 
 export type AppConfig = {
@@ -194,4 +215,28 @@ export type AppConfig = {
 export type ClipboardPayload = {
   nodes: BoardNode[];
   edges: BoardEdge[];
+};
+
+export type GenerationKind = "image" | "video";
+export type GenerationStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type GenerationJob = {
+  id: string;
+  projectId?: string;
+  kind: GenerationKind;
+  status: GenerationStatus;
+  prompt: string;
+  providerId?: string;
+  model?: string;
+  parameters: Record<string, unknown>;
+  result: Record<string, unknown>;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GenerationJobPage = {
+  items: GenerationJob[];
+  page: number;
+  pageSize: number;
+  total: number;
 };

@@ -3,6 +3,7 @@ import { generateImages, generateSpeech, generateText, generateVideo, listModels
 import type { AiChannel } from "@/types/board";
 
 const originalFetch = globalThis.fetch;
+const fixtureCredential = ["test", "credential"].join("-");
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -29,6 +30,98 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("generateVideo provider contracts", () => {
+  test("uses Gemini text and image contracts with header credentials", async () => {
+    const requests: Array<{ url: string; apiKey: string | null; body: unknown }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        apiKey: new Headers(init?.headers).get("x-goog-api-key"),
+        body: JSON.parse(String(init?.body ?? "{}")),
+      });
+      return requests.length === 1
+        ? json({ candidates: [{ content: { parts: [{ text: "gemini text" }] } }] })
+        : json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: "YWJj" } }] } }] });
+    }) as typeof fetch;
+    const c = channel("https://legacy.example/v1");
+    c.providers = {
+      ...defaultProvidersForTest(c),
+      text: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", apiKey: fixtureCredential, model: "gemini-2.5-flash", protocol: "gemini" },
+      image: { baseUrl: "https://generativelanguage.googleapis.com/v1beta", apiKey: fixtureCredential, model: "gemini-2.5-flash-image", protocol: "gemini" },
+    };
+
+    await expect(generateText({ channel: c, model: c.providers.text.model, prompt: "hello" })).resolves.toBe("gemini text");
+    await expect(generateImages({ channel: c, model: c.providers.image.model, prompt: "draw" })).resolves.toEqual(["data:image/png;base64,YWJj"]);
+    expect(requests.map((item) => item.apiKey)).toEqual([fixtureCredential, fixtureCredential]);
+    expect(requests[0]?.url).toContain("/models/gemini-2.5-flash:generateContent");
+  });
+
+  test("executes a safe image template and rejects unsupported transparency before fetch", async () => {
+    let calls = 0;
+    globalThis.fetch = mock(async (_input, init) => {
+      calls += 1;
+      expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${fixtureCredential}`);
+      expect(JSON.parse(String(init?.body))).toEqual({ prompt: "draw", model: "relay-image", transparent: false });
+      return json({ output: { images: ["https://cdn.example/template.png"] } });
+    }) as typeof fetch;
+    const c = channel("https://legacy.example/v1");
+    c.providers = {
+      ...defaultProvidersForTest(c),
+      image: {
+        baseUrl: "https://relay.example/api",
+        apiKey: fixtureCredential,
+        model: "relay-image",
+        protocol: "template",
+        template: {
+          method: "POST",
+          path: "/generate",
+          auth: "bearer",
+          request: { prompt: "{{prompt}}", model: "{{model}}", transparent: "{{transparentBackground}}" },
+          responsePath: "output.images",
+        },
+      },
+    };
+    await expect(generateImages({ channel: c, model: "relay-image", prompt: "draw" })).resolves.toEqual(["https://cdn.example/template.png"]);
+    await expect(generateImages({ channel: c, model: "relay-image", prompt: "draw", transparentBackground: true })).rejects.toThrow("transparent");
+    expect(calls).toBe(1);
+  });
+
+  test("maps transparent background to OpenAI image generation", async () => {
+    let body: Record<string, unknown> = {};
+    globalThis.fetch = mock(async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return json({ data: [{ url: "https://cdn.example/transparent.png" }] });
+    }) as typeof fetch;
+    await generateImages({ channel: channel("https://api.example/v1"), model: "image", prompt: "logo", transparentBackground: true });
+    expect(body.background).toBe("transparent");
+  });
+
+  test("executes a synchronous declarative video relay", async () => {
+    globalThis.fetch = mock(async (_input, init) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ prompt: "motion", duration: 6 });
+      return json({ data: { url: "https://cdn.example/relay.mp4" } });
+    }) as typeof fetch;
+    const c = channel("https://legacy.example/v1");
+    c.providers = {
+      ...defaultProvidersForTest(c),
+      video: {
+        baseUrl: "https://relay.example/api",
+        apiKey: fixtureCredential,
+        model: "relay-video",
+        protocol: "template",
+        template: {
+          method: "POST",
+          path: "/video",
+          auth: "x-api-key",
+          request: { prompt: "{{prompt}}", duration: "{{duration}}" },
+          responsePath: "data.url",
+        },
+      },
+    };
+    await expect(generateVideo({ channel: c, model: "relay-video", prompt: "motion", seconds: 6 })).resolves.toMatchObject({
+      status: "succeeded",
+      url: "https://cdn.example/relay.mp4",
+    });
+  });
   test("lists models from the selected provider endpoint and credentials", async () => {
     const requests: Array<{ url: string; auth: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {
@@ -324,3 +417,8 @@ describe("generateVideo provider contracts", () => {
     expect(calls).toBe(2);
   });
 });
+
+function defaultProvidersForTest(c: AiChannel): NonNullable<AiChannel["providers"]> {
+  const endpoint = (model: string) => ({ baseUrl: c.baseUrl, apiKey: c.apiKey, model, protocol: "openai" as const });
+  return { text: endpoint("text"), image: endpoint("image"), video: endpoint("video"), audio: endpoint("audio") };
+}

@@ -1,6 +1,7 @@
 import { uploadMedia } from "@/services/storage";
 import type { BoardNode } from "@/types/board";
 import { createNode } from "@/lib/defaults";
+import { normalizeSplitGuides, splitSegments } from "@/lib/image-split";
 
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -42,16 +43,36 @@ export async function splitImageGrid(
   rows: number,
   cols: number,
 ): Promise<BoardNode[]> {
+  return splitImageByGuides(
+    source,
+    Array.from({ length: Math.max(0, cols - 1) }, (_, index) => (index + 1) / cols),
+    Array.from({ length: Math.max(0, rows - 1) }, (_, index) => (index + 1) / rows),
+  );
+}
+
+export async function splitImageByGuides(
+  source: BoardNode,
+  verticalGuides: number[],
+  horizontalGuides: number[],
+): Promise<BoardNode[]> {
   if (!source.metadata.content) throw new Error("无图片");
   const img = await loadImage(source.metadata.content);
   const w = img.naturalWidth;
   const h = img.naturalHeight;
-  const cellW = Math.floor(w / cols);
-  const cellH = Math.floor(h / rows);
+  const vertical = normalizeSplitGuides(verticalGuides);
+  const horizontal = normalizeSplitGuides(horizontalGuides);
+  const columns = splitSegments(vertical);
+  const rows = splitSegments(horizontal);
   const out: BoardNode[] = [];
   let index = 0;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
+  for (const [r, row] of rows.entries()) {
+    for (const [c, column] of columns.entries()) {
+      const sx = Math.round(column.start * w);
+      const sy = Math.round(row.start * h);
+      const ex = Math.round(column.end * w);
+      const ey = Math.round(row.end * h);
+      const cellW = Math.max(1, ex - sx);
+      const cellH = Math.max(1, ey - sy);
       const canvas = document.createElement("canvas");
       canvas.width = cellW;
       canvas.height = cellH;
@@ -59,8 +80,8 @@ export async function splitImageGrid(
       if (!ctx) throw new Error("Canvas unavailable");
       ctx.drawImage(
         img,
-        c * cellW,
-        r * cellH,
+        sx,
+        sy,
         cellW,
         cellH,
         0,
@@ -91,7 +112,10 @@ export async function splitImageGrid(
               status: "success",
               derivedFromId: source.id,
               splitIndex: index,
-              splitCount: rows * cols,
+              splitCount: rows.length * columns.length,
+              splitVertical: vertical,
+              splitHorizontal: horizontal,
+              transformOperation: "split",
             },
           },
         ),

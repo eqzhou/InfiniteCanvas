@@ -1,7 +1,7 @@
 import type { AiChannel, AiEndpointConfig, AiProviderKind, AiProviders } from "@/types/board";
 
 export function defaultProviders(channel: AiChannel): AiProviders {
-  const base = { baseUrl: channel.baseUrl, apiKey: channel.apiKey, model: "" };
+  const base = { baseUrl: channel.baseUrl, apiKey: channel.apiKey, model: "", protocol: "openai" as const };
   return {
     text: { ...base, model: channel.defaultTextModel },
     image: { ...base, model: channel.defaultImageModel },
@@ -11,11 +11,18 @@ export function defaultProviders(channel: AiChannel): AiProviders {
 }
 
 export function getProvider(channel: AiChannel, kind: AiProviderKind): AiEndpointConfig {
-  return channel.providers?.[kind] ?? defaultProviders(channel)[kind];
+  const fallback = defaultProviders(channel)[kind];
+  return { ...fallback, ...channel.providers?.[kind], protocol: channel.providers?.[kind]?.protocol ?? "openai" };
 }
 
 export function normalizeChannel(channel: AiChannel): AiChannel {
-  const providers = { ...defaultProviders(channel), ...(channel.providers ?? {}) };
+  const defaults = defaultProviders(channel);
+  const providers = {
+    text: { ...defaults.text, ...channel.providers?.text },
+    image: { ...defaults.image, ...channel.providers?.image },
+    video: { ...defaults.video, ...channel.providers?.video },
+    audio: { ...defaults.audio, ...channel.providers?.audio },
+  };
   return {
     ...channel,
     providers,

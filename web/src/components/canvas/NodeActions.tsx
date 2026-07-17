@@ -16,7 +16,7 @@ import { nowIso, uid } from "@/lib/id";
 import { CropDialog } from "@/components/canvas/CropDialog";
 import { AngleDialog } from "@/components/canvas/AngleDialog";
 import { ImageToolsDialog, type ImageToolMode } from "@/components/canvas/ImageToolsDialog";
-import { splitImageGrid } from "@/lib/image-advanced";
+import { splitImageByGuides } from "@/lib/image-advanced";
 import { ImageTransformRegistry } from "@/services/image-transform/registry";
 import { createLocalCanvasTransformProvider } from "@/services/image-transform/providers/local-canvas";
 import { createOpenAIImageTransformProvider } from "@/services/image-transform/providers/openai-images";
@@ -35,6 +35,7 @@ import {
   Plus,
   RotateCw,
   Sparkles,
+  Type,
   Wand2,
 } from "lucide-react";
 
@@ -162,6 +163,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
           quality: node.metadata.quality || config.imageQuality,
           n: node.metadata.count || config.imageCount,
           referenceDataUrls: refs,
+          transparentBackground: Boolean(node.metadata.transparentBackground),
         });
         const created: BoardNode[] = [];
         for (const [i, url] of urls.entries()) {
@@ -285,6 +287,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
         size: cfg.metadata.size,
         quality: config.imageQuality,
         n: cfg.metadata.count,
+        transparentBackground: Boolean(cfg.metadata.transparentBackground),
       });
       const created: BoardNode[] = [];
       for (const [index, url] of urls.entries()) {
@@ -343,7 +346,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
     try {
       const out = await generateText({
         channel,
-        model: getProvider(channel, "text").model,
+        model: node.metadata.model || getProvider(channel, "text").model,
         prompt: `原文本：\n${node.metadata.content ?? ""}\n\n改写要求：${instruction}`,
       });
       if (!node.metadata.content) {
@@ -382,12 +385,13 @@ export function NodeActions({ node }: { node: BoardNode }) {
         : [];
       const urls = await generateImages({
         channel,
-        model: getProvider(channel, "image").model,
+        model: node.metadata.model || getProvider(channel, "image").model,
         prompt,
         size: config.imageSize,
         quality: config.imageQuality,
         n: config.imageCount,
         referenceDataUrls: refs,
+        transparentBackground: Boolean(node.metadata.transparentBackground),
       });
       if (urls.length === 1 && !node.metadata.content) {
         const uploaded = await uploadMedia(urls[0], "image");
@@ -477,6 +481,40 @@ export function NodeActions({ node }: { node: BoardNode }) {
     }
   };
 
+  const reversePrompt = async () => {
+    if (!channel || !getProvider(channel, "text").apiKey) {
+      alert("请先在设置中配置文本视觉模型服务的 API Key");
+      return;
+    }
+    updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
+    try {
+      const images = node.metadata.storageKey
+        ? await resolveNodeImageDataUrls([node.metadata.storageKey])
+        : node.metadata.content ? [node.metadata.content] : [];
+      if (!images.length) throw new Error("当前图片没有可读取的内容");
+      const text = await generateText({
+        channel,
+        model: getProvider(channel, "text").model,
+        prompt: "分析这张图片并输出可复现其主体、构图、光线、色彩和风格的详细生图提示词。只输出提示词。",
+        images,
+      });
+      const created = createNode(
+        "text",
+        { x: node.position.x + node.width + 60, y: node.position.y },
+        { title: "反推提示词", metadata: { content: text, status: "success" } },
+      );
+      placeRight([created]);
+      updateNode(node.id, { metadata: { status: "success" } });
+    } catch (error) {
+      updateNode(node.id, {
+        metadata: {
+          status: "error",
+          errorDetails: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  };
+
   const generateOnVideo = async () => {
     if (!channel || !getProvider(channel, "video").apiKey) {
       alert("请先在设置中配置 API Key");
@@ -519,7 +557,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
       ]);
       const result = await generateVideo({
         channel,
-        model: getProvider(channel, "video").model,
+        model: node.metadata.model || getProvider(channel, "video").model,
         prompt,
         size: node.metadata.size,
         seconds: node.metadata.duration ?? 5,
@@ -637,7 +675,7 @@ export function NodeActions({ node }: { node: BoardNode }) {
     try {
       const speech = await generateSpeech({
         channel,
-        model: getProvider(channel, "audio").model,
+        model: node.metadata.model || getProvider(channel, "audio").model,
         input: prompt,
         voice: node.metadata.voice || "alloy",
       });
@@ -721,6 +759,9 @@ return (
           <>
             <IconBtn title="生成/重试" onClick={() => void generateOnImage()}>
               <Sparkles size={14} />
+            </IconBtn>
+            <IconBtn title="反推提示词" onClick={() => void reversePrompt()}>
+              <Type size={14} />
             </IconBtn>
             <IconBtn title="裁剪" onClick={() => setCropOpen(true)}>
               <Crop size={14} />
@@ -932,8 +973,8 @@ return (
             ]);
             setImageTool(null);
           }}
-          onSplit={async (rows, cols) => {
-            const created = await splitImageGrid(node, rows, cols);
+          onSplit={async (vertical, horizontal) => {
+            const created = await splitImageByGuides(node, vertical, horizontal);
             placeRight(created);
             setImageTool(null);
           }}

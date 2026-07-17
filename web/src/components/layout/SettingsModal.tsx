@@ -7,6 +7,8 @@ import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
 import { uid } from "@/lib/id";
 import { getProvider, normalizeChannel } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
+import type { AiTemplateConfig } from "@/types/board";
+import { validateProviderTemplate } from "@/lib/provider-template";
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useBoardStore((s) => s.config);
@@ -71,11 +73,31 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               const labels = { text: "文本", image: "生图", video: "视频", audio: "音频" };
               return <div key={kind} className="rounded border border-[var(--ob-line)] p-3">
                 <h3 className="mb-2 font-medium">{labels[kind]}模型服务</h3>
+                <label className="mb-2 flex items-center gap-2">
+                  <span className="text-[var(--ob-muted)]">协议</span>
+                  <select
+                    className="field max-w-40"
+                    aria-label={`${labels[kind]}协议`}
+                    value={provider.protocol}
+                    onChange={(e) => updateProvider(kind, { protocol: e.target.value as typeof provider.protocol })}
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="ark">Ark / Seedance</option>
+                    <option value="gemini">Gemini</option>
+                    <option value="template">Template</option>
+                  </select>
+                </label>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <input className="field" aria-label={`${labels[kind]} URL`} value={provider.baseUrl} onChange={(e) => updateProvider(kind, { baseUrl: e.target.value })} placeholder="https://api.example.com/v1" />
                   <input className="field" aria-label={`${labels[kind]} API Key`} type="password" value={provider.apiKey} onChange={(e) => updateProvider(kind, { apiKey: e.target.value })} />
                   <input className="field" aria-label={`${labels[kind]}模型`} value={provider.model} onChange={(e) => updateProvider(kind, { model: e.target.value })} />
                 </div>
+                {provider.protocol === "template" ? (
+                  <TemplateEditor
+                    value={provider.template}
+                    onChange={(template) => updateProvider(kind, { template })}
+                  />
+                ) : null}
                 <button
                   type="button"
                   className="btn mt-2"
@@ -248,6 +270,53 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         .field { width: 100%; border: 1px solid var(--ob-line); border-radius: 8px; padding: 8px 10px; background: transparent; color: var(--ob-ink); }
         .btn { border: 1px solid var(--ob-line); border-radius: 8px; padding: 8px 12px; background: var(--ob-accent-soft); }
       `}</style>
+    </div>
+  );
+}
+
+function TemplateEditor({
+  value,
+  onChange,
+}: {
+  value?: AiTemplateConfig;
+  onChange: (value: AiTemplateConfig) => void;
+}) {
+  const fallback: AiTemplateConfig = {
+    method: "POST",
+    path: "/generate",
+    auth: "bearer",
+    request: { prompt: "{{prompt}}", model: "{{model}}" },
+    responsePath: "data.urls",
+  };
+  const [source, setSource] = useState(() => JSON.stringify(value ?? fallback, null, 2));
+  const [message, setMessage] = useState("");
+  return (
+    <div className="mt-2">
+      <textarea
+        aria-label="声明式模板 JSON"
+        className="field min-h-40 resize-y font-mono text-xs"
+        value={source}
+        onChange={(event) => setSource(event.target.value)}
+      />
+      <div className="mt-1 flex items-center gap-2">
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            try {
+              const parsed = JSON.parse(source) as AiTemplateConfig;
+              validateProviderTemplate(parsed);
+              onChange(parsed);
+              setMessage("模板已应用");
+            } catch (cause) {
+              setMessage(cause instanceof Error ? cause.message : String(cause));
+            }
+          }}
+        >
+          应用模板
+        </button>
+        {message ? <span className="text-xs text-[var(--ob-muted)]">{message}</span> : null}
+      </div>
     </div>
   );
 }

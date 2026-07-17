@@ -187,6 +187,74 @@ test("text-to-image creates a connected config and executes immediately", async 
   )).toBe(true);
 });
 
+test("image workbench persists history and inserts a result into the canvas", async ({ page }) => {
+  await page.route("https://workbench.example/v1/images/generations", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC" }] }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://workbench.example/v1");
+  await page.getByLabel("生图 API Key").fill("workbench-test-key");
+  await page.getByLabel("生图模型").fill("workbench-image");
+  await page.getByRole("button", { name: "关闭" }).click();
+
+  await page.goto("/workbench/image");
+  await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
+  await page.getByText("提示词", { exact: true }).locator("..").locator("textarea").fill("workbench square");
+  await page.getByRole("button", { name: "生成", exact: true }).click();
+  const history = page.locator("article").filter({ hasText: "workbench square" });
+  await expect(history).toContainText("succeeded");
+  await page.reload();
+  await expect(page.locator("article").filter({ hasText: "workbench square" })).toBeVisible();
+  await page.getByRole("button", { name: "插入画布" }).click();
+  await expect(page.getByRole("button", { name: "已插入" })).toBeVisible();
+  await page.goto("/");
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+});
+
+test("image split supports draggable guides and persists normalized lineage", async ({ page }) => {
+  await openFreshBoard(page);
+  const imageInput = page.locator('input[type="file"][accept="image/*"]').first();
+  await imageInput.setInputFiles({
+    name: "split.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  await page.getByTitle("切分").click();
+  const vertical = page.getByRole("button", { name: "纵向分割线 1" });
+  const box = await vertical.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width / 2 + 30, box!.y + box!.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await page.getByRole("button", { name: "新增横线" }).click();
+  await page.getByRole("button", { name: "删除选中线" }).click();
+  await page.getByRole("button", { name: "重置", exact: true }).click();
+  await page.getByRole("button", { name: "应用" }).click();
+  await expect.poll(() => page.evaluate(
+    () => new Promise<boolean>((resolve, reject) => {
+      const open = indexedDB.open("openboard-app");
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const database = open.result;
+        const request = database.transaction("app_state", "readonly").objectStore("app_state").get("openboard:projects");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const projects = Array.isArray(request.result) ? request.result : [];
+          resolve(projects.some((project) => project?.nodes?.some((node: { metadata?: { transformOperation?: string; splitVertical?: number[]; splitHorizontal?: number[] } }) =>
+            node.metadata?.transformOperation === "split" && node.metadata.splitVertical?.[0] === 0.5 && node.metadata.splitHorizontal?.[0] === 0.5,
+          )));
+          database.close();
+        };
+      };
+    }),
+  )).toBe(true);
+});
+
 test("a sandboxed plugin node persists its state across reloads", async ({ page }) => {
   await openFreshBoard(page);
   await page.goto("/plugins");
@@ -252,6 +320,25 @@ test("double-clicking an image opens and closes the full preview", async ({ page
   await expect(page.getByRole("dialog", { name: "图片预览" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "图片预览" })).toHaveCount(0);
+});
+
+test("image reverse prompt creates a connected text node", async ({ page }) => {
+  await page.route("https://vision.example/v1/responses", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ output_text: "studio light, red square" }) });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("文本 URL").fill("https://vision.example/v1");
+  await page.getByLabel("文本 API Key").fill("vision-test-key");
+  await page.getByLabel("文本模型").fill("vision-model");
+  await page.getByRole("button", { name: "关闭" }).click();
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    name: "vision.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  await page.getByTitle("反推提示词").click();
+  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("studio light, red square");
 });
 
 test("local image upscale creates a lineage-tracked derived node", async ({ page }) => {

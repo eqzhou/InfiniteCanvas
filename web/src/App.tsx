@@ -9,6 +9,8 @@ import { HomePage } from "@/pages/HomePage";
 import { AssetsPage } from "@/pages/AssetsPage";
 import { PromptsPage } from "@/pages/PromptsPage";
 import { PluginsPage } from "@/pages/PluginsPage";
+import { ImageWorkbenchPage } from "@/pages/ImageWorkbenchPage";
+import { VideoWorkbenchPage } from "@/pages/VideoWorkbenchPage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
 
 export function App() {
@@ -87,6 +89,8 @@ export function App() {
           <Route path="/assets" element={<AssetsPage />} />
           <Route path="/prompts" element={<PromptsPage />} />
           <Route path="/plugins" element={<PluginsPage />} />
+          <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
+          <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
