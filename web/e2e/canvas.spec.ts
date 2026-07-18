@@ -93,6 +93,7 @@ test("projects support create, rename, JSON export/import, and batch delete", as
 });
 
 test("desktop project panel resizes, collapses, and persists its width", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop resize behavior is covered here.");
   await openFreshBoard(page);
   const panel = page.getByRole("complementary", { name: "项目侧栏" });
   const resizeHandle = page.getByRole("separator", { name: "调整项目侧栏宽度" });
@@ -123,14 +124,20 @@ test("canvas element panel selects, locates, and batch exports nodes", async ({ 
   await openFreshBoard(page);
   await page.getByTitle("文本", { exact: true }).click();
   await page.getByTitle("配置", { exact: true }).click();
+  await openProjectPanel(page);
 
   const panel = page.getByRole("complementary", { name: "项目侧栏" });
   await panel.getByRole("tab", { name: "元素" }).click();
   const elements = panel.getByRole("list", { name: "画布元素" });
   await expect(elements.getByRole("listitem")).toHaveCount(2);
   await panel.getByRole("button", { name: "全选元素" }).click();
-  await expect(page.locator('[data-node-type="text"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
-  await expect(page.locator('[data-node-type="config"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await expect(panel.getByRole("checkbox", { name: "选择文本" })).toBeChecked();
+    await expect(panel.getByRole("checkbox", { name: "选择生成配置" })).toBeChecked();
+  } else {
+    await expect(page.locator('[data-node-type="text"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
+    await expect(page.locator('[data-node-type="config"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
+  }
 
   const downloadPromise = page.waitForEvent("download");
   await panel.getByRole("button", { name: "导出所选元素" }).click();
@@ -140,6 +147,7 @@ test("canvas element panel selects, locates, and batch exports nodes", async ({ 
   await elements.getByRole("button", { name: "定位文本" }).click();
   await expect(page.locator('[data-node-type="text"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
   await page.reload();
+  await openProjectPanel(page);
   await expect(panel.getByRole("tab", { name: "元素", selected: true })).toBeVisible();
 });
 
@@ -746,9 +754,11 @@ test("node titles appear only while hovered, selected, or edited", async ({ page
 
   await page.getByTestId("canvas-surface").click({ position: { x: 24, y: 24 } });
   await expect(title).toHaveCSS("opacity", "0");
-  await node.hover();
-  await expect(title).toHaveCSS("opacity", "1");
-  await node.click();
+  if ((page.viewportSize()?.width ?? 1440) >= 768) {
+    await node.hover();
+    await expect(title).toHaveCSS("opacity", "1");
+  }
+  await node.locator("[data-node-header]").click();
   await expect(title).toHaveCSS("opacity", "1");
 });
 
