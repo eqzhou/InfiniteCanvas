@@ -8,7 +8,7 @@ import { useBoardStore } from "@/stores/use-board-store";
 import { generateImages, generateText, generateVideo } from "@/services/ai-client";
 import { storageKeyToDataUrl, uploadMedia } from "@/services/storage";
 import { nowIso, uid } from "@/lib/id";
-import type { BoardNode, PluginManifest } from "@/types/board";
+import type { AssetItem, BoardNode, PluginManifest } from "@/types/board";
 
 const PanoramaPluginNode = lazy(async () => {
   const module = await import("@/components/canvas/PanoramaPluginNode");
@@ -108,7 +108,9 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
       listAssets: (query) => {
         const needle = query.trim().toLocaleLowerCase();
         return useBoardStore.getState().assets
-          .filter((asset) => !needle || `${asset.title} ${asset.tags.join(" ")}`.toLocaleLowerCase().includes(needle))
+          .filter((asset): asset is AssetItem & { kind: "text" | "image" } =>
+            (asset.kind === "text" || asset.kind === "image") &&
+            (!needle || `${asset.title} ${asset.tags.join(" ")}`.toLocaleLowerCase().includes(needle)))
           .slice(0, 100)
           .map((asset) => ({
             id: asset.id,

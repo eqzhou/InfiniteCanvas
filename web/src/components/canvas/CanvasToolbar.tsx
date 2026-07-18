@@ -41,7 +41,7 @@ export function CanvasToolbar({
     <div
       role="toolbar"
       aria-label="画布工具栏"
-      className="flex flex-wrap items-center gap-2 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] py-2 pl-14 pr-3 sm:px-3"
+      className="ob-toolbar-scroll flex min-h-12 w-full min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel)] py-2 pl-14 pr-3 sm:px-3"
     >
       <Tool label="文本" onClick={() => onAdd("text")}>
         <Type size={16} />
@@ -58,9 +58,9 @@ export function CanvasToolbar({
       <Tool label="音频" onClick={() => onAdd("audio")}>
         <Music2 size={16} />
       </Tool>
-      <label title="导入图片" className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
+      <label aria-label="导入图片" title="导入图片" className="inline-flex shrink-0 cursor-pointer items-center rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
         <Upload size={16} />
-        <span className="hidden sm:inline">导入图片</span>
+        <span className="sr-only">导入图片</span>
         <input
           type="file"
           accept="image/*"
@@ -76,9 +76,9 @@ export function CanvasToolbar({
         />
       </label>
       {onImportVideos ? (
-        <label title="导入视频" className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
+        <label aria-label="导入视频" title="导入视频" className="inline-flex shrink-0 cursor-pointer items-center rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
           <Film size={16} />
-          <span className="hidden sm:inline">导入视频</span>
+          <span className="sr-only">导入视频</span>
           <input
             type="file"
             accept="video/*"
@@ -95,9 +95,9 @@ export function CanvasToolbar({
         </label>
       ) : null}
       {onImportAudios ? (
-        <label title="导入音频" className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
+        <label aria-label="导入音频" title="导入音频" className="inline-flex shrink-0 cursor-pointer items-center rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
           <Music2 size={16} />
-          <span className="hidden sm:inline">导入音频</span>
+          <span className="sr-only">导入音频</span>
           <input
             type="file"
             accept="audio/*"
@@ -113,15 +113,16 @@ export function CanvasToolbar({
           />
         </label>
       ) : null}
-      <div className="mx-1 h-5 w-px bg-[var(--ob-line)]" />
-      <Tool label="撤销" onClick={undo}>
+      <div className="mx-1 h-5 w-px shrink-0 bg-[var(--ob-line)]" />
+      <Tool label="撤销" onClick={undo} compact>
         <Undo2 size={16} />
       </Tool>
-      <Tool label="重做" onClick={redo}>
+      <Tool label="重做" onClick={redo} compact>
         <Redo2 size={16} />
       </Tool>
       <Tool
         label="背景"
+        compact
         onClick={() => {
           const order = ["dots", "lines", "blank"] as const;
           const i = order.indexOf(backgroundMode ?? "dots");
@@ -130,16 +131,16 @@ export function CanvasToolbar({
       >
         <Grid3X3 size={16} />
       </Tool>
-      <Tool label="小地图" onClick={() => setShowMinimap(!showMinimap)} active={showMinimap}>
+      <Tool label="小地图" onClick={() => setShowMinimap(!showMinimap)} active={showMinimap} compact>
         <Map size={16} />
       </Tool>
       {onOpenAssets ? (
-        <Tool label="素材" onClick={onOpenAssets}>
+        <Tool label="素材" onClick={onOpenAssets} compact>
           <Bookmark size={16} />
         </Tool>
       ) : null}
       {onFitView ? (
-        <Tool label="适应" onClick={onFitView}>
+        <Tool label="适应" onClick={onFitView} compact>
           <Focus size={16} />
         </Tool>
       ) : null}
@@ -152,25 +153,28 @@ function Tool({
   onClick,
   children,
   active,
+  compact = false,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
   active?: boolean;
+  compact?: boolean;
 }) {
   return (
     <button
       type="button"
       title={label}
+      aria-label={label}
       onClick={onClick}
-      className={`inline-flex items-center gap-1 rounded-md border px-2 py-1.5 text-sm ${
+      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1.5 text-sm ${
         active
           ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]"
           : "border-[var(--ob-line)] hover:bg-[var(--ob-accent-soft)]"
       }`}
     >
       {children}
-      <span className="hidden sm:inline">{label}</span>
+      <span className={compact ? "sr-only" : "hidden sm:inline"}>{label}</span>
     </button>
   );
 }

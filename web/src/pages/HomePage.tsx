@@ -1,11 +1,16 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { BoardCanvas } from "@/components/canvas/BoardCanvas";
 import { AssistantPanel } from "@/components/assistant/AssistantPanel";
 import {
   Archive,
+  Boxes,
   Download,
   FolderPlus,
+  Image as ImageIcon,
+  ListChecks,
+  LocateFixed,
+  PanelLeftClose,
   PanelLeftOpen,
   Trash2,
   Upload,
@@ -14,21 +19,126 @@ import {
 import { parseBoardProject } from "@/lib/board-document";
 import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { exportNodeSelection } from "@/lib/node-export";
+import type { BoardNode } from "@/types/board";
+import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
+
+const NODE_TYPE_LABELS: Record<BoardNode["type"], string> = {
+  text: "文本",
+  image: "图片",
+  config: "配置",
+  video: "视频",
+  audio: "音频",
+  group: "分组",
+  plugin: "插件",
+};
 
 export function HomePage() {
   const ready = useBoardStore((s) => s.ready);
   const projects = useBoardStore((s) => s.projects);
   const activeProjectId = useBoardStore((s) => s.activeProjectId);
+  const activeProject = useBoardStore((s) => s.projects.find((project) => project.id === s.activeProjectId) ?? null);
+  const assets = useBoardStore((s) => s.assets);
+  const setAssets = useBoardStore((s) => s.setAssets);
+  const selectedIds = useBoardStore((s) => s.selectedIds);
   const setActiveProject = useBoardStore((s) => s.setActiveProject);
+  const setSelected = useBoardStore((s) => s.setSelected);
+  const setViewport = useBoardStore((s) => s.setViewport);
+  const insertAsset = useBoardStore((s) => s.insertAsset);
+  const showAssistant = useBoardStore((s) => s.showAssistant);
   const createProject = useBoardStore((s) => s.createProject);
   const renameProject = useBoardStore((s) => s.renameProject);
   const deleteProjects = useBoardStore((s) => s.deleteProjects);
   const exportActiveProject = useBoardStore((s) => s.exportActiveProject);
   const importProject = useBoardStore((s) => s.importProject);
+  const config = useBoardStore((s) => s.config);
+  const setConfig = useBoardStore((s) => s.setConfig);
+  const flushConfig = useBoardStore((s) => s.flushConfig);
   const fileRef = useRef<HTMLInputElement>(null);
+  const panelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const panelWidthRef = useRef(config.canvasPanelWidth ?? 256);
+  const viewportAnimationRef = useRef<number | null>(null);
   const [checked, setChecked] = useState<string[]>([]);
+  const [checkedNodes, setCheckedNodes] = useState<string[]>([]);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(config.canvasPanelWidth ?? 256);
+  const panelCollapsed = config.canvasPanelCollapsed === true;
+  const panelTab = config.canvasPanelTab ?? "projects";
   useEscapeDismiss(projectsOpen, () => setProjectsOpen(false));
+
+  useEffect(() => {
+    const width = config.canvasPanelWidth ?? 256;
+    setPanelWidth(width);
+    panelWidthRef.current = width;
+  }, [config.canvasPanelWidth]);
+
+  useEffect(() => {
+    const available = new Set(activeProject?.nodes.map((node) => node.id) ?? []);
+    setCheckedNodes((current) => current.filter((id) => available.has(id)));
+  }, [activeProject]);
+
+  useEffect(() => () => {
+    if (viewportAnimationRef.current !== null) cancelAnimationFrame(viewportAnimationRef.current);
+  }, []);
+
+  const updatePanelConfig = (patch: Partial<Pick<typeof config, "canvasPanelWidth" | "canvasPanelCollapsed" | "canvasPanelTab">>) => {
+    const latest = useBoardStore.getState().config;
+    setConfig({ ...latest, ...patch });
+  };
+
+  const changePanelTab = (tab: "projects" | "elements" | "assets") => {
+    updatePanelConfig({ canvasPanelTab: tab });
+    void flushConfig();
+  };
+
+  const focusNode = (node: BoardNode) => {
+    const project = useBoardStore.getState().getActive();
+    if (!project) return;
+    setSelected([node.id]);
+    if (viewportAnimationRef.current !== null) cancelAnimationFrame(viewportAnimationRef.current);
+    const start = { ...project.viewport };
+    const canvasWidth = Math.max(320, window.innerWidth - panelWidth - (showAssistant ? 340 : 0));
+    const canvasHeight = Math.max(240, window.innerHeight - 104);
+    const target = {
+      k: start.k,
+      x: canvasWidth / 2 - (node.position.x + node.width / 2) * start.k,
+      y: canvasHeight / 2 - (node.position.y + node.height / 2) * start.k,
+    };
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / 260);
+      const eased = 1 - (1 - progress) ** 3;
+      setViewport({
+        k: start.k,
+        x: start.x + (target.x - start.x) * eased,
+        y: start.y + (target.y - start.y) * eased,
+      }, false);
+      if (progress < 1) viewportAnimationRef.current = requestAnimationFrame(tick);
+      else viewportAnimationRef.current = null;
+    };
+    viewportAnimationRef.current = requestAnimationFrame(tick);
+  };
+
+  const exportCheckedNodes = async () => {
+    if (!activeProject) return;
+    const selected = activeProject.nodes.filter((node) => checkedNodes.includes(node.id));
+    const blob = await exportNodeSelection(selected);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `画布元素-${selected.length}.zip`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const deleteSidebarAsset = async (assetId: string) => {
+    const state = useBoardStore.getState();
+    const asset = state.assets.find((item) => item.id === assetId);
+    if (!asset) return;
+    const nextAssets = state.assets.filter((item) => item.id !== assetId);
+    setAssets(nextAssets);
+    await deleteAssetBlobIfUnreferenced(asset.storageKey, state.projects, nextAssets);
+  };
 
   const sorted = useMemo(
     () => [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -43,9 +153,15 @@ export function HomePage() {
     <div className="relative flex h-full min-h-0">
       <button
         type="button"
-        className="absolute left-2 top-2 z-[60] rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-2 shadow-[var(--ob-shadow)] md:hidden"
-        title="项目"
-        onClick={() => setProjectsOpen(true)}
+        className={`absolute left-2 top-2 z-[60] h-9 w-9 place-items-center rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)] ${panelCollapsed ? "grid" : "grid md:hidden"}`}
+        title={panelCollapsed ? "展开侧栏" : "项目"}
+        onClick={() => {
+          if (window.innerWidth >= 768) {
+            updatePanelConfig({ canvasPanelCollapsed: false });
+          } else {
+            setProjectsOpen(true);
+          }
+        }}
       >
         <PanelLeftOpen size={17} />
       </button>
@@ -58,10 +174,12 @@ export function HomePage() {
         />
       ) : null}
       <aside
-        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel)] md:static md:flex md:w-64`}
+        aria-label="项目侧栏"
+        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} relative w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel)] md:w-[var(--canvas-panel-width)]`}
+        style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
         <div className="flex items-center gap-2 border-b border-[var(--ob-line)] p-3">
-          <strong className="text-sm">项目</strong>
+          <strong className="text-sm">工作区</strong>
           <button
             type="button"
             className="ml-auto rounded p-1 hover:bg-[var(--ob-accent-soft)] md:hidden"
@@ -72,77 +190,118 @@ export function HomePage() {
           </button>
           <button
             type="button"
-            className="rounded p-1 hover:bg-[var(--ob-accent-soft)] md:ml-auto"
-            title="新建"
-            onClick={() => createProject(`画布 ${projects.length + 1}`)}
+            className="ml-auto hidden rounded p-1 hover:bg-[var(--ob-accent-soft)] md:grid"
+            title="收起侧栏"
+            onClick={() => updatePanelConfig({ canvasPanelCollapsed: true })}
           >
-            <FolderPlus size={16} />
+            <PanelLeftClose size={16} />
           </button>
-          <button
-            type="button"
-            className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
-            title="导入 JSON"
-            onClick={() => fileRef.current?.click()}
-          >
-            <Upload size={16} />
-          </button>
-          <button
-            type="button"
-            className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
-            title="导出当前"
-            onClick={() => {
-              const p = exportActiveProject();
-              if (!p) return;
-              const blob = new Blob([JSON.stringify(p, null, 2)], {
-                type: "application/json",
-              });
-              const a = document.createElement("a");
-              a.href = URL.createObjectURL(blob);
-              a.download = `${p.title || "openboard"}.json`;
-              a.click();
-            }}
-          >
-            <Download size={16} />
-          </button>
-          <button
-            type="button"
-            className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
-            title="导出完整包"
-            onClick={() => {
-              void (async () => {
-                const project = exportActiveProject();
-                if (!project) return;
-                try {
-                  const blob = await exportProjectBundle(project);
-                  const url = URL.createObjectURL(blob);
-                  const anchor = document.createElement("a");
-                  anchor.href = url;
-                  anchor.download = `${project.title || "openboard"}.openboard`;
-                  anchor.click();
-                  URL.revokeObjectURL(url);
-                } catch (error) {
-                  alert(error instanceof Error ? error.message : String(error));
-                }
-              })();
-            }}
-          >
-            <Archive size={16} />
-          </button>
-          <button
-            type="button"
-            className="rounded p-1 text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
-            title="删除勾选"
-            disabled={!checked.length}
-            onClick={() => {
-              if (!checked.length) return;
-              if (confirm(`删除选中的 ${checked.length} 个项目？`)) {
-                deleteProjects(checked);
-                setChecked([]);
-              }
-            }}
-          >
-            <Trash2 size={16} />
-          </button>
+          {panelTab === "projects" ? (
+            <>
+              <button
+                type="button"
+                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                title="新建"
+                onClick={() => createProject(`画布 ${projects.length + 1}`)}
+              >
+                <FolderPlus size={16} />
+              </button>
+              <button
+                type="button"
+                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                title="导入 JSON"
+                onClick={() => fileRef.current?.click()}
+              >
+                <Upload size={16} />
+              </button>
+              <button
+                type="button"
+                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                title="导出当前"
+                onClick={() => {
+                  const p = exportActiveProject();
+                  if (!p) return;
+                  const blob = new Blob([JSON.stringify(p, null, 2)], {
+                    type: "application/json",
+                  });
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `${p.title || "openboard"}.json`;
+                  a.click();
+                }}
+              >
+                <Download size={16} />
+              </button>
+              <button
+                type="button"
+                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                title="导出完整包"
+                onClick={() => {
+                  void (async () => {
+                    const project = exportActiveProject();
+                    if (!project) return;
+                    try {
+                      const blob = await exportProjectBundle(project);
+                      const url = URL.createObjectURL(blob);
+                      const anchor = document.createElement("a");
+                      anchor.href = url;
+                      anchor.download = `${project.title || "openboard"}.openboard`;
+                      anchor.click();
+                      URL.revokeObjectURL(url);
+                    } catch (error) {
+                      alert(error instanceof Error ? error.message : String(error));
+                    }
+                  })();
+                }}
+              >
+                <Archive size={16} />
+              </button>
+              <button
+                type="button"
+                className="rounded p-1 text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                title="删除勾选"
+                disabled={!checked.length}
+                onClick={() => {
+                  if (!checked.length) return;
+                  if (confirm(`删除选中的 ${checked.length} 个项目？`)) {
+                    deleteProjects(checked);
+                    setChecked([]);
+                  }
+                }}
+              >
+                <Trash2 size={16} />
+              </button>
+            </>
+          ) : null}
+          {panelTab === "elements" ? (
+            <>
+              <button
+                type="button"
+                aria-label="全选元素"
+                title="全选元素"
+                className="rounded p-1 hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                disabled={!activeProject?.nodes.length}
+                onClick={() => {
+                  const ids = activeProject?.nodes.map((node) => node.id) ?? [];
+                  setCheckedNodes(ids);
+                  setSelected(ids);
+                }}
+              >
+                <ListChecks size={16} />
+              </button>
+              <button
+                type="button"
+                aria-label="导出所选元素"
+                title="导出所选元素"
+                className="rounded p-1 hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                disabled={!checkedNodes.length}
+                onClick={() => void exportCheckedNodes().catch((error) =>
+                  alert(error instanceof Error ? error.message : String(error)))}
+              >
+                <Archive size={16} />
+              </button>
+            </>
+          ) : null}
           <input
             ref={fileRef}
             type="file"
@@ -167,8 +326,32 @@ export function HomePage() {
             }}
           />
         </div>
+        <div role="tablist" aria-label="工作区视图" className="grid grid-cols-3 border-b border-[var(--ob-line)] px-2 pt-1">
+          {([
+            ["projects", "项目"],
+            ["elements", "元素"],
+            ["assets", "素材"],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={panelTab === value}
+              className={`relative px-2 py-2 text-xs ${
+                panelTab === value
+                  ? "font-medium text-[var(--ob-accent)] after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-[var(--ob-accent)]"
+                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+              }`}
+              onClick={() => changePanelTab(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="min-h-0 flex-1 overflow-auto p-2">
-          {sorted.map((p) => (
+          {panelTab === "projects" ? (
+            <>
+            {sorted.map((p) => (
             <div
               key={p.id}
               className={`group mb-1 rounded-lg border px-2 py-2 ${
@@ -217,7 +400,147 @@ export function HomePage() {
               还没有项目，点击右上角新建。
             </p>
           ) : null}
+            </>
+          ) : null}
+          {panelTab === "elements" ? (
+            activeProject?.nodes.length ? (
+              <ul role="list" aria-label="画布元素" className="space-y-1">
+                {activeProject.nodes.map((node) => {
+                  const checkedNode = checkedNodes.includes(node.id);
+                  const selected = selectedIds.includes(node.id);
+                  return (
+                    <li
+                      key={node.id}
+                      className={`flex items-center gap-2 rounded-md border px-2 py-2 ${
+                        selected
+                          ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]"
+                          : "border-transparent hover:border-[var(--ob-line)]"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`选择${node.title}`}
+                        checked={checkedNode}
+                        onChange={(event) => {
+                          const next = event.target.checked
+                            ? [...checkedNodes, node.id]
+                            : checkedNodes.filter((id) => id !== node.id);
+                          setCheckedNodes(next);
+                          setSelected(next);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        aria-label={`定位${node.title}`}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        onClick={() => focusNode(node)}
+                      >
+                        <LocateFixed size={14} className="shrink-0 text-[var(--ob-accent)]" />
+                        <span className="min-w-0 flex-1 truncate text-sm">{node.title}</span>
+                        <span className="text-[10px] text-[var(--ob-muted)]">{NODE_TYPE_LABELS[node.type]}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="p-3 text-sm text-[var(--ob-muted)]">当前画布没有元素</p>
+            )
+          ) : null}
+          {panelTab === "assets" ? (
+            assets.length ? (
+              <ul role="list" aria-label="侧栏素材" className="grid grid-cols-2 gap-2">
+                {assets.map((asset) => (
+                  <li key={asset.id} className="group relative min-h-24 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[var(--ob-canvas)]">
+                    {asset.kind === "image" && asset.coverUrl ? (
+                      <img src={asset.coverUrl} alt={asset.title} className="h-24 w-full object-cover" />
+                    ) : asset.kind === "video" && asset.coverUrl ? (
+                      <video src={asset.coverUrl} aria-label={asset.title} muted preload="metadata" className="h-24 w-full bg-black object-contain" />
+                    ) : asset.kind === "audio" && asset.coverUrl ? (
+                      <div className="grid h-24 place-items-center px-2 text-xs text-[var(--ob-muted)]">音频</div>
+                    ) : (
+                      <p className="line-clamp-4 p-2 text-xs leading-relaxed">{asset.content || asset.title}</p>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={`插入素材 ${asset.title}`}
+                      title="插入画布"
+                      className="absolute inset-0 grid place-items-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+                      onClick={() => {
+                        if (!activeProject) return;
+                        void insertAsset(asset.id, {
+                          x: (window.innerWidth / 2 - activeProject.viewport.x) / activeProject.viewport.k,
+                          y: (window.innerHeight / 2 - activeProject.viewport.y) / activeProject.viewport.k,
+                        });
+                      }}
+                    >
+                      <ImageIcon size={18} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`删除素材 ${asset.title}`}
+                      title="删除素材"
+                      className="absolute right-1 top-1 z-10 grid h-7 w-7 place-items-center rounded-sm bg-[var(--ob-panel)] text-[var(--ob-danger)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus:opacity-100"
+                      onClick={() => {
+                        if (!confirm(`删除素材“${asset.title}”？`)) return;
+                        void deleteSidebarAsset(asset.id).catch((error) =>
+                          alert(error instanceof Error ? error.message : String(error)));
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="grid place-items-center gap-2 p-6 text-center text-sm text-[var(--ob-muted)]">
+                <Boxes size={22} />
+                <span>暂无素材</span>
+              </div>
+            )
+          ) : null}
         </div>
+        <div
+          role="separator"
+          aria-label="调整项目侧栏宽度"
+          aria-orientation="vertical"
+          aria-valuemin={220}
+          aria-valuemax={420}
+          aria-valuenow={panelWidth}
+          tabIndex={0}
+          className="absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize touch-none select-none hover:bg-[color-mix(in_srgb,var(--ob-accent)_24%,transparent)] focus:bg-[color-mix(in_srgb,var(--ob-accent)_24%,transparent)] md:block"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            panelResizeRef.current = {
+              startX: event.clientX,
+              startWidth: panelWidthRef.current,
+            };
+            const move = (moveEvent: MouseEvent) => {
+              const resize = panelResizeRef.current;
+              if (!resize) return;
+              const nextWidth = Math.min(420, Math.max(220, resize.startWidth + moveEvent.clientX - resize.startX));
+              panelWidthRef.current = nextWidth;
+              setPanelWidth(nextWidth);
+            };
+            const finish = () => {
+              panelResizeRef.current = null;
+              window.removeEventListener("mousemove", move);
+              updatePanelConfig({ canvasPanelWidth: panelWidthRef.current });
+              void flushConfig();
+            };
+            window.addEventListener("mousemove", move);
+            window.addEventListener("mouseup", finish, { once: true });
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            const nextWidth = Math.min(420, Math.max(220, panelWidth + (event.key === "ArrowRight" ? 16 : -16)));
+            setPanelWidth(nextWidth);
+            panelWidthRef.current = nextWidth;
+            updatePanelConfig({ canvasPanelWidth: nextWidth });
+            void flushConfig();
+          }}
+        />
       </aside>
 
       <div className="min-w-0 flex-1">

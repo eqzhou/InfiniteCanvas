@@ -25,6 +25,11 @@ test_redis_url=$(node -e '
   process.stdout.write(value.toString());
 ' "$OPENBOARD_REDIS_URL")
 
+if [[ -z "${OPENBOARD_CHROMIUM_EXECUTABLE:-}" ]]; then
+  mac_chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  [[ -x "$mac_chrome" ]] && export OPENBOARD_CHROMIUM_EXECUTABLE="$mac_chrome"
+fi
+
 cleanup() {
   redis-cli -u "$test_redis_url" FLUSHDB >/dev/null 2>&1 || true
   if ! dropdb --if-exists --force --maintenance-db="$OPENBOARD_DATABASE_URL" "$test_db" >/dev/null 2>&1; then
@@ -37,7 +42,7 @@ trap cleanup EXIT INT TERM
 
 cd web
 set +e
-OPENBOARD_E2E_FORMAL=1 playwright test
+OPENBOARD_E2E_FORMAL=1 bunx playwright test
 test_status=$?
 set -e
 cd "$ROOT"

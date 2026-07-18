@@ -1,7 +1,8 @@
-# OpenBoard v0.8.2 behavior parity
+# OpenBoard v0.8.2 core and v0.9.0 public-delta parity
 
-This inventory freezes the engineering target to the publicly documented and
-black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`. It does not
+This inventory freezes the engineering core to the publicly documented and
+black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
+explicit public interface delta listed for `v0.9.0`. It does not
 claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
 an independent implementation with its own architecture, data model, UI,
 plugins, SDK, fixtures, and assets.
@@ -12,7 +13,8 @@ smoke tests that require real paid credentials remain opt-in.
 
 ## Public baseline traceability
 
-The frozen public inputs are the immutable v0.8.2 documents and hashes listed
+The frozen public inputs are the immutable v0.8.2 documents and hashes, plus
+the v0.9.0 release metadata, listed
 in `docs/BEHAVIOR_SPEC.md`. This table maps their named behaviors to local
 implementation and verification surfaces; it does not use upstream source as
 implementation evidence.
@@ -45,6 +47,10 @@ implementation evidence.
 | Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, generation-job tests, cancellation/retry E2E, and formal E2E |
 | Multi-tab browser runtime, MCP tools, snapshots, Codex continuity, attachments, stop and approvals | Go runtime/MCP/Codex tests plus browser/Codex E2E |
 | PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
+| Resizable/collapsible canvas panel with project, element and asset tabs | panel persistence, element selection/location/export and asset-panel E2E |
+| Local prompt CRUD/copy/direct insertion and hover-revealed node names | prompt library and node-title E2E |
+| Image/video/audio asset upload, preview, insertion, deletion and archive restore | asset E2E and `workspace-bundle.test.ts` |
+| Active-canvas archive from the top bar and bounded multi-element ZIP export | project lifecycle and element panel E2E plus `node-export.test.ts` |
 
 ## Intentional differences
 
@@ -62,11 +68,11 @@ implementation evidence.
   runtime, expanded MCP tools and a production-shaped local backend. These are
   additive and do not redefine the frozen reference requirements.
 - Hosted accounts, tenants, billing and multi-user authorization are outside
-  both the personal/local target and this v0.8.2 parity claim.
+  both the personal/local target and this core-plus-public-delta parity claim.
 
 ## Verification summary
 
-- [verified] 207 Bun unit/integration tests; 87.12% lines and 89.26% functions
+- [verified] 211 Bun unit/integration tests; coverage threshold remains 80% or higher
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 51/51 desktop Chromium tests against the production Vite build and isolated Go data directory

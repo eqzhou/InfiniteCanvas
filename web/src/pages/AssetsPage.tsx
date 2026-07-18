@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { AssetItem } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
-import { collectStorageKeys, deleteBlob, downloadStorageKey, uploadMedia } from "@/services/storage";
+import { downloadStorageKey, uploadMedia } from "@/services/storage";
 import { filenameForMimeType } from "@/lib/download-filename";
 import { AssetEditorDialog, type AssetEditorValues } from "@/components/assets/AssetEditorDialog";
-import { collectGenerationStorageKeys } from "@/services/generation-jobs";
+import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 
 export function AssetsPage() {
   const assets = useBoardStore((s) => s.assets);
@@ -13,7 +13,7 @@ export function AssetsPage() {
   const insertAsset = useBoardStore((s) => s.insertAsset);
   const active = useBoardStore((s) => s.getActive());
   const [q, setQ] = useState("");
-  const [kind, setKind] = useState<"all" | "text" | "image">("all");
+  const [kind, setKind] = useState<"all" | AssetItem["kind"]>("all");
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<AssetItem | null>(null);
   const [creating, setCreating] = useState(false);
@@ -55,12 +55,12 @@ export function AssetsPage() {
     });
   };
 
-  const addImage = async (file: File) => {
-    const uploaded = await uploadMedia(file, "image");
+  const addMedia = async (file: File, assetKind: "image" | "video" | "audio") => {
+    const uploaded = await uploadMedia(file, assetKind === "image" ? "image" : "media");
     const t = nowIso();
     const item: AssetItem = {
       id: uid("asset"),
-      kind: "image",
+      kind: assetKind,
       title: file.name,
       coverUrl: uploaded.url,
       storageKey: uploaded.storageKey,
@@ -73,12 +73,11 @@ export function AssetsPage() {
   };
 
   const removeOrphanedBlob = async (storageKey: string | undefined, nextAssets: AssetItem[]) => {
-    if (!storageKey) return;
-    const keys = collectStorageKeys(useBoardStore.getState().projects, nextAssets);
-    for (const key of await collectGenerationStorageKeys()) keys.add(key);
-    if (!keys.has(storageKey)) {
-      await deleteBlob(storageKey.startsWith("media:") ? "media" : "image", storageKey);
-    }
+    await deleteAssetBlobIfUnreferenced(
+      storageKey,
+      useBoardStore.getState().projects,
+      nextAssets,
+    );
   };
 
   const saveAsset = async (values: AssetEditorValues) => {
@@ -99,7 +98,7 @@ export function AssetsPage() {
       return;
     }
     const replacement = values.replacement
-      ? await uploadMedia(values.replacement, "image")
+      ? await uploadMedia(values.replacement, editing.kind === "image" ? "image" : "media")
       : null;
     const latestAssets = useBoardStore.getState().assets;
     const nextAssets = latestAssets.map((asset) =>
@@ -141,6 +140,8 @@ export function AssetsPage() {
           <option value="all">全部</option>
           <option value="text">文本</option>
           <option value="image">图片</option>
+          <option value="video">视频</option>
+          <option value="audio">音频</option>
         </select>
         <button
           type="button"
@@ -157,7 +158,33 @@ export function AssetsPage() {
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) void addImage(f);
+              if (f) void addMedia(f, "image");
+              e.currentTarget.value = "";
+            }}
+          />
+        </label>
+        <label className="cursor-pointer rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm">
+          上传视频
+          <input
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void addMedia(file, "video");
+              e.currentTarget.value = "";
+            }}
+          />
+        </label>
+        <label className="cursor-pointer rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm">
+          上传音频
+          <input
+            type="file"
+            accept="audio/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void addMedia(file, "audio");
               e.currentTarget.value = "";
             }}
           />
@@ -176,6 +203,20 @@ export function AssetsPage() {
                 alt={a.title}
                 className="mb-2 h-40 w-full rounded object-cover"
               />
+            ) : null}
+            {a.kind === "video" && a.coverUrl ? (
+              <video
+                src={a.coverUrl}
+                aria-label={a.title}
+                muted
+                preload="metadata"
+                className="mb-2 h-40 w-full rounded bg-black object-contain"
+              />
+            ) : null}
+            {a.kind === "audio" && a.coverUrl ? (
+              <div className="mb-2 grid h-24 place-items-center rounded bg-[var(--ob-canvas)] px-3">
+                <audio src={a.coverUrl} aria-label={a.title} controls preload="none" className="w-full" />
+              </div>
             ) : null}
             <h3 className="font-medium">{a.title}</h3>
             {a.source ? <p className="truncate text-xs text-[var(--ob-muted)]">{a.source}</p> : null}
@@ -209,14 +250,14 @@ export function AssetsPage() {
                   复制
                 </button>
               ) : null}
-              {a.kind === "image" && a.storageKey ? (
+              {a.kind !== "text" && a.storageKey ? (
                 <button
                   type="button"
                   className="rounded border border-[var(--ob-line)] px-2 py-1"
                   onClick={() =>
                     void downloadStorageKey(
                       a.storageKey!,
-                      filenameForMimeType(a.title || a.id, a.mimeType, "png"),
+                      filenameForMimeType(a.title || a.id, a.mimeType, a.kind === "image" ? "png" : a.kind === "video" ? "mp4" : "mp3"),
                     )
                   }
                 >

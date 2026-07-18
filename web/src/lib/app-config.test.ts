@@ -18,4 +18,27 @@ describe("application configuration", () => {
       .toBe("Keep the edit natural.\n\nreplace the sky");
     expect(applySystemPrompt("", "replace the sky")).toBe("replace the sky");
   });
+
+  test("bounds persisted canvas panel preferences", () => {
+    const base = createDefaultConfig();
+    expect(normalizeAppConfig({
+      ...base,
+      canvasPanelWidth: 900,
+      canvasPanelCollapsed: true,
+      canvasPanelTab: "assets",
+    })).toMatchObject({
+      canvasPanelWidth: 420,
+      canvasPanelCollapsed: true,
+      canvasPanelTab: "assets",
+    });
+    expect(normalizeAppConfig({
+      ...base,
+      canvasPanelWidth: 10,
+      canvasPanelTab: "invalid" as "projects",
+    })).toMatchObject({
+      canvasPanelWidth: 220,
+      canvasPanelCollapsed: false,
+      canvasPanelTab: "projects",
+    });
+  });
 });

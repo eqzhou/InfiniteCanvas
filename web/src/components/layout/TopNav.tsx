@@ -2,6 +2,7 @@ import { useBoardStore } from "@/stores/use-board-store";
 import { Link, useLocation } from "react-router-dom";
 import {
   Bookmark,
+  Archive,
   Bot,
   HelpCircle,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { exportProjectBundle } from "@/lib/project-bundle";
 
 export function TopNav({
   onOpenSettings,
@@ -29,6 +31,8 @@ export function TopNav({
   const setShowShortcuts = useBoardStore((s) => s.setShowShortcuts);
   const showLocalAgent = useBoardStore((s) => s.showLocalAgent);
   const setShowLocalAgent = useBoardStore((s) => s.setShowLocalAgent);
+  const activeProject = useBoardStore((s) =>
+    s.projects.find((project) => project.id === s.activeProjectId) ?? null);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -74,6 +78,29 @@ export function TopNav({
         })}
       </nav>
       <div className="ml-auto flex items-center gap-1">
+        {location.pathname === "/" ? (
+          <button
+            type="button"
+            className="rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] disabled:opacity-40 sm:p-2"
+            title="导出当前画布包"
+            disabled={!activeProject}
+            onClick={() => {
+              if (!activeProject) return;
+              void exportProjectBundle(activeProject)
+                .then((blob) => {
+                  const url = URL.createObjectURL(blob);
+                  const anchor = document.createElement("a");
+                  anchor.href = url;
+                  anchor.download = `${activeProject.title || "openboard"}.openboard`;
+                  anchor.click();
+                  URL.revokeObjectURL(url);
+                })
+                .catch((error) => alert(error instanceof Error ? error.message : String(error)));
+            }}
+          >
+            <Archive size={18} />
+          </button>
+        ) : null}
         <button
           type="button"
           className="rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] sm:p-2"

@@ -165,7 +165,7 @@ export type ProjectSummary = {
 
 export type AssetItem = {
   id: string;
-  kind: "text" | "image";
+  kind: "text" | "image" | "video" | "audio";
   title: string;
   tags: string[];
   notes?: string;
@@ -238,6 +238,9 @@ export type AppConfig = {
   disabledPluginIds?: string[];
   pluginRegistryUrl?: string;
   localAgentUrl?: string;
+  canvasPanelWidth?: number;
+  canvasPanelCollapsed?: boolean;
+  canvasPanelTab?: "projects" | "elements" | "assets";
 };
 
 export type ClipboardPayload = {

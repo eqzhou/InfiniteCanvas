@@ -85,7 +85,7 @@ export function BoardNodeView({
       data-node-id={node.id}
       data-node-type={node.type}
       className={cn(
-        "absolute flex flex-col overflow-visible rounded-lg border shadow-[var(--ob-shadow)]",
+        "group/node absolute flex flex-col overflow-visible rounded-lg border shadow-[var(--ob-shadow)]",
         node.type === "group"
           ? groupHighlighted
             ? "border-solid border-[var(--ob-accent)] bg-[color-mix(in_srgb,var(--ob-accent)_18%,transparent)] ring-2 ring-[color-mix(in_srgb,var(--ob-accent)_35%,transparent)]"
@@ -116,7 +116,11 @@ export function BoardNodeView({
       }}
     >
       <div
-        className="absolute bottom-full left-0 mb-1 max-w-full text-xs font-medium text-[var(--ob-text)]"
+        data-node-title
+        className={cn(
+          "absolute bottom-full left-0 mb-1 max-w-full text-xs font-medium text-[var(--ob-ink)] transition-opacity duration-150",
+          selected || editingTitle ? "opacity-100" : "opacity-0 group-hover/node:opacity-100",
+        )}
         onPointerDown={(event) => event.stopPropagation()}
         onDoubleClick={(event) => {
           event.stopPropagation();

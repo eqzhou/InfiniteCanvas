@@ -570,7 +570,7 @@ export function BoardCanvas() {
       : null;
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden">
       <CanvasToolbar
         onAdd={(type) => {
           const center = screenToWorld(

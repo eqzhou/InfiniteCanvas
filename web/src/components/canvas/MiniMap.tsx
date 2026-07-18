@@ -35,8 +35,9 @@ export function MiniMap({
     };
   }, [nodes]);
 
-  const mw = 180;
-  const mh = 120;
+  const compact = width < 640;
+  const mw = compact ? 128 : 180;
+  const mh = compact ? 88 : 120;
   const bw = bounds.maxX - bounds.minX;
   const bh = bounds.maxY - bounds.minY;
   const scale = Math.min(mw / bw, mh / bh);
@@ -52,7 +53,7 @@ export function MiniMap({
     <button
       type="button"
       aria-label="画布小地图"
-      className="absolute bottom-4 right-4 overflow-hidden rounded-lg border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)]"
+      className="absolute bottom-3 right-3 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:bottom-4 sm:right-4 sm:rounded-lg"
       style={{ width: mw, height: mh }}
       onClick={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();

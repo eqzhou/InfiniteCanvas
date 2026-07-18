@@ -54,6 +54,9 @@ export function createDefaultConfig(): AppConfig {
     plugins: [],
     disabledPluginIds: [],
     localAgentUrl: "http://127.0.0.1:8790",
+    canvasPanelWidth: 256,
+    canvasPanelCollapsed: false,
+    canvasPanelTab: "projects",
   };
 }
 

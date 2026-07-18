@@ -160,4 +160,53 @@ describe("workspace media bundle", () => {
     expect(target.removed).toEqual(["image:restored-1"]);
     expect(target.blobs.size).toBe(0);
   });
+
+  test("round trips video and audio assets through protected media storage", async () => {
+    const sourceSnapshot = snapshot();
+    const timestamp = "2026-07-18T00:00:00.000Z";
+    sourceSnapshot.assets = [
+      ...sourceSnapshot.assets,
+      {
+        id: "asset-video",
+        kind: "video",
+        title: "Demo video",
+        tags: [],
+        storageKey: "media:video",
+        coverUrl: "/api/blobs/media%3Avideo",
+        mimeType: "video/mp4",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: "asset-audio",
+        kind: "audio",
+        title: "Demo audio",
+        tags: [],
+        storageKey: "media:audio",
+        coverUrl: "/api/blobs/media%3Aaudio",
+        mimeType: "audio/mpeg",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ];
+    const source = fakeStorage({
+      "image:shared": new Blob(["image-bytes"], { type: "image/png" }),
+      "media:video": new Blob(["video-bytes"], { type: "video/mp4" }),
+      "media:audio": new Blob(["audio-bytes"], { type: "audio/mpeg" }),
+    });
+
+    const archive = await exportWorkspaceBundle(sourceSnapshot, source.storage);
+    const target = fakeStorage();
+    const restored = await importWorkspaceBundle(archive, createDefaultConfig(), target.storage);
+    const video = restored.assets.find((asset) => asset.id === "asset-video");
+    const audio = restored.assets.find((asset) => asset.id === "asset-audio");
+
+    expect(target.stores()).toBe(3);
+    expect(video).toMatchObject({ kind: "video", mimeType: "video/mp4" });
+    expect(audio).toMatchObject({ kind: "audio", mimeType: "audio/mpeg" });
+    expect(video?.storageKey).toStartWith("media:");
+    expect(audio?.storageKey).toStartWith("media:");
+    expect(target.blobs.get(video!.storageKey!)).toEqual(new Blob(["video-bytes"], { type: "video/mp4" }));
+    expect(target.blobs.get(audio!.storageKey!)).toEqual(new Blob(["audio-bytes"], { type: "audio/mpeg" }));
+  });
 });

@@ -7,8 +7,21 @@ import {
   mergePromptSourceItems,
 } from "@/services/prompt-sources";
 import { PromptDetailDialog } from "@/components/prompts/PromptDetailDialog";
-import { Eye, RefreshCw, Trash2 } from "lucide-react";
+import {
+  Copy,
+  Eye,
+  FilePlus2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  SendToBack,
+  Trash2,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import {
+  PromptEditorDialog,
+  type PromptEditorValues,
+} from "@/components/prompts/PromptEditorDialog";
 
 const BUILTIN: PromptItem[] = [
   {
@@ -57,6 +70,8 @@ export function PromptsPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<PromptItem | null>(null);
+  const [editingPrompt, setEditingPrompt] = useState<PromptItem | null>(null);
+  const [editorMode, setEditorMode] = useState<"create" | "edit" | null>(null);
 
   // Keep a fresh deployment empty. Built-in examples are opt-in via the
   // explicit restore action below, so demo content never appears silently.
@@ -177,10 +192,54 @@ export function PromptsPage() {
     });
   };
 
+  const savePrompt = (values: PromptEditorValues) => {
+    const latest = useBoardStore.getState().prompts;
+    if (editorMode === "edit" && editingPrompt) {
+      setPrompts(latest.map((prompt) =>
+        prompt.id === editingPrompt.id
+          ? { ...prompt, title: values.title, body: values.body, tags: [...values.tags] }
+          : prompt,
+      ));
+    } else {
+      setPrompts([
+        {
+          id: uid("prompt"),
+          title: values.title,
+          body: values.body,
+          tags: [...values.tags],
+          source: "local",
+        },
+        ...latest,
+      ]);
+    }
+    setEditingPrompt(null);
+    setEditorMode(null);
+  };
+
+  const openLocalCopy = (prompt: PromptItem) => {
+    setEditingPrompt({ ...prompt, id: "", source: "local", tags: [...prompt.tags] });
+    setEditorMode("create");
+  };
+
+  const usePrompt = (prompt: PromptItem) => {
+    insertPrompt(prompt);
+    navigate("/");
+  };
+
   return (
     <div className="mx-auto h-full max-w-6xl overflow-auto p-4 sm:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-semibold">提示词库</h1>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white"
+          onClick={() => {
+            setEditingPrompt(null);
+            setEditorMode("create");
+          }}
+        >
+          <Plus size={15} /> 新建提示词
+        </button>
         <input
           className="w-full rounded-md border border-[var(--ob-line)] bg-transparent px-3 py-1.5 text-sm sm:ml-auto sm:w-auto"
           placeholder="搜索标题/标签…"
@@ -212,7 +271,10 @@ export function PromptsPage() {
         <button
           type="button"
           className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
-          onClick={() => setPrompts(BUILTIN)}
+          onClick={() => {
+            const current = useBoardStore.getState().prompts.filter((prompt) => prompt.source !== "builtin");
+            setPrompts([...BUILTIN.map((prompt) => ({ ...prompt, tags: [...prompt.tags] })), ...current]);
+          }}
         >
           恢复内置
         </button>
@@ -277,13 +339,13 @@ export function PromptsPage() {
         {filtered.map((p) => (
           <article
             key={p.id}
-            className="rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4"
+            className="flex min-h-52 flex-col rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 transition-colors hover:border-[var(--ob-accent)]"
           >
             <div className="mb-1 flex items-center gap-2">
               <h3 className="font-medium">{p.title}</h3>
               <span className="text-xs text-[var(--ob-muted)]">{p.source}</span>
             </div>
-            <p className="text-sm text-[var(--ob-muted)]">{p.body}</p>
+            <p className="line-clamp-4 flex-1 whitespace-pre-wrap text-sm leading-relaxed text-[var(--ob-muted)]">{p.body}</p>
             <div className="mt-2 flex flex-wrap gap-1">
               {p.tags.map((t) => (
                 <span
@@ -294,28 +356,73 @@ export function PromptsPage() {
                 </span>
               ))}
             </div>
-            <div className="mt-3 flex gap-2 text-sm">
+            <div className="mt-3 flex flex-wrap gap-1.5 text-sm">
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded border border-[var(--ob-line)] px-2 py-1"
+                className="inline-flex items-center gap-1 rounded-md bg-[var(--ob-accent)] px-2 py-1 text-white"
+                onClick={() => usePrompt(p)}
+              >
+                <SendToBack size={14} /> 插入画布
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1"
                 onClick={() => setSelectedPrompt(p)}
               >
                 <Eye size={14} /> 详情
               </button>
               <button
                 type="button"
-                className="rounded border border-[var(--ob-line)] px-2 py-1"
+                title="复制提示词"
+                aria-label="复制提示词"
+                className="grid h-8 w-8 place-items-center rounded-md border border-[var(--ob-line)]"
                 onClick={() => void navigator.clipboard.writeText(p.body)}
               >
-                复制
+                <Copy size={14} />
               </button>
               <button
                 type="button"
-                className="rounded border border-[var(--ob-line)] px-2 py-1"
+                title="加入素材"
+                aria-label="加入素材"
+                className="grid h-8 w-8 place-items-center rounded-md border border-[var(--ob-line)]"
                 onClick={() => addPromptAsset(p)}
               >
-                加入素材
+                <FilePlus2 size={14} />
               </button>
+              {p.source === "local" ? (
+                <>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1"
+                    onClick={() => {
+                      setEditingPrompt(p);
+                      setEditorMode("edit");
+                    }}
+                  >
+                    <Pencil size={14} /> 编辑
+                  </button>
+                  <button
+                    type="button"
+                    className="grid h-8 w-8 place-items-center rounded-md text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)]"
+                    title="删除"
+                    aria-label="删除"
+                    onClick={() => {
+                      if (!window.confirm(`删除提示词“${p.title}”？`)) return;
+                      setPrompts(useBoardStore.getState().prompts.filter((prompt) => prompt.id !== p.id));
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1"
+                  onClick={() => openLocalCopy(p)}
+                >
+                  <FilePlus2 size={14} /> 另存为
+                </button>
+              )}
             </div>
           </article>
         ))}
@@ -341,6 +448,16 @@ export function PromptsPage() {
           setSelectedPrompt(null);
           navigate("/");
         }}
+      />
+      <PromptEditorDialog
+        open={editorMode !== null}
+        mode={editorMode === "edit" ? "edit" : "create"}
+        prompt={editingPrompt}
+        onClose={() => {
+          setEditingPrompt(null);
+          setEditorMode(null);
+        }}
+        onSave={savePrompt}
       />
     </div>
   );

@@ -1,5 +1,19 @@
 import type { PluginManifest, Point } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import {
+  ClipboardPaste,
+  CopyPlus,
+  Film,
+  Focus,
+  FolderMinus,
+  FolderPlus,
+  ImagePlus,
+  Music2,
+  Puzzle,
+  Settings2,
+  Trash2,
+  Type,
+} from "lucide-react";
 
 export type ContextMenuState = {
   screen: Point;
@@ -42,12 +56,13 @@ export function ContextMenu({
 }) {
   useEscapeDismiss(Boolean(state), onClose, 80);
   if (!state) return null;
-  type Item = { label: string; action?: () => void; disabled?: boolean };
+  type MenuIcon = typeof Type;
+  type Item = { label: string; action?: () => void; disabled?: boolean; icon?: MenuIcon };
   const items: Item[] = state.nodeId
     ? [
-        { label: "复制/粘贴副本", action: onDuplicate },
-        { label: "删除", action: onDelete },
-        { label: "适应视图", action: onBring },
+        { label: "创建副本", action: onDuplicate, icon: CopyPlus },
+        { label: "删除", action: onDelete, icon: Trash2 },
+        { label: "适应视图", action: onBring, icon: Focus },
         ...(multi
           ? [
               { label: "左对齐", action: () => onAlign?.("left") },
@@ -62,42 +77,61 @@ export function ContextMenu({
           : []),
       ]
     : [
-        { label: "粘贴", action: () => onPaste(state.world) },
-        { label: "新建文本", action: () => onAdd("text", state.world) },
-        { label: "新建图片", action: () => onAdd("image", state.world) },
-        { label: "新建配置", action: () => onAdd("config", state.world) },
-        { label: "新建视频", action: () => onAdd("video", state.world) },
-        { label: "新建音频", action: () => onAdd("audio", state.world) },
+        { label: "粘贴", action: () => onPaste(state.world), icon: ClipboardPaste },
+        { label: "新建文本", action: () => onAdd("text", state.world), icon: Type },
+        { label: "新建图片", action: () => onAdd("image", state.world), icon: ImagePlus },
+        { label: "新建配置", action: () => onAdd("config", state.world), icon: Settings2 },
+        { label: "新建视频", action: () => onAdd("video", state.world), icon: Film },
+        { label: "新建音频", action: () => onAdd("audio", state.world), icon: Music2 },
         ...plugins.map((plugin) => ({
           label: `插件 · ${plugin.name}`,
           action: () => onAdd("plugin", state.world, plugin.id),
+          icon: Puzzle,
         })),
       ];
-  if (state.nodeId && canGroup) items.unshift({ label: "组合", action: onGroup });
-  if (state.nodeId && canUngroup) items.unshift({ label: "取消组合", action: onUngroup });
+  if (state.nodeId && canGroup) items.unshift({ label: "组合", action: onGroup, icon: FolderPlus });
+  if (state.nodeId && canUngroup) items.unshift({ label: "取消组合", action: onUngroup, icon: FolderMinus });
+
+  const menuWidth = 208;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const left = Math.max(8, Math.min(state.screen.x, viewportWidth - menuWidth - 8));
+  const opensUpward = state.screen.y > viewportHeight / 2;
 
   return (
     <>
       <div className="fixed inset-0 z-[70]" onPointerDown={onClose} />
       <div
-        className="fixed z-[80] min-w-40 overflow-hidden rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] py-1 shadow-[var(--ob-shadow)]"
-        style={{ left: state.screen.x, top: state.screen.y }}
+        role="menu"
+        aria-label={state.nodeId ? "节点菜单" : "画布菜单"}
+        className="fixed z-[80] w-52 overflow-y-auto rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
+        style={{
+          left,
+          top: Math.max(8, Math.min(state.screen.y, viewportHeight - 8)),
+          maxHeight: Math.max(120, viewportHeight - 16),
+          transform: opensUpward ? "translateY(-100%)" : undefined,
+        }}
         onPointerDown={(event) => event.stopPropagation()}
       >
-        {items.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
-            disabled={item.disabled}
-            onClick={() => {
-              onClose();
-              item.action?.();
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+        {items.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className="flex min-h-9 w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+              disabled={item.disabled}
+              onClick={() => {
+                onClose();
+                item.action?.();
+              }}
+            >
+              {Icon ? <Icon size={15} className="shrink-0 text-[var(--ob-muted)]" /> : <span className="w-[15px]" />}
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
       </div>
     </>
   );

@@ -11,27 +11,35 @@ export function ZoomControls({
   onReset: () => void;
 }) {
   return (
-    <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-1.5 shadow-[var(--ob-shadow)]">
+    <div
+      role="group"
+      aria-label="缩放控制"
+      className="absolute bottom-3 left-3 flex items-center gap-1 rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_94%,transparent)] px-1.5 py-1 shadow-[var(--ob-shadow)] sm:bottom-4 sm:left-4 sm:gap-2 sm:rounded-lg sm:px-2 sm:py-1.5"
+    >
       <button
         type="button"
         className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+        aria-label="缩小"
         onClick={() => onChange(clamp(k / 1.1, 0.15, 3))}
       >
         <Minus size={16} />
       </button>
       <input
+        aria-label="缩放比例"
+        className="hidden w-28 sm:block"
         type="range"
         min={15}
         max={300}
         value={Math.round(k * 100)}
         onChange={(e) => onChange(Number(e.target.value) / 100)}
       />
-      <span className="w-12 text-center text-xs tabular-nums">
+      <span className="w-10 text-center text-xs tabular-nums sm:w-12">
         {Math.round(k * 100)}%
       </span>
       <button
         type="button"
         className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+        aria-label="放大"
         onClick={() => onChange(clamp(k * 1.1, 0.15, 3))}
       >
         <Plus size={16} />

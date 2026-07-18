@@ -53,9 +53,14 @@ test("projects support create, rename, JSON export/import, and batch delete", as
   await latestTitle.fill("可导出项目");
 
   const downloadPromise = page.waitForEvent("download");
-  await page.getByTitle("导出当前").click();
+  await page.getByTitle("导出当前", { exact: true }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("可导出项目.json");
+
+  const archiveDownloadPromise = page.waitForEvent("download");
+  await page.getByTitle("导出当前画布包").click();
+  const archiveDownload = await archiveDownloadPromise;
+  expect(archiveDownload.suggestedFilename()).toBe("可导出项目.openboard");
 
   const now = "2026-07-18T00:00:00.000Z";
   await page.locator('input[type="file"][accept^=".json"]').setInputFiles({
@@ -85,6 +90,57 @@ test("projects support create, rename, JSON export/import, and batch delete", as
   await expect(page.locator('input[value="可导出项目"]')).toHaveCount(0);
   await expect(page.locator('input[value="我的第一个画布"]')).toBeVisible();
   await expect(page.locator('input[value="外部项目 (导入)"]')).toBeVisible();
+});
+
+test("desktop project panel resizes, collapses, and persists its width", async ({ page }) => {
+  await openFreshBoard(page);
+  const panel = page.getByRole("complementary", { name: "项目侧栏" });
+  const resizeHandle = page.getByRole("separator", { name: "调整项目侧栏宽度" });
+  const before = await panel.boundingBox();
+  const handle = await resizeHandle.boundingBox();
+  expect(before).not.toBeNull();
+  expect(handle).not.toBeNull();
+
+  await resizeHandle.hover({ position: { x: 2, y: 80 } });
+  await page.mouse.down();
+  await page.mouse.move(handle!.x + 86, handle!.y + 80, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThan(before!.width + 60);
+  const resizedWidth = (await panel.boundingBox())!.width;
+
+  await panel.getByTitle("收起侧栏").click();
+  await expect(panel).toBeHidden();
+  await page.getByTitle("展开侧栏").click();
+  await expect(panel).toBeVisible();
+  expect((await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
+
+  await page.reload();
+  await expect(panel).toBeVisible();
+  expect((await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
+});
+
+test("canvas element panel selects, locates, and batch exports nodes", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByTitle("文本", { exact: true }).click();
+  await page.getByTitle("配置", { exact: true }).click();
+
+  const panel = page.getByRole("complementary", { name: "项目侧栏" });
+  await panel.getByRole("tab", { name: "元素" }).click();
+  const elements = panel.getByRole("list", { name: "画布元素" });
+  await expect(elements.getByRole("listitem")).toHaveCount(2);
+  await panel.getByRole("button", { name: "全选元素" }).click();
+  await expect(page.locator('[data-node-type="text"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
+  await expect(page.locator('[data-node-type="config"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
+
+  const downloadPromise = page.waitForEvent("download");
+  await panel.getByRole("button", { name: "导出所选元素" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/画布元素-2\.zip$/);
+
+  await elements.getByRole("button", { name: "定位文本" }).click();
+  await expect(page.locator('[data-node-type="text"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
+  await page.reload();
+  await expect(panel.getByRole("tab", { name: "元素", selected: true })).toBeVisible();
 });
 
 test("canvas editing preserves copied edges, history, view controls, and appearance", async ({ page }) => {
@@ -244,8 +300,8 @@ test("blank canvas double-click opens the node chooser at the pointer", async ({
       y: Math.min(300, surfaceBox!.height / 2),
     },
   });
-  await expect(page.getByRole("button", { name: "新建文本" })).toBeVisible();
-  await page.getByRole("button", { name: "新建音频" }).click();
+  await expect(page.getByRole("menuitem", { name: "新建文本" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "新建音频" }).click();
   await expect(page.locator('[data-node-type="audio"]')).toHaveCount(1);
 });
 
@@ -324,10 +380,10 @@ test("Escape dismisses only the topmost canvas overlay", async ({ page }) => {
     clientX: 500,
     clientY: 300,
   });
-  await expect(page.getByRole("button", { name: "新建文本" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "新建文本" })).toBeVisible();
 
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "新建文本" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "新建文本" })).toHaveCount(0);
   await expect(page.getByText("本地 Agent", { exact: true })).toBeVisible();
 
   await page.keyboard.press("Escape");
@@ -592,7 +648,7 @@ test("config input reorder changes Ark reference order", async ({ page }) => {
   await page.getByLabel("视频协议").selectOption("ark");
   await page.getByLabel("视频 URL").fill("https://order.example/api/plan/v3");
   await page.getByLabel("视频 API Key").fill("order-test-key");
-  await page.getByLabel("视频模型").fill("seedance-1-0-pro-250528");
+  await page.getByLabel("视频模型", { exact: true }).fill("seedance-1-0-pro-250528");
   await closeSettings(page);
 
   const now = "2026-07-18T00:00:00.000Z";
@@ -681,6 +737,56 @@ test("node title, font size, and model overrides are editable and persistent", a
   await expect(page.getByLabel("文本节点模型")).toHaveValue("local-text-model");
 });
 
+test("node titles appear only while hovered, selected, or edited", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByTitle("文本", { exact: true }).click();
+  const node = page.locator('[data-node-type="text"]');
+  const title = node.locator("[data-node-title]");
+  await expect(title).toHaveCSS("opacity", "1");
+
+  await page.getByTestId("canvas-surface").click({ position: { x: 24, y: 24 } });
+  await expect(title).toHaveCSS("opacity", "0");
+  await node.hover();
+  await expect(title).toHaveCSS("opacity", "1");
+  await node.click();
+  await expect(title).toHaveCSS("opacity", "1");
+});
+
+test("settings keeps provider configuration structured without responsive overflow", async ({ page }) => {
+  for (const viewport of [
+    { width: 1380, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await openFreshBoard(page);
+    await page.getByTitle("设置").click();
+
+    const dialog = page.getByRole("dialog", { name: "设置" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("[data-provider-kind]")).toHaveCount(4);
+    await expect(dialog.getByLabel("文本 URL")).toBeVisible();
+    await expect(dialog.getByLabel("生图 API Key")).toBeVisible();
+
+    const dimensions = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(dimensions.left).toBeGreaterThanOrEqual(0);
+    expect(dimensions.right).toBeLessThanOrEqual(dimensions.viewportWidth);
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+
+    await dialog.getByLabel("WebDAV URL").scrollIntoViewIfNeeded();
+    await expect(dialog.getByRole("button", { name: "关闭" })).toBeVisible();
+    await closeSettings(page);
+  }
+});
+
 test("text-to-image creates a connected config and executes immediately", async ({ page }) => {
   let requestBody: Record<string, unknown> | null = null;
   await page.route("https://mock.example/v1/images/generations", async (route) => {
@@ -696,10 +802,10 @@ test("text-to-image creates a connected config and executes immediately", async 
   });
   await openFreshBoard(page);
   await page.getByTitle("设置").click();
-  const settings = page.getByRole("heading", { name: "设置" }).locator("..").locator("..");
+  const settings = page.getByRole("dialog", { name: "设置" });
   await settings.getByLabel("生图 URL").fill("https://mock.example/v1");
   await settings.getByLabel("生图 API Key").fill("test-only-key");
-  await settings.getByLabel("生图模型").fill("mock-image-model");
+  await settings.getByLabel("生图模型", { exact: true }).fill("mock-image-model");
   await settings.getByLabel("默认数量").fill("2");
   await settings.getByLabel("全局系统提示词").fill("Use a crisp editorial style.");
   await closeSettings(page);
@@ -770,7 +876,7 @@ test("failed text-to-image keeps its config and can retry successfully", async (
   await page.getByTitle("设置").click();
   await page.getByLabel("生图 URL").fill("https://retry-flow.example/v1");
   await page.getByLabel("生图 API Key").fill("retry-flow-test-key");
-  await page.getByLabel("生图模型").fill("retry-flow-image");
+  await page.getByLabel("生图模型", { exact: true }).fill("retry-flow-image");
   await closeSettings(page);
 
   await page.getByTitle("文本").click();
@@ -815,10 +921,10 @@ test("a configuration node generates the requested text batch", async ({ page })
   await page.getByTitle("设置").click();
   await page.getByLabel("文本 URL").fill("https://batch.example/v1");
   await page.getByLabel("文本 API Key").fill("batch-test-key");
-  await page.getByLabel("文本模型").fill("batch-text-model");
+  await page.getByLabel("文本模型", { exact: true }).fill("batch-text-model");
   await page.getByLabel("生图 URL").fill("https://batch.example/v1");
   await page.getByLabel("生图 API Key").fill("batch-test-key");
-  await page.getByLabel("生图模型").fill("batch-image-model");
+  await page.getByLabel("生图模型", { exact: true }).fill("batch-image-model");
   await page.getByLabel("默认数量").fill("1");
   await page.getByLabel("全局系统提示词").fill("Return one concise alternative.");
   await closeSettings(page);
@@ -857,7 +963,7 @@ test("image workbench persists history and inserts a result into the canvas", as
   await page.getByTitle("设置").click();
   await page.getByLabel("生图 URL").fill("https://workbench.example/v1");
   await page.getByLabel("生图 API Key").fill("workbench-test-key");
-  await page.getByLabel("生图模型").fill("workbench-image");
+  await page.getByLabel("生图模型", { exact: true }).fill("workbench-image");
   await closeSettings(page);
 
   await page.goto("/workbench/image");
@@ -898,7 +1004,7 @@ test("image workbench records cancellation and retries the cancelled job", async
   await page.getByTitle("设置").click();
   await page.getByLabel("生图 URL").fill("https://cancel.example/v1");
   await page.getByLabel("生图 API Key").fill("cancel-test-key");
-  await page.getByLabel("生图模型").fill("cancel-image");
+  await page.getByLabel("生图模型", { exact: true }).fill("cancel-image");
   await closeSettings(page);
 
   await page.goto("/workbench/image");
@@ -928,7 +1034,7 @@ test("image workbench refuses retry when a recorded reference is missing", async
   await page.getByTitle("设置").click();
   await page.getByLabel("生图 URL").fill("https://missing-reference.example/v1");
   await page.getByLabel("生图 API Key").fill("missing-reference-test-key");
-  await page.getByLabel("生图模型").fill("missing-reference-image");
+  await page.getByLabel("生图模型", { exact: true }).fill("missing-reference-image");
   await closeSettings(page);
 
   await page.goto("/workbench/image");
@@ -1004,7 +1110,7 @@ test("video workbench persists Ark audio and watermark settings across retry", a
   await page.getByLabel("视频协议").selectOption("ark");
   await page.getByLabel("视频 URL").fill("https://workbench-video.example/api/plan/v3");
   await page.getByLabel("视频 API Key").fill("workbench-video-key");
-  await page.getByLabel("视频模型").fill("doubao-seedance-2.0");
+  await page.getByLabel("视频模型", { exact: true }).fill("doubao-seedance-2.0");
   await closeSettings(page);
 
   await page.goto("/workbench/video");
@@ -1443,7 +1549,7 @@ test("image reverse prompt creates a connected text node", async ({ page }) => {
   await page.getByTitle("设置").click();
   await page.getByLabel("文本 URL").fill("https://vision.example/v1");
   await page.getByLabel("文本 API Key").fill("vision-test-key");
-  await page.getByLabel("文本模型").fill("vision-model");
+  await page.getByLabel("文本模型", { exact: true }).fill("vision-model");
   await closeSettings(page);
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
     name: "vision.png",
@@ -1474,7 +1580,7 @@ test("an image node can create a connected video with itself as reference", asyn
   await page.getByTitle("设置").click();
   await page.getByLabel("视频 URL").fill("https://video.example/v1");
   await page.getByLabel("视频 API Key").fill("video-test-key");
-  await page.getByLabel("视频模型").fill("video-model");
+  await page.getByLabel("视频模型", { exact: true }).fill("video-model");
   await closeSettings(page);
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
     name: "reference.png",
@@ -1513,7 +1619,7 @@ test("node prompt media chips preserve and submit connected image references", a
   await page.getByTitle("设置").click();
   await page.getByLabel("视频 URL").fill("https://chips.example/v1");
   await page.getByLabel("视频 API Key").fill("chip-test-key");
-  await page.getByLabel("视频模型").fill("chip-video-model");
+  await page.getByLabel("视频模型", { exact: true }).fill("chip-video-model");
   await closeSettings(page);
   await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
     name: "chip-reference.png",
@@ -1658,6 +1764,45 @@ test("prompt details can insert their content into the active canvas", async ({ 
   await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
 });
 
+test("local prompts support create, reload, edit, direct canvas use, and delete", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.goto("/prompts");
+  await page.getByRole("button", { name: "新建提示词" }).click();
+
+  let editor = page.getByRole("dialog", { name: "新建提示词" });
+  await editor.getByLabel("标题").fill("本地商品主图");
+  await editor.getByLabel("提示词内容").fill("Clean product hero image on a vivid red background");
+  await editor.getByLabel("标签").fill("商品, 红色, 主图");
+  await editor.getByRole("button", { name: "保存提示词" }).click();
+
+  let card = page.locator("article").filter({ hasText: "本地商品主图" });
+  await expect(card).toContainText("Clean product hero image");
+  await page.getByRole("button", { name: "恢复内置" }).click();
+  await expect(card).toBeVisible();
+  await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
+  await page.reload();
+  card = page.locator("article").filter({ hasText: "本地商品主图" });
+  await expect(card).toBeVisible();
+
+  await card.getByRole("button", { name: "编辑" }).click();
+  editor = page.getByRole("dialog", { name: "编辑提示词" });
+  await editor.getByLabel("提示词内容").fill("Updated local product prompt");
+  await editor.getByRole("button", { name: "保存提示词" }).click();
+  await expect(card).toContainText("Updated local product prompt");
+
+  await card.getByRole("button", { name: "插入画布" }).click();
+  await expect(page).toHaveURL("/");
+  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("Updated local product prompt");
+
+  await page.goto("/prompts");
+  card = page.locator("article").filter({ hasText: "本地商品主图" });
+  page.once("dialog", (dialog) => dialog.accept());
+  await card.getByRole("button", { name: "删除" }).click();
+  await expect(card).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator("article").filter({ hasText: "本地商品主图" })).toHaveCount(0);
+});
+
 test("prompt library filters tags and manages multiple persisted remote sources", async ({ page }) => {
   const sources = ["https://prompts-one.example/catalog.json", "https://prompts-two.example/catalog.json"];
   await page.route(sources[0], async (route) => route.fulfill({
@@ -1717,6 +1862,49 @@ test("asset editor updates title, source, tags, notes, and text content", async 
   const edited = page.locator("article").filter({ hasText: "Edited asset" });
   await expect(edited).toContainText("local-test");
   await expect(edited).toContainText("Edited content");
+});
+
+test("asset library uploads, persists, previews, and inserts video media", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.goto("/assets");
+  await page.locator('input[type="file"][accept="video/*"]').setInputFiles({
+    name: "campaign-loop.mp4",
+    mimeType: "video/mp4",
+    buffer: Buffer.from("000000206674797069736F6D0000020069736F6D69736F3261766331", "hex"),
+  });
+
+  let card = page.locator("article").filter({ hasText: "campaign-loop.mp4" });
+  await expect(card.locator("video")).toBeVisible();
+  await page.reload();
+  card = page.locator("article").filter({ hasText: "campaign-loop.mp4" });
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "插入画布" }).click();
+  await page.goto("/");
+  await expect(page.locator('[data-node-type="video"]')).toHaveCount(1);
+});
+
+test("canvas asset panel inserts and deletes persisted assets", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop canvas asset panel is covered here.");
+  await openFreshBoard(page);
+  await page.goto("/assets");
+  await page.getByRole("button", { name: "新增文本" }).click();
+  const dialog = page.getByRole("dialog", { name: "新增素材" });
+  await dialog.getByLabel("标题").fill("Sidebar asset");
+  await dialog.getByLabel("内容").fill("Sidebar body");
+  await dialog.getByRole("button", { name: "保存" }).click();
+
+  await page.goto("/");
+  const panel = page.getByRole("complementary", { name: "项目侧栏" });
+  await panel.getByRole("tab", { name: "素材" }).click();
+  await panel.getByRole("button", { name: "插入素材 Sidebar asset" }).click();
+  await expect(page.locator('[data-node-type="text"]')).toHaveCount(1);
+
+  page.once("dialog", (confirmation) => confirmation.accept());
+  await panel.getByRole("button", { name: "删除素材 Sidebar asset" }).click();
+  await expect(panel.getByText("Sidebar asset", { exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(panel.getByRole("tab", { name: "素材", selected: true })).toBeVisible();
+  await expect(panel.getByText("Sidebar asset", { exact: true })).toHaveCount(0);
 });
 
 test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page, browserName }) => {
@@ -1892,10 +2080,10 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   await page.getByTitle("设置").click();
   await page.getByLabel("文本 URL").fill("https://assistant-flow.example/v1");
   await page.getByLabel("文本 API Key").fill("assistant-text-key");
-  await page.getByLabel("文本模型").fill("assistant-text-model");
+  await page.getByLabel("文本模型", { exact: true }).fill("assistant-text-model");
   await page.getByLabel("生图 URL").fill("https://assistant-flow.example/v1");
   await page.getByLabel("生图 API Key").fill("assistant-image-key");
-  await page.getByLabel("生图模型").fill("assistant-image-model");
+  await page.getByLabel("生图模型", { exact: true }).fill("assistant-image-model");
   await closeSettings(page);
 
   const assistant = page.locator("aside").filter({ hasText: "画布助手" });
@@ -2154,6 +2342,68 @@ test("mobile assistant can be opened and closed without hiding the canvas", asyn
   await page.getByTitle("关闭助手").click();
   await expect(page.getByTestId("canvas-surface")).toBeVisible();
   await expect(page.getByText("画布助手", { exact: true })).toHaveCount(0);
+});
+
+test("mobile canvas controls stay compact and do not overlap", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFreshBoard(page);
+
+  const toolbar = page.getByRole("toolbar", { name: "画布工具栏" });
+  const toolbarBox = await toolbar.boundingBox();
+  expect(toolbarBox).not.toBeNull();
+  expect(toolbarBox!.height).toBeLessThanOrEqual(60);
+
+  const zoom = page.getByRole("group", { name: "缩放控制" });
+  const minimap = page.getByLabel("画布小地图");
+  await expect(zoom).toBeVisible();
+  await expect(minimap).toBeVisible();
+  const zoomBox = await zoom.boundingBox();
+  const minimapBox = await minimap.boundingBox();
+  expect(zoomBox).not.toBeNull();
+  expect(minimapBox).not.toBeNull();
+  const overlaps = !(
+    zoomBox!.x + zoomBox!.width <= minimapBox!.x ||
+    minimapBox!.x + minimapBox!.width <= zoomBox!.x ||
+    zoomBox!.y + zoomBox!.height <= minimapBox!.y ||
+    minimapBox!.y + minimapBox!.height <= zoomBox!.y
+  );
+  expect(overlaps).toBe(false);
+});
+
+test("desktop canvas toolbar exposes every core action without scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openFreshBoard(page);
+  const toolbar = page.getByRole("toolbar", { name: "画布工具栏" });
+  const dimensions = await toolbar.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+  for (const name of ["文本", "音频", "导入图片", "撤销", "背景", "小地图", "素材", "适应"]) {
+    await expect(toolbar.getByTitle(name, { exact: true })).toBeVisible();
+  }
+});
+
+test("canvas context menu remains inside the viewport at the lower-right edge", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFreshBoard(page);
+  const surface = page.getByTestId("canvas-surface");
+  const surfaceBox = await surface.boundingBox();
+  expect(surfaceBox).not.toBeNull();
+  await page.mouse.click(
+    surfaceBox!.x + surfaceBox!.width - 4,
+    surfaceBox!.y + surfaceBox!.height - 4,
+    { button: "right" },
+  );
+
+  const menu = page.getByRole("menu", { name: "画布菜单" });
+  await expect(menu).toBeVisible();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(8);
+  expect(menuBox!.y).toBeGreaterThanOrEqual(8);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(382);
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(836);
 });
 
 for (const viewport of [

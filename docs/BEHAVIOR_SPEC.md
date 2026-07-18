@@ -6,12 +6,13 @@ fixtures, and implementation structure.
 
 ## Frozen baseline
 
-The current engineering baseline is `basketikun/infinite-canvas v0.8.2`
+The frozen core engineering baseline is `basketikun/infinite-canvas v0.8.2`
 (`0c4288b8325c95a8bdca76e93737d07ffbc55f7e`) as
 described by public documentation and recorded black-box behavior available on
-2026-07-16. Later upstream changes are out of scope until a new baseline is
-explicitly adopted. The implementation team did not use upstream source, CSS,
-plugins, fixtures, screenshots, or assets as implementation input.
+2026-07-16. The public `v0.9.0` release delta published on 2026-07-17 was
+adopted on 2026-07-18 as an additive interface target. Unlisted later upstream
+changes remain out of scope. The implementation team did not use upstream
+source, CSS, plugins, fixtures, screenshots, or assets as implementation input.
 
 | Date | Surface | Public/observed input | Required observable result | Confidence |
 |---|---|---|---|---|
@@ -48,13 +49,17 @@ plugins, fixtures, screenshots, or assets as implementation input.
 | 2026-07-18 | Legacy save and workbench cancellation | Import v1 then reload; cancel a running workbench request then retry | The project persists as v2 without loss; the cancelled job remains in history and retry creates a successful job | high |
 | 2026-07-18 | Global system prompt | Configure a global instruction, then generate or edit text/images | Every text request receives a system instruction and every image prompt receives the instruction before the user prompt | high |
 | 2026-07-18 | Workbench media lifecycle | Retry a job after reference loss; insert a result then delete its history | Missing references block the request; shared board/job media survives history deletion; unowned references and results are reclaimed | high |
+| 2026-07-18 | v0.9 workspace navigation | Resize/collapse the canvas side panel, switch project/element/asset views, select and locate elements | Panel state persists; multi-selection mirrors the canvas; viewport movement is animated and bounded | high |
+| 2026-07-18 | v0.9 asset workflow | Upload and preview image/video/audio assets, insert or delete them from the canvas panel | Media persists through the formal storage API; deletion reclaims only unreferenced protected blobs | high |
+| 2026-07-18 | v0.9 prompt and node presentation | Manage local prompts and inspect a canvas node without selecting it | Local prompts create/edit/copy/insert/delete without replacing remote entries; node titles appear on hover/select/edit | high |
+| 2026-07-18 | v0.9 export workflow | Select multiple elements or export the active canvas archive from the top bar | Selected elements download as a bounded ZIP; the active project downloads as a media-complete `.openboard` archive | high |
 
 ## Evidence
 
 - Automated evidence is in `web/src/**/*.test.ts`, `web/e2e/canvas.spec.ts`,
   `server/**/**_test.go`, and CI workflow definitions.
 - The feature-to-evidence matrix is maintained in `docs/FEATURE_PARITY.md` and
-  is frozen to the v0.8.2 scope above.
+  covers the v0.8.2 core and the explicitly listed v0.9.0 public delta above.
 - Public protocol evidence includes OpenAI-compatible HTTP conventions, MCP
   transport conventions, JSON-RPC, and browser pointer events.
 - Exact reference-project behavior remains an interoperability target, not a
@@ -71,6 +76,7 @@ plugins, fixtures, screenshots, or assets as implementation input.
 | https://github.com/basketikun/infinite-canvas/blob/v0.8.2/docs/content/docs/canvas/canvas-shortcuts.mdx | 2026-07-18 | Public shortcut behavior; blob `12865173d4e0f190b03d2694de42fb834d0c303a` |
 | https://github.com/basketikun/infinite-canvas/blob/v0.8.2/docs/content/docs/progress/todo.mdx | 2026-07-18 | Publicly declared remaining reference-project work; blob `36ce0801b904de38c7b0a75344f2ee8f11b85c17` |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.8.2 | 2026-07-17 | Frozen release identifier and public release notes; URL availability verified without reading source files |
+| https://github.com/basketikun/infinite-canvas/releases/tag/v0.9.0 | 2026-07-18 | Public release metadata used to define the additive interface delta; no release source, styles, screenshots, plugins, or assets were used |
 | https://spec.modelcontextprotocol.io/ | 2026-07-16 | MCP transport and tool lifecycle interoperability |
 | https://www.jsonrpc.org/specification | 2026-07-16 | JSON-RPC request, notification, response, and error semantics |
 | https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events | 2026-07-16 | Browser pointer and touch event semantics |

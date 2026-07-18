@@ -99,8 +99,8 @@ export function AssetEditorDialog({
             </label>
           ) : (
             <label className="grid gap-1 text-sm sm:col-span-2">
-              替换图片
-              <input type="file" accept="image/*" onChange={(event) => setReplacement(event.target.files?.[0])} />
+              替换{asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : "音频"}
+              <input type="file" accept={`${asset.kind}/*`} onChange={(event) => setReplacement(event.target.files?.[0])} />
             </label>
           )}
         </div>

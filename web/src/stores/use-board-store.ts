@@ -590,11 +590,11 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       await assetWrites.flush();
       return;
     }
-    if (node.type === "image" && node.metadata.content) {
+    if ((node.type === "image" || node.type === "video" || node.type === "audio") && node.metadata.content) {
       const asset: AssetItem = {
         id: uid("asset"),
-        kind: "image",
-        title: node.title || "图片素材",
+        kind: node.type,
+        title: node.title || `${node.type === "image" ? "图片" : node.type === "video" ? "视频" : "音频"}素材`,
         tags: [],
         coverUrl: node.metadata.content,
         storageKey: node.metadata.storageKey,
@@ -619,7 +619,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       });
       return;
     }
-    get().addNode("image", position, {
+    get().addNode(asset.kind, position, {
       title: asset.title,
       metadata: {
         content: asset.coverUrl,

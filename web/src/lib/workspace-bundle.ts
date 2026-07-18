@@ -253,7 +253,7 @@ function parseAsset(value: unknown, index: number): AssetItem {
   const input = record(value, `Workspace asset ${index}`);
   const id = boundedString(input.id, `Workspace asset ${index} id`, 128);
   const kind = input.kind;
-  if (!ID.test(id) || (kind !== "text" && kind !== "image") ||
+  if (!ID.test(id) || (kind !== "text" && kind !== "image" && kind !== "video" && kind !== "audio") ||
       !Array.isArray(input.tags) || input.tags.length > 50 ||
       input.tags.some((tag) => typeof tag !== "string" || tag.length > 100)) {
     throw new Error(`Invalid workspace asset ${index}`);
