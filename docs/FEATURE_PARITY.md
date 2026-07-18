@@ -28,7 +28,7 @@ implementation evidence.
 | Text editing, node model/prompt selection, empty-node fill and connected rewrite | `NodePromptBar.tsx`, `node title, font size, and model overrides` E2E |
 | Connected media `@` menu, thumbnail chips, atomic deletion and deterministic request references | `PromptChipInput.tsx`, `prompt-references.test.ts`, prompt-chip E2E |
 | Text-to-image creates and immediately runs a connected config node | `text-to-image creates a connected config` E2E |
-| Config nodes aggregate ordered text/image/video/audio inputs | `BoardNodeView.tsx` input preview and `NodeActions.tsx` ordered upstream resolver |
+| Config nodes aggregate ordered text/image/video/audio inputs | `BoardNodeView.tsx` input preview, `NodeActions.tsx` ordered upstream resolver, and Ark request-order E2E |
 | Config image batches and config text batches of 1-8 results | `image-generation.test.ts`, `text-batch.test.ts`, config text-batch E2E |
 | Image upload/drag, crop, rotate/multi-angle, mask, upscale, split and lineage | image transform unit tests plus split/upscale E2E |
 | Image retry protects missing references; multi-result batches expand and select a primary image | `image-generation.test.ts`, `BatchGroupControls.tsx`, canvas E2E |
@@ -42,7 +42,7 @@ implementation evidence.
 | WebDAV project and full-workspace backup/restore with deduplicated media and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
 | Loopback New API query auto-configuration and remote-safe fragment configuration | `url-credentials.test.ts` and loopback-link E2E |
 | Plugin install/enable/update/rollback/uninstall, sandbox, permissions, SDK and five examples | plugin unit tests plus registry/SVG/panorama E2E |
-| Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, generation-job tests, workbench/formal E2E |
+| Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, generation-job tests, cancellation/retry E2E, and formal E2E |
 | Multi-tab browser runtime, MCP tools, snapshots, Codex continuity, attachments, stop and approvals | Go runtime/MCP/Codex tests plus browser/Codex E2E |
 | PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
 
@@ -66,24 +66,24 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 199 Bun unit/integration tests; 86.73% lines and 88.60% functions
+- [verified] 199 Bun unit/integration tests; 86.74% lines and 88.64% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
-- [verified] 38/38 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 43/43 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
 
 ## Data and canvas
 
-- [verified] Schema v2 documents; v1/no-version read compatibility and save-time upgrade
+- [verified] Schema v2 documents; v1/no-version read compatibility plus save-time upgrade and reload E2E
 - [verified] Project create, rename, delete, batch delete, JSON and media-bundle import/export
 - [verified] PostgreSQL authoritative persistence, Redis disposable cache, protected filesystem media, and empty-server IndexedDB migration
 - [verified] Pan, wheel/pinch zoom, slider, reset, fit, minimap, backgrounds, themes, culling, and 1k/10k indexes
 - [verified] Marquee/multi-select, copy/paste/duplicate, align/distribute, drag/click connections, edge deletion, undo/redo, and shortcuts
 - [verified] Text/image/config/video/audio/plugin nodes; ports, drag, resize, preview, metadata inspection, and prompt bars
 - [verified] Titles above nodes with bounded inline edit; blank-canvas double-click node chooser
-- [verified] Group drag-in/out thresholds, hover feedback, 24px automatic bounds, grouped movement, and history
+- [verified] Same-frame group drag-in/out, 16px exit threshold, hover feedback, exact 24px automatic bounds, grouped movement, undo/redo, and reload
 - [verified] Text font size 10-72px, prompt selection, node model override, and provider-default inheritance
 - [verified] Immediate text-to-image flow with retained failed config node and retry path
 
@@ -99,7 +99,7 @@ implementation evidence.
 - [verified] Reproducible image request metadata, missing-reference preflight failure, and expandable multi-result batches
 - [verified] Draggable image split guides with normalized coordinates and lineage
 - [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
-- [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion
+- [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion; cancellation is persisted before a successful retry
 - [verified] PostgreSQL generation-job migration, paginated CRUD and timestamp-preserving atomic bulk restore; IndexedDB compatibility in development mode
 - [verified] WebDAV full-workspace bundles include projects, assets, prompts, generation history and deduplicated media while preserving local credentials
 
@@ -121,7 +121,7 @@ implementation evidence.
 - [verified] Prompt cover and bounded result-image galleries with detail preview and canvas insertion
 - [verified] Text/image nodes create connected video nodes; image-to-video includes the source image reference
 - [verified] Smart Seedance duration and Ark fast-model `1080p` preflight rejection
-- [verified] Config nodes preview ordered text, image, video, and audio inputs
+- [verified] Config nodes preview ordered text, image, video, and audio inputs; reordering changes the actual Ark reference request order
 - [verified] Assistant pasted-image preview, removal, direct insertion, and later message-image reinsertion
 
 ## Agent and MCP

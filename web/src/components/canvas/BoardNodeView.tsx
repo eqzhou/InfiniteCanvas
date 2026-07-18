@@ -14,6 +14,15 @@ import { defaultModelForMode } from "@/lib/generation-model";
 import { normalizeNodeTitle } from "@/lib/node-format";
 import { Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
 
+function moveInput(order: readonly string[], index: number, offset: -1 | 1): string[] {
+  const target = index + offset;
+  return order.map((id, current) => {
+    if (current === index) return order[target] ?? id;
+    if (current === target) return order[index] ?? id;
+    return id;
+  });
+}
+
 type Props = {
   node: BoardNode;
   selected: boolean;
@@ -408,8 +417,8 @@ export function BoardNodeView({
                 const incoming = project.edges
                   .filter((e) => e.to === node.id)
                   .map((e) => e.from);
-                let order = node.metadata.inputOrder?.filter((id) => incoming.includes(id)) ?? [];
-                for (const id of incoming) if (!order.includes(id)) order.push(id);
+                const configured = node.metadata.inputOrder?.filter((id) => incoming.includes(id)) ?? [];
+                const order = [...configured, ...incoming.filter((id) => !configured.includes(id))];
                 if (!order.length) return <div className="text-[var(--ob-muted)]">暂无上游节点</div>;
                 return (
                   <ul className="space-y-1">
@@ -453,24 +462,26 @@ export function BoardNodeView({
                           </div>
                           <button
                             type="button"
+                            aria-label={`上移输入 ${idx + 1}`}
                             className="rounded px-1 hover:bg-[var(--ob-accent-soft)]"
                             disabled={idx === 0}
                             onClick={() => {
-                              const next = [...order];
-                              [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                              updateNode(node.id, { metadata: { inputOrder: next } });
+                              updateNode(node.id, {
+                                metadata: { inputOrder: moveInput(order, idx, -1) },
+                              });
                             }}
                           >
                             ↑
                           </button>
                           <button
                             type="button"
+                            aria-label={`下移输入 ${idx + 1}`}
                             className="rounded px-1 hover:bg-[var(--ob-accent-soft)]"
                             disabled={idx === order.length - 1}
                             onClick={() => {
-                              const next = [...order];
-                              [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
-                              updateNode(node.id, { metadata: { inputOrder: next } });
+                              updateNode(node.id, {
+                                metadata: { inputOrder: moveInput(order, idx, 1) },
+                              });
                             }}
                           >
                             ↓

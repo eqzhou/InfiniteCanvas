@@ -42,6 +42,10 @@ plugins, fixtures, screenshots, or assets as implementation input.
 | 2026-07-18 | New API local link | Open a loopback URL containing legacy `apiKey` and `baseUrl` query parameters | The active text provider is populated and the sensitive query is immediately removed; non-loopback deployments require a fragment link | high |
 | 2026-07-18 | Prompt media references | Type `@` in a node prompt with connected media | The menu inserts labeled thumbnail chips; chips delete atomically and serialize into deterministic media labels forwarded with the request | high |
 | 2026-07-18 | Port connections | Click an output port, then click an input port | The pending connection remains armed between clicks and commits one edge; blank click or Escape cancels it | high |
+| 2026-07-18 | Overlay dismissal | Open stacked canvas/panel/modal overlays and press Escape | Only the visually topmost dismissible surface closes; another Escape closes the next surface | high |
+| 2026-07-18 | Fast group drag | Dispatch move and pointer-up before the next animation frame | Final geometry and group membership commit atomically; 24px bounds, 16px exit, undo/redo, and reload remain consistent | high |
+| 2026-07-18 | Ordered config inputs | Reorder connected media and execute an Ark video config | Preview numbering, persisted `inputOrder`, and provider reference array use the selected order | high |
+| 2026-07-18 | Legacy save and workbench cancellation | Import v1 then reload; cancel a running workbench request then retry | The project persists as v2 without loss; the cancelled job remains in history and retry creates a successful job | high |
 | 2026-07-18 | Global system prompt | Configure a global instruction, then generate or edit text/images | Every text request receives a system instruction and every image prompt receives the instruction before the user prompt | high |
 
 ## Evidence

@@ -1,4 +1,5 @@
 import type { PluginManifest, Point } from "@/types/board";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export type ContextMenuState = {
   screen: Point;
@@ -39,6 +40,7 @@ export function ContextMenu({
   onUngroup?: () => void;
   plugins?: PluginManifest[];
 }) {
+  useEscapeDismiss(Boolean(state), onClose, 80);
   if (!state) return null;
   type Item = { label: string; action?: () => void; disabled?: boolean };
   const items: Item[] = state.nodeId

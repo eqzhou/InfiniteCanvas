@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export function ImagePreviewDialog({
   open,
@@ -14,15 +15,11 @@ export function ImagePreviewDialog({
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  useEscapeDismiss(open, onClose, 100);
   useLayoutEffect(() => {
     if (!open) return;
     dialogRef.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) return null;
   return createPortal(
@@ -33,9 +30,6 @@ export function ImagePreviewDialog({
       aria-label="图片预览"
       tabIndex={-1}
       className="fixed inset-0 z-[100] grid place-items-center bg-black/80 p-4"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") onClose();
-      }}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

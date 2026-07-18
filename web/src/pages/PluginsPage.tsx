@@ -13,6 +13,7 @@ import { saveConfig } from "@/services/storage";
 import { BUILTIN_PLUGINS } from "@/plugins/builtins";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { PluginManifest, PluginPermission, PluginRegistryEntry } from "@/types/board";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 function PluginCard({
   manifest,
@@ -109,6 +110,10 @@ export function PluginsPage() {
   const [pendingManifest, setPendingManifest] = useState<PluginManifest | null>(null);
   const [consented, setConsented] = useState<PluginPermission[]>([]);
   const builtinIds = useMemo(() => new Set(BUILTIN_PLUGINS.map((plugin) => plugin.id)), []);
+  useEscapeDismiss(Boolean(pendingManifest) && !busy, () => {
+    setPendingManifest(null);
+    setConsented([]);
+  });
 
   const install = async () => {
     setBusy(true);
@@ -378,7 +383,10 @@ export function PluginsPage() {
               <button
                 type="button"
                 className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
-                onClick={() => setPendingManifest(null)}
+                onClick={() => {
+                  setPendingManifest(null);
+                  setConsented([]);
+                }}
               >
                 取消
               </button>

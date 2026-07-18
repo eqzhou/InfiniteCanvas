@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { Point } from "@/types/board";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export function AssetPickerModal({
   open,
@@ -15,6 +16,7 @@ export function AssetPickerModal({
   const insertAsset = useBoardStore((s) => s.insertAsset);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | "text" | "image">("all");
+  useEscapeDismiss(open, onClose);
 
   const filtered = useMemo(
     () =>

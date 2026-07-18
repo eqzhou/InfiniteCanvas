@@ -173,6 +173,327 @@ test("Escape closes settings, shortcuts, and the local Agent panel", async ({ pa
   await expect(page.getByText("本地 Agent", { exact: true })).toHaveCount(0);
 });
 
+test("Escape dismisses only the topmost canvas overlay", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) < 768,
+    "The local Agent button is intentionally hidden in the compact toolbar.",
+  );
+  await openFreshBoard(page);
+  await page.getByTitle("本地 Agent").click();
+  await expect(page.getByText("本地 Agent", { exact: true })).toBeVisible();
+
+  await page.getByTestId("canvas-surface").dispatchEvent("contextmenu", {
+    button: 2,
+    clientX: 500,
+    clientY: 300,
+  });
+  await expect(page.getByRole("button", { name: "新建文本" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "新建文本" })).toHaveCount(0);
+  await expect(page.getByText("本地 Agent", { exact: true })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("本地 Agent", { exact: true })).toHaveCount(0);
+});
+
+test("a same-frame drag commits group membership before pointerup reconciliation", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) < 768,
+    "Stable desktop coordinates are required for the pointer timing regression.",
+  );
+  await openFreshBoard(page);
+  const now = "2026-07-18T00:00:00.000Z";
+  const project = {
+    schemaVersion: 2,
+    id: "group-race-project",
+    title: "Group race atomic",
+    createdAt: now,
+    updatedAt: now,
+    nodes: [
+      {
+        id: "group_1",
+        type: "group",
+        title: "分组",
+        position: { x: 76, y: 76 },
+        width: 368,
+        height: 228,
+        metadata: { childIds: ["text_a", "text_b"] },
+      },
+      {
+        id: "text_a",
+        type: "text",
+        title: "A",
+        position: { x: 100, y: 100 },
+        width: 140,
+        height: 180,
+        metadata: { content: "A" },
+      },
+      {
+        id: "text_b",
+        type: "text",
+        title: "B",
+        position: { x: 280, y: 100 },
+        width: 140,
+        height: 180,
+        metadata: { content: "B" },
+      },
+      {
+        id: "text_c",
+        type: "text",
+        title: "C",
+        position: { x: 560, y: 100 },
+        width: 140,
+        height: 180,
+        metadata: { content: "C" },
+      },
+    ],
+    edges: [],
+    chatSessions: [],
+    activeChatId: null,
+    backgroundMode: "dots",
+    viewport: { x: 0, y: 0, k: 1 },
+  };
+  await page.locator('input[type="file"][accept*=".json"]').setInputFiles({
+    name: "group-race.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(project)),
+  });
+
+  const moving = page.locator('[data-node-id="text_c"]');
+  const surface = page.getByTestId("canvas-surface");
+  const source = await moving.locator("[data-node-header]").boundingBox();
+  const canvas = await surface.boundingBox();
+  expect(source).not.toBeNull();
+  expect(canvas).not.toBeNull();
+  const persistedGroup = () => page.evaluate(() => new Promise<{
+    childIds: string[];
+    position: { x: number; y: number } | null;
+    width: number | null;
+    height: number | null;
+    padding: { left: number; top: number; right: number; bottom: number } | null;
+  }>((resolve, reject) => {
+    const request = indexedDB.open("openboard-app");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const read = database.transaction("app_state", "readonly")
+        .objectStore("app_state").get("openboard:projects");
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const projects = Array.isArray(read.result) ? read.result : [];
+        const imported = projects.find((item) => item?.title === "Group race atomic (导入)");
+        const group = imported?.nodes?.find((node: { id?: string }) => node.id === "group_1");
+        const childIds: string[] = group?.metadata?.childIds ?? [];
+        const children = imported?.nodes?.filter((node: { id?: string }) => childIds.includes(node.id ?? "")) ?? [];
+        const minX = children.length ? Math.min(...children.map((node: { position: { x: number } }) => node.position.x)) : 0;
+        const minY = children.length ? Math.min(...children.map((node: { position: { y: number } }) => node.position.y)) : 0;
+        const maxX = children.length ? Math.max(...children.map((node: { position: { x: number }; width: number }) => node.position.x + node.width)) : 0;
+        const maxY = children.length ? Math.max(...children.map((node: { position: { y: number }; height: number }) => node.position.y + node.height)) : 0;
+        database.close();
+        resolve({
+          childIds,
+          position: group?.position ?? null,
+          width: group?.width ?? null,
+          height: group?.height ?? null,
+          padding: group && children.length ? {
+            left: minX - group.position.x,
+            top: minY - group.position.y,
+            right: group.position.x + group.width - maxX,
+            bottom: group.position.y + group.height - maxY,
+          } : null,
+        });
+      };
+    };
+  }));
+  await page.evaluate(({ source }) => {
+    const header = document.querySelector<HTMLElement>('[data-node-id="text_c"] [data-node-header]');
+    if (!header) throw new Error("group drag fixture missing");
+    const startX = source.x + 20;
+    const startY = source.y + 15;
+    header.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true, pointerId: 17, button: 0, buttons: 1, clientX: startX, clientY: startY,
+    }));
+  }, { source: source! });
+  await page.evaluate(({ canvas }) => {
+    const surface = document.querySelector<HTMLElement>('[data-testid="canvas-surface"]');
+    if (!surface) throw new Error("canvas surface missing");
+    const endX = canvas.x + 420;
+    const endY = canvas.y + 115;
+    surface.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true, pointerId: 17, button: 0, buttons: 1, clientX: endX, clientY: endY,
+    }));
+    surface.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true, pointerId: 17, button: 0, buttons: 0, clientX: endX, clientY: endY,
+    }));
+  }, { canvas: canvas! });
+
+  await expect.poll(async () => {
+    const group = await persistedGroup();
+    return { childIds: group.childIds, padding: group.padding };
+  }).toEqual({
+    childIds: ["text_a", "text_b", "text_c"],
+    padding: { left: 24, top: 24, right: 24, bottom: 24 },
+  });
+
+  await page.getByTitle("撤销").click();
+  await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b"], width: 368 });
+  await page.getByTitle("重做").click();
+  await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b", "text_c"], padding: { left: 24, top: 24, right: 24, bottom: 24 } });
+  await page.reload();
+  await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b", "text_c"], padding: { left: 24, top: 24, right: 24, bottom: 24 } });
+
+  const reloadedSource = await page.locator('[data-node-id="text_c"] [data-node-header]').boundingBox();
+  const reloadedCanvas = await page.getByTestId("canvas-surface").boundingBox();
+  expect(reloadedSource).not.toBeNull();
+  expect(reloadedCanvas).not.toBeNull();
+  await page.evaluate(({ source }) => {
+    const header = document.querySelector<HTMLElement>('[data-node-id="text_c"] [data-node-header]');
+    if (!header) throw new Error("group drag fixture missing after reload");
+    header.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true,
+      pointerId: 18,
+      button: 0,
+      buttons: 1,
+      clientX: source.x + 20,
+      clientY: source.y + 15,
+    }));
+  }, { source: reloadedSource! });
+  await page.evaluate(({ canvas }) => {
+    const surface = document.querySelector<HTMLElement>('[data-testid="canvas-surface"]');
+    if (!surface) throw new Error("canvas surface missing after reload");
+    const endX = canvas.x + 620;
+    const endY = canvas.y + 115;
+    surface.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true, pointerId: 18, button: 0, buttons: 1, clientX: endX, clientY: endY,
+    }));
+    surface.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true, pointerId: 18, button: 0, buttons: 0, clientX: endX, clientY: endY,
+    }));
+  }, { canvas: reloadedCanvas! });
+
+  await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b"], width: 368 });
+  await page.getByTitle("撤销").click();
+  await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b", "text_c"], padding: { left: 24, top: 24, right: 24, bottom: 24 } });
+  await page.getByTitle("重做").click();
+  await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b"], width: 368 });
+  await page.reload();
+  await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b"], width: 368 });
+});
+
+test("a legacy v1 project upgrades to schema v2 and survives reload", async ({ page }) => {
+  await openFreshBoard(page);
+  const now = "2026-07-18T00:00:00.000Z";
+  await page.locator('input[type="file"][accept*=".json"]').setInputFiles({
+    name: "legacy-v1.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      id: "legacy-v1",
+      title: "Legacy schema fixture",
+      createdAt: now,
+      updatedAt: now,
+      nodes: [{
+        id: "legacy_text",
+        type: "text",
+        title: "Legacy text",
+        position: { x: 120, y: 120 },
+        width: 320,
+        height: 180,
+        metadata: { content: "persisted legacy content" },
+      }],
+      edges: [],
+      chatSessions: [],
+      activeChatId: null,
+      backgroundMode: "dots",
+      viewport: { x: 0, y: 0, k: 1 },
+    })),
+  });
+
+  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("persisted legacy content");
+  await expect.poll(() => page.evaluate(() => new Promise<number | null>((resolve, reject) => {
+    const request = indexedDB.open("openboard-app");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const read = database.transaction("app_state", "readonly")
+        .objectStore("app_state").get("openboard:projects");
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const projects = Array.isArray(read.result) ? read.result : [];
+        const imported = projects.find((item) => item?.title === "Legacy schema fixture (导入)");
+        database.close();
+        resolve(imported?.schemaVersion ?? null);
+      };
+    };
+  }))).toBe(2);
+
+  await page.reload();
+  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("persisted legacy content");
+});
+
+test("config input reorder changes Ark reference order", async ({ page }) => {
+  const red = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+  const blue = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNkYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC";
+  let requestBody: { content?: Array<{ type?: string; image_url?: { url?: string } }> } | null = null;
+  await page.route("https://order.example/api/plan/v3/contents/generations/tasks", async (route) => {
+    requestBody = JSON.parse(route.request().postData() ?? "null") as typeof requestBody;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "ordered-task",
+        status: "succeeded",
+        content: { video_url: "https://cdn.example/ordered.mp4" },
+      }),
+    });
+  });
+  await page.route("https://cdn.example/ordered.mp4", async (route) => {
+    await route.fulfill({ contentType: "video/mp4", body: "video-bytes" });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("视频协议").selectOption("ark");
+  await page.getByLabel("视频 URL").fill("https://order.example/api/plan/v3");
+  await page.getByLabel("视频 API Key").fill("order-test-key");
+  await page.getByLabel("视频模型").fill("seedance-1-0-pro-250528");
+  await closeSettings(page);
+
+  const now = "2026-07-18T00:00:00.000Z";
+  await page.locator('input[type="file"][accept*=".json"]').setInputFiles({
+    name: "ordered-inputs.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      id: "ordered-inputs",
+      title: "Ordered inputs fixture",
+      createdAt: now,
+      updatedAt: now,
+      nodes: [
+        { id: "red", type: "image", title: "Red", position: { x: 40, y: 80 }, width: 140, height: 140, metadata: { content: red } },
+        { id: "blue", type: "image", title: "Blue", position: { x: 40, y: 280 }, width: 140, height: 140, metadata: { content: blue } },
+        { id: "config", type: "config", title: "Video config", position: { x: 300, y: 120 }, width: 360, height: 360, metadata: { generationMode: "video", prompt: "ordered references", duration: 5, videoRatio: "16:9", resolution: "720p" } },
+      ],
+      edges: [
+        { id: "red-config", from: "red", to: "config" },
+        { id: "blue-config", from: "blue", to: "config" },
+      ],
+      chatSessions: [],
+      activeChatId: null,
+      backgroundMode: "dots",
+      viewport: { x: 0, y: 0, k: 1 },
+    })),
+  });
+
+  await page.locator('[data-node-id="config"] [data-node-header]').click();
+  await page.getByRole("button", { name: "下移输入 1" }).click();
+  await page.getByTitle("运行生成").click();
+  await expect.poll(() => requestBody).not.toBeNull();
+  const references = requestBody?.content
+    ?.filter((item) => item.type === "image_url")
+    .map((item) => item.image_url?.url);
+  expect(references).toEqual([blue, red]);
+});
+
 test("node title, font size, and model overrides are editable and persistent", async ({ page }) => {
   await openFreshBoard(page);
   await page.getByTitle("文本").click();
@@ -367,6 +688,39 @@ test("image workbench persists history and inserts a result into the canvas", as
   await expect(page.getByRole("button", { name: "已插入" })).toBeVisible();
   await page.goto("/");
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+});
+
+test("image workbench records cancellation and retries the cancelled job", async ({ page }) => {
+  let requests = 0;
+  await page.route("https://cancel.example/v1/images/generations", async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC" }] }),
+    }).catch(() => undefined);
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://cancel.example/v1");
+  await page.getByLabel("生图 API Key").fill("cancel-test-key");
+  await page.getByLabel("生图模型").fill("cancel-image");
+  await closeSettings(page);
+
+  await page.goto("/workbench/image");
+  await page.getByLabel("提示词").fill("cancel then retry");
+  await page.getByRole("button", { name: "生成", exact: true }).click();
+  await expect(page.getByTitle("停止")).toBeEnabled();
+  await page.getByTitle("停止").click();
+
+  const cancelled = page.locator("article").filter({ hasText: "cancel then retry" });
+  await expect(cancelled).toContainText("cancelled");
+  await cancelled.getByTitle("重试").click();
+  await expect.poll(() => requests).toBe(2);
+  const jobs = page.locator("article").filter({ hasText: "cancel then retry" });
+  await expect(jobs.filter({ hasText: "succeeded" })).toHaveCount(1);
 });
 
 test("video workbench persists Ark audio and watermark settings across retry", async ({ page }) => {

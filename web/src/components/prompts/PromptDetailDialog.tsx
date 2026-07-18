@@ -1,5 +1,6 @@
 import type { PromptItem } from "@/types/board";
 import { X } from "lucide-react";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export function PromptDetailDialog({
   prompt,
@@ -16,6 +17,7 @@ export function PromptDetailDialog({
   onAddAsset: () => void;
   onInsert?: () => void;
 }) {
+  useEscapeDismiss(open && Boolean(prompt), onClose);
   if (!open || !prompt) return null;
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">

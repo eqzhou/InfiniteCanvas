@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BoardNode } from "@/types/board";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 type Props = {
   node: BoardNode;
@@ -9,6 +10,7 @@ type Props = {
 };
 
 export function CropDialog({ node, open, onClose, onConfirm }: Props) {
+  useEscapeDismiss(open, onClose);
   const [natural, setNatural] = useState({ w: 0, h: 0 });
   const [x, setX] = useState(0);
   const [y, setY] = useState(0);

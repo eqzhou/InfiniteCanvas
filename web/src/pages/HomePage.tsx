@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { parseBoardProject } from "@/lib/board-document";
 import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export function HomePage() {
   const ready = useBoardStore((s) => s.ready);
@@ -27,6 +28,7 @@ export function HomePage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [checked, setChecked] = useState<string[]>([]);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  useEscapeDismiss(projectsOpen, () => setProjectsOpen(false));
 
   const sorted = useMemo(
     () => [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),

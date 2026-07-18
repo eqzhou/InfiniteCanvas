@@ -135,6 +135,42 @@ export function BoardCanvas() {
     [setViewport],
   );
 
+  const commitPendingNodeMove = useCallback((reconcileRootIds?: string[]) => {
+    if (nodeFrameRef.current !== null) {
+      cancelAnimationFrame(nodeFrameRef.current);
+      nodeFrameRef.current = null;
+    }
+    const pending = pendingNodeMoveRef.current;
+    pendingNodeMoveRef.current = null;
+    if (!pending && !reconcileRootIds) return;
+    useBoardStore.getState().updateActive(
+      (active) => {
+        let movedNodes = active.nodes;
+        if (pending) {
+          const start = screenToWorld(pending.start, pending.viewport);
+          const current = screenToWorld(pending.current, pending.viewport);
+          const moveIds = new Set(pending.ids);
+          movedNodes = active.nodes.map((node) => {
+            const origin = pending.origins[node.id];
+            if (!moveIds.has(node.id) || !origin) return node;
+            return {
+              ...node,
+              position: {
+                x: origin.x + current.x - start.x,
+                y: origin.y + current.y - start.y,
+              },
+            };
+          });
+        }
+        const nodes = reconcileRootIds
+          ? reconcileGroupMembership(movedNodes, reconcileRootIds).nodes
+          : movedNodes;
+        return { ...active, nodes };
+      },
+      { history: false },
+    );
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") setSpaceDown(true);
@@ -351,32 +387,7 @@ export function BoardCanvas() {
         viewport: project.viewport,
       };
       if (nodeFrameRef.current === null) {
-        nodeFrameRef.current = requestAnimationFrame(() => {
-          nodeFrameRef.current = null;
-          const pending = pendingNodeMoveRef.current;
-          pendingNodeMoveRef.current = null;
-          if (!pending) return;
-          const start = screenToWorld(pending.start, pending.viewport);
-          const current = screenToWorld(pending.current, pending.viewport);
-          const moveIds = new Set(pending.ids);
-          useBoardStore.getState().updateActive(
-            (active) => ({
-              ...active,
-              nodes: active.nodes.map((node) => {
-                const origin = pending.origins[node.id];
-                if (!moveIds.has(node.id) || !origin) return node;
-                return {
-                  ...node,
-                  position: {
-                    x: origin.x + current.x - start.x,
-                    y: origin.y + current.y - start.y,
-                  },
-                };
-              }),
-            }),
-            { history: false },
-          );
-        });
+        nodeFrameRef.current = requestAnimationFrame(() => commitPendingNodeMove());
       }
       const start = screenToWorld(drag.start, project.viewport);
       const current = screenToWorld(p, project.viewport);
@@ -479,16 +490,7 @@ export function BoardCanvas() {
         }
       }
     } else if (drag.kind === "node") {
-      const current = useBoardStore.getState().getActive();
-      if (current) {
-        const reconciled = reconcileGroupMembership(current.nodes, drag.rootIds);
-        if (reconciled.changed) {
-          useBoardStore.getState().updateActive(
-            (active) => ({ ...active, nodes: reconciled.nodes }),
-            { history: false },
-          );
-        }
-      }
+      commitPendingNodeMove(drag.rootIds);
     }
     setGroupHoverId(null);
     setDrag(null);

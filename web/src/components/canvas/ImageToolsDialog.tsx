@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BoardNode } from "@/types/board";
 import type { ImageTransformContext } from "@/services/image-transform/types";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export type ImageToolMode = "mask" | "upscale" | "split";
 export type ImageToolProviderOption = {
@@ -50,6 +51,11 @@ export function ImageToolsDialog({
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
+
+  useEscapeDismiss(open, () => {
+    abortRef.current?.abort();
+    onClose();
+  });
 
   useEffect(() => {
     if (!providers.some((provider) => provider.id === providerId)) {

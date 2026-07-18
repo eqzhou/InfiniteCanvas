@@ -91,8 +91,8 @@ export function NodeActions({ node }: { node: BoardNode }) {
         audios: [] as Array<{ storageKey?: string; content?: string }>,
       };
     const incoming = project.edges.filter((e) => e.to === node.id).map((e) => e.from);
-    let order = node.metadata.inputOrder?.filter((id) => incoming.includes(id)) ?? [];
-    for (const id of incoming) if (!order.includes(id)) order.push(id);
+    const configured = node.metadata.inputOrder?.filter((id) => incoming.includes(id)) ?? [];
+    const order = [...configured, ...incoming.filter((id) => !configured.includes(id))];
     const nodes = order
       .map((id) => project.nodes.find((n) => n.id === id))
       .filter((n): n is NonNullable<typeof n> => Boolean(n));

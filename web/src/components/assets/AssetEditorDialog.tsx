@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { AssetItem } from "@/types/board";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export type AssetEditorValues = {
   title: string;
@@ -30,6 +31,7 @@ export function AssetEditorDialog({
   const [replacement, setReplacement] = useState<File | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEscapeDismiss(Boolean(asset) && !busy, onClose);
 
   useEffect(() => {
     if (!asset) return;

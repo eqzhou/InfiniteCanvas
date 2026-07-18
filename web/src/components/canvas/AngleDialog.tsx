@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { BoardNode } from "@/types/board";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 const PRESETS = [0, 15, 30, 45, 90, 180, 270, -15, -30, -45];
 
@@ -15,6 +16,7 @@ export function AngleDialog({
   onConfirm: (degrees: number) => void;
 }) {
   const [deg, setDeg] = useState(15);
+  useEscapeDismiss(open, onClose);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
