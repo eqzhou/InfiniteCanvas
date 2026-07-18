@@ -161,19 +161,36 @@ export async function replaceGenerationJobs(jobs: GenerationJob[]): Promise<void
   await setMany(validated.map((job) => [job.id, job] as [IDBValidKey, GenerationJob]), jobStore);
 }
 
-export async function collectGenerationStorageKeys(): Promise<Set<string>> {
+export function collectGenerationStorageKeysFromJobs(
+  jobs: readonly GenerationJob[],
+): Set<string> {
   const keys = new Set<string>();
-  for (const job of await listAllGenerationJobs()) {
-      const references = Array.isArray(job.parameters.referenceStorageKeys)
-        ? job.parameters.referenceStorageKeys
-        : [];
-      for (const key of references) if (typeof key === "string") keys.add(key);
-      const items = Array.isArray(job.result.items) ? job.result.items : [];
-      for (const item of items) {
-        if (item && typeof item === "object" && typeof (item as { storageKey?: unknown }).storageKey === "string") {
-          keys.add((item as { storageKey: string }).storageKey);
-        }
+  for (const job of jobs) {
+    const references = Array.isArray(job.parameters.referenceStorageKeys)
+      ? job.parameters.referenceStorageKeys
+      : [];
+    for (const key of references) if (typeof key === "string") keys.add(key);
+    const items = Array.isArray(job.result.items) ? job.result.items : [];
+    for (const item of items) {
+      if (item && typeof item === "object" && typeof (item as { storageKey?: unknown }).storageKey === "string") {
+        keys.add((item as { storageKey: string }).storageKey);
       }
+    }
   }
   return keys;
+}
+
+export function findUnreferencedGenerationStorageKeys(
+  removed: GenerationJob,
+  remaining: readonly GenerationJob[],
+  externallyReferenced: ReadonlySet<string>,
+): Set<string> {
+  const candidates = collectGenerationStorageKeysFromJobs([removed]);
+  const live = collectGenerationStorageKeysFromJobs(remaining);
+  for (const key of externallyReferenced) live.add(key);
+  return new Set([...candidates].filter((key) => !live.has(key)));
+}
+
+export async function collectGenerationStorageKeys(): Promise<Set<string>> {
+  return collectGenerationStorageKeysFromJobs(await listAllGenerationJobs());
 }

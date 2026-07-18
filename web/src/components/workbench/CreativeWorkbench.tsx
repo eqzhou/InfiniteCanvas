@@ -5,15 +5,19 @@ import type { GenerationJob, GenerationKind } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { getProvider } from "@/lib/ai-config";
 import { resolveVideoDuration } from "@/lib/video-generation";
+import { assertResolvedImageReferences } from "@/lib/image-generation";
 import { generateImages, generateVideo } from "@/services/ai-client";
 import {
   createGenerationJob,
   deleteGenerationJob,
+  findUnreferencedGenerationStorageKeys,
+  listAllGenerationJobs,
   listGenerationJobs,
   updateGenerationJob,
 } from "@/services/generation-jobs";
 import {
   blobToDataUrl,
+  collectStorageKeys,
   deleteStorageKey,
   downloadStorageKey,
   getBlob,
@@ -81,6 +85,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
     setBusy(true);
     setError("");
     let job: GenerationJob | undefined;
+    const uploadedReferenceKeys: string[] = [];
     try {
       const referenceData: string[] = [];
       const referenceStorageKeys: string[] = [];
@@ -95,9 +100,11 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
             referenceStorageKeys.push(key);
           }
         }
+        assertResolvedImageReferences(keys, referenceData);
       } else {
         for (const file of references) {
           const uploaded = await uploadMedia(file, file.type.startsWith("image/") ? "image" : "media");
+          uploadedReferenceKeys.push(uploaded.storageKey);
           referenceStorageKeys.push(uploaded.storageKey);
           referenceData.push(await blobToDataUrl(file));
         }
@@ -171,6 +178,9 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
       await refresh();
     } catch (cause) {
       const cancelled = controller.signal.aborted;
+      if (!job && uploadedReferenceKeys.length) {
+        await Promise.allSettled(uploadedReferenceKeys.map(deleteStorageKey));
+      }
       if (job) {
         await updateGenerationJob(job.id, {
           status: cancelled ? "cancelled" : "failed",
@@ -250,9 +260,15 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold">生成历史</h2><button type="button" title="刷新" onClick={() => void refresh()}><RefreshCw size={16} /></button></div>
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             {jobs.map((job) => <HistoryRow key={job.id} job={job} onRetry={() => void run(job)} onInsert={(item) => insert(item, job)} onDelete={async () => {
-              const items = resultItems(job);
               await deleteGenerationJob(job.id);
-              await Promise.all(items.flatMap((item) => item.storageKey ? [deleteStorageKey(item.storageKey)] : []));
+              const state = useBoardStore.getState();
+              const externalKeys = collectStorageKeys(state.projects, state.assets);
+              const orphanedKeys = findUnreferencedGenerationStorageKeys(
+                job,
+                await listAllGenerationJobs(),
+                externalKeys,
+              );
+              await Promise.allSettled([...orphanedKeys].map(deleteStorageKey));
               await refresh();
             }} />)}
           </div>

@@ -66,10 +66,10 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 199 Bun unit/integration tests; 86.74% lines and 88.64% functions
+- [verified] 201 Bun unit/integration tests; 87.02% lines and 88.84% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
-- [verified] 43/43 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 45/45 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
@@ -99,7 +99,7 @@ implementation evidence.
 - [verified] Reproducible image request metadata, missing-reference preflight failure, and expandable multi-result batches
 - [verified] Draggable image split guides with normalized coordinates and lineage
 - [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
-- [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion; cancellation is persisted before a successful retry
+- [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion; retry rejects missing references and history deletion preserves shared board/job media while reclaiming orphans
 - [verified] PostgreSQL generation-job migration, paginated CRUD and timestamp-preserving atomic bulk restore; IndexedDB compatibility in development mode
 - [verified] WebDAV full-workspace bundles include projects, assets, prompts, generation history and deduplicated media while preserving local credentials
 

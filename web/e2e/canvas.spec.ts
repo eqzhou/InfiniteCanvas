@@ -605,6 +605,48 @@ test("text-to-image creates a connected config and executes immediately", async 
   )).toBe(true);
 });
 
+test("failed text-to-image keeps its config and can retry successfully", async ({ page }) => {
+  let requests = 0;
+  await page.route("https://retry-flow.example/v1/images/generations", async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "temporary" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC" }],
+      }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://retry-flow.example/v1");
+  await page.getByLabel("生图 API Key").fill("retry-flow-test-key");
+  await page.getByLabel("生图模型").fill("retry-flow-image");
+  await closeSettings(page);
+
+  await page.getByTitle("文本").click();
+  await page.getByPlaceholder("写下提示词或说明…").fill("retryable image flow");
+  await page.getByTitle("生图").click();
+
+  const config = page.locator('[data-node-type="config"]');
+  await expect(config).toHaveCount(1);
+  await expect(config).toContainText("AI 503");
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(0);
+  await config.locator("[data-node-header]").click();
+  await config.getByTitle("运行生成").click();
+  await expect.poll(() => requests).toBe(2);
+  await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+  await expect(config).not.toContainText("AI 503");
+});
+
 test("a configuration node generates the requested text batch", async ({ page }) => {
   let requests = 0;
   const textBodies: Array<Record<string, unknown>> = [];
@@ -688,6 +730,14 @@ test("image workbench persists history and inserts a result into the canvas", as
   await expect(page.getByRole("button", { name: "已插入" })).toBeVisible();
   await page.goto("/");
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+
+  await page.goto("/workbench/image");
+  const retainedHistory = page.locator("article").filter({ hasText: "workbench square" });
+  await retainedHistory.getByTitle("删除").click();
+  await expect(retainedHistory).toHaveCount(0);
+  await page.goto("/");
+  await page.reload();
+  await expect(page.locator('[data-node-type="image"] img[alt="工作台图片"]')).toBeVisible();
 });
 
 test("image workbench records cancellation and retries the cancelled job", async ({ page }) => {
@@ -721,6 +771,73 @@ test("image workbench records cancellation and retries the cancelled job", async
   await expect.poll(() => requests).toBe(2);
   const jobs = page.locator("article").filter({ hasText: "cancel then retry" });
   await expect(jobs.filter({ hasText: "succeeded" })).toHaveCount(1);
+});
+
+test("image workbench refuses retry when a recorded reference is missing", async ({ page }) => {
+  let requests = 0;
+  await page.route("https://missing-reference.example/v1/images/generations", async (route) => {
+    requests += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data: [] }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://missing-reference.example/v1");
+  await page.getByLabel("生图 API Key").fill("missing-reference-test-key");
+  await page.getByLabel("生图模型").fill("missing-reference-image");
+  await closeSettings(page);
+
+  await page.goto("/workbench/image");
+  await page.evaluate(() => new Promise<string>((resolve, reject) => {
+    const open = indexedDB.open("openboard-app");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const request = database.transaction("app_state", "readonly")
+        .objectStore("app_state")
+        .get("openboard:projects");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const projectId = Array.isArray(request.result) ? request.result[0]?.id : undefined;
+        database.close();
+        if (typeof projectId === "string") resolve(projectId);
+        else reject(new Error("active test project is missing"));
+      };
+    };
+  }).then((projectId) => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open("openboard-generation-jobs");
+    open.onerror = () => reject(open.error);
+    open.onupgradeneeded = () => open.result.createObjectStore("jobs");
+    open.onsuccess = () => {
+      const database = open.result;
+      const transaction = database.transaction("jobs", "readwrite");
+      transaction.objectStore("jobs").put({
+        id: "job-missing-reference",
+        projectId,
+        kind: "image",
+        status: "failed",
+        prompt: "missing reference retry",
+        providerId: "default",
+        model: "missing-reference-image",
+        parameters: { referenceStorageKeys: ["image:does-not-exist"] },
+        result: {},
+        error: "previous failure",
+        createdAt: "2026-07-18T00:00:00.000Z",
+        updatedAt: "2026-07-18T00:00:00.000Z",
+      }, "job-missing-reference");
+      transaction.oncomplete = () => { database.close(); resolve(); };
+      transaction.onerror = () => reject(transaction.error);
+    };
+  })));
+  await page.reload();
+
+  const history = page.locator("article").filter({ hasText: "missing reference retry" });
+  await history.getByTitle("重试").click();
+  await expect(page.getByRole("alert")).toContainText("参考图已丢失或无法恢复");
+  expect(requests).toBe(0);
+  await expect(page.locator("article").filter({ hasText: "missing reference retry" })).toHaveCount(1);
 });
 
 test("video workbench persists Ark audio and watermark settings across retry", async ({ page }) => {
@@ -870,7 +987,8 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
     .toHaveValue("plugin state from Playwright");
 });
 
-test("plugin registry installation requires consent for every permission", async ({ page }) => {
+test("plugin registry install, upgrade, and uninstall preserve permission consent", async ({ page }) => {
+  let registryVersion = "1.0.0";
   await page.route("https://registry.example/openboard.json", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -879,7 +997,7 @@ test("plugin registry installation requires consent for every permission", async
         plugins: [{
           id: "example.registry-note",
           name: "Registry Note",
-          version: "1.0.0",
+          version: registryVersion,
           description: "Registry test plugin",
           manifestUrl: "https://plugins.example/registry-note.json",
         }],
@@ -893,7 +1011,7 @@ test("plugin registry installation requires consent for every permission", async
         schemaVersion: 2,
         id: "example.registry-note",
         name: "Registry Note",
-        version: "1.0.0",
+        version: registryVersion,
         description: "Registry test plugin",
         document: "<script>openboard.ready()</script>",
         permissions: ["node:read", "ai:text"],
@@ -914,7 +1032,23 @@ test("plugin registry installation requires consent for every permission", async
   await expect(confirm).toBeDisabled();
   await dialog.getByLabel("ai:text").check();
   await confirm.click();
-  await expect(page.locator("article").filter({ hasText: "example.registry-note" })).toContainText("已安装");
+  const installedCard = page.locator("article").filter({ hasText: "example.registry-note" });
+  await expect(installedCard).toContainText("v1.0.0");
+
+  registryVersion = "1.1.0";
+  await page.getByRole("button", { name: "刷新注册表" }).click();
+  await installedCard.getByRole("button", { name: "升级到 v1.1.0" }).click();
+  const upgradeDialog = page.getByRole("dialog", { name: /安装 Registry Note/ });
+  await expect(upgradeDialog.getByLabel("node:read")).toBeChecked();
+  await expect(upgradeDialog.getByLabel("ai:text")).toBeChecked();
+  await upgradeDialog.getByRole("button", { name: "同意并安装" }).click();
+  await expect(installedCard).toContainText("v1.1.0");
+
+  page.once("dialog", (confirmation) => confirmation.accept());
+  await installedCard.getByTitle("卸载插件").click();
+  const registryCardAfterRemoval = page.locator("article").filter({ hasText: "example.registry-note" });
+  await expect(registryCardAfterRemoval).toContainText("注册表");
+  await expect(registryCardAfterRemoval.getByRole("button", { name: "安装" })).toBeVisible();
 });
 
 test("SVG plugin edits and previews isolated markup", async ({ page }) => {
@@ -1363,9 +1497,9 @@ test("local Agent connects to the real Go service with a session token", async (
 test("audio nodes expose the audio generation prompt", async ({ page }) => {
   await openFreshBoard(page);
   await page.getByRole("button", { name: "音频", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "节点生成提示词" })).toBeVisible();
-  await expect(page.getByText("输入语音文本…", { exact: true })).toBeVisible();
-  await expect(page.getByText("输入视频提示词…", { exact: true })).toHaveCount(0);
+  const prompt = page.getByRole("textbox", { name: "节点生成提示词" });
+  await expect(prompt).toBeVisible();
+  await expect(prompt).toHaveAttribute("aria-placeholder", "输入语音文本…");
 });
 
 test("browser runtime executes board commands, navigation, and protected snapshots", async ({ page, request }) => {

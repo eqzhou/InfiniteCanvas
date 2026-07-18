@@ -47,6 +47,7 @@ plugins, fixtures, screenshots, or assets as implementation input.
 | 2026-07-18 | Ordered config inputs | Reorder connected media and execute an Ark video config | Preview numbering, persisted `inputOrder`, and provider reference array use the selected order | high |
 | 2026-07-18 | Legacy save and workbench cancellation | Import v1 then reload; cancel a running workbench request then retry | The project persists as v2 without loss; the cancelled job remains in history and retry creates a successful job | high |
 | 2026-07-18 | Global system prompt | Configure a global instruction, then generate or edit text/images | Every text request receives a system instruction and every image prompt receives the instruction before the user prompt | high |
+| 2026-07-18 | Workbench media lifecycle | Retry a job after reference loss; insert a result then delete its history | Missing references block the request; shared board/job media survives history deletion; unowned references and results are reclaimed | high |
 
 ## Evidence
 
