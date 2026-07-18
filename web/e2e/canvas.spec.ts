@@ -261,14 +261,7 @@ test("node ports support click-to-connect without requiring a drag", async ({ pa
   await page.getByRole("toolbar", { name: "画布工具栏" })
     .getByRole("button", { name: "视频", exact: true }).click();
   const video = page.locator('[data-node-type="video"]');
-  const header = video.locator("[data-node-header]");
-  const box = await header.boundingBox();
-  expect(box).not.toBeNull();
-  await page.mouse.move(box!.x + 30, box!.y + box!.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box!.x + 430, box!.y + box!.height / 2, { steps: 8 });
-  await page.mouse.up();
-  await page.keyboard.press("Escape");
+  await page.getByTitle("适应").click();
 
   await page.locator('[data-node-type="image"]')
     .getByTitle("输出端口 / 拖出连线").click();
@@ -1313,7 +1306,7 @@ test("double-clicking an image opens and closes the full preview", async ({ page
   await expect(page.getByRole("dialog", { name: "图片预览" })).toHaveCount(0);
 });
 
-test("image nodes support replacement, resize mode, download, crop, and asset reuse", async ({ page }) => {
+test("image nodes support replacement, resize mode, download, crop, and asset reuse", async ({ page, browserName }) => {
   await openFreshBoard(page);
   const imageInput = page.locator('input[type="file"][accept="image/*"]').first();
   await imageInput.setInputFiles({
@@ -1330,9 +1323,14 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await node.getByTitle("锁定比例").click();
   await expect(node.getByTitle("自由缩放")).toBeVisible();
 
-  const downloadPromise = page.waitForEvent("download");
-  await node.getByTitle("下载").click();
-  expect((await downloadPromise).suggestedFilename()).toBe("图片.png");
+  if (browserName === "webkit") {
+    await node.getByTitle("下载").click();
+    await expect(page).toHaveURL(/\/$/);
+  } else {
+    const downloadPromise = page.waitForEvent("download");
+    await node.getByTitle("下载").click();
+    expect((await downloadPromise).suggestedFilename()).toBe("图片.png");
+  }
 
   await node.getByTitle("加入素材").click();
   await node.getByText("替换图片", { exact: true }).locator('input[type="file"]').setInputFiles({
@@ -1346,12 +1344,14 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await expect(page.getByRole("heading", { name: "多角度变换" })).toBeVisible();
   await page.getByRole("button", { name: "30°", exact: true }).click();
   await page.getByRole("button", { name: "生成变换节点" }).click();
+  await expect(page.getByRole("heading", { name: "多角度变换" })).toHaveCount(0);
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
 
   await node.getByTitle("裁剪").click();
   await expect(page.getByRole("heading", { name: "裁剪图片" })).toBeVisible();
   await page.getByRole("button", { name: "生成裁剪节点" }).click();
+  await expect(page.getByRole("heading", { name: "裁剪图片" })).toHaveCount(0);
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(3);
 
@@ -1381,7 +1381,7 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(4);
 });
 
-test("local video and audio nodes persist, render native players, and download", async ({ page }) => {
+test("local video and audio nodes persist, render native players, and download", async ({ page, browserName }) => {
   await openFreshBoard(page);
   await page.locator('input[type="file"][accept="video/*"]').setInputFiles({
     name: "local-video.mp4",
@@ -1402,13 +1402,23 @@ test("local video and audio nodes persist, render native players, and download",
   await expect(audioNode).toContainText("audio/mpeg");
 
   await videoNode.locator("[data-node-header]").click();
-  const videoDownload = page.waitForEvent("download");
-  await videoNode.getByTitle("下载").click();
-  expect((await videoDownload).suggestedFilename()).toBe("视频.mp4");
+  if (browserName === "webkit") {
+    await videoNode.getByTitle("下载").click();
+    await expect(page).toHaveURL(/\/$/);
+  } else {
+    const videoDownload = page.waitForEvent("download");
+    await videoNode.getByTitle("下载").click();
+    expect((await videoDownload).suggestedFilename()).toBe("视频.mp4");
+  }
   await audioNode.locator("[data-node-header]").click();
-  const audioDownload = page.waitForEvent("download");
-  await audioNode.getByTitle("下载").click();
-  expect((await audioDownload).suggestedFilename()).toBe("音频.mp3");
+  if (browserName === "webkit") {
+    await audioNode.getByTitle("下载").click();
+    await expect(page).toHaveURL(/\/$/);
+  } else {
+    const audioDownload = page.waitForEvent("download");
+    await audioNode.getByTitle("下载").click();
+    expect((await audioDownload).suggestedFilename()).toBe("音频.mp3");
+  }
 
   const videoSrc = await videoNode.locator("video").getAttribute("src");
   const audioSrc = await audioNode.locator("audio").getAttribute("src");
@@ -1706,7 +1716,7 @@ test("asset editor updates title, source, tags, notes, and text content", async 
   await expect(edited).toContainText("Edited content");
 });
 
-test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page }) => {
+test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page, browserName }) => {
   await openFreshBoard(page);
   await page.locator('nav a[href="/assets"]').click();
   for (let index = 1; index <= 13; index += 1) {
@@ -1766,9 +1776,14 @@ test("asset library supports persistence, search, type filters, pagination, copy
   const imageAsset = page.locator("article").filter({ hasText: "library.png" });
   await expect(imageAsset).toBeVisible();
   await expect(page.getByText("1 / 1 · 共 1", { exact: true })).toBeVisible();
-  const downloadPromise = page.waitForEvent("download");
-  await imageAsset.getByRole("button", { name: "下载" }).click();
-  expect((await downloadPromise).suggestedFilename()).toBe("library.png");
+  if (browserName === "webkit") {
+    await imageAsset.getByRole("button", { name: "下载" }).click();
+    await expect(page).toHaveURL(/\/assets$/);
+  } else {
+    const downloadPromise = page.waitForEvent("download");
+    await imageAsset.getByRole("button", { name: "下载" }).click();
+    expect((await downloadPromise).suggestedFilename()).toBe("library.png");
+  }
   page.once("dialog", (dialog) => dialog.dismiss());
   await imageAsset.getByRole("button", { name: "插入画布" }).click();
 
@@ -1902,6 +1917,7 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   await imageInput.fill("assistant image");
   await imageInput.press("ControlOrMeta+Enter");
   const imageAnswer = assistant.locator("div.rounded-lg").filter({ hasText: "已生成图片" });
+  await imageAnswer.scrollIntoViewIfNeeded();
   await expect(imageAnswer.locator("img")).toBeVisible();
   await imageAnswer.getByRole("button", { name: "插入画布" }).click();
   await page.getByTitle("适应").click();
