@@ -66,10 +66,10 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 193 Bun unit/integration tests; 86.29% lines and 88.35% functions
+- [verified] 196 Bun unit/integration tests; 86.57% lines and 88.59% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
-- [verified] 128 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in the latest completed CI run
-- [verified] 34/34 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
+- [verified] 36/36 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
