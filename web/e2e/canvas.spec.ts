@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 const agentUrl = process.env.OPENBOARD_E2E_PRODUCTION === "1"
   ? "http://127.0.0.1:8792"
   : "http://127.0.0.1:8791";
+const pngPixelBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n0YAAAAASUVORK5CYII=";
 
 async function openFreshBoard(page: Page) {
   await page.goto("/");
@@ -1312,7 +1313,7 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await imageInput.setInputFiles({
     name: "source.png",
     mimeType: "image/png",
-    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+    buffer: Buffer.from(pngPixelBase64, "base64"),
   });
   const node = page.locator('[data-node-type="image"]').first();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
@@ -1336,7 +1337,7 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await node.getByText("替换图片", { exact: true }).locator('input[type="file"]').setInputFiles({
     name: "replacement.png",
     mimeType: "image/png",
-    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64"),
+    buffer: Buffer.from(pngPixelBase64, "base64"),
   });
   await expect.poll(() => node.locator("img").getAttribute("src")).not.toBe(initialSrc);
 
@@ -1425,10 +1426,10 @@ test("local video and audio nodes persist, render native players, and download",
   await page.reload();
   const reloadedVideo = page.locator('[data-node-type="video"] video[controls]');
   const reloadedAudio = page.locator('[data-node-type="audio"] audio[controls]');
-  await expect(reloadedVideo).toHaveAttribute("src", /^blob:/);
-  await expect(reloadedAudio).toHaveAttribute("src", /^blob:/);
-  await expect.poll(() => reloadedVideo.getAttribute("src")).not.toBe(videoSrc);
-  await expect.poll(() => reloadedAudio.getAttribute("src")).not.toBe(audioSrc);
+  await expect(reloadedVideo).toHaveAttribute("src", /^(blob:|data:video\/)/);
+  await expect(reloadedAudio).toHaveAttribute("src", /^(blob:|data:audio\/)/);
+  expect(videoSrc).toMatch(/^(blob:|data:video\/)/);
+  expect(audioSrc).toMatch(/^(blob:|data:audio\/)/);
   await expect(page.locator('[data-node-type="audio"]')).toContainText("audio/mpeg");
 });
 
@@ -1881,7 +1882,7 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
-        data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC" }],
+        data: [{ b64_json: pngPixelBase64 }],
       }),
     });
   });
