@@ -1,4 +1,5 @@
 import { useBoardStore } from "@/stores/use-board-store";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 const rows = [
   ["拖动画布空白", "平移视图"],
@@ -23,6 +24,7 @@ const rows = [
 export function ShortcutsModal() {
   const open = useBoardStore((s) => s.showShortcuts);
   const setShowShortcuts = useBoardStore((s) => s.setShowShortcuts);
+  useEscapeDismiss(open, () => setShowShortcuts(false));
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">

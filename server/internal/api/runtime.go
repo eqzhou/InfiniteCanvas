@@ -27,6 +27,8 @@ type runtimeTransport interface {
 type runtimeClient struct {
 	id        string
 	transport runtimeTransport
+	state     json.RawMessage
+	sequence  uint64
 }
 
 type runtimeResult struct {
@@ -34,17 +36,24 @@ type runtimeResult struct {
 	err  error
 }
 
+type pendingRuntimeCommand struct {
+	client *runtimeClient
+	waiter chan runtimeResult
+}
+
 type runtimeHub struct {
-	mu      sync.Mutex
-	client  *runtimeClient
-	stateV  json.RawMessage
-	pending map[string]chan runtimeResult
-	tickets map[string]time.Time
+	mu       sync.Mutex
+	clients  map[string]*runtimeClient
+	active   *runtimeClient
+	sequence uint64
+	pending  map[string]pendingRuntimeCommand
+	tickets  map[string]time.Time
 }
 
 func newRuntimeHub() *runtimeHub {
 	return &runtimeHub{
-		pending: make(map[string]chan runtimeResult),
+		clients: make(map[string]*runtimeClient),
+		pending: make(map[string]pendingRuntimeCommand),
 		tickets: make(map[string]time.Time),
 	}
 }
@@ -76,20 +85,14 @@ func (h *runtimeHub) consumeTicket(ticket string) bool {
 }
 
 func (h *runtimeHub) attach(transport runtimeTransport) *runtimeClient {
-	client := &runtimeClient{id: randomID("browser"), transport: transport}
 	h.mu.Lock()
-	previous := h.client
-	h.client = client
-	h.stateV = nil
-	waiters := h.pending
-	h.pending = make(map[string]chan runtimeResult)
+	h.sequence++
+	client := &runtimeClient{id: randomID("browser"), transport: transport, sequence: h.sequence}
+	h.clients[client.id] = client
+	if h.active == nil {
+		h.active = client
+	}
 	h.mu.Unlock()
-	if previous != nil {
-		_ = previous.transport.Close()
-	}
-	for _, waiter := range waiters {
-		waiter <- runtimeResult{err: errors.New("browser runtime replaced")}
-	}
 	return client
 }
 
@@ -98,14 +101,26 @@ func (h *runtimeHub) detach(client *runtimeClient, cause error) {
 		cause = errors.New("browser disconnected")
 	}
 	h.mu.Lock()
-	if h.client != client {
+	if h.clients[client.id] != client {
 		h.mu.Unlock()
 		return
 	}
-	h.client = nil
-	h.stateV = nil
-	waiters := h.pending
-	h.pending = make(map[string]chan runtimeResult)
+	delete(h.clients, client.id)
+	waiters := make([]chan runtimeResult, 0)
+	for id, pending := range h.pending {
+		if pending.client == client {
+			waiters = append(waiters, pending.waiter)
+			delete(h.pending, id)
+		}
+	}
+	if h.active == client {
+		h.active = nil
+		for _, candidate := range h.clients {
+			if h.active == nil || candidate.sequence > h.active.sequence {
+				h.active = candidate
+			}
+		}
+	}
 	h.mu.Unlock()
 	_ = client.transport.Close()
 	for _, waiter := range waiters {
@@ -116,13 +131,16 @@ func (h *runtimeHub) detach(client *runtimeClient, cause error) {
 func (h *runtimeHub) connected() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.client != nil
+	return len(h.clients) > 0
 }
 
 func (h *runtimeHub) state() json.RawMessage {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append(json.RawMessage(nil), h.stateV...)
+	if h.active == nil {
+		return nil
+	}
+	return append(json.RawMessage(nil), h.active.state...)
 }
 
 func (h *runtimeHub) receive(client *runtimeClient, message runtimeEnvelope) error {
@@ -132,8 +150,11 @@ func (h *runtimeHub) receive(client *runtimeClient, message runtimeEnvelope) err
 			return errors.New("runtime state is invalid")
 		}
 		h.mu.Lock()
-		if h.client == client {
-			h.stateV = append(json.RawMessage(nil), message.Data...)
+		if h.clients[client.id] == client {
+			h.sequence++
+			client.sequence = h.sequence
+			client.state = append(json.RawMessage(nil), message.Data...)
+			h.active = client
 		}
 		h.mu.Unlock()
 		return nil
@@ -142,27 +163,31 @@ func (h *runtimeHub) receive(client *runtimeClient, message runtimeEnvelope) err
 			return errors.New("runtime result id is required")
 		}
 		h.mu.Lock()
-		waiter := h.pending[message.ID]
-		delete(h.pending, message.ID)
+		pending, exists := h.pending[message.ID]
+		if exists && pending.client == client {
+			delete(h.pending, message.ID)
+		} else {
+			exists = false
+		}
 		h.mu.Unlock()
-		if waiter == nil {
+		if !exists {
 			return nil
 		}
 		if !message.OK {
 			if message.Error == "" {
 				message.Error = "browser command failed"
 			}
-			waiter <- runtimeResult{err: errors.New(message.Error)}
+			pending.waiter <- runtimeResult{err: errors.New(message.Error)}
 			return nil
 		}
 		if len(message.Data) == 0 {
 			message.Data = json.RawMessage(`{}`)
 		}
 		if !json.Valid(message.Data) {
-			waiter <- runtimeResult{err: errors.New("browser result is invalid")}
+			pending.waiter <- runtimeResult{err: errors.New("browser result is invalid")}
 			return nil
 		}
-		waiter <- runtimeResult{data: append(json.RawMessage(nil), message.Data...)}
+		pending.waiter <- runtimeResult{data: append(json.RawMessage(nil), message.Data...)}
 		return nil
 	default:
 		return errors.New("runtime message type is unsupported")
@@ -182,9 +207,9 @@ func (h *runtimeHub) command(ctx context.Context, method string, params json.Raw
 	id := randomID("command")
 	waiter := make(chan runtimeResult, 1)
 	h.mu.Lock()
-	client := h.client
+	client := h.active
 	if client != nil {
-		h.pending[id] = waiter
+		h.pending[id] = pendingRuntimeCommand{client: client, waiter: waiter}
 	}
 	h.mu.Unlock()
 	if client == nil {

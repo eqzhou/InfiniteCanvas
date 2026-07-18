@@ -47,6 +47,37 @@ describe("parseBoardProject", () => {
     expect(() => parseBoardProject(input)).toThrow("position.x");
   });
 
+  test("validates video generation metadata at the import boundary", () => {
+    const withMetadata = (metadata: Record<string, unknown>) => ({
+      ...validProject(),
+      nodes: [{
+        ...validProject().nodes[0]!,
+        type: "config",
+        metadata: { generationMode: "video", ...metadata },
+      }],
+    });
+    const valid = withMetadata({
+      duration: 8,
+      smartDuration: false,
+      videoRatio: "21:9",
+      resolution: "1080p",
+      generateAudio: true,
+      watermark: false,
+    });
+    expect(parseBoardProject(valid).nodes[0]?.metadata.generateAudio).toBe(true);
+
+    for (const [metadata, field] of [
+      [{ generationMode: "script" }, "generationMode"],
+      [{ duration: 16 }, "duration"],
+      [{ videoRatio: "2:1" }, "videoRatio"],
+      [{ resolution: "4k" }, "resolution"],
+      [{ generateAudio: "yes" }, "generateAudio"],
+      [{ watermark: 1 }, "watermark"],
+    ] as const) {
+      expect(() => parseBoardProject(withMetadata(metadata))).toThrow(field);
+    }
+  });
+
   test("rejects duplicate node ids", () => {
     const input = validProject();
     input.nodes.push({ ...input.nodes[0]! });

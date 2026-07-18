@@ -281,6 +281,26 @@ export async function deleteBlob(kind: "image" | "media", key: string): Promise<
   }
 }
 
+export async function storeImportedMedia(
+  kind: "image" | "media",
+  blob: Blob,
+): Promise<{ storageKey: string; url: string }> {
+  const maxBytes = kind === "image"
+    ? MEDIA_UPLOAD_LIMITS.imageBytes
+    : MEDIA_UPLOAD_LIMITS.mediaBytes;
+  if (blob.size > maxBytes) throw new Error(`Media is too large (limit ${maxBytes} bytes)`);
+  const storageKey = `${kind}:${createStorageId()}`;
+  await putBlob(kind, storageKey, blob);
+  try {
+    const url = URL.createObjectURL(blob);
+    objectUrls.set(storageKey, url);
+    return { storageKey, url };
+  } catch (error) {
+    await deleteBlob(kind, storageKey);
+    throw error;
+  }
+}
+
 export async function resolveObjectUrl(
   kind: "image" | "media",
   storageKey: string,

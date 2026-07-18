@@ -223,6 +223,51 @@ func TestRuntimeTimeoutAndDisconnectDoNotReplayCommands(t *testing.T) {
 	}
 }
 
+func TestRuntimeKeepsMultipleBrowserTabsAndRoutesToMostRecent(t *testing.T) {
+	hub := newRuntimeHub()
+	firstTransport := newFakeRuntimeTransport()
+	secondTransport := newFakeRuntimeTransport()
+	first := hub.attach(firstTransport)
+	second := hub.attach(secondTransport)
+	defer hub.detach(first, errors.New("test complete"))
+	defer hub.detach(second, errors.New("test complete"))
+
+	if !hub.connected() {
+		t.Fatal("multiple attached browser tabs were not connected")
+	}
+	if err := hub.receive(first, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"route":"/assets"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		done <- err
+	}()
+	command := firstTransport.last(t)
+	if err := hub.receive(first, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	hub.detach(first, errors.New("first tab closed"))
+	if !hub.connected() {
+		t.Fatal("closing one tab disconnected the remaining browser runtime")
+	}
+	go func() {
+		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		done <- err
+	}()
+	command = secondTransport.last(t)
+	if err := hub.receive(second, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecuteToolRoutesLiveToolsWithoutHoldingProjectLock(t *testing.T) {
 	server := NewServer(t.TempDir())
 	transport := newFakeRuntimeTransport()

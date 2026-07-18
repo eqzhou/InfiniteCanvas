@@ -324,3 +324,32 @@ func (s *PostgresStore) DeleteGenerationJob(ctx context.Context, id string) erro
 	}
 	return nil
 }
+
+func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, jobs []GenerationJob) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs`); err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("invalid generation createdAt: %w", err)
+		}
+		updated, err := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("invalid generation updatedAt: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
+			(id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+			VALUES ($1,NULLIF($2,''),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt, job.ProviderID,
+			job.Model, job.Parameters, job.Result, job.Error, created, updated); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}

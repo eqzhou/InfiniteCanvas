@@ -12,6 +12,8 @@ import type {
   PromptItem,
   Viewport,
 } from "@/types/board";
+import type { WorkspaceSnapshot } from "@/lib/workspace-bundle";
+import { listAllGenerationJobs, replaceGenerationJobs } from "@/services/generation-jobs";
 import { createDefaultConfig, createEmptySession, createNode, createProject } from "@/lib/defaults";
 import { normalizeAppConfig } from "@/lib/app-config";
 import { HistoryStack } from "@/lib/history";
@@ -114,6 +116,7 @@ type BoardState = {
   ungroupSelected: () => void;
   persist: () => Promise<void>;
   persistNow: () => Promise<void>;
+  replaceWorkspace: (snapshot: WorkspaceSnapshot) => Promise<void>;
 };
 
 const histories = new Map<string, HistoryStack<Snapshot>>();
@@ -738,6 +741,51 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const keys = collectStorageKeys(projects, assets);
     for (const key of await collectGenerationStorageKeys()) keys.add(key);
     await cleanupUnusedMedia(keys);
+  },
+
+  replaceWorkspace: async (snapshot) => {
+    await Promise.all([
+      get().persistNow(),
+      get().flushConfig(),
+      assetWrites.flush(),
+      promptWrites.flush(),
+    ]);
+    const current = get();
+    const previous: WorkspaceSnapshot = {
+      projects: structuredClone(current.projects),
+      assets: structuredClone(current.assets),
+      prompts: structuredClone(current.prompts),
+      config: structuredClone(current.config),
+      generationJobs: await listAllGenerationJobs(),
+    };
+    const persistSnapshot = async (value: WorkspaceSnapshot) => {
+      await saveProjects(value.projects);
+      await saveAssets(value.assets);
+      await savePrompts(value.prompts);
+      await saveConfig(value.config);
+      await replaceGenerationJobs(value.generationJobs);
+    };
+    try {
+      await persistSnapshot(snapshot);
+    } catch (error) {
+      try {
+        await persistSnapshot(previous);
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], "工作区恢复失败，且原数据回滚未完成");
+      }
+      throw error;
+    }
+    histories.clear();
+    set({
+      projects: structuredClone(snapshot.projects),
+      activeProjectId: snapshot.projects[0]?.id ?? null,
+      selectedIds: [],
+      clipboard: null,
+      config: structuredClone(snapshot.config),
+      assets: structuredClone(snapshot.assets),
+      prompts: structuredClone(snapshot.prompts),
+      connectingFrom: null,
+    });
   },
 }));
 

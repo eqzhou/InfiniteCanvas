@@ -11,6 +11,7 @@ import {
   readAgentToken,
   resolveAgentBaseUrl,
 } from "@/services/local-agent";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 const CodexPanel = lazy(async () => {
   const module = await import("@/components/agent/CodexPanel");
@@ -38,6 +39,7 @@ export function LocalAgentPanel() {
   ));
   const [token, setToken] = useState(initialAgentToken);
   const connection = useMemo(() => ({ baseUrl, token }), [baseUrl, token]);
+  useEscapeDismiss(show, () => setShow(false));
 
   const refresh = useCallback(async () => {
     setBusy(true);

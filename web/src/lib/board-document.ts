@@ -13,6 +13,9 @@ import { validateJsonObject } from "@/lib/bounded-json";
 
 const NODE_TYPES = new Set<NodeType>(["text", "image", "config", "video", "audio", "group", "plugin"]);
 const BACKGROUND_MODES = new Set(["dots", "lines", "blank"]);
+const GENERATION_MODES = new Set(["text", "image", "video"]);
+const VIDEO_RATIOS = new Set(["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]);
+const VIDEO_RESOLUTIONS = new Set(["480p", "720p", "1080p"]);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 const PLUGIN_ID_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$/;
 const MAX_NODES = 10_000;
@@ -83,6 +86,10 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   optionalString(input.size, `${path}.size`, 100);
   optionalString(input.quality, `${path}.quality`, 100);
   optionalString(input.storageKey, `${path}.storageKey`, 512);
+  if (input.generationMode !== undefined &&
+      (typeof input.generationMode !== "string" || !GENERATION_MODES.has(input.generationMode))) {
+    throw new Error(`${path}.generationMode is invalid`);
+  }
   if (input.count !== undefined) {
     const count = finite(input.count, `${path}.count`);
     if (!Number.isSafeInteger(count) || count < 1 || count > 8) {
@@ -110,6 +117,25 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   }
   if (input.smartDuration !== undefined && typeof input.smartDuration !== "boolean") {
     throw new Error(`${path}.smartDuration must be a boolean`);
+  }
+  if (input.duration !== undefined) {
+    const duration = finite(input.duration, `${path}.duration`);
+    if (!Number.isSafeInteger(duration) || duration < 4 || duration > 15) {
+      throw new Error(`${path}.duration is outside the supported range`);
+    }
+  }
+  if (input.videoRatio !== undefined &&
+      (typeof input.videoRatio !== "string" || !VIDEO_RATIOS.has(input.videoRatio))) {
+    throw new Error(`${path}.videoRatio is invalid`);
+  }
+  if (input.resolution !== undefined &&
+      (typeof input.resolution !== "string" || !VIDEO_RESOLUTIONS.has(input.resolution))) {
+    throw new Error(`${path}.resolution is invalid`);
+  }
+  for (const key of ["generateAudio", "watermark"] as const) {
+    if (input[key] !== undefined && typeof input[key] !== "boolean") {
+      throw new Error(`${path}.${key} must be a boolean`);
+    }
   }
   if (input.generationType !== undefined &&
       input.generationType !== "text-to-image" && input.generationType !== "image-to-image") {

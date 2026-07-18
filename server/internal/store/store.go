@@ -76,4 +76,5 @@ type Store interface {
 	GetGenerationJob(context.Context, string) (GenerationJob, error)
 	PutGenerationJob(context.Context, GenerationJob) error
 	DeleteGenerationJob(context.Context, string) error
+	ReplaceGenerationJobs(context.Context, []GenerationJob) error
 }

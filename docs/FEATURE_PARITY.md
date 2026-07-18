@@ -39,11 +39,11 @@ implementation evidence.
 | Assistant selected/upstream context, text/image generation, sessions, retry, insert and single/batch deletion | `AssistantPanel.tsx`, `assistant-sessions.test.ts`, assistant E2E |
 | Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and multiple remote caches | `PromptsPage.tsx`, `PromptDetailDialog.tsx`, `prompt-sources.test.ts`, prompt E2E |
 | Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | `AssetsPage.tsx`, `AssetEditorDialog.tsx`, asset/formal E2E |
-| WebDAV upload/download with media-complete project packages and no exported credentials | `SettingsModal.tsx`, `webdav.test.ts`, `project-bundle.test.ts` |
+| WebDAV project and full-workspace backup/restore with deduplicated media and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
 | Loopback New API query auto-configuration and remote-safe fragment configuration | `url-credentials.test.ts` and loopback-link E2E |
 | Plugin install/enable/update/rollback/uninstall, sandbox, permissions, SDK and five examples | plugin unit tests plus registry/SVG/panorama E2E |
 | Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, generation-job tests, workbench/formal E2E |
-| Browser runtime, MCP tools, snapshots, Codex continuity, attachments, stop and approvals | Go runtime/MCP/Codex tests plus browser/Codex E2E |
+| Multi-tab browser runtime, MCP tools, snapshots, Codex continuity, attachments, stop and approvals | Go runtime/MCP/Codex tests plus browser/Codex E2E |
 | PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
 
 ## Intentional differences
@@ -66,10 +66,10 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 196 Bun unit/integration tests; 86.57% lines and 88.59% functions
+- [verified] 199 Bun unit/integration tests; 86.73% lines and 88.60% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
-- [verified] 36/36 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 38/38 Chromium tests against the production Vite build and isolated Go data directory
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
@@ -100,7 +100,8 @@ implementation evidence.
 - [verified] Draggable image split guides with normalized coordinates and lineage
 - [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
 - [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion
-- [verified] PostgreSQL generation-job migration and paginated CRUD; IndexedDB compatibility in development mode
+- [verified] PostgreSQL generation-job migration, paginated CRUD and timestamp-preserving atomic bulk restore; IndexedDB compatibility in development mode
+- [verified] WebDAV full-workspace bundles include projects, assets, prompts, generation history and deduplicated media while preserving local credentials
 
 ## Plugins
 

@@ -14,6 +14,8 @@ import (
 )
 
 const maxGenerationJobBytes = 1 << 20
+const maxGenerationRestoreBytes = 32 << 20
+const maxGenerationRestoreItems = 10_000
 
 var generationKinds = map[string]bool{"image": true, "video": true}
 var generationStatuses = map[string]bool{
@@ -81,6 +83,38 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, job)
+}
+
+func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxGenerationRestoreBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var jobs []store.GenerationJob
+	if err := decoder.Decode(&jobs); err != nil || ensureJSONEOF(decoder) != nil || jobs == nil || len(jobs) > maxGenerationRestoreItems {
+		http.Error(w, "invalid or oversized generation history", http.StatusBadRequest)
+		return
+	}
+	ids := make(map[string]struct{}, len(jobs))
+	for _, job := range jobs {
+		if !validGenerationJob(job) {
+			http.Error(w, "invalid generation history item", http.StatusBadRequest)
+			return
+		}
+		if _, exists := ids[job.ID]; exists {
+			http.Error(w, "duplicate generation history id", http.StatusBadRequest)
+			return
+		}
+		ids[job.ID] = struct{}{}
+	}
+	if err := s.store.ReplaceGenerationJobs(r.Context(), jobs); err != nil {
+		http.Error(w, "failed to replace generation history", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) getGenerationJob(w http.ResponseWriter, r *http.Request) {
@@ -169,13 +203,26 @@ func decodeGenerationJob(w http.ResponseWriter, r *http.Request) (store.Generati
 	if err := ensureJSONEOF(decoder); err != nil {
 		return store.GenerationJob{}, errors.New("invalid generation job json")
 	}
-	if !validProjectID(job.ID) || (job.ProjectID != "" && !validProjectID(job.ProjectID)) ||
-		!generationKinds[job.Kind] || !generationStatuses[job.Status] ||
-		len(job.Prompt) > 100_000 || len(job.ProviderID) > 500 || len(job.Model) > 500 || len(job.Error) > 10_000 ||
-		!jsonObject(job.Parameters) || !jsonObject(job.Result) {
+	if !validGenerationJobFields(job) {
 		return store.GenerationJob{}, errors.New("invalid generation job fields")
 	}
 	return job, nil
+}
+
+func validGenerationJob(job store.GenerationJob) bool {
+	if !validGenerationJobFields(job) {
+		return false
+	}
+	_, createdErr := time.Parse(time.RFC3339Nano, job.CreatedAt)
+	_, updatedErr := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+	return createdErr == nil && updatedErr == nil
+}
+
+func validGenerationJobFields(job store.GenerationJob) bool {
+	return validProjectID(job.ID) && (job.ProjectID == "" || validProjectID(job.ProjectID)) &&
+		generationKinds[job.Kind] && generationStatuses[job.Status] &&
+		len(job.Prompt) <= 100_000 && len(job.ProviderID) <= 500 && len(job.Model) <= 500 && len(job.Error) <= 10_000 &&
+		jsonObject(job.Parameters) && jsonObject(job.Result)
 }
 
 func jsonObject(value json.RawMessage) bool {

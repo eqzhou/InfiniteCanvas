@@ -71,6 +71,7 @@ canvas.
 - Reproducible image retries with reference protection and expandable result batches
 - Direct text/image-to-video creation with smart duration and provider preflight validation
 - Persistent image/video generation jobs, history, retry, cancel, and canvas insertion
+- WebDAV project and full-workspace backup/restore for projects, assets, prompts, history, and deduplicated media
 
 ### Phase 3 — Independent plugins
 - Manifest v2 permissions, registry install/enable/disable/upgrade/rollback/uninstall
@@ -79,7 +80,7 @@ canvas.
 - Prompt tags, multiple refreshable remote sources, cover/result galleries, and canvas insertion
 
 ### Phase 4 — Browser and Codex agent runtime
-- Ticketed WebSocket with live state, atomic operations, snapshots, assets, prompts, and navigation
+- Multi-tab ticketed WebSocket with live state, atomic operations, snapshots, assets, prompts, and navigation
 - MCP stdio and owner-only remote connection file with compatibility tools
 - Continuous Codex threads, safe Markdown, structured logs, stop, attachments, and approvals
 - Independent OpenBoard Codex plugin installer and standard Claude MCP instructions

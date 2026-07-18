@@ -94,6 +94,15 @@ func (m *memoryStore) DeleteGenerationJob(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *memoryStore) ReplaceGenerationJobs(_ context.Context, jobs []store.GenerationJob) error {
+	next := make(map[string]store.GenerationJob, len(jobs))
+	for _, job := range jobs {
+		next[job.ID] = job
+	}
+	m.jobs = next
+	return nil
+}
+
 func persistentHandler(t *testing.T) http.Handler {
 	t.Helper()
 	r := chi.NewRouter()
@@ -223,5 +232,39 @@ func TestGenerationJobRejectsInvalidInput(t *testing.T) {
 	}
 	if got := request(t, handler, http.MethodGet, "/api/generation-jobs?page=0&pageSize=1000", nil); got.Code != http.StatusBadRequest {
 		t.Fatalf("invalid pagination accepted: %d", got.Code)
+	}
+}
+
+func TestGenerationJobBulkRestore(t *testing.T) {
+	backend := newMemoryStore()
+	handler := chi.NewRouter()
+	MountServer(handler, NewServerWithStore(t.TempDir(), backend))
+	body := []byte(`[{"id":"job-restored","projectId":"board-1","kind":"video","status":"succeeded","prompt":"restored","parameters":{"duration":5},"result":{"items":[]},"createdAt":"2026-07-01T01:02:03Z","updatedAt":"2026-07-02T04:05:06.123Z"}]`)
+	if got := request(t, handler, http.MethodPut, "/api/generation-jobs", body); got.Code != http.StatusNoContent {
+		t.Fatalf("restore jobs: %d %s", got.Code, got.Body.String())
+	}
+	job := backend.jobs["job-restored"]
+	if job.CreatedAt != "2026-07-01T01:02:03Z" || job.UpdatedAt != "2026-07-02T04:05:06.123Z" {
+		t.Fatalf("timestamps changed: %#v", job)
+	}
+}
+
+func TestGenerationJobBulkRestoreRejectsEntireInvalidBatch(t *testing.T) {
+	backend := newMemoryStore()
+	backend.jobs["existing"] = store.GenerationJob{ID: "existing"}
+	handler := chi.NewRouter()
+	MountServer(handler, NewServerWithStore(t.TempDir(), backend))
+	valid := `{"id":"job-1","kind":"image","status":"succeeded","prompt":"ok","parameters":{},"result":{},"createdAt":"2026-07-01T00:00:00Z","updatedAt":"2026-07-01T00:00:00Z"}`
+	for _, body := range []string{
+		`null`,
+		`[` + valid + `,` + valid + `]`,
+		`[` + valid + `,{"id":"job-2","kind":"audio","status":"running","prompt":"bad","parameters":{},"result":{},"createdAt":"2026-07-01T00:00:00Z","updatedAt":"2026-07-01T00:00:00Z"}]`,
+	} {
+		if got := request(t, handler, http.MethodPut, "/api/generation-jobs", []byte(body)); got.Code != http.StatusBadRequest {
+			t.Fatalf("invalid restore accepted: %d %s", got.Code, got.Body.String())
+		}
+		if len(backend.jobs) != 1 || backend.jobs["existing"].ID != "existing" {
+			t.Fatalf("invalid restore changed existing data: %#v", backend.jobs)
+		}
 	}
 }

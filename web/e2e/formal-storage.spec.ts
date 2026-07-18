@@ -84,9 +84,29 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   const created = await request.post("/api/generation-jobs", { data: generation });
   await expect(created).toBeOK();
   expect(created.status()).toBe(201);
+  const createdJob = await created.json() as Record<string, unknown>;
   const listed = await request.get("/api/generation-jobs?projectId=formal-project&kind=image&page=1&pageSize=10");
   await expect(listed).toBeOK();
   await expect(listed.json()).resolves.toMatchObject({ page: 1, pageSize: 10, total: 1 });
-  const deleted = await request.delete("/api/generation-jobs/formal-job-1");
-  expect(deleted.status()).toBe(204);
+  const restoredAt = "2026-07-01T02:03:04.567Z";
+  const replaced = await request.put("/api/generation-jobs", { data: [
+    createdJob,
+    {
+      ...generation,
+      id: "formal-job-restored",
+      prompt: "restored generation",
+      createdAt: restoredAt,
+      updatedAt: restoredAt,
+    },
+  ] });
+  expect(replaced.status()).toBe(204);
+  const restored = await request.get("/api/generation-jobs/formal-job-restored");
+  await expect(restored).toBeOK();
+  await expect(restored.json()).resolves.toMatchObject({
+    id: "formal-job-restored",
+    createdAt: restoredAt,
+    updatedAt: restoredAt,
+  });
+  const cleared = await request.put("/api/generation-jobs", { data: [] });
+  expect(cleared.status()).toBe(204);
 });

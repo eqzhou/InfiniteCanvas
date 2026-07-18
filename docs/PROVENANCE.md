@@ -15,6 +15,7 @@ working-tree action was clean-room compliant.
 | AI adapters and image/video workbenches | Original provider-neutral contracts based on public protocol documentation | Mock-provider unit tests, workbench E2E, and formal generation-job persistence |
 | Plugin registry, host, SDK, and examples | Original manifests, protocol, UI, and examples; Three.js is an MIT dependency | Permission/quota/catalog tests plus SVG and panorama E2E |
 | Browser runtime and expanded MCP tools | Original ticketed WebSocket and command protocol | Go WebSocket/remote MCP tests and protected-snapshot E2E |
+| WebDAV workspace bundles | Original bounded ZIP manifest, media remapping, credential filtering, and rollback protocol | Workspace bundle unit tests and formal generation-history restore E2E |
 | Codex panel and OpenBoard Codex plugin | Original local integration over public app-server/MCP concepts | Fake app-server tests, Markdown/attachment/interrupt/approval E2E, owner-only connection-file tests |
 
 ## Reference behavior

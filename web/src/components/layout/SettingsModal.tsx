@@ -1,14 +1,17 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { createDefaultChannel } from "@/lib/defaults";
 import { listModels } from "@/services/ai-client";
 import { webdavGetBlob, webdavPutBlob } from "@/services/webdav";
 import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
+import { exportWorkspaceBundle, importWorkspaceBundle } from "@/lib/workspace-bundle";
 import { getProvider, normalizeChannel } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
 import type { AiTemplateConfig } from "@/types/board";
 import { validateProviderTemplate } from "@/lib/provider-template";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { listAllGenerationJobs } from "@/services/generation-jobs";
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useBoardStore((s) => s.config);
@@ -18,6 +21,21 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [busyKind, setBusyKind] = useState<AiProviderKind | null>(null);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const requestClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    void flushConfig()
+      .then(() => {
+        setClosing(false);
+        onClose();
+      })
+      .catch((cause) => {
+        setClosing(false);
+        setError(cause instanceof Error ? cause.message : "配置保存失败");
+      });
+  }, [closing, flushConfig, onClose]);
+  useEscapeDismiss(open, requestClose);
 
   if (!open) return null;
   const channel =
@@ -60,18 +78,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             type="button"
             className="text-[var(--ob-muted)] disabled:opacity-50"
             disabled={closing}
-            onClick={() => {
-              setClosing(true);
-              void flushConfig()
-                .then(() => {
-                  setClosing(false);
-                  onClose();
-                })
-                .catch((cause) => {
-                  setClosing(false);
-                  setError(cause instanceof Error ? cause.message : "配置保存失败");
-                });
-            }}
+            onClick={requestClose}
           >
             {closing ? "保存中…" : "关闭"}
           </button>
@@ -235,6 +242,30 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     void (async () => {
                       try {
                         const state = useBoardStore.getState();
+                        const bundle = await exportWorkspaceBundle({
+                          projects: state.projects,
+                          assets: state.assets,
+                          prompts: state.prompts,
+                          config: state.config,
+                          generationJobs: await listAllGenerationJobs(),
+                        });
+                        await webdavPutBlob(state.config, "openboard-workspace.obundle", bundle);
+                        alert("已上传完整工作区备份");
+                      } catch (e) {
+                        alert(e instanceof Error ? e.message : String(e));
+                      }
+                    })();
+                  }}
+                >
+                  上传完整工作区
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        const state = useBoardStore.getState();
                         const blob = await webdavGetBlob(
                           state.config,
                           "openboard-current.openboard",
@@ -249,9 +280,28 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 >
                   导入云端画布
                 </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        if (!confirm("恢复完整工作区会替换当前项目、素材、提示词和生成历史。继续吗？")) return;
+                        const state = useBoardStore.getState();
+                        const blob = await webdavGetBlob(state.config, "openboard-workspace.obundle");
+                        await importWorkspaceBundle(blob, state.config, undefined, state.replaceWorkspace);
+                        alert("已恢复完整工作区");
+                      } catch (e) {
+                        alert(e instanceof Error ? e.message : String(e));
+                      }
+                    })();
+                  }}
+                >
+                  恢复完整工作区
+                </button>
               </div>
               <p className="text-xs text-[var(--ob-muted)]">
-                浏览器直连 WebDAV；需 HTTPS 和目标服务允许 CORS。完整包包含当前画布媒体。
+                浏览器直连 WebDAV；需 HTTPS 和目标服务允许 CORS。完整包包含项目、素材、提示词、生成历史和媒体；密钥不导出。
               </p>
             </div>
           </div>

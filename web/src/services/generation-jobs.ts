@@ -1,4 +1,4 @@
-import { createStore, del, entries, get, set } from "idb-keyval";
+import { clear, createStore, del, entries, get, set, setMany } from "idb-keyval";
 import type {
   GenerationJob,
   GenerationJobPage,
@@ -48,7 +48,7 @@ export function paginateGenerationJobs(
   };
 }
 
-function validateJob(job: GenerationJob): GenerationJob {
+export function validateGenerationJob(job: GenerationJob): GenerationJob {
   const kinds = new Set<GenerationKind>(["image", "video"]);
   const statuses = new Set<GenerationStatus>(["queued", "running", "succeeded", "failed", "cancelled"]);
   if (!ID.test(job.id) || (job.projectId && !ID.test(job.projectId)) || !kinds.has(job.kind) ||
@@ -83,9 +83,9 @@ export async function listGenerationJobs(query: GenerationJobQuery = {}): Promis
     if (query.projectId) params.set("projectId", query.projectId);
     if (query.kind) params.set("kind", query.kind);
     const result = await api<GenerationJobPage>(`generation-jobs?${params}`);
-    return { ...result, items: result.items.map(validateJob) };
+    return { ...result, items: result.items.map(validateGenerationJob) };
   }
-  const values = (await entries<string, GenerationJob>(jobStore)).map(([, value]) => validateJob(value));
+  const values = (await entries<string, GenerationJob>(jobStore)).map(([, value]) => validateGenerationJob(value));
   return paginateGenerationJobs(values, query);
 }
 
@@ -93,21 +93,21 @@ export async function getGenerationJob(id: string): Promise<GenerationJob | unde
   if (!ID.test(id)) throw new Error("invalid generation job id");
   if (SERVER_STORAGE) {
     try {
-      return validateJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`));
+      return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`));
     } catch (error) {
       if (error instanceof Error && error.message.endsWith("HTTP 404")) return undefined;
       throw error;
     }
   }
   const value = await get<GenerationJob>(id, jobStore);
-  return value ? validateJob(value) : undefined;
+  return value ? validateGenerationJob(value) : undefined;
 }
 
 export async function createGenerationJob(input: NewGenerationJob): Promise<GenerationJob> {
   const timestamp = nowIso();
-  const job = validateJob({ ...input, id: input.id ?? uid("job"), createdAt: timestamp, updatedAt: timestamp });
+  const job = validateGenerationJob({ ...input, id: input.id ?? uid("job"), createdAt: timestamp, updatedAt: timestamp });
   if (SERVER_STORAGE) {
-    return validateJob(await api<GenerationJob>("generation-jobs", { method: "POST", body: JSON.stringify(job) }));
+    return validateGenerationJob(await api<GenerationJob>("generation-jobs", { method: "POST", body: JSON.stringify(job) }));
   }
   if (await get(job.id, jobStore)) throw new Error("generation job already exists");
   await set(job.id, job, jobStore);
@@ -117,9 +117,9 @@ export async function createGenerationJob(input: NewGenerationJob): Promise<Gene
 export async function updateGenerationJob(id: string, patch: Partial<GenerationJob>): Promise<GenerationJob> {
   const current = await getGenerationJob(id);
   if (!current) throw new Error("generation job not found");
-  const job = validateJob({ ...current, ...patch, id, createdAt: current.createdAt, updatedAt: nowIso() });
+  const job = validateGenerationJob({ ...current, ...patch, id, createdAt: current.createdAt, updatedAt: nowIso() });
   if (SERVER_STORAGE) {
-    return validateJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(job) }));
+    return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(job) }));
   }
   await set(id, job, jobStore);
   return job;
@@ -134,12 +134,36 @@ export async function deleteGenerationJob(id: string): Promise<void> {
   await del(id, jobStore);
 }
 
-export async function collectGenerationStorageKeys(): Promise<Set<string>> {
-  const keys = new Set<string>();
+export async function listAllGenerationJobs(): Promise<GenerationJob[]> {
+  const jobs: GenerationJob[] = [];
   let page = 1;
   while (true) {
     const result = await listGenerationJobs({ page, pageSize: 100 });
-    for (const job of result.items) {
+    jobs.push(...result.items);
+    if (page * result.pageSize >= result.total) return jobs;
+    page += 1;
+  }
+}
+
+export async function replaceGenerationJobs(jobs: GenerationJob[]): Promise<void> {
+  if (jobs.length > 10_000) throw new Error("generation history exceeds 10000 items");
+  const validated = jobs.map(validateGenerationJob);
+  const ids = new Set<string>();
+  for (const job of validated) {
+    if (ids.has(job.id)) throw new Error("duplicate generation job id");
+    ids.add(job.id);
+  }
+  if (SERVER_STORAGE) {
+    await api<void>("generation-jobs", { method: "PUT", body: JSON.stringify(validated) });
+    return;
+  }
+  await clear(jobStore);
+  await setMany(validated.map((job) => [job.id, job] as [IDBValidKey, GenerationJob]), jobStore);
+}
+
+export async function collectGenerationStorageKeys(): Promise<Set<string>> {
+  const keys = new Set<string>();
+  for (const job of await listAllGenerationJobs()) {
       const references = Array.isArray(job.parameters.referenceStorageKeys)
         ? job.parameters.referenceStorageKeys
         : [];
@@ -150,9 +174,6 @@ export async function collectGenerationStorageKeys(): Promise<Set<string>> {
           keys.add((item as { storageKey: string }).storageKey);
         }
       }
-    }
-    if (page * result.pageSize >= result.total) break;
-    page += 1;
   }
   return keys;
 }

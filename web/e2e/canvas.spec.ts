@@ -150,6 +150,29 @@ test("node ports support click-to-connect without requiring a drag", async ({ pa
   }))).toBe(1);
 });
 
+test("Escape closes settings, shortcuts, and the local Agent panel", async ({ page }) => {
+  test.skip(
+    (page.viewportSize()?.width ?? 1440) < 768,
+    "The shortcut button is intentionally hidden in the compact toolbar.",
+  );
+  await openFreshBoard(page);
+
+  await page.getByTitle("设置").click();
+  await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "设置" })).toHaveCount(0);
+
+  await page.getByTitle("快捷键").click();
+  await expect(page.getByRole("heading", { name: "画布快捷键" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "画布快捷键" })).toHaveCount(0);
+
+  await page.getByTitle("本地 Agent").click();
+  await expect(page.getByText("本地 Agent", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("本地 Agent", { exact: true })).toHaveCount(0);
+});
+
 test("node title, font size, and model overrides are editable and persistent", async ({ page }) => {
   await openFreshBoard(page);
   await page.getByTitle("文本").click();
@@ -344,6 +367,51 @@ test("image workbench persists history and inserts a result into the canvas", as
   await expect(page.getByRole("button", { name: "已插入" })).toBeVisible();
   await page.goto("/");
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+});
+
+test("video workbench persists Ark audio and watermark settings across retry", async ({ page }) => {
+  const requestBodies: Array<Record<string, unknown>> = [];
+  await page.route("https://workbench-video.example/api/plan/v3/contents/generations/tasks", async (route) => {
+    requestBodies.push(JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: `video-${requestBodies.length}`,
+        status: "succeeded",
+        content: { video_url: "https://cdn.example/workbench.mp4" },
+      }),
+    });
+  });
+  await page.route("https://cdn.example/workbench.mp4", async (route) => {
+    await route.fulfill({ contentType: "video/mp4", body: "video-bytes" });
+  });
+
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("视频协议").selectOption("ark");
+  await page.getByLabel("视频 URL").fill("https://workbench-video.example/api/plan/v3");
+  await page.getByLabel("视频 API Key").fill("workbench-video-key");
+  await page.getByLabel("视频模型").fill("doubao-seedance-2.0");
+  await closeSettings(page);
+
+  await page.goto("/workbench/video");
+  await page.getByLabel("提示词").fill("orbiting product shot");
+  await page.getByLabel("生成声音").check();
+  await page.getByLabel("水印").check();
+  await page.getByRole("button", { name: "生成", exact: true }).click();
+
+  const history = page.locator("article").filter({ hasText: "orbiting product shot" });
+  await expect(history).toContainText("succeeded");
+  expect(requestBodies).toHaveLength(1);
+  expect(requestBodies[0]?.generate_audio).toBe(true);
+  expect(requestBodies[0]?.watermark).toBe(true);
+
+  await page.reload();
+  const reloaded = page.locator("article").filter({ hasText: "orbiting product shot" });
+  await reloaded.getByTitle("重试").click();
+  await expect.poll(() => requestBodies).toHaveLength(2);
+  expect(requestBodies[1]?.generate_audio).toBe(true);
+  expect(requestBodies[1]?.watermark).toBe(true);
 });
 
 test("image split supports draggable guides and persists normalized lineage", async ({ page }) => {

@@ -46,6 +46,8 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
   const [smartDuration, setSmartDuration] = useState(false);
   const [ratio, setRatio] = useState("16:9");
   const [resolution, setResolution] = useState("720p");
+  const [generateAudio, setGenerateAudio] = useState(false);
+  const [watermark, setWatermark] = useState(false);
   const [references, setReferences] = useState<File[]>([]);
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
   const [busy, setBusy] = useState(false);
@@ -102,7 +104,15 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
       }
       const parameters = source?.parameters ?? (kind === "image"
         ? { size, quality, count, transparentBackground: transparent, referenceStorageKeys }
-        : { seconds, smartDuration, ratio, resolution, referenceStorageKeys });
+        : {
+            seconds,
+            smartDuration,
+            ratio,
+            resolution,
+            generateAudio,
+            watermark,
+            referenceStorageKeys,
+          });
       job = await createGenerationJob({
         projectId: project?.id,
         kind,
@@ -142,6 +152,8 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           ),
           ratio: String(parameters.ratio ?? ratio),
           resolution: String(parameters.resolution ?? resolution),
+          generateAudio: Boolean(parameters.generateAudio),
+          watermark: Boolean(parameters.watermark),
           referenceImages: referenceData.filter((value) => value.startsWith("data:image/")),
           referenceVideos: referenceData.filter((value) => value.startsWith("data:video/")),
           referenceAudios: referenceData.filter((value) => value.startsWith("data:audio/")),
@@ -222,6 +234,8 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                 <label>比例<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={ratio} onChange={(event) => setRatio(event.target.value)} /></label>
                 <label>清晰度<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label>
                 <label className="flex items-center gap-2 self-end pb-2"><input type="checkbox" checked={smartDuration} onChange={(event) => setSmartDuration(event.target.checked)} />智能时长</label>
+                <label className="flex items-center gap-2"><input type="checkbox" checked={generateAudio} onChange={(event) => setGenerateAudio(event.target.checked)} />生成声音</label>
+                <label className="flex items-center gap-2"><input type="checkbox" checked={watermark} onChange={(event) => setWatermark(event.target.checked)} />水印</label>
               </div>
             )}
             <label className="block">参考素材<input type="file" multiple accept="image/*,video/*,audio/*" className="mt-1 block w-full text-xs" onChange={(event) => setReferences(Array.from(event.target.files ?? []))} /></label>
