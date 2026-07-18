@@ -42,6 +42,14 @@ describe("canvas geometry", () => {
     expect(fitViewport([], 900, 500)).toEqual({ x: 450, y: 250, k: 1 });
   });
 
+  test("fitViewport keeps node controls outside the node rectangle visible", () => {
+    const viewport = fitViewport([node(0, 0, 240, 180)], 1000, 600, 80);
+    const overflow = 120;
+
+    expect((-overflow * viewport.k) + viewport.x).toBeGreaterThanOrEqual(79);
+    expect(((180 + overflow) * viewport.k) + viewport.y).toBeLessThanOrEqual(521);
+  });
+
   test("media display bounds keep tiny and huge images usable", () => {
     expect(fitMediaDisplaySize(1, 1)).toEqual({ width: 120, height: 120 });
     expect(fitMediaDisplaySize(4_000, 2_000)).toEqual({ width: 420, height: 210 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { BoardNode } from "@/types/board";
 import { cn } from "@/lib/cn";
 import { useBoardStore } from "@/stores/use-board-store";
@@ -48,6 +48,7 @@ export function BoardNodeView({
   onCompleteConnect,
   onContextMenu,
 }: Props) {
+  const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const updateNode = useBoardStore((s) => s.updateNode);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -187,6 +188,7 @@ export function BoardNodeView({
               </select>
             </div>
             <textarea
+              ref={textEditorRef}
               className="min-h-0 flex-1 resize-none border-0 bg-transparent outline-none"
               style={{ fontSize: node.metadata.fontSize ?? 14 }}
               value={node.metadata.content ?? ""}
@@ -523,7 +525,17 @@ export function BoardNodeView({
         ) : null}
       </div>
 
-      {selected && node.type !== "group" && node.type !== "plugin" ? <NodeActions node={node} /> : null}
+      {selected && node.type !== "group" && node.type !== "plugin" ? (
+        <NodeActions
+          node={node}
+          onEditText={node.type === "text" ? () => {
+            const editor = textEditorRef.current;
+            if (!editor) return;
+            editor.focus();
+            editor.setSelectionRange(editor.value.length, editor.value.length);
+          } : undefined}
+        />
+      ) : null}
       {selected && node.type !== "config" && node.type !== "group" && node.type !== "plugin" ? (
         <NodePromptBar node={node} />
       ) : null}

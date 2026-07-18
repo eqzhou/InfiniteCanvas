@@ -2,6 +2,7 @@ import { uploadMedia } from "@/services/storage";
 import type { BoardNode } from "@/types/board";
 import { createNode } from "@/lib/defaults";
 import { normalizeSplitGuides, splitSegments } from "@/lib/image-split";
+import { fitMediaDisplaySize } from "@/lib/geometry";
 
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -91,6 +92,7 @@ export async function splitImageByGuides(
       );
       const blob = await canvasToBlob(canvas);
       const uploaded = await uploadMedia(blob, "image");
+      const display = fitMediaDisplaySize(cellW, cellH, 120, 240);
       out.push(
         createNode(
           "image",
@@ -100,8 +102,8 @@ export async function splitImageByGuides(
           },
           {
             title: `${source.title} · ${r + 1}x${c + 1}`,
-            width: Math.min(240, cellW),
-            height: Math.min(240, cellH),
+            width: display.width,
+            height: display.height,
             metadata: {
               content: uploaded.url,
               storageKey: uploaded.storageKey,

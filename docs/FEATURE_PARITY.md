@@ -19,26 +19,26 @@ implementation evidence.
 
 | Public behavior | Local evidence |
 |---|---|
-| Multi-project create/rename/delete/batch delete and JSON/media import/export | `use-board-store.ts`, `HomePage.tsx`, `board-document.test.ts`, `project-bundle.test.ts`, formal storage E2E |
-| Pan, wheel/pinch/slider zoom, reset, fit, minimap, backgrounds and themes | `gesture.test.ts`, `geometry.test.ts`, `BoardCanvas.tsx`, viewport/mobile E2E |
-| Marquee/additive/all selection, delete, copy/paste with edges, undo/redo and shortcuts | `BoardCanvas.tsx`, `use-board-store.ts`, `history.test.ts`, `keyboard.test.ts` |
-| Selected-node upstream/downstream node and edge highlighting | `BoardCanvas.tsx` related-node/active-edge rendering |
-| Text/image/config/video/audio nodes, drag, resize, ports, metadata and preview | `BoardNodeView.tsx`, `NodeActions.tsx`, canvas E2E |
-| Image proportional/free resizing, replacement, download and asset insertion | `BoardNodeView.tsx`, `NodeActions.tsx`, `AssetsPage.tsx` |
-| Text editing, node model/prompt selection, empty-node fill and connected rewrite | `NodePromptBar.tsx`, `node title, font size, and model overrides` E2E |
+| Multi-project create/rename/delete/batch delete and JSON/media import/export | project lifecycle E2E, `board-document.test.ts`, `project-bundle.test.ts`, formal storage E2E |
+| Pan, wheel/pinch/slider zoom, reset, fit, minimap, backgrounds and themes | canvas editing/touch/viewport E2E, `gesture.test.ts`, `geometry.test.ts` |
+| Marquee/additive/all selection, delete, copy/paste with edges, undo/redo and shortcuts | canvas editing E2E, `history.test.ts`, `keyboard.test.ts` |
+| Selected-node upstream/downstream node and edge highlighting | canvas editing E2E asserts related node and active edge rendering |
+| Text/image/config/video/audio nodes, drag, resize, ports, metadata and preview | canvas/image/local-media E2E plus group drag E2E |
+| Image proportional/free resizing, replacement, download and asset insertion | image lifecycle and asset-library E2E |
+| Text editing, explicit toolbar edit, node model/prompt selection, empty-node fill and connected rewrite | node title/font/model and node prompt E2E |
 | Connected media `@` menu, thumbnail chips, atomic deletion and deterministic request references | `PromptChipInput.tsx`, `prompt-references.test.ts`, prompt-chip E2E |
 | Text-to-image creates and immediately runs a connected config node | `text-to-image creates a connected config` E2E |
 | Config nodes aggregate ordered text/image/video/audio inputs | `BoardNodeView.tsx` input preview, `NodeActions.tsx` ordered upstream resolver, and Ark request-order E2E |
 | Config image batches and config text batches of 1-8 results | `image-generation.test.ts`, `text-batch.test.ts`, config text-batch E2E |
-| Image upload/drag, crop, rotate/multi-angle, mask, upscale, split and lineage | image transform unit tests plus split/upscale E2E |
+| Image upload/drag, crop, rotate/multi-angle, mask, upscale, split and lineage | image lifecycle, split controls and upscale E2E plus image-transform unit tests |
 | Image retry protects missing references; multi-result batches expand and select a primary image | `image-generation.test.ts`, `BatchGroupControls.tsx`, canvas E2E |
 | Independent text/image/video/audio provider URL, key, protocol, model and model listing | `SettingsModal.tsx`, `ai-client.test.ts`, formal storage E2E |
 | Global system prompt across text, image generation, and image editing entry points | `ai-client.test.ts`, text-batch and text-to-image E2E |
 | OpenAI text/image/video/audio and Ark/Seedance video contracts | `ai-client.test.ts`, `video-generation.test.ts`, image-to-video E2E |
 | Seedance 9 image/3 video/3 audio references, ratios, 480p/720p/1080p and smart/4-15s duration | `NodeActions.tsx`, `BoardNodeView.tsx`, `CreativeWorkbench.tsx`, `video-generation.test.ts` |
-| Assistant selected/upstream context, text/image generation, sessions, retry, insert and single/batch deletion | `AssistantPanel.tsx`, `assistant-sessions.test.ts`, assistant E2E |
-| Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and multiple remote caches | `PromptsPage.tsx`, `PromptDetailDialog.tsx`, `prompt-sources.test.ts`, prompt E2E |
-| Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | `AssetsPage.tsx`, `AssetEditorDialog.tsx`, asset/formal E2E |
+| Assistant selected/upstream context, text/image generation, sessions, retry, insert and single/batch deletion | full assistant generation E2E and `assistant-sessions.test.ts` |
+| Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and multiple remote caches | prompt detail/library E2E and `prompt-sources.test.ts` |
+| Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | full asset-library E2E and formal-storage E2E |
 | WebDAV project and full-workspace backup/restore with deduplicated media and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
 | Loopback New API query auto-configuration and remote-safe fragment configuration | `url-credentials.test.ts` and loopback-link E2E |
 | Plugin install/enable/update/rollback/uninstall, sandbox, permissions, SDK and five examples | plugin unit tests plus registry/SVG/panorama E2E |
@@ -66,10 +66,11 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 201 Bun unit/integration tests; 87.02% lines and 88.84% functions
+- [verified] 207 Bun unit/integration tests; 87.12% lines and 89.26% functions
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
-- [verified] 45/45 Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 51/51 desktop Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 41 passed and 10 intentional desktop-only skips in production mobile Chromium
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit

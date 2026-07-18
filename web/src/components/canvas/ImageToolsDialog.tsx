@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { BoardNode } from "@/types/board";
 import type { ImageTransformContext } from "@/services/image-transform/types";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
@@ -95,7 +96,7 @@ export function ImageToolsDialog({
     onClose();
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
       <div className="w-full max-w-md rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
         <div className="mb-3 flex items-center justify-between">
@@ -281,7 +282,8 @@ export function ImageToolsDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

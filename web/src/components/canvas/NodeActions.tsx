@@ -28,6 +28,7 @@ import { createTransformLineage } from "@/services/image-transform/lineage";
 import { applySystemPrompt } from "@/lib/app-config";
 import { getProvider } from "@/lib/ai-config";
 import { adjustFontSize } from "@/lib/node-format";
+import { filenameForMimeType } from "@/lib/download-filename";
 import {
   assertResolvedImageReferences,
   createImageGenerationMetadata,
@@ -47,7 +48,7 @@ import {
   Wand2,
 } from "lucide-react";
 
-export function NodeActions({ node }: { node: BoardNode }) {
+export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?: () => void }) {
   const project = useBoardStore((s) => s.getActive());
   const config = useBoardStore((s) => s.config);
   const updateNode = useBoardStore((s) => s.updateNode);
@@ -746,13 +747,14 @@ export function NodeActions({ node }: { node: BoardNode }) {
       return;
     }
     try {
-      const ext =
-        node.type === "video"
-          ? "mp4"
-          : node.metadata.mimeType?.includes("png")
-            ? "png"
-            : "jpg";
-      await downloadStorageKey(node.metadata.storageKey, `${node.title || node.id}.${ext}`);
+      await downloadStorageKey(
+        node.metadata.storageKey,
+        filenameForMimeType(
+          node.title || node.id,
+          node.metadata.mimeType,
+          node.type === "video" ? "mp4" : node.type === "audio" ? "mp3" : "jpg",
+        ),
+      );
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
@@ -841,6 +843,9 @@ return (
       >
         {node.type === "text" ? (
           <>
+            <IconBtn title="编辑文字" onClick={() => onEditText?.()}>
+              <Type size={14} />
+            </IconBtn>
             <IconBtn title="AI 改写" onClick={() => void rewriteText()}>
               <Wand2 size={14} />
             </IconBtn>

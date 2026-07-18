@@ -3,7 +3,9 @@ import { useBoardStore } from "@/stores/use-board-store";
 import type { AssetItem } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
 import { collectStorageKeys, deleteBlob, downloadStorageKey, uploadMedia } from "@/services/storage";
+import { filenameForMimeType } from "@/lib/download-filename";
 import { AssetEditorDialog, type AssetEditorValues } from "@/components/assets/AssetEditorDialog";
+import { collectGenerationStorageKeys } from "@/services/generation-jobs";
 
 export function AssetsPage() {
   const assets = useBoardStore((s) => s.assets);
@@ -73,6 +75,7 @@ export function AssetsPage() {
   const removeOrphanedBlob = async (storageKey: string | undefined, nextAssets: AssetItem[]) => {
     if (!storageKey) return;
     const keys = collectStorageKeys(useBoardStore.getState().projects, nextAssets);
+    for (const key of await collectGenerationStorageKeys()) keys.add(key);
     if (!keys.has(storageKey)) {
       await deleteBlob(storageKey.startsWith("media:") ? "media" : "image", storageKey);
     }
@@ -211,7 +214,10 @@ export function AssetsPage() {
                   type="button"
                   className="rounded border border-[var(--ob-line)] px-2 py-1"
                   onClick={() =>
-                    void downloadStorageKey(a.storageKey!, `${a.title || a.id}.png`)
+                    void downloadStorageKey(
+                      a.storageKey!,
+                      filenameForMimeType(a.title || a.id, a.mimeType, "png"),
+                    )
                   }
                 >
                   下载

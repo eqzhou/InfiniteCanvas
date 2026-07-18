@@ -154,8 +154,9 @@ function applySnap(project: BoardProject, s: Snapshot): BoardProject {
   };
 }
 
-let persistTimer: number | undefined;
 let hydratePromise: Promise<void> | undefined;
+const projectWrites = new LatestWrite(saveProjects, (error) =>
+  console.error("OpenBoard project persistence failed", error));
 const configWrites = new LatestWrite(saveConfig, (error) =>
   console.error("OpenBoard config persistence failed", error));
 const assetWrites = new LatestWrite(saveAssets, (error) =>
@@ -182,44 +183,46 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     if (hydratePromise) return hydratePromise;
     hydratePromise = (async () => {
       try {
-      const [rawProjects, config, rawAssets, prompts] = await Promise.all([
-        loadProjects(),
-        loadConfig(),
-        loadAssets(),
-        loadPrompts(),
-      ]);
-      const [projects, assets] = await Promise.all([
-        rehydrateProjects(rawProjects),
-        rehydrateAssets(rawAssets),
-      ]);
-      let nextProjects = projects;
-      let activeProjectId = projects[0]?.id ?? null;
-      if (!nextProjects.length) {
-        const first = createProject("我的第一个画布");
-        nextProjects = [first];
-        activeProjectId = first.id;
-      }
-      const defaults = createDefaultConfig();
-      const hydratedConfig = config
-        ? normalizeAppConfig({
-            ...defaults,
-            ...config,
-            plugins: normalizePluginManifests(config.plugins),
-            disabledPluginIds: Array.isArray(config.disabledPluginIds)
-              ? [...new Set(config.disabledPluginIds.filter((id): id is string => typeof id === "string"))]
-              : [],
-          })
-        : defaults;
-      set({
-        ready: true,
-        projects: nextProjects,
-        config: hydratedConfig,
-        assets,
-        prompts,
-        activeProjectId,
-      });
-      await saveProjects(nextProjects);
-      await saveAssets(assets);
+        const [rawProjects, config, rawAssets, prompts] = await Promise.all([
+          loadProjects(),
+          loadConfig(),
+          loadAssets(),
+          loadPrompts(),
+        ]);
+        const [projects, assets] = await Promise.all([
+          rehydrateProjects(rawProjects),
+          rehydrateAssets(rawAssets),
+        ]);
+        let nextProjects = projects;
+        let activeProjectId = projects[0]?.id ?? null;
+        if (!nextProjects.length) {
+          const first = createProject("我的第一个画布");
+          nextProjects = [first];
+          activeProjectId = first.id;
+        }
+        const defaults = createDefaultConfig();
+        const hydratedConfig = config
+          ? normalizeAppConfig({
+              ...defaults,
+              ...config,
+              plugins: normalizePluginManifests(config.plugins),
+              disabledPluginIds: Array.isArray(config.disabledPluginIds)
+                ? [...new Set(config.disabledPluginIds.filter((id): id is string => typeof id === "string"))]
+                : [],
+            })
+          : defaults;
+        await Promise.all([
+          saveProjects(nextProjects),
+          saveAssets(assets),
+        ]);
+        set({
+          ready: true,
+          projects: nextProjects,
+          config: hydratedConfig,
+          assets,
+          prompts,
+          activeProjectId,
+        });
       } catch (err) {
         console.error("OpenBoard hydrate failed", err);
         set({
@@ -583,7 +586,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
       const assets = [asset, ...get().assets];
       set({ assets });
-      await saveAssets(assets);
+      assetWrites.enqueue(structuredClone(assets));
+      await assetWrites.flush();
       return;
     }
     if (node.type === "image" && node.metadata.content) {
@@ -600,7 +604,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
       const assets = [asset, ...get().assets];
       set({ assets });
-      await saveAssets(assets);
+      assetWrites.enqueue(structuredClone(assets));
+      await assetWrites.flush();
     }
   },
 
@@ -728,16 +733,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   persist: async () => {
-    window.clearTimeout(persistTimer);
-    persistTimer = window.setTimeout(async () => {
-      await get().persistNow();
-    }, 250);
+    projectWrites.enqueue(structuredClone(get().projects));
   },
 
   persistNow: async () => {
-    window.clearTimeout(persistTimer);
+    projectWrites.enqueue(structuredClone(get().projects));
+    await projectWrites.flush();
     const { projects, assets } = get();
-    await saveProjects(projects);
     const keys = collectStorageKeys(projects, assets);
     for (const key of await collectGenerationStorageKeys()) keys.add(key);
     await cleanupUnusedMedia(keys);

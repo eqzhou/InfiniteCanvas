@@ -49,7 +49,9 @@ export function MiniMap({
   };
 
   return (
-    <div
+    <button
+      type="button"
+      aria-label="画布小地图"
       className="absolute bottom-4 right-4 overflow-hidden rounded-lg border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)]"
       style={{ width: mw, height: mh }}
       onClick={(e) => {
@@ -90,6 +92,6 @@ export function MiniMap({
           strokeWidth={1.5}
         />
       </svg>
-    </div>
+    </button>
   );
 }

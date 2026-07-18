@@ -35,6 +35,8 @@ import { createNodeSpatialIndex } from "@/lib/spatial-index";
 import { createEdgeGeometryIndex } from "@/lib/edge-index";
 import { enabledPluginManifests } from "@/lib/plugin-catalog";
 import { BUILTIN_PLUGINS } from "@/plugins/builtins";
+import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
+import { findOpenNodePosition } from "@/lib/node-placement";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -575,21 +577,28 @@ export function BoardCanvas() {
             { x: size.w / 2, y: size.h / 2 },
             project.viewport,
           );
-          addNode(type, {
+          const preferred = {
             x: center.x - 140,
             y: center.y - 100,
-          });
+          };
+          addNode(type, findOpenNodePosition(
+            project.nodes,
+            preferred,
+            DEFAULT_NODE_SIZE[type],
+          ));
         }}
         onImportImages={async (files) => {
           const center = screenToWorld(
             { x: size.w / 2, y: size.h / 2 },
             project.viewport,
           );
-          for (const [i, file] of files.entries()) {
-            await attachUploadedImage(file, {
-              x: center.x + i * 24,
-              y: center.y + i * 24,
-            });
+          for (const file of files) {
+            const currentNodes = useBoardStore.getState().getActive()?.nodes ?? [];
+            await attachUploadedImage(file, findOpenNodePosition(
+              currentNodes,
+              center,
+              DEFAULT_NODE_SIZE.image,
+            ));
           }
         }}
         onImportVideos={async (files) => {
@@ -597,11 +606,13 @@ export function BoardCanvas() {
             { x: size.w / 2, y: size.h / 2 },
             project.viewport,
           );
-          for (const [i, file] of files.entries()) {
-            await attachUploadedVideo(file, {
-              x: center.x + i * 24,
-              y: center.y + i * 24,
-            });
+          for (const file of files) {
+            const currentNodes = useBoardStore.getState().getActive()?.nodes ?? [];
+            await attachUploadedVideo(file, findOpenNodePosition(
+              currentNodes,
+              center,
+              DEFAULT_NODE_SIZE.video,
+            ));
           }
         }}
         onImportAudios={async (files) => {
@@ -609,11 +620,13 @@ export function BoardCanvas() {
             { x: size.w / 2, y: size.h / 2 },
             project.viewport,
           );
-          for (const [i, file] of files.entries()) {
-            await attachUploadedAudio(file, {
-              x: center.x + i * 24,
-              y: center.y + i * 24,
-            });
+          for (const file of files) {
+            const currentNodes = useBoardStore.getState().getActive()?.nodes ?? [];
+            await attachUploadedAudio(file, findOpenNodePosition(
+              currentNodes,
+              center,
+              DEFAULT_NODE_SIZE.audio,
+            ));
           }
         }}
         onOpenAssets={() => {

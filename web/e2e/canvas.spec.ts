@@ -21,12 +21,154 @@ async function closeSettings(page: Page) {
   await expect(page.getByRole("heading", { name: "设置" })).toHaveCount(0);
 }
 
+async function openProjectPanel(page: Page) {
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await page.getByTitle("项目").click();
+  }
+}
+
+function projectCard(page: Page, title: string) {
+  return page.locator("aside .group").filter({
+    has: page.locator(`input[value="${title}"]`),
+  });
+}
+
 test("first launch creates and opens a board project", async ({ page }) => {
   await openFreshBoard(page);
   if ((page.viewportSize()?.width ?? 1440) >= 768) {
     await expect(page.locator('input[value="我的第一个画布"]')).toBeVisible();
     await expect(page.getByText("0 节点", { exact: false })).toBeVisible();
   }
+});
+
+test("projects support create, rename, JSON export/import, and batch delete", async ({ page }) => {
+  await openFreshBoard(page);
+  await openProjectPanel(page);
+  await page.getByTitle("新建").click();
+  await page.getByTitle("新建").click();
+  await expect(page.locator('input[value="画布 2"]')).toBeVisible();
+  const latestTitle = page.locator('input[value="画布 3"]');
+  await latestTitle.fill("可导出项目");
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTitle("导出当前").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("可导出项目.json");
+
+  const now = "2026-07-18T00:00:00.000Z";
+  await page.locator('input[type="file"][accept^=".json"]').setInputFiles({
+    name: "imported-project.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      id: "import-source",
+      title: "外部项目",
+      createdAt: now,
+      updatedAt: now,
+      nodes: [],
+      edges: [],
+      chatSessions: [],
+      activeChatId: null,
+      backgroundMode: "dots",
+      viewport: { x: 0, y: 0, k: 1 },
+    })),
+  });
+  await expect(page.locator('input[value="外部项目 (导入)"]')).toBeVisible();
+
+  await projectCard(page, "画布 2").getByRole("checkbox").check();
+  await projectCard(page, "可导出项目").getByRole("checkbox").check();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTitle("删除勾选").click();
+  await expect(page.locator('input[value="画布 2"]')).toHaveCount(0);
+  await expect(page.locator('input[value="可导出项目"]')).toHaveCount(0);
+  await expect(page.locator('input[value="我的第一个画布"]')).toBeVisible();
+  await expect(page.locator('input[value="外部项目 (导入)"]')).toBeVisible();
+});
+
+test("canvas editing preserves copied edges, history, view controls, and appearance", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop controls and edge hit targets are covered here.");
+  await openFreshBoard(page);
+  await page.getByTitle("文本").click();
+  await page.getByTitle("配置").click();
+  const textNode = page.locator('[data-node-type="text"]');
+  const configNode = page.locator('[data-node-type="config"]');
+  await textNode.getByTitle("输出端口 / 拖出连线").click();
+  await configNode.getByTitle("输入端口").click();
+  const edges = page.getByTestId("canvas-surface").locator("svg").first().locator("g");
+  await expect(edges).toHaveCount(1);
+  await textNode.locator("[data-node-header]").click();
+  await expect(textNode).toHaveClass(/border-\[var\(--ob-select\)\]/);
+  await expect(configNode).toHaveClass(/border-\[var\(--ob-accent\)\]/);
+  await expect(edges.first().locator("path").nth(1)).toHaveAttribute("stroke", "var(--ob-select)");
+
+  const textBox = await textNode.boundingBox();
+  const configBox = await configNode.boundingBox();
+  expect(textBox).not.toBeNull();
+  expect(configBox).not.toBeNull();
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.move(Math.max(0, textBox!.x - 16), Math.max(0, Math.min(textBox!.y, configBox!.y) - 16));
+  await page.mouse.down();
+  await page.mouse.move(
+    Math.max(textBox!.x + textBox!.width, configBox!.x + configBox!.width) + 16,
+    Math.max(textBox!.y + textBox!.height, configBox!.y + configBox!.height) + 16,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
+  await expect(textNode).toHaveClass(/ring-2/);
+  await expect(configNode).toHaveClass(/ring-2/);
+
+  const edgePoint = await edges.first().locator('path[stroke="transparent"]').evaluate((element) => {
+    const path = element as SVGPathElement;
+    const point = path.getPointAtLength(path.getTotalLength() / 2);
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("edge screen transform is unavailable");
+    return {
+      x: matrix.a * point.x + matrix.c * point.y + matrix.e,
+      y: matrix.b * point.x + matrix.d * point.y + matrix.f,
+    };
+  });
+  await page.mouse.click(edgePoint.x, edgePoint.y);
+  await expect(edges.first().locator("path").nth(1)).toHaveAttribute("stroke", "var(--ob-select)");
+  await page.keyboard.press("Delete");
+  await expect(edges).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(edges).toHaveCount(1);
+
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ControlOrMeta+c");
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(page.locator('[data-node-type="text"]')).toHaveCount(2);
+  await expect(page.locator('[data-node-type="config"]')).toHaveCount(2);
+  await expect(edges).toHaveCount(2);
+
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.locator('[data-node-type="text"]')).toHaveCount(1);
+  await expect(edges).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await expect(page.locator('[data-node-type="text"]')).toHaveCount(2);
+  await expect(edges).toHaveCount(2);
+
+  const surface = page.getByTestId("canvas-surface");
+  await expect.poll(() => surface.evaluate((element) => getComputedStyle(element).backgroundImage))
+    .toContain("radial-gradient");
+  await page.getByTitle("背景").click();
+  await expect.poll(() => surface.evaluate((element) => getComputedStyle(element).backgroundImage))
+    .toContain("linear-gradient");
+  await page.getByTitle("背景").click();
+  await expect.poll(() => surface.evaluate((element) => getComputedStyle(element).backgroundImage))
+    .toBe("none");
+
+  await expect(page.getByLabel("画布小地图")).toBeVisible();
+  await page.getByTitle("小地图").click();
+  await expect(page.getByLabel("画布小地图")).toHaveCount(0);
+  await page.getByTitle("小地图").click();
+  await expect(page.getByLabel("画布小地图")).toBeVisible();
+
+  const wasDark = await page.locator("html").evaluate((element) => element.classList.contains("dark"));
+  await page.getByTitle("主题").click();
+  await expect.poll(() => page.locator("html").evaluate((element) => element.classList.contains("dark")))
+    .toBe(!wasDark);
 });
 
 test("loopback New API links configure text credentials and scrub the URL", async ({ page }) => {
@@ -507,6 +649,11 @@ test("node title, font size, and model overrides are editable and persistent", a
   const model = node.getByLabel("文本节点模型");
   await model.fill("local-text-model");
   const editor = page.getByPlaceholder("写下提示词或说明…");
+  await editor.fill("toolbar editing target");
+  await page.getByTitle("适应").click();
+  await node.locator("[data-node-header]").click();
+  await node.getByTitle("编辑文字").click();
+  await expect.poll(() => editor.evaluate((element) => document.activeElement === element)).toBe(true);
   const initialSize = await editor.evaluate((element) => getComputedStyle(element).fontSize);
   await page.getByTitle("增大字号").click();
   await expect.poll(() => editor.evaluate((element) => getComputedStyle(element).fontSize))
@@ -1166,6 +1313,115 @@ test("double-clicking an image opens and closes the full preview", async ({ page
   await expect(page.getByRole("dialog", { name: "图片预览" })).toHaveCount(0);
 });
 
+test("image nodes support replacement, resize mode, download, crop, and asset reuse", async ({ page }) => {
+  await openFreshBoard(page);
+  const imageInput = page.locator('input[type="file"][accept="image/*"]').first();
+  await imageInput.setInputFiles({
+    name: "source.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  const node = page.locator('[data-node-type="image"]').first();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+  const initialSrc = await node.locator("img").getAttribute("src");
+
+  await node.getByTitle("自由缩放").click();
+  await expect(node.getByTitle("锁定比例")).toBeVisible();
+  await node.getByTitle("锁定比例").click();
+  await expect(node.getByTitle("自由缩放")).toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download");
+  await node.getByTitle("下载").click();
+  expect((await downloadPromise).suggestedFilename()).toBe("图片.png");
+
+  await node.getByTitle("加入素材").click();
+  await node.getByText("替换图片", { exact: true }).locator('input[type="file"]').setInputFiles({
+    name: "replacement.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64"),
+  });
+  await expect.poll(() => node.locator("img").getAttribute("src")).not.toBe(initialSrc);
+
+  await node.getByTitle("多角度").click();
+  await expect(page.getByRole("heading", { name: "多角度变换" })).toBeVisible();
+  await page.getByRole("button", { name: "30°", exact: true }).click();
+  await page.getByRole("button", { name: "生成变换节点" }).click();
+  await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
+
+  await node.getByTitle("裁剪").click();
+  await expect(page.getByRole("heading", { name: "裁剪图片" })).toBeVisible();
+  await page.getByRole("button", { name: "生成裁剪节点" }).click();
+  await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(3);
+
+  await page.locator('nav a[href="/assets"]').click();
+  const asset = page.locator("article").filter({ hasText: "图片" });
+  await expect(asset).toBeVisible();
+  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
+    const open = indexedDB.open("openboard-app");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const request = database.transaction("app_state", "readonly")
+        .objectStore("app_state")
+        .get("openboard:assets");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        resolve(Array.isArray(request.result) ? request.result.length : 0);
+        database.close();
+      };
+    };
+  }))).toBe(1);
+  await page.reload();
+  await expect(asset).toBeVisible();
+  await asset.getByRole("button", { name: "插入画布" }).click();
+  await page.locator('nav a[href="/"]').click();
+  await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(4);
+});
+
+test("local video and audio nodes persist, render native players, and download", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.locator('input[type="file"][accept="video/*"]').setInputFiles({
+    name: "local-video.mp4",
+    mimeType: "video/mp4",
+    buffer: Buffer.from("openboard-video-fixture"),
+  });
+  await page.locator('input[type="file"][accept="audio/*"]').setInputFiles({
+    name: "local-audio.mp3",
+    mimeType: "audio/mpeg",
+    buffer: Buffer.from("openboard-audio-fixture"),
+  });
+  await page.getByTitle("适应").click();
+
+  const videoNode = page.locator('[data-node-type="video"]');
+  const audioNode = page.locator('[data-node-type="audio"]');
+  await expect(videoNode.locator("video[controls]")).toHaveCount(1);
+  await expect(audioNode.locator("audio[controls]")).toHaveCount(1);
+  await expect(audioNode).toContainText("audio/mpeg");
+
+  await videoNode.locator("[data-node-header]").click();
+  const videoDownload = page.waitForEvent("download");
+  await videoNode.getByTitle("下载").click();
+  expect((await videoDownload).suggestedFilename()).toBe("视频.mp4");
+  await audioNode.locator("[data-node-header]").click();
+  const audioDownload = page.waitForEvent("download");
+  await audioNode.getByTitle("下载").click();
+  expect((await audioDownload).suggestedFilename()).toBe("音频.mp3");
+
+  const videoSrc = await videoNode.locator("video").getAttribute("src");
+  const audioSrc = await audioNode.locator("audio").getAttribute("src");
+  await page.reload();
+  const reloadedVideo = page.locator('[data-node-type="video"] video[controls]');
+  const reloadedAudio = page.locator('[data-node-type="audio"] audio[controls]');
+  await expect(reloadedVideo).toHaveAttribute("src", /^blob:/);
+  await expect(reloadedAudio).toHaveAttribute("src", /^blob:/);
+  await expect.poll(() => reloadedVideo.getAttribute("src")).not.toBe(videoSrc);
+  await expect.poll(() => reloadedAudio.getAttribute("src")).not.toBe(audioSrc);
+  await expect(page.locator('[data-node-type="audio"]')).toContainText("audio/mpeg");
+});
+
 test("image reverse prompt creates a connected text node", async ({ page }) => {
   await page.route("https://vision.example/v1/responses", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ output_text: "studio light, red square" }) });
@@ -1347,12 +1603,46 @@ test("prompt details can insert their content into the active canvas", async ({ 
 
   const dialog = page.getByRole("dialog", { name: "产品棚拍" });
   await expect(dialog).toContainText("Studio product photo");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText(value: string) {
+          sessionStorage.setItem("openboard:e2e-prompt-copy", value);
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  await dialog.getByRole("button", { name: "复制提示词" }).click();
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("openboard:e2e-prompt-copy")))
+    .toContain("Studio product photo");
+  await dialog.getByRole("button", { name: "加入素材" }).click();
   await dialog.getByRole("button", { name: "插入当前画布文本节点" }).click();
 
   await expect(page).toHaveURL("/");
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue(
     /Studio product photo/,
   );
+  await page.locator('nav a[href="/assets"]').click();
+  await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
+    const open = indexedDB.open("openboard-app");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const request = database.transaction("app_state", "readonly")
+        .objectStore("app_state")
+        .get("openboard:assets");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        resolve(Array.isArray(request.result) ? request.result.length : 0);
+        database.close();
+      };
+    };
+  }))).toBe(1);
+  await page.reload();
+  await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
 });
 
 test("prompt library filters tags and manages multiple persisted remote sources", async ({ page }) => {
@@ -1414,6 +1704,86 @@ test("asset editor updates title, source, tags, notes, and text content", async 
   const edited = page.locator("article").filter({ hasText: "Edited asset" });
   await expect(edited).toContainText("local-test");
   await expect(edited).toContainText("Edited content");
+});
+
+test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.locator('nav a[href="/assets"]').click();
+  for (let index = 1; index <= 13; index += 1) {
+    await page.getByRole("button", { name: "新增文本" }).click();
+    const dialog = page.getByRole("dialog", { name: "新增素材" });
+    await dialog.getByLabel("标题").fill(`Text Asset ${String(index).padStart(2, "0")}`);
+    await dialog.getByLabel("内容").fill(`copy body ${index}`);
+    await dialog.getByRole("button", { name: "保存" }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+  await page.locator('input[type="file"][accept="image/*"]').setInputFiles({
+    name: "library.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  await expect(page.getByText("1 / 2 · 共 14", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
+    const open = indexedDB.open("openboard-app");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const request = database.transaction("app_state", "readonly")
+        .objectStore("app_state")
+        .get("openboard:assets");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        resolve(Array.isArray(request.result) ? request.result.length : 0);
+        database.close();
+      };
+    };
+  }))).toBe(14);
+  await page.reload();
+  await expect(page.getByText("1 / 2 · 共 14", { exact: true })).toBeVisible();
+
+  const search = page.getByPlaceholder("搜索…");
+  await search.fill("Text Asset 01");
+  await expect(page.locator("article")).toHaveCount(1);
+  const textAsset = page.locator("article").filter({ hasText: "Text Asset 01" });
+  await expect(textAsset).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText(value: string) {
+          sessionStorage.setItem("openboard:e2e-copied-text", value);
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  await textAsset.getByRole("button", { name: "复制" }).click();
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("openboard:e2e-copied-text")))
+    .toBe("copy body 1");
+  await search.fill("");
+
+  await page.locator("select").selectOption("image");
+  const imageAsset = page.locator("article").filter({ hasText: "library.png" });
+  await expect(imageAsset).toBeVisible();
+  await expect(page.getByText("1 / 1 · 共 1", { exact: true })).toBeVisible();
+  const downloadPromise = page.waitForEvent("download");
+  await imageAsset.getByRole("button", { name: "下载" }).click();
+  expect((await downloadPromise).suggestedFilename()).toBe("library.png");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await imageAsset.getByRole("button", { name: "插入画布" }).click();
+
+  await page.locator("select").selectOption("all");
+  await page.getByRole("button", { name: "下一页" }).click();
+  await expect(page.getByText("2 / 2 · 共 14", { exact: true })).toBeVisible();
+  const pageTwoAsset = page.locator("article").filter({ hasText: "Text Asset 01" });
+  page.once("dialog", (dialog) => dialog.accept());
+  await pageTwoAsset.getByRole("button", { name: "删除" }).click();
+  await expect(pageTwoAsset).toHaveCount(0);
+  await expect(page.getByText("2 / 2 · 共 13", { exact: true })).toBeVisible();
+
+  await page.locator('nav a[href="/"]').click();
+  await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
 });
 
 test("assistant can batch-delete sessions and preserves one active session", async ({ page }) => {
@@ -1480,6 +1850,70 @@ test("assistant previews pasted images and inserts them without sending", async 
   await assistant.getByRole("button", { name: "插入画布", exact: true }).click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
   await expect(preview).toHaveCount(0);
+});
+
+test("assistant generates, retries, inserts, deletes, and reloads text and images", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop assistant generation workflow is covered here.");
+  let textRequests = 0;
+  await page.route("https://assistant-flow.example/v1/responses", async (route) => {
+    textRequests += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ output_text: `assistant answer ${textRequests}` }),
+    });
+  });
+  await page.route("https://assistant-flow.example/v1/images/generations", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC" }],
+      }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("文本 URL").fill("https://assistant-flow.example/v1");
+  await page.getByLabel("文本 API Key").fill("assistant-text-key");
+  await page.getByLabel("文本模型").fill("assistant-text-model");
+  await page.getByLabel("生图 URL").fill("https://assistant-flow.example/v1");
+  await page.getByLabel("生图 API Key").fill("assistant-image-key");
+  await page.getByLabel("生图模型").fill("assistant-image-model");
+  await closeSettings(page);
+
+  const assistant = page.locator("aside").filter({ hasText: "画布助手" });
+  const askInput = assistant.getByPlaceholder("问点什么…（可粘贴图片）");
+  await askInput.fill("assistant draft");
+  await askInput.press("ControlOrMeta+Enter");
+  let answer = assistant.locator("div.rounded-lg").filter({ hasText: "assistant answer 1" });
+  await expect(answer).toBeVisible();
+  await answer.getByRole("button", { name: "插入画布" }).click();
+  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("assistant answer 1");
+
+  await answer.getByRole("button", { name: "重试" }).click();
+  await expect.poll(() => textRequests).toBe(2);
+  answer = assistant.locator("div.rounded-lg").filter({ hasText: "assistant answer 2" });
+  await expect(answer).toBeVisible();
+  const userMessage = assistant.locator("div.rounded-lg").filter({ hasText: "assistant draft" });
+  await userMessage.getByRole("button", { name: "删除" }).click();
+  await expect(userMessage).toHaveCount(0);
+
+  await assistant.getByRole("button", { name: "生图", exact: true }).click();
+  const imageInput = assistant.getByPlaceholder("描述想生成的图片…（可粘贴图片）");
+  await imageInput.fill("assistant image");
+  await imageInput.press("ControlOrMeta+Enter");
+  const imageAnswer = assistant.locator("div.rounded-lg").filter({ hasText: "已生成图片" });
+  await expect(imageAnswer.locator("img")).toBeVisible();
+  await imageAnswer.getByRole("button", { name: "插入画布" }).click();
+  await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+
+  await page.reload();
+  await expect(assistant.getByText("assistant answer 2", { exact: true })).toBeVisible();
+  await expect(assistant.getByText("已生成图片", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+  await assistant.locator("div.rounded-lg").filter({ hasText: "已生成图片" })
+    .getByRole("button", { name: "删除" }).click();
+  await expect(assistant.getByText("已生成图片", { exact: true })).toHaveCount(0);
 });
 
 test("local Agent connects to the real Go service with a session token", async ({ page }) => {

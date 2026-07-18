@@ -5,6 +5,7 @@ import {
 } from "@/services/storage";
 import type { BoardNode } from "@/types/board";
 import { createNode } from "@/lib/defaults";
+import { fitMediaDisplaySize } from "@/lib/geometry";
 
 export async function makeCroppedNode(
   source: BoardNode,
@@ -13,6 +14,7 @@ export async function makeCroppedNode(
   if (!source.metadata.content) throw new Error("无图片");
   const blob = await cropImageToBlob(source.metadata.content, crop);
   const uploaded = await uploadMedia(blob, "image");
+  const display = fitMediaDisplaySize(uploaded.width, uploaded.height, 120, 360);
   return createNode(
     "image",
     {
@@ -21,8 +23,8 @@ export async function makeCroppedNode(
     },
     {
       title: `${source.title} · 裁剪`,
-      width: Math.min(360, uploaded.width || source.width),
-      height: Math.min(360, uploaded.height || source.height),
+      width: display.width,
+      height: display.height,
       metadata: {
         content: uploaded.url,
         storageKey: uploaded.storageKey,
@@ -43,6 +45,7 @@ export async function makeRotatedNode(
   if (!source.metadata.content) throw new Error("无图片");
   const blob = await rotateImageToBlob(source.metadata.content, degrees);
   const uploaded = await uploadMedia(blob, "image");
+  const display = fitMediaDisplaySize(uploaded.width, uploaded.height, 120, 360);
   return createNode(
     "image",
     {
@@ -51,8 +54,8 @@ export async function makeRotatedNode(
     },
     {
       title: `${source.title} · ${degrees}°`,
-      width: Math.min(360, uploaded.width || source.width),
-      height: Math.min(360, uploaded.height || source.height),
+      width: display.width,
+      height: display.height,
       metadata: {
         content: uploaded.url,
         storageKey: uploaded.storageKey,

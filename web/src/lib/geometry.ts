@@ -69,6 +69,7 @@ export function fitViewport(
   padding = 80,
 ): Viewport {
   if (!nodes.length) return { x: width / 2, y: height / 2, k: 1 };
+  const controlOverflow = 120;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -79,6 +80,10 @@ export function fitViewport(
     maxX = Math.max(maxX, n.position.x + n.width);
     maxY = Math.max(maxY, n.position.y + n.height);
   }
+  minX -= controlOverflow;
+  minY -= controlOverflow;
+  maxX += controlOverflow;
+  maxY += controlOverflow;
   const bw = Math.max(1, maxX - minX);
   const bh = Math.max(1, maxY - minY);
   const k = clamp(
