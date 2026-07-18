@@ -3,7 +3,8 @@ import { expect, test, type Page } from "@playwright/test";
 const agentUrl = process.env.OPENBOARD_E2E_PRODUCTION === "1"
   ? "http://127.0.0.1:8792"
   : "http://127.0.0.1:8791";
-const pngPixelBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n0YAAAAASUVORK5CYII=";
+const pngPixelBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWP8z8AARAjAhGBCWIQFAIPRAgYQO+IXAAAAAElFTkSuQmCC";
+const pngReplacementBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWNk+A+ESIAJiQ1mEhYAAILSAgahbK2jAAAAAElFTkSuQmCC";
 
 async function openFreshBoard(page: Page) {
   await page.goto("/");
@@ -1313,7 +1314,7 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await imageInput.setInputFiles({
     name: "source.png",
     mimeType: "image/png",
-    buffer: Buffer.from(pngPixelBase64, "base64"),
+    buffer: Buffer.from(pngReplacementBase64, "base64"),
   });
   const node = page.locator('[data-node-type="image"]').first();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
@@ -1351,6 +1352,7 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
 
   await node.getByTitle("裁剪").click();
   await expect(page.getByRole("heading", { name: "裁剪图片" })).toBeVisible();
+  await expect(page.getByText("X (0-4)", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "生成裁剪节点" }).click();
   await expect(page.getByRole("heading", { name: "裁剪图片" })).toHaveCount(0);
   await page.getByTitle("适应").click();

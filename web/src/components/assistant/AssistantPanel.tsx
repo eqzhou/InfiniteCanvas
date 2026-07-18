@@ -447,7 +447,7 @@ export function AssistantPanel() {
                 key={img.id}
                 src={img.url}
                 alt=""
-                className="mt-2 max-h-40 rounded object-contain"
+                className="mt-2 min-h-16 min-w-16 max-h-40 max-w-full rounded object-contain"
               />
             ))}
             <div className="mt-2 flex flex-wrap gap-2">
