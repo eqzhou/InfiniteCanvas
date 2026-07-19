@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   collectGenerationStorageKeysFromJobs,
+  findInterruptedGenerationJobs,
   findUnreferencedGenerationStorageKeys,
   paginateGenerationJobs,
 } from "./generation-jobs";
@@ -72,5 +73,28 @@ describe("generation job media lifecycle", () => {
       [remaining],
       new Set(["image:on-canvas"]),
     )).toEqual(new Set(["image:orphan-ref", "image:orphan-result"]));
+  });
+});
+
+describe("generation job recovery", () => {
+  test("finds only this tab's persisted running jobs without a live activity", () => {
+    const ownedOrphan = { ...job("owned-orphan", "2026-07-05T00:00:00Z"), status: "running" as const, parameters: { ownerClientId: "tab-one" } };
+    const ownedLive = { ...job("owned-live", "2026-07-05T00:00:00Z"), status: "running" as const, parameters: { ownerClientId: "tab-one" } };
+    const otherTab = { ...job("other-tab", "2026-07-05T00:00:00Z"), status: "running" as const, parameters: { ownerClientId: "tab-two" } };
+    const recentOtherTab = { ...job("recent-other-tab", "2026-07-19T00:00:00Z"), status: "running" as const, parameters: { ownerClientId: "tab-two" } };
+    const recentLegacy = {
+      ...job("recent-legacy", "2026-07-19T00:00:00Z"),
+      status: "running" as const,
+      parameters: {},
+    };
+
+    expect(findInterruptedGenerationJobs(
+      [ownedOrphan, ownedLive, otherTab, recentOtherTab, {
+        ...job("legacy-orphan", "2026-07-05T00:00:00Z"), status: "running", parameters: {},
+      }, recentLegacy, job("complete", "2026-07-05T00:00:00Z")],
+      "tab-one",
+      new Set(["owned-live"]),
+      Date.parse("2026-07-19T00:10:00Z"),
+    ).map((item) => item.id)).toEqual(["owned-orphan", "other-tab", "legacy-orphan"]);
   });
 });

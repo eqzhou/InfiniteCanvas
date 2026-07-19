@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
-import { Bot, Link2, RefreshCw, Unplug } from "lucide-react";
+import { Bot, Link2, LoaderCircle, RefreshCw, Unplug } from "lucide-react";
 import {
   DEFAULT_AGENT_BASE_URL,
   AGENT_TOKEN_KEY,
@@ -12,6 +12,10 @@ import {
   resolveAgentBaseUrl,
 } from "@/services/local-agent";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import {
+  getGenerationActivities,
+  subscribeGenerationActivities,
+} from "@/services/generation-activity";
 
 const CodexPanel = lazy(async () => {
   const module = await import("@/components/agent/CodexPanel");
@@ -32,6 +36,7 @@ export function LocalAgentPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [generationTasks, setGenerationTasks] = useState(getGenerationActivities);
   const [baseUrl, setBaseUrl] = useState(() => resolveAgentBaseUrl(
     config.localAgentUrl,
     readAgentToken(),
@@ -40,6 +45,11 @@ export function LocalAgentPanel() {
   const [token, setToken] = useState(initialAgentToken);
   const connection = useMemo(() => ({ baseUrl, token }), [baseUrl, token]);
   useEscapeDismiss(show, () => setShow(false));
+  const runningGenerationTasks = generationTasks.filter((task) => task.status === "running");
+
+  useEffect(() => subscribeGenerationActivities(() => {
+    setGenerationTasks(getGenerationActivities());
+  }), []);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -230,6 +240,23 @@ export function LocalAgentPanel() {
               当前服务未公布可用工具。
             </p>
           )}
+          {runningGenerationTasks.length ? (
+            <section className="border-t border-[var(--ob-line)] pt-2" aria-label="正在运行的生成任务">
+              <div className="mb-1 flex items-center gap-1.5 font-medium">
+                <LoaderCircle size={13} className="animate-spin text-[var(--ob-accent)]" />
+                生成任务 · {runningGenerationTasks.length}
+              </div>
+              <ul className="space-y-1 text-[10px] text-[var(--ob-muted)]">
+                {runningGenerationTasks.slice(0, 4).map((task) => (
+                  <li key={task.id} className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0 uppercase">{task.kind}</span>
+                    <span className="min-w-0 flex-1 truncate" title={task.prompt}>{task.prompt || "无提示词"}</span>
+                    <span className="shrink-0">{task.surface === "image-workbench" ? "图片工作台" : task.surface === "video-workbench" ? "视频工作台" : "画布"}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           <Suspense fallback={<div className="border-t border-[var(--ob-line)] pt-2 text-[var(--ob-muted)]">加载 Codex 面板…</div>}>
             <CodexPanel connection={connection} />
           </Suspense>

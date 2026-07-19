@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -61,6 +62,13 @@ func (s *Server) runtimeSocket(w http.ResponseWriter, r *http.Request) {
 	transport := &websocketRuntimeTransport{connection: connection}
 	client := s.runtime.attach(transport)
 	defer s.runtime.detach(client, errors.New("browser disconnected"))
+	ready, _ := json.Marshal(runtimeEnvelope{
+		Type: "ready",
+		Data: json.RawMessage(fmt.Sprintf(`{"clientId":%q}`, client.id)),
+	})
+	if err := transport.Write(r.Context(), ready); err != nil {
+		return
+	}
 	for {
 		kind, data, err := connection.Read(r.Context())
 		if err != nil {

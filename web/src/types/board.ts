@@ -184,8 +184,39 @@ export type PromptItem = {
   body: string;
   tags: string[];
   source: string;
+  sourceId?: string;
   coverUrl?: string;
   resultUrls?: string[];
+};
+
+export type PromptSourceFormat = "auto" | "json" | "markdown" | "html";
+export type PromptSourceMapping = {
+  itemsPath?: string;
+  idPath?: string;
+  titlePath?: string;
+  bodyPath?: string;
+  tagsPath?: string;
+  coverUrlPath?: string;
+  resultUrlsPath?: string;
+};
+export type PromptSourceHtmlMapping = {
+  itemSelector: string;
+  titleSelector?: string;
+  bodySelector: string;
+  tagsSelector?: string;
+  coverSelector?: string;
+  resultSelector?: string;
+};
+export type PromptSourceConfig = {
+  id: string;
+  name: string;
+  url: string;
+  format: PromptSourceFormat;
+  enabled: boolean;
+  refreshMinutes: number;
+  mapping?: PromptSourceMapping;
+  html?: PromptSourceHtmlMapping;
+  lastFetchedAt?: string;
 };
 
 export type AiChannel = {
@@ -233,7 +264,7 @@ export type AppConfig = {
   webdavUrl?: string;
   webdavUser?: string;
   webdavPass?: string;
-  promptSources?: string[];
+  promptSources?: PromptSourceConfig[];
   plugins?: PluginManifest[];
   disabledPluginIds?: string[];
   pluginRegistryUrl?: string;

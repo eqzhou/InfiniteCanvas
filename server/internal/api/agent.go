@@ -116,6 +116,8 @@ func isBrowserRuntimeTool(tool string) bool {
 		"board.create_text_node", "board.create_image_prompt_flow", "asset.search", "asset.insert",
 		"prompt.search", "prompt.insert", "site.navigate":
 		return true
+	case "generation_get_status":
+		return true
 	default:
 		return false
 	}

@@ -26,6 +26,16 @@ describe("browser runtime protocol", () => {
       method: "shell.exec",
       data: {},
     }))).toThrow("method");
+    expect(parseRuntimeCommand(JSON.stringify({
+      type: "command",
+      id: "command-generation",
+      method: "generation_get_status",
+      data: { taskId: "job-one" },
+    }))).toEqual({
+      id: "command-generation",
+      method: "generation_get_status",
+      data: { taskId: "job-one" },
+    });
   });
 
   test("applies a validated operation batch without mutating the project", () => {

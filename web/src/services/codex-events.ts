@@ -12,10 +12,27 @@ export function codexApprovalKey(event: CodexEvent): string {
   return `request:${event.method ?? ""}:${JSON.stringify(event.params ?? null)}`;
 }
 
+export function codexApprovalResolutionKey(event: CodexEvent): string | undefined {
+  if (event.method !== "openboard/approval_resolved" || event.id === undefined || event.id === null) {
+    return undefined;
+  }
+  return `id:${String(event.id)}`;
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+export function codexEventThreadId(event: CodexEvent): string | undefined {
+  const params = record(event.params);
+  const turn = record(params?.turn);
+  const thread = record(params?.thread);
+  for (const value of [params?.threadId, turn?.threadId, thread?.id]) {
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
 }
 
 function errorText(value: unknown): string | undefined {
@@ -41,9 +58,9 @@ export function classifyCodexEvent(event: CodexEvent): CodexEventEffect {
     return { kind: "assistant-delta", text: delta };
   }
   const method = event.method ?? "";
-  if (method.includes("turn/started") || method.includes("turn_started")) return { kind: "turn", status: "running" };
-  if (method.includes("turn/completed") || method.includes("turn_completed")) return { kind: "turn", status: "completed" };
-  if (method.includes("turn/failed") || method.includes("turn_failed") || params?.error) {
+  if (method === "turn/started" || method === "turn_started") return { kind: "turn", status: "running" };
+  if (method === "turn/completed" || method === "turn_completed") return { kind: "turn", status: "completed" };
+  if (method === "turn/failed" || method === "turn_failed") {
     return { kind: "turn", status: "failed", ...(eventError ? { error: eventError } : {}) };
   }
   if (method.includes("item/")) {

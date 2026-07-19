@@ -40,6 +40,7 @@ export function HomePage() {
   const activeProject = useBoardStore((s) => s.projects.find((project) => project.id === s.activeProjectId) ?? null);
   const assets = useBoardStore((s) => s.assets);
   const setAssets = useBoardStore((s) => s.setAssets);
+  const flushAssets = useBoardStore((s) => s.flushAssets);
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const setActiveProject = useBoardStore((s) => s.setActiveProject);
   const setSelected = useBoardStore((s) => s.setSelected);
@@ -137,6 +138,7 @@ export function HomePage() {
     if (!asset) return;
     const nextAssets = state.assets.filter((item) => item.id !== assetId);
     setAssets(nextAssets);
+    await flushAssets();
     await deleteAssetBlobIfUnreferenced(asset.storageKey, state.projects, nextAssets);
   };
 

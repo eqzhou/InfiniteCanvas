@@ -28,14 +28,21 @@ limits, upload concurrency and disk quotas, and cross-process write locking.
 - `GET /api/health`
 - `GET /api/version`
 - `GET /api/agent/status` — local board tools and bridge status
+- `POST /api/runtime/ticket`, `GET /api/runtime/ws` — ticketed browser runtime
+- `POST /api/runtime/command` — execute an identified command in the bound tab
+- `GET /api/codex/session?profile=...` — inspect the shared session and running state
 - `POST /api/codex/session` — start a local `codex app-server --stdio` session
 - `POST /api/codex/message` — start a streamed turn (`sessionId`, `text`)
+- `POST /api/codex/interrupt` — stop the active turn
+- `POST /api/codex/attachments` — upload bounded owner-only images
+- `DELETE /api/codex/attachments/{id}?sessionId=...` — cancel a pending image attachment
 - `POST /api/codex/approval` — explicitly approve or deny a server request
 - `GET /api/codex/events?sessionId=...` — SSE notifications and approval requests
 - `DELETE /api/codex/session/{id}` — close a Codex session
 - `POST /api/files` — multipart upload
 - `GET /api/files/{name}`
 - `GET|PUT|DELETE /api/projects...` — optional server-side project mirror
+- `GET|POST|PUT|DELETE /api/generation-jobs...` — paginated workbench history
 
 The interactive infinite canvas remains in the web app. Go owns local services,
 file persistence helpers, and the optional local Codex bridge. Codex startup is
@@ -48,7 +55,10 @@ to be available on the host.
 Agent panel synchronizes newer browser/server project revisions every two
 seconds while open.
 
-Available tools: `board.list_nodes`, `board.add_node`, `board.update_node`,
+Live browser tools include state, selection, PNG snapshot, atomic operations,
+text/image flows, asset/prompt search and insertion, navigation, and
+`generation_get_status`. The six persisted compatibility tools remain:
+`board.list_nodes`, `board.add_node`, `board.update_node`,
 `board.delete_nodes`, `board.connect`, and `board.export_json`.
 
 ## MCP stdio

@@ -11,6 +11,7 @@ import { validateJsonObject } from "@/lib/bounded-json";
 const SERVER_STORAGE = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
 const jobStore = createStore("openboard-generation-jobs", "jobs");
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+export const LEGACY_GENERATION_GRACE_MS = 30 * 60_000;
 
 export type GenerationJobQuery = {
   projectId?: string;
@@ -46,6 +47,22 @@ export function paginateGenerationJobs(
     pageSize,
     total: filtered.length,
   };
+}
+
+export function findInterruptedGenerationJobs(
+  jobs: readonly GenerationJob[],
+  ownerClientId: string,
+  liveActivityIds: ReadonlySet<string>,
+  now = Date.now(),
+): GenerationJob[] {
+  if (!ownerClientId) return [];
+  return jobs
+    .filter((job) => {
+      if (job.status !== "running" || liveActivityIds.has(job.id)) return false;
+      if (job.parameters.ownerClientId === ownerClientId) return true;
+      return now - Date.parse(job.updatedAt) >= LEGACY_GENERATION_GRACE_MS;
+    })
+    .map((job) => structuredClone(job));
 }
 
 export function validateGenerationJob(job: GenerationJob): GenerationJob {

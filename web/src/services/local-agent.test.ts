@@ -3,14 +3,17 @@ import { describe, expect, test } from "bun:test";
 import {
   closeCodexSession,
   createCodexSession,
+  deleteCodexAttachment,
   decideProjectSync,
   fetchAgentStatus,
+  getCodexSession,
   interruptCodexTurn,
   normalizeAgentBaseUrl,
   parseCodexSseRecords,
   resolveAgentBaseUrl,
   respondCodexApproval,
   sendCodexMessage,
+  subscribeCodexEvents,
   uploadCodexAttachments,
 } from "./local-agent";
 
@@ -101,6 +104,11 @@ describe("local agent connection", () => {
           headers: { "content-type": "application/json" },
         });
       }
+      if (String(input).includes("/api/codex/session?profile=")) {
+        return new Response(JSON.stringify({ id: "session-1", threadId: "thread-1", profile: "default", running: false }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
       if (String(input).endsWith("/api/codex/attachments")) {
         return new Response(JSON.stringify({
           attachments: [{ id: "image-1", name: "pixel.png", mimeType: "image/png", bytes: 5 }],
@@ -112,24 +120,157 @@ describe("local agent connection", () => {
     };
     const connection = { baseUrl: "http://127.0.0.1:8790", token: "secret" };
     const session = await createCodexSession(connection, "/tmp/board", fetcher);
+    const active = await getCodexSession(connection, "default", fetcher);
     const attachments = await uploadCodexAttachments(connection, session.id, [
       new File(["pixel"], "pixel.png", { type: "image/png" }),
     ], fetcher);
+    await deleteCodexAttachment(connection, session.id, attachments[0].id, fetcher);
     await sendCodexMessage(connection, session.id, "hello", fetcher, attachments.map((item) => item.id));
     await interruptCodexTurn(connection, session.id, fetcher);
     await respondCodexApproval(connection, session.id, 7, true, fetcher);
     await closeCodexSession(connection, session.id, fetcher);
     expect(requests.map((request) => request.url)).toEqual([
       "http://127.0.0.1:8790/api/codex/session",
+      "http://127.0.0.1:8790/api/codex/session?profile=default",
       "http://127.0.0.1:8790/api/codex/attachments",
+      "http://127.0.0.1:8790/api/codex/attachments/image-1?sessionId=session-1",
       "http://127.0.0.1:8790/api/codex/message",
       "http://127.0.0.1:8790/api/codex/interrupt",
       "http://127.0.0.1:8790/api/codex/approval",
       "http://127.0.0.1:8790/api/codex/session/session-1",
     ]);
+    expect(active?.threadId).toBe("thread-1");
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({ cwd: "/tmp/board" });
-    expect(JSON.parse(String(requests[2].init?.body))).toEqual({ sessionId: "session-1", text: "hello", attachmentIds: ["image-1"] });
-    expect(JSON.parse(String(requests[4].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
-    expect(new Headers(requests[2].init?.headers).get("Authorization")).toBe("Bearer secret");
+    expect(JSON.parse(String(requests[4].init?.body))).toEqual({ sessionId: "session-1", text: "hello", attachmentIds: ["image-1"] });
+    expect(JSON.parse(String(requests[6].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
+    expect(new Headers(requests[4].init?.headers).get("Authorization")).toBe("Bearer secret");
+  });
+
+  test("reconnects sequenced Codex streams and suppresses replay duplicates", async () => {
+    const responses = [
+      [{ sequence: 1, type: "notification", method: "item/completed" }],
+      [
+        { sequence: 1, type: "notification", method: "item/completed" },
+        { sequence: 1, type: "notification", method: "openboard/session_state", data: { id: "session-1", running: true } },
+        { sequence: 2, type: "notification", method: "turn/completed" },
+      ],
+    ];
+    let calls = 0;
+    const fetcher = async () => {
+      const events = responses[Math.min(calls, responses.length - 1)];
+      calls += 1;
+      return new Response(events.map((event) => `event: notification\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    };
+    const received: string[] = [];
+    let subscription!: ReturnType<typeof subscribeCodexEvents>;
+    let finish!: () => void;
+    const completed = new Promise<void>((resolve) => { finish = resolve; });
+    subscription = subscribeCodexEvents(
+      { baseUrl: "http://127.0.0.1:8790", token: "secret" },
+      "session-1",
+      (event) => {
+        received.push(event.method ?? "");
+        if (event.method === "turn/completed") {
+          subscription.close();
+          finish();
+        }
+      },
+      undefined,
+      fetcher,
+    );
+    await Promise.race([
+      completed,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("stream did not recover")), 2_000)),
+    ]);
+    expect(calls).toBe(2);
+    expect(received.filter((method) => method === "item/completed")).toHaveLength(1);
+    expect(received).toContain("openboard/session_state");
+    expect(received).toContain("turn/completed");
+  });
+
+  test("stops reconnecting when the Codex session reaches a terminal HTTP state", async () => {
+    let calls = 0;
+    let recoverable: boolean | undefined;
+    const subscription = subscribeCodexEvents(
+      { baseUrl: "http://127.0.0.1:8790", token: "secret" },
+      "session-closed",
+      () => undefined,
+      (_error, canRecover) => { recoverable = canRecover; },
+      async () => {
+        calls += 1;
+        return new Response("closed", { status: 404 });
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    subscription.close();
+    expect(calls).toBe(1);
+    expect(recoverable).toBe(false);
+  });
+
+  test("reconnects an empty Codex stream and resumes after the last sequence", async () => {
+    const urls: string[] = [];
+    const errors: boolean[] = [];
+    let calls = 0;
+    let subscription!: ReturnType<typeof subscribeCodexEvents>;
+    const completed = new Promise<void>((resolve) => {
+      subscription = subscribeCodexEvents(
+        { baseUrl: "http://127.0.0.1:8790", token: "secret" },
+        "session-1",
+        (event) => {
+          if (event.sequence === 1) return;
+          subscription.close();
+          resolve();
+        },
+        (_error, recoverable) => { errors.push(recoverable); },
+        async (input) => {
+          urls.push(String(input));
+          calls += 1;
+          if (calls === 1) return new Response("");
+          if (calls === 2) {
+            return new Response(`event: notification\ndata: ${JSON.stringify({ sequence: 1, type: "notification", method: "item/completed" })}\n\n`);
+          }
+          return new Response(`event: notification\ndata: ${JSON.stringify({ sequence: 2, type: "notification", method: "turn/completed" })}\n\n`);
+        },
+      );
+    });
+    await Promise.race([
+      completed,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("empty stream did not recover")), 2_000)),
+    ]);
+    expect(calls).toBe(3);
+    expect(urls[2]).toContain("afterSequence=1");
+    expect(errors).toContain(true);
+  });
+
+  test("replays an event when its consumer throws before committing the checkpoint", async () => {
+    const urls: string[] = [];
+    let attempts = 0;
+    let subscription!: ReturnType<typeof subscribeCodexEvents>;
+    const completed = new Promise<void>((resolve) => {
+      subscription = subscribeCodexEvents(
+        { baseUrl: "http://127.0.0.1:8790", token: "secret" },
+        "session-1",
+        () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("storage unavailable");
+          subscription.close();
+          resolve();
+        },
+        undefined,
+        async (input) => {
+          urls.push(String(input));
+          return new Response(`event: notification\ndata: ${JSON.stringify({ sequence: 1, type: "notification", method: "item/completed" })}\n\n`);
+        },
+      );
+    });
+    await Promise.race([
+      completed,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("failed event was not replayed")), 2_000)),
+    ]);
+    expect(attempts).toBe(2);
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).not.toContain("afterSequence");
   });
 });

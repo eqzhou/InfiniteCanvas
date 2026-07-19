@@ -30,7 +30,7 @@ func TestInitializeAndListTools(t *testing.T) {
 	if !strings.Contains(lines[1], `"board.list_nodes"`) || !strings.Contains(lines[1], `"inputSchema"`) {
 		t.Fatalf("tools response = %s", lines[1])
 	}
-	for _, name := range []string{"board.get_state", "board.apply_ops", "board.export_snapshot", "asset.search", "prompt.insert", "site.navigate"} {
+	for _, name := range []string{"board.get_state", "board.apply_ops", "board.export_snapshot", "asset.search", "prompt.insert", "site.navigate", "generation_get_status"} {
 		if !strings.Contains(lines[1], `"`+name+`"`) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
 		}

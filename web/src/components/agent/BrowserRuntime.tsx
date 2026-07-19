@@ -21,6 +21,21 @@ import {
   type AgentConnection,
 } from "@/services/local-agent";
 import type { BoardNode, Point } from "@/types/board";
+import {
+  getRuntimeOwnerId,
+  setRuntimeClientId,
+  startRuntimeOwnerLease,
+} from "@/services/runtime-identity";
+import {
+  getGenerationActivities,
+  subscribeGenerationActivities,
+} from "@/services/generation-activity";
+import {
+  findInterruptedGenerationJobs,
+  getGenerationJob,
+  listAllGenerationJobs,
+  updateGenerationJob,
+} from "@/services/generation-jobs";
 
 const RECONNECT_MAX_MS = 15_000;
 
@@ -58,6 +73,7 @@ async function executeRuntimeCommand(
         project,
         selection: [...state.selectedIds],
         viewport: project?.viewport ?? null,
+        generationTasks: getGenerationActivities(),
       };
     case "board.get_selection":
       return {
@@ -193,6 +209,58 @@ async function executeRuntimeCommand(
       await useBoardStore.getState().persistNow();
       return useBoardStore.getState().getActive()?.nodes.find((node) => node.id === nodeId);
     }
+    case "generation_get_status": {
+      const taskId = typeof command.data.taskId === "string"
+        ? stringValue(command.data.taskId, "generation task id", 128)
+        : "";
+      const nodeIds = Array.isArray(command.data.nodeIds)
+        ? command.data.nodeIds.map((id) => stringValue(id, "generation node id", 128))
+        : [];
+      if (!taskId && !nodeIds.length) throw new Error("taskId or nodeIds is required");
+      if (nodeIds.length > 100 || new Set(nodeIds).size !== nodeIds.length) {
+        throw new Error("generation node ids are invalid");
+      }
+      const statusForNode = (node: BoardNode) => {
+        if (node.metadata.status === "loading") return "running";
+        if (node.metadata.status === "success") return "succeeded";
+        if (node.metadata.status === "error") return "failed";
+        return "queued";
+      };
+      const nodes = nodeIds.map((id) => {
+        const node = project?.nodes.find((item) => item.id === id);
+        if (!node) return { nodeId: id, status: "not_found" };
+        return {
+          nodeId: id,
+          status: statusForNode(node),
+          kind: node.metadata.generationMode ?? node.type,
+          error: node.metadata.errorDetails,
+        };
+      });
+      let task = taskId
+        ? getGenerationActivities().find((item) => item.id === taskId)
+        : undefined;
+      if (taskId && !task) {
+        let stored = await getGenerationJob(taskId);
+        const owner = stored?.parameters.ownerClientId;
+        let visible = !owner || owner === getRuntimeOwnerId();
+        if (stored && findInterruptedGenerationJobs(
+          [stored],
+          getRuntimeOwnerId(),
+          new Set(),
+        ).length > 0) {
+          stored = await updateGenerationJob(stored.id, {
+            status: "failed",
+            error: "页面刷新后任务已中断，请重试",
+          });
+          visible = true;
+        }
+        if (visible) task = stored as typeof task;
+      }
+      return {
+        ...(taskId ? { task: task ?? { id: taskId, status: "not_found" } } : {}),
+        ...(nodeIds.length ? { nodes } : {}),
+      };
+    }
     case "site.navigate": {
       const path = stringValue(command.data.path, "site path", 200);
       if (!["/", "/assets", "/prompts", "/plugins", "/workbench/image", "/workbench/video"].includes(path)) {
@@ -211,6 +279,27 @@ export function BrowserRuntime() {
   const baseUrl = useBoardStore((state) => state.config.localAgentUrl ?? DEFAULT_AGENT_BASE_URL);
   const socketRef = useRef<WebSocket | null>(null);
   const stateFrameRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => startRuntimeOwnerLease(), []);
+
+  useEffect(() => {
+    if (!ready) return;
+    const recover = () => {
+      void listAllGenerationJobs().then(async (jobs) => {
+        const liveIds = new Set(
+          getGenerationActivities().filter((item) => item.status === "running").map((item) => item.id),
+        );
+        const interrupted = findInterruptedGenerationJobs(jobs, getRuntimeOwnerId(), liveIds);
+        await Promise.all(interrupted.map((job) => updateGenerationJob(job.id, {
+          status: "failed",
+          error: "页面刷新后任务已中断，请重试",
+        })));
+      }).catch(() => undefined);
+    };
+    recover();
+    const timer = window.setInterval(recover, 60_000);
+    return () => window.clearInterval(timer);
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -236,6 +325,8 @@ export function BrowserRuntime() {
           projectId: project?.id ?? null,
           selection: [...state.selectedIds],
           viewport: project?.viewport ?? null,
+          focused: document.visibilityState === "visible" && document.hasFocus(),
+          generationTasks: getGenerationActivities(),
         },
       }));
     };
@@ -247,6 +338,10 @@ export function BrowserRuntime() {
       });
     };
     const unsubscribe = useBoardStore.subscribe(scheduleState);
+    const unsubscribeGeneration = subscribeGenerationActivities(scheduleState);
+    window.addEventListener("focus", scheduleState);
+    window.addEventListener("blur", scheduleState);
+    document.addEventListener("visibilitychange", scheduleState);
 
     const connect = async () => {
       try {
@@ -264,6 +359,12 @@ export function BrowserRuntime() {
             let commandId = "";
             try {
               const raw = String(event.data);
+              const control = JSON.parse(raw) as { type?: unknown; data?: { clientId?: unknown } };
+              if (control.type === "ready") {
+                setRuntimeClientId(typeof control.data?.clientId === "string" ? control.data.clientId : "");
+                sendState();
+                return;
+              }
               try {
                 const value = JSON.parse(raw) as { id?: unknown };
                 if (typeof value?.id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value.id)) commandId = value.id;
@@ -312,10 +413,15 @@ export function BrowserRuntime() {
     return () => {
       stopped = true;
       unsubscribe();
+      unsubscribeGeneration();
+      window.removeEventListener("focus", scheduleState);
+      window.removeEventListener("blur", scheduleState);
+      document.removeEventListener("visibilitychange", scheduleState);
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (stateFrameRef.current !== undefined) cancelAnimationFrame(stateFrameRef.current);
       socket?.close();
       if (socketRef.current === socket) socketRef.current = null;
+      setRuntimeClientId("");
     };
   }, [baseUrl, navigate, ready]);
 
@@ -330,6 +436,8 @@ export function BrowserRuntime() {
         projectId: project?.id ?? null,
         selection: [...state.selectedIds],
         viewport: project?.viewport ?? null,
+        focused: document.visibilityState === "visible" && document.hasFocus(),
+        generationTasks: getGenerationActivities(),
       },
     }));
   }, [location.pathname]);

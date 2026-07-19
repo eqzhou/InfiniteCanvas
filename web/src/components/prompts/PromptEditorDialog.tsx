@@ -20,12 +20,13 @@ export function PromptEditorDialog({
   mode: "create" | "edit";
   prompt: PromptItem | null;
   onClose: () => void;
-  onSave: (values: PromptEditorValues) => void;
+  onSave: (values: PromptEditorValues) => Promise<void> | void;
 }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -33,9 +34,10 @@ export function PromptEditorDialog({
     setBody(prompt?.body ?? "");
     setTags(prompt?.tags.join(", ") ?? "");
     setError(null);
+    setBusy(false);
   }, [open, prompt]);
 
-  useEscapeDismiss(open, onClose);
+  useEscapeDismiss(open && !busy, onClose);
   if (!open) return null;
 
   const heading = mode === "edit" ? "编辑提示词" : "新建提示词";
@@ -56,11 +58,14 @@ export function PromptEditorDialog({
         .map((tag) => tag.trim())
         .filter(Boolean),
     )).slice(0, 20);
-    onSave({
+    setBusy(true);
+    setError(null);
+    void Promise.resolve().then(() => onSave({
       title: normalizedTitle.slice(0, 120),
       body: normalizedBody.slice(0, 20_000),
       tags: normalizedTags.map((tag) => tag.slice(0, 40)),
-    });
+    })).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setBusy(false));
   };
 
   return (
@@ -78,6 +83,7 @@ export function PromptEditorDialog({
             title="关闭提示词编辑器"
             aria-label="关闭提示词编辑器"
             className="ml-auto grid h-8 w-8 place-items-center rounded-md text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)]"
+            disabled={busy}
             onClick={onClose}
           >
             <X size={17} />
@@ -115,11 +121,11 @@ export function PromptEditorDialog({
           {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
         </div>
         <footer className="flex justify-end gap-2 border-t border-[var(--ob-line)] px-4 py-3 sm:px-5">
-          <button type="button" className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm" onClick={onClose}>
+          <button type="button" disabled={busy} className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm disabled:opacity-50" onClick={onClose}>
             取消
           </button>
-          <button type="button" className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white" onClick={submit}>
-            保存提示词
+          <button type="button" disabled={busy} className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50" onClick={submit}>
+            {busy ? "保存中" : "保存提示词"}
           </button>
         </footer>
       </div>

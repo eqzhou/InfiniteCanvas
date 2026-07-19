@@ -6,6 +6,7 @@ import { SettingsModal } from "@/components/layout/SettingsModal";
 import { ShortcutsModal } from "@/components/layout/ShortcutsModal";
 import { LocalAgentPanel } from "@/components/agent/LocalAgentPanel";
 import { BrowserRuntime } from "@/components/agent/BrowserRuntime";
+import { PromptSourceScheduler } from "@/components/prompts/PromptSourceScheduler";
 import { HomePage } from "@/pages/HomePage";
 import { AssetsPage } from "@/pages/AssetsPage";
 import { PromptsPage } from "@/pages/PromptsPage";
@@ -19,6 +20,7 @@ export function App() {
   const theme = useBoardStore((s) => s.config.theme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [urlCredentialError, setUrlCredentialError] = useState<string | null>(null);
+  const [promptSourceError, setPromptSourceError] = useState<string | null>(null);
   const [urlCredentials] = useState(() =>
     consumeUrlCredentials(window.location.href));
 
@@ -66,6 +68,15 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const report = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: unknown }>).detail;
+      if (typeof detail?.message === "string") setPromptSourceError(detail.message);
+    };
+    window.addEventListener("openboard:prompt-source-error", report);
+    return () => window.removeEventListener("openboard:prompt-source-error", report);
+  }, []);
+
+  useEffect(() => {
     const controlPluginPanel = (event: Event) => {
       const detail = (event as CustomEvent<{ open?: unknown }>).detail;
       if (typeof detail?.open === "boolean") {
@@ -95,6 +106,12 @@ export function App() {
           </button>
         </div>
       ) : null}
+      {promptSourceError ? (
+        <div role="alert" className="flex items-center gap-2 border-b border-[var(--ob-warning)] bg-[var(--ob-panel)] px-4 py-2 text-sm text-[var(--ob-warning)]">
+          <span className="min-w-0 flex-1 truncate">提示词来源自动刷新失败：{promptSourceError}</span>
+          <button type="button" className="shrink-0" onClick={() => setPromptSourceError(null)}>关闭</button>
+        </div>
+      ) : null}
       <main className="min-h-0 flex-1">
         <Routes>
           <Route path="/" element={<HomePage />} />
@@ -110,6 +127,7 @@ export function App() {
       <ShortcutsModal />
       <LocalAgentPanel />
       <BrowserRuntime />
+      <PromptSourceScheduler />
     </div>
   );
 }

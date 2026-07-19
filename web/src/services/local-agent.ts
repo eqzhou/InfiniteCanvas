@@ -38,6 +38,8 @@ export type CodexSession = {
   threadId?: string;
   profile?: string;
   reused?: boolean;
+  running?: boolean;
+  runtimeClientId?: string;
 };
 export type CodexAttachment = {
   id: string;
@@ -46,6 +48,7 @@ export type CodexAttachment = {
   bytes: number;
 };
 export type CodexEvent = {
+  sequence?: number;
   type: "notification" | "approval" | "error";
   method?: string;
   id?: unknown;
@@ -147,17 +150,42 @@ export async function createCodexSession(
   return value as CodexSession;
 }
 
+export async function getCodexSession(
+  connection: AgentConnection,
+  profile = "default",
+  fetcher: Fetcher = fetch,
+): Promise<CodexSession | null> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(profile)) throw new Error("Codex profile is invalid");
+  const response = await agentFetch(connection, `api/codex/session?profile=${encodeURIComponent(profile)}`, {
+    method: "GET",
+  }, fetcher);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Codex session status failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 64 * 1024);
+  if (!value || typeof value !== "object" || typeof (value as { id?: unknown }).id !== "string" ||
+      typeof (value as { running?: unknown }).running !== "boolean") {
+    throw new Error("Agent returned an invalid Codex session status");
+  }
+  return value as CodexSession;
+}
+
 export async function sendCodexMessage(
   connection: AgentConnection,
   sessionId: string,
   text: string,
   fetcher: Fetcher = fetch,
   attachmentIds: string[] = [],
+  clientId = "",
 ): Promise<void> {
   const response = await agentFetch(connection, "api/codex/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, text, ...(attachmentIds.length ? { attachmentIds } : {}) }),
+    body: JSON.stringify({
+      sessionId,
+      text,
+      ...(attachmentIds.length ? { attachmentIds } : {}),
+      ...(clientId ? { clientId } : {}),
+    }),
   }, fetcher);
   if (!response.ok) throw new Error(`Codex message failed: HTTP ${response.status}`);
 }
@@ -204,6 +232,26 @@ export async function uploadCodexAttachments(
   return attachments as CodexAttachment[];
 }
 
+export async function deleteCodexAttachment(
+  connection: AgentConnection,
+  sessionId: string,
+  attachmentId: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || !/^[A-Za-z0-9_-]{1,128}$/.test(attachmentId)) {
+    throw new Error("Codex attachment identity is invalid");
+  }
+  const response = await agentFetch(
+    connection,
+    `api/codex/attachments/${encodeURIComponent(attachmentId)}?sessionId=${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+    fetcher,
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Codex attachment cleanup failed: HTTP ${response.status}`);
+  }
+}
+
 export async function respondCodexApproval(
   connection: AgentConnection,
   sessionId: string,
@@ -223,36 +271,89 @@ export function subscribeCodexEvents(
   connection: AgentConnection,
   sessionId: string,
   onEvent: (event: CodexEvent) => void,
-  onError?: (error: Error) => void,
+  onError?: (error: Error, recoverable: boolean) => void,
+  fetcher: Fetcher = fetch,
 ): { close: () => void } {
   const baseUrl = normalizeAgentBaseUrl(connection.baseUrl || DEFAULT_AGENT_BASE_URL);
   const controller = new AbortController();
   const headers = new Headers();
   if (connection.token) headers.set("Authorization", `Bearer ${connection.token}`);
-  void fetch(`${baseUrl}/api/codex/events?sessionId=${encodeURIComponent(sessionId)}`, {
-    headers,
-    credentials: "omit",
-    redirect: "error",
-    referrerPolicy: "no-referrer",
-    signal: controller.signal,
-  }).then(async (response) => {
-    if (!response.ok || !response.body) throw new Error(`Codex event stream failed: HTTP ${response.status}`);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (!controller.signal.aborted) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      const parsed = parseCodexSseRecords(buffer);
-      buffer = parsed.remainder;
-      for (const event of parsed.events) onEvent(event);
+  let lastSequence = 0;
+  const deliver = (event: CodexEvent): boolean => {
+    const sequence = event.sequence;
+    const previousSequence = lastSequence;
+    if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence >= 0) {
+      if (sequence > 0 && sequence <= lastSequence && event.method !== "openboard/session_state") return false;
+      if (lastSequence > 0 && sequence > lastSequence + 1) {
+        throw new Error(`Codex event stream sequence gap: expected ${lastSequence + 1}, received ${sequence}`);
+      }
     }
-    const parsed = parseCodexSseRecords(buffer, true);
-    for (const event of parsed.events) onEvent(event);
-  }).catch((error: unknown) => {
-    if (!controller.signal.aborted) onError?.(error instanceof Error ? error : new Error("codex stream error"));
+    onEvent(event);
+    if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence >= 0) {
+      lastSequence = Math.max(lastSequence, sequence);
+    }
+    return typeof sequence !== "number" || sequence > previousSequence;
+  };
+  const wait = (milliseconds: number) => new Promise<void>((resolve) => {
+    const timer = globalThis.setTimeout(resolve, milliseconds);
+    controller.signal.addEventListener("abort", () => {
+      globalThis.clearTimeout(timer);
+      resolve();
+    }, { once: true });
   });
+  void (async () => {
+    let delay = 250;
+    while (!controller.signal.aborted) {
+      let reconnect = false;
+      let madeProgress = false;
+      const connectedAt = Date.now();
+      try {
+        const query = new URLSearchParams({ sessionId });
+        if (lastSequence > 0) query.set("afterSequence", String(lastSequence));
+        const response = await fetcher(`${baseUrl}/api/codex/events?${query}`, {
+          headers,
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          signal: controller.signal,
+        });
+        if (response.status === 404 || response.status === 410) {
+          onError?.(new Error(`Codex event stream ended: HTTP ${response.status}`), false);
+          return;
+        }
+        if (response.status === 409) {
+          onError?.(new Error("Codex event history expired; start a new session to avoid an incomplete transcript"), false);
+          return;
+        }
+        if (!response.ok || !response.body) throw new Error(`Codex event stream failed: HTTP ${response.status}`);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!controller.signal.aborted) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          const parsed = parseCodexSseRecords(buffer);
+          buffer = parsed.remainder;
+          for (const event of parsed.events) madeProgress = deliver(event) || madeProgress;
+        }
+        const parsed = parseCodexSseRecords(buffer, true);
+        for (const event of parsed.events) madeProgress = deliver(event) || madeProgress;
+        reconnect = true;
+        if (!madeProgress) {
+          onError?.(new Error("Codex event stream ended unexpectedly"), true);
+        }
+        if (madeProgress || Date.now() - connectedAt >= 1_000) delay = 250;
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        reconnect = true;
+        onError?.(error instanceof Error ? error : new Error("codex stream error"), true);
+      }
+      if (!reconnect || controller.signal.aborted) return;
+      await wait(delay);
+      delay = Math.min(5_000, delay * 2);
+    }
+  })();
   return { close: () => controller.abort() };
 }
 

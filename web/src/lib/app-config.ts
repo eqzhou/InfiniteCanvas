@@ -1,4 +1,5 @@
 import type { AppConfig } from "@/types/board";
+import { normalizePromptSourceConfigs } from "@/services/prompt-sources";
 
 export const SYSTEM_PROMPT_MAX_LENGTH = 20_000;
 
@@ -23,5 +24,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
     canvasPanelTab: rawPanelTab === "elements" || rawPanelTab === "assets"
       ? rawPanelTab
       : "projects",
+    promptSources: normalizePromptSourceConfigs(
+      (config as AppConfig & { promptSources?: unknown }).promptSources),
   };
 }

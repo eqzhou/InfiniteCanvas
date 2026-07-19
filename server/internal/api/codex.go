@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,11 +22,26 @@ import (
 
 const maxCodexBody = 256 << 10
 const maxCodexAttachmentBytes = 30 << 20
+const codexHistoryLimit = 128
+const codexSubscriberBuffer = codexHistoryLimit + 64
+const codexStartupTimeout = 15 * time.Second
+const codexTurnStartTimeout = 30 * time.Second
+
+var errCodexHistoryGap = errors.New("Codex event history is no longer available")
 
 type codexManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*codexSession
-	profiles map[string]string
+	mu                  sync.RWMutex
+	sessions            map[string]*codexSession
+	profiles            map[string]string
+	creating            map[string]*codexCreation
+	activeTurnSessionID string
+}
+
+type codexCreation struct {
+	done     chan struct{}
+	snapshot codexSessionSnapshot
+	status   int
+	err      string
 }
 
 type codexSession struct {
@@ -44,6 +60,18 @@ type codexSession struct {
 	closed             bool
 	pendingAttachments map[string]codexAttachment
 	activeAttachments  []codexAttachment
+	runtimeClientID    string
+	releaseRuntime     func()
+	eventSequence      uint64
+}
+
+type codexSessionSnapshot struct {
+	ID              string `json:"id"`
+	ThreadID        string `json:"threadId,omitempty"`
+	Profile         string `json:"profile"`
+	Reused          bool   `json:"reused"`
+	Running         bool   `json:"running"`
+	RuntimeClientID string `json:"runtimeClientId,omitempty"`
 }
 
 type codexAttachment struct {
@@ -55,15 +83,38 @@ type codexAttachment struct {
 }
 
 type codexEvent struct {
-	Type   string          `json:"type"`
-	Method string          `json:"method,omitempty"`
-	ID     json.RawMessage `json:"id,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
-	Data   any             `json:"data,omitempty"`
+	Sequence uint64          `json:"sequence"`
+	Type     string          `json:"type"`
+	Method   string          `json:"method,omitempty"`
+	ID       json.RawMessage `json:"id,omitempty"`
+	Params   json.RawMessage `json:"params,omitempty"`
+	Data     any             `json:"data,omitempty"`
 }
 
 func newCodexManager() *codexManager {
-	return &codexManager{sessions: make(map[string]*codexSession), profiles: make(map[string]string)}
+	return &codexManager{
+		sessions: make(map[string]*codexSession),
+		profiles: make(map[string]string),
+		creating: make(map[string]*codexCreation),
+	}
+}
+
+func (m *codexManager) claimTurn(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.activeTurnSessionID != "" && m.activeTurnSessionID != sessionID {
+		return false
+	}
+	m.activeTurnSessionID = sessionID
+	return true
+}
+
+func (m *codexManager) releaseTurn(sessionID string) {
+	m.mu.Lock()
+	if m.activeTurnSessionID == sessionID {
+		m.activeTurnSessionID = ""
+	}
+	m.mu.Unlock()
 }
 
 func randomID(prefix string) string {
@@ -99,21 +150,80 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid codex profile", http.StatusBadRequest)
 		return
 	}
-	if !req.Fresh {
-		s.codex.mu.RLock()
-		existingID := s.codex.profiles[profile]
-		existing := s.codex.sessions[existingID]
-		s.codex.mu.RUnlock()
-		if existing != nil && !existing.isClosed() {
-			writeJSON(w, map[string]any{"id": existing.id, "threadId": existing.threadID, "profile": profile, "reused": true})
+	s.codex.mu.Lock()
+	if creating := s.codex.creating[profile]; creating != nil {
+		s.codex.mu.Unlock()
+		select {
+		case <-creating.done:
+			if creating.err != "" {
+				http.Error(w, creating.err, creating.status)
+				return
+			}
+			snapshot := creating.snapshot
+			snapshot.Reused = true
+			writeJSON(w, snapshot)
+		case <-r.Context().Done():
+			http.Error(w, "codex session request cancelled", http.StatusRequestTimeout)
+		}
+		return
+	}
+	existingID := s.codex.profiles[profile]
+	existing := s.codex.sessions[existingID]
+	if existing != nil && !existing.isClosed() {
+		if req.Fresh && existing.snapshot(false).Running {
+			s.codex.mu.Unlock()
+			http.Error(w, "codex turn is already running", http.StatusConflict)
+			return
+		}
+		if !req.Fresh {
+			snapshot := existing.snapshot(true)
+			writeJSON(w, snapshot)
+			s.codex.mu.Unlock()
 			return
 		}
 	}
+	s.codex.mu.Unlock()
+	creation := &codexCreation{done: make(chan struct{})}
+	s.codex.mu.Lock()
+	// A creator could have appeared while the prior session state was inspected.
+	if current := s.codex.creating[profile]; current != nil {
+		s.codex.mu.Unlock()
+		select {
+		case <-current.done:
+			if current.err != "" {
+				http.Error(w, current.err, current.status)
+				return
+			}
+			snapshot := current.snapshot
+			snapshot.Reused = true
+			writeJSON(w, snapshot)
+		case <-r.Context().Done():
+			http.Error(w, "codex session request cancelled", http.StatusRequestTimeout)
+		}
+		return
+	}
+	latestID := s.codex.profiles[profile]
+	latest := s.codex.sessions[latestID]
+	if latestID != existingID && latest != nil && !latest.isClosed() {
+		snapshot := latest.snapshot(true)
+		writeJSON(w, snapshot)
+		s.codex.mu.Unlock()
+		return
+	}
+	s.codex.creating[profile] = creation
+	s.codex.mu.Unlock()
 	// The HTTP request context ends as soon as this response is sent. A Codex
 	// session must outlive the request and is cancelled explicitly on close.
 	session, err := startCodexSession(context.Background(), cwd)
 	if err != nil {
-		http.Error(w, "codex app-server unavailable: "+err.Error(), http.StatusServiceUnavailable)
+		message := "codex app-server unavailable: " + err.Error()
+		http.Error(w, message, http.StatusServiceUnavailable)
+		s.codex.mu.Lock()
+		creation.status = http.StatusServiceUnavailable
+		creation.err = message
+		delete(s.codex.creating, profile)
+		close(creation.done)
+		s.codex.mu.Unlock()
 		return
 	}
 	session.profile = profile
@@ -129,7 +239,49 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 	if previous != nil {
 		previous.close()
 	}
-	writeJSON(w, map[string]any{"id": session.id, "threadId": session.threadID, "profile": profile, "reused": false})
+	snapshot := session.snapshot(false)
+	writeJSON(w, snapshot)
+	s.codex.mu.Lock()
+	creation.snapshot = snapshot
+	delete(s.codex.creating, profile)
+	close(creation.done)
+	s.codex.mu.Unlock()
+}
+
+func (s *Server) getCodexSession(w http.ResponseWriter, r *http.Request) {
+	profile := strings.TrimSpace(r.URL.Query().Get("profile"))
+	if profile == "" {
+		profile = "default"
+	}
+	if !projectIDPattern.MatchString(profile) {
+		http.Error(w, "invalid codex profile", http.StatusBadRequest)
+		return
+	}
+	s.codex.mu.RLock()
+	session := s.codex.sessions[s.codex.profiles[profile]]
+	s.codex.mu.RUnlock()
+	if session == nil || session.isClosed() {
+		http.Error(w, "codex session not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, session.snapshot(true))
+}
+
+func (s *codexSession) snapshot(reused bool) codexSessionSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshotLocked(reused)
+}
+
+func (s *codexSession) snapshotLocked(reused bool) codexSessionSnapshot {
+	return codexSessionSnapshot{
+		ID: s.id, ThreadID: s.threadID, Profile: s.profile, Reused: reused,
+		Running: s.turnStarting || s.turnID != "", RuntimeClientID: s.runtimeClientID,
+	}
+}
+
+func (s *codexSession) stateEventLocked() codexEvent {
+	return codexEvent{Type: "notification", Method: "openboard/session_state", Data: s.snapshotLocked(true)}
 }
 
 func startCodexSession(parent context.Context, cwd string) (*codexSession, error) {
@@ -137,7 +289,12 @@ func startCodexSession(parent context.Context, cwd string) (*codexSession, error
 	if bin == "" {
 		bin = "codex"
 	}
-	ctx, cancel := context.WithCancel(parent)
+	if err := parent.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	startupContext, finishStartup := context.WithTimeout(parent, codexStartupTimeout)
+	defer finishStartup()
 	cmd := exec.CommandContext(ctx, bin, "app-server", "--stdio")
 	cmd.Dir = cwd
 	stdin, err := cmd.StdinPipe()
@@ -166,15 +323,15 @@ func startCodexSession(parent context.Context, cwd string) (*codexSession, error
 		subs: make(map[chan codexEvent]struct{}), pendingAttachments: make(map[string]codexAttachment),
 	}
 	var initResult map[string]any
-	if err := client.Call(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "openboard", "version": "0.1.0"}}, &initResult); err != nil {
+	if err := client.Call(startupContext, "initialize", map[string]any{"clientInfo": map[string]any{"name": "openboard", "version": "0.1.0"}}, &initResult); err != nil {
 		_ = client.Close()
 		cancel()
 		return nil, err
 	}
 	// The app-server protocol uses a notification to complete initialization.
-	_ = client.Notify(ctx, "initialized", map[string]any{})
+	_ = client.Notify(startupContext, "initialized", map[string]any{})
 	var thread map[string]any
-	if err := client.Call(ctx, "thread/start", map[string]any{"cwd": cwd}, &thread); err != nil {
+	if err := client.Call(startupContext, "thread/start", map[string]any{"cwd": cwd}, &thread); err != nil {
 		_ = client.Close()
 		cancel()
 		return nil, err
@@ -199,8 +356,11 @@ func (s *codexSession) consume() {
 			if !ok {
 				return
 			}
-			s.trackTurnNotification(n.Method, n.Params)
+			stateChanged := s.trackTurnNotification(n.Method, n.Params)
 			s.publish(codexEvent{Type: "notification", Method: n.Method, Params: n.Params})
+			if stateChanged {
+				s.publishState()
+			}
 		case req, ok := <-s.client.Requests():
 			if !ok {
 				return
@@ -216,27 +376,32 @@ func (s *codexSession) isClosed() bool {
 	return s.closed
 }
 
-func (s *codexSession) trackTurnNotification(method string, params json.RawMessage) {
+func (s *codexSession) trackTurnNotification(method string, params json.RawMessage) bool {
 	var payload struct {
 		Turn struct {
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
 	_ = json.Unmarshal(params, &payload)
+	if payload.Turn.ID != "" && !projectIDPattern.MatchString(payload.Turn.ID) {
+		return false
+	}
 	s.mu.Lock()
 	if payload.Turn.ID != "" && (method == "turn/started" || method == "turn_started") {
 		s.turnID = payload.Turn.ID
+		s.mu.Unlock()
+		return true
 	}
 	completed := method == "turn/completed" || method == "turn_completed" || method == "turn/failed" || method == "turn_failed"
 	if completed {
 		if payload.Turn.ID != "" && s.turnID != "" && s.turnID != payload.Turn.ID {
 			s.mu.Unlock()
-			return
+			return false
 		}
 		if s.turnID == "" && payload.Turn.ID != "" {
 			if !s.turnStarting {
 				s.mu.Unlock()
-				return
+				return false
 			}
 			s.completedTurnID = payload.Turn.ID
 		}
@@ -244,11 +409,18 @@ func (s *codexSession) trackTurnNotification(method string, params json.RawMessa
 		s.turnStarting = false
 		attachments := s.activeAttachments
 		s.activeAttachments = nil
+		release := s.releaseRuntime
+		s.releaseRuntime = nil
+		s.runtimeClientID = ""
 		s.mu.Unlock()
 		removeCodexAttachments(attachments)
-		return
+		if release != nil {
+			release()
+		}
+		return true
 	}
 	s.mu.Unlock()
+	return false
 }
 
 func (s *codexSession) publish(event codexEvent) {
@@ -258,30 +430,61 @@ func (s *codexSession) publish(event codexEvent) {
 		return
 	}
 	s.history = append(s.history, event)
-	if len(s.history) > 128 {
-		s.history = append([]codexEvent(nil), s.history[len(s.history)-128:]...)
+	s.eventSequence++
+	event.Sequence = s.eventSequence
+	s.history[len(s.history)-1] = event
+	if len(s.history) > codexHistoryLimit {
+		s.history = append([]codexEvent(nil), s.history[len(s.history)-codexHistoryLimit:]...)
 	}
 	for ch := range s.subs {
 		select {
 		case ch <- event:
 		default:
+			delete(s.subs, ch)
+			close(ch)
 		}
 	}
 }
 
+func (s *codexSession) publishState() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	event := s.stateEventLocked()
+	s.mu.Unlock()
+	s.publish(event)
+}
+
 func (s *codexSession) subscribe() (chan codexEvent, func()) {
+	ch, unsubscribe, _ := s.subscribeAfter(0)
+	return ch, unsubscribe
+}
+
+func (s *codexSession) subscribeAfter(afterSequence uint64) (chan codexEvent, func(), error) {
 	// Match the bounded replay history so a subscriber can be initialized
 	// without blocking while the session mutex is held.
-	ch := make(chan codexEvent, 128)
+	ch := make(chan codexEvent, codexSubscriberBuffer)
 	s.mu.Lock()
 	if s.closed {
 		close(ch)
 		s.mu.Unlock()
-		return ch, func() {}
+		return ch, func() {}, nil
+	}
+	if afterSequence > s.eventSequence || (afterSequence > 0 && len(s.history) > 0 && s.history[0].Sequence > afterSequence+1) {
+		close(ch)
+		s.mu.Unlock()
+		return ch, func() {}, errCodexHistoryGap
 	}
 	for _, event := range s.history {
-		ch <- event
+		if event.Sequence > afterSequence {
+			ch <- event
+		}
 	}
+	state := s.stateEventLocked()
+	state.Sequence = s.eventSequence
+	ch <- state
 	s.subs[ch] = struct{}{}
 	s.mu.Unlock()
 	return ch, func() {
@@ -291,7 +494,7 @@ func (s *codexSession) subscribe() (chan codexEvent, func()) {
 			close(ch)
 		}
 		s.mu.Unlock()
-	}
+	}, nil
 }
 
 func (s *codexSession) close() {
@@ -302,6 +505,9 @@ func (s *codexSession) close() {
 	}
 	s.closed = true
 	attachments := make([]codexAttachment, 0, len(s.pendingAttachments)+len(s.activeAttachments))
+	release := s.releaseRuntime
+	s.releaseRuntime = nil
+	s.runtimeClientID = ""
 	for _, attachment := range s.pendingAttachments {
 		attachments = append(attachments, attachment)
 	}
@@ -313,6 +519,9 @@ func (s *codexSession) close() {
 	}
 	s.subs = make(map[chan codexEvent]struct{})
 	s.mu.Unlock()
+	if release != nil {
+		release()
+	}
 	removeCodexAttachments(attachments)
 	_ = s.client.Close()
 	if s.cancel != nil {
@@ -322,9 +531,9 @@ func (s *codexSession) close() {
 
 func (s *Server) findCodex(id string) (*codexSession, bool) {
 	s.codex.mu.RLock()
-	defer s.codex.mu.RUnlock()
 	v, ok := s.codex.sessions[id]
-	return v, ok
+	s.codex.mu.RUnlock()
+	return v, ok && !v.isClosed()
 }
 
 func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +542,7 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		SessionID     string   `json:"sessionId"`
 		Text          string   `json:"text"`
 		AttachmentIDs []string `json:"attachmentIds"`
+		ClientID      string   `json:"clientId"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -346,34 +556,79 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session.mu.Lock()
+	sessionClosed := session.closed
 	turnRunning := session.turnID != "" || session.turnStarting
-	if !turnRunning {
+	if !turnRunning && !sessionClosed {
 		session.turnStarting = true
 	}
 	session.mu.Unlock()
+	if sessionClosed {
+		http.Error(w, "codex session not found", http.StatusNotFound)
+		return
+	}
 	if turnRunning {
 		http.Error(w, "codex turn is already running", http.StatusConflict)
 		return
 	}
+	if !s.codex.claimTurn(session.id) {
+		session.cancelTurnStart()
+		http.Error(w, "another codex turn is already running", http.StatusConflict)
+		return
+	}
+	requestedClientID := strings.TrimSpace(req.ClientID)
+	clientID, clientClaimed := s.runtime.claimClient(requestedClientID)
+	if requestedClientID != "" && !clientClaimed {
+		s.codex.releaseTurn(session.id)
+		session.cancelTurnStart()
+		http.Error(w, "requested browser runtime is not connected", http.StatusConflict)
+		return
+	}
+	releaseTurn := func() {
+		s.codex.releaseTurn(session.id)
+		s.runtime.unpin(session.id)
+	}
+	session.mu.Lock()
+	session.releaseRuntime = releaseTurn
+	session.mu.Unlock()
+	if clientID != "" {
+		s.runtime.pin(session.id, clientID)
+		session.mu.Lock()
+		session.runtimeClientID = clientID
+		session.mu.Unlock()
+	}
+	session.publishState()
 	input := []any{map[string]any{"type": "text", "text": req.Text}}
 	attachments, err := session.takeAttachments(req.AttachmentIDs)
 	if err != nil {
 		session.cancelTurnStart()
+		session.publishState()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	for _, attachment := range attachments {
 		input = append(input, map[string]any{"type": "localImage", "path": attachment.Path})
 	}
+	session.reserveTurnAttachments(attachments)
 	params := map[string]any{"threadId": session.threadID, "input": input}
+	session.publish(codexEvent{
+		Type: "notification", Method: "openboard/user_message",
+		Data: map[string]any{"id": randomID("message"), "text": strings.TrimSpace(req.Text)},
+	})
 	var turn map[string]any
-	if err := session.client.Call(r.Context(), "turn/start", params, &turn); err != nil {
-		session.cancelTurnStart()
-		removeCodexAttachments(attachments)
+	turnContext, cancelTurnStart := context.WithTimeout(context.Background(), codexTurnStartTimeout)
+	err = session.client.Call(turnContext, "turn/start", params, &turn)
+	cancelTurnStart()
+	if err != nil {
+		s.discardCodexSession(session)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	session.activateTurn(turn, attachments)
+	if !session.activateTurn(turn) {
+		s.discardCodexSession(session)
+		http.Error(w, "Codex turn/start returned an invalid turn id", http.StatusBadGateway)
+		return
+	}
+	session.publishState()
 	writeJSON(w, map[string]any{"ok": true})
 }
 
@@ -402,7 +657,13 @@ func (s *codexSession) takeAttachments(ids []string) ([]codexAttachment, error) 
 	return attachments, nil
 }
 
-func (s *codexSession) activateTurn(turn map[string]any, attachments []codexAttachment) {
+func (s *codexSession) reserveTurnAttachments(attachments []codexAttachment) {
+	s.mu.Lock()
+	s.activeAttachments = append(s.activeAttachments, attachments...)
+	s.mu.Unlock()
+}
+
+func (s *codexSession) activateTurn(turn map[string]any) bool {
 	turnID := ""
 	if value, ok := turn["turn"].(map[string]any); ok {
 		turnID, _ = value["id"].(string)
@@ -410,25 +671,68 @@ func (s *codexSession) activateTurn(turn map[string]any, attachments []codexAtta
 	if turnID == "" {
 		turnID, _ = turn["id"].(string)
 	}
+	if !projectIDPattern.MatchString(turnID) {
+		turnID = ""
+	}
 	s.mu.Lock()
+	if turnID == "" {
+		if projectIDPattern.MatchString(s.turnID) {
+			s.turnStarting = false
+			s.mu.Unlock()
+			return true
+		}
+		if projectIDPattern.MatchString(s.completedTurnID) {
+			s.completedTurnID = ""
+			s.turnStarting = false
+			s.mu.Unlock()
+			return true
+		}
+		s.mu.Unlock()
+		return false
+	}
 	if turnID != "" && s.completedTurnID == turnID {
 		s.completedTurnID = ""
 		s.turnStarting = false
 		s.turnID = ""
 		s.mu.Unlock()
-		removeCodexAttachments(attachments)
-		return
+		return true
+	}
+	if s.completedTurnID != "" {
+		s.mu.Unlock()
+		return false
+	}
+	if s.turnID != "" && s.turnID != turnID {
+		s.mu.Unlock()
+		return false
 	}
 	s.turnStarting = false
 	s.turnID = turnID
-	s.activeAttachments = append(s.activeAttachments, attachments...)
 	s.mu.Unlock()
+	return true
+}
+
+func (s *Server) discardCodexSession(session *codexSession) {
+	s.codex.mu.Lock()
+	if s.codex.sessions[session.id] == session {
+		delete(s.codex.sessions, session.id)
+	}
+	if s.codex.profiles[session.profile] == session.id {
+		delete(s.codex.profiles, session.profile)
+	}
+	s.codex.mu.Unlock()
+	session.close()
 }
 
 func (s *codexSession) cancelTurnStart() {
 	s.mu.Lock()
 	s.turnStarting = false
+	release := s.releaseRuntime
+	s.releaseRuntime = nil
+	s.runtimeClientID = ""
 	s.mu.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 func (s *Server) interruptCodex(w http.ResponseWriter, r *http.Request) {
@@ -488,6 +792,11 @@ func (s *Server) respondCodexApproval(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	session.publish(codexEvent{
+		Type: "notification", Method: "openboard/approval_resolved",
+		ID:   append(json.RawMessage(nil), req.ID...),
+		Data: map[string]any{"approved": req.Approve},
+	})
 	writeJSON(w, map[string]any{"ok": true})
 }
 
@@ -503,7 +812,20 @@ func (s *Server) codexEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-	ch, unsubscribe := session.subscribe()
+	afterSequence := uint64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("afterSequence")); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid Codex event sequence", http.StatusBadRequest)
+			return
+		}
+		afterSequence = parsed
+	}
+	ch, unsubscribe, err := session.subscribeAfter(afterSequence)
+	if errors.Is(err, errCodexHistoryGap) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	defer unsubscribe()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

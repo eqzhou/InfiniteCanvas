@@ -278,6 +278,10 @@ function parsePrompt(value: unknown, index: number): PromptItem {
   boundedString(input.title, `Workspace prompt ${index} title`, 500);
   boundedString(input.body, `Workspace prompt ${index} body`, 100_000);
   boundedString(input.source, `Workspace prompt ${index} source`, 1_000);
+  if (input.sourceId !== undefined) {
+    const sourceId = boundedString(input.sourceId, `Workspace prompt ${index} sourceId`, 64);
+    if (!ID.test(sourceId)) throw new Error(`Invalid workspace prompt ${index} sourceId`);
+  }
   if (input.coverUrl !== undefined) boundedString(input.coverUrl, `Workspace prompt ${index} coverUrl`, 2_000);
   if (input.resultUrls !== undefined && (!Array.isArray(input.resultUrls) || input.resultUrls.length > 100 ||
       input.resultUrls.some((url) => typeof url !== "string" || url.length > 2_000))) {

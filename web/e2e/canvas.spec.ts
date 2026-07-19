@@ -998,6 +998,112 @@ test("image workbench persists history and inserts a result into the canvas", as
   await expect(page.locator('[data-node-type="image"] img[alt="工作台图片"]')).toBeVisible();
 });
 
+test("Agent sees one unified running generation task from the image workbench", async ({ page, request, context }) => {
+  let requestStarted = false;
+  let releaseProvider!: () => void;
+  const providerGate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+  await page.route("https://activity.example/v1/images/generations", async (route) => {
+    requestStarted = true;
+    await providerGate;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data: [{ b64_json: pngPixelBase64 }] }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://activity.example/v1");
+  await page.getByLabel("生图 API Key").fill("activity-test-key");
+  await page.getByLabel("生图模型", { exact: true }).fill("activity-image");
+  await closeSettings(page);
+  await page.goto("/workbench/image");
+  await page.getByLabel("提示词").fill("tracked workbench generation");
+  await page.getByRole("button", { name: "生成", exact: true }).click();
+  await expect.poll(() => requestStarted).toBe(true);
+
+  await page.getByTitle("本地 Agent").click();
+  await expect(page.getByRole("region", { name: "正在运行的生成任务" })).toContainText("tracked workbench generation");
+  const response = await request.post(`${agentUrl}/api/runtime/command`, {
+    headers: { Authorization: "Bearer e2e-token" },
+    data: { method: "board.get_state", params: {}, timeoutMs: 10_000 },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const state = await response.json() as { generationTasks?: Array<Record<string, unknown>> };
+  expect(state.generationTasks?.[0]).toMatchObject({
+    kind: "image",
+    status: "running",
+    surface: "image-workbench",
+    prompt: "tracked workbench generation",
+  });
+  const taskId = String(state.generationTasks?.[0]?.id);
+  const statusResponse = await request.post(`${agentUrl}/api/runtime/command`, {
+    headers: { Authorization: "Bearer e2e-token" },
+    data: {
+      method: "generation_get_status",
+      params: { taskId },
+      timeoutMs: 10_000,
+    },
+  });
+  expect(statusResponse.ok(), await statusResponse.text()).toBe(true);
+  expect(await statusResponse.json()).toMatchObject({
+    task: { status: "running", surface: "image-workbench" },
+  });
+
+  const second = await context.newPage();
+  await second.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  });
+  await openFreshBoard(second);
+  await second.goto("/prompts");
+  await second.bringToFront();
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
+    window.dispatchEvent(new Event("blur"));
+  });
+  await second.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(async () => {
+    const active = await request.post(`${agentUrl}/api/runtime/command`, {
+      headers: { Authorization: "Bearer e2e-token" },
+      data: { method: "board.get_state", params: {}, timeoutMs: 10_000 },
+    });
+    return (await active.json() as { route?: string }).route;
+  }).toBe("/prompts");
+  const denied = await request.post(`${agentUrl}/api/runtime/command`, {
+    headers: { Authorization: "Bearer e2e-token" },
+    data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
+  });
+  expect(await denied.json()).toEqual({ task: { id: taskId, status: "not_found" } });
+  await second.close();
+  await page.bringToFront();
+  await expect.poll(async () => {
+    const fallback = await request.post(`${agentUrl}/api/runtime/command`, {
+      headers: { Authorization: "Bearer e2e-token" },
+      data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
+    });
+    return (await fallback.json() as { task?: { status?: string } }).task?.status;
+  }).toBe("running");
+
+  releaseProvider();
+  await expect(page.getByRole("region", { name: "正在运行的生成任务" })).toHaveCount(0);
+  await expect(page.locator("article").filter({ hasText: "tracked workbench generation" })).toContainText("succeeded");
+  const completed = await request.post(`${agentUrl}/api/runtime/command`, {
+    headers: { Authorization: "Bearer e2e-token" },
+    data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
+  });
+  expect(await completed.json()).toMatchObject({ task: { id: taskId, status: "succeeded" } });
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
+  await expect.poll(async () => {
+    const afterReload = await request.post(`${agentUrl}/api/runtime/command`, {
+      headers: { Authorization: "Bearer e2e-token" },
+      data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
+    });
+    return (await afterReload.json() as { task?: { status?: string } }).task?.status;
+  }).toBe("succeeded");
+});
+
 test("image workbench records cancellation and retries the cancelled job", async ({ page }) => {
   let requests = 0;
   await page.route("https://cancel.example/v1/images/generations", async (route) => {
@@ -1844,10 +1950,88 @@ test("prompt library filters tags and manages multiple persisted remote sources"
   await page.getByTitle("关闭详情").click();
 
   const firstSource = page.locator("li").filter({ hasText: sources[0] });
+  page.once("dialog", (dialog) => dialog.accept());
   await firstSource.getByTitle("移除提示词源").click();
   await page.reload();
   await expect(page.locator("li").filter({ hasText: sources[0] })).toHaveCount(0);
   await expect(page.locator("li").filter({ hasText: sources[1] })).toBeVisible();
+});
+
+test("prompt source manager previews, persists, edits, disables, and removes declarative sources", async ({ page }) => {
+  const jsonUrl = "https://mapped-prompts.example/catalog.json";
+  const htmlUrl = "https://html-prompts.example/catalog.html";
+  await page.route(jsonUrl, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      payload: {
+        entries: [{
+          slug: "mapped-one",
+          label: "Mapped prompt",
+          value: "mapped nested body",
+          metadata: { tags: ["mapped", "nested"] },
+        }],
+      },
+    }),
+  }));
+  await page.route(htmlUrl, async (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<!doctype html><html><body>
+      <article class="prompt-card"><h2 class="title">HTML prompt</h2>
+      <p class="prompt">html mapped body</p><span class="tag">html</span></article>
+    </body></html>`,
+  }));
+
+  await openFreshBoard(page);
+  await page.goto("/prompts");
+  await page.getByRole("button", { name: "管理来源" }).click();
+  let manager = page.getByRole("dialog", { name: "管理提示词来源" });
+  await manager.getByLabel("来源名称").fill("Nested catalog");
+  await manager.getByLabel("来源解析格式").selectOption("json");
+  await manager.getByLabel("来源 URL").fill(jsonUrl);
+  await manager.getByLabel("条目路径").fill("payload.entries");
+  await manager.getByLabel("ID 路径").fill("slug");
+  await manager.getByLabel("标题路径").fill("label");
+  await manager.getByLabel("正文路径").fill("value");
+  await manager.getByLabel("标签路径").fill("metadata.tags");
+  await manager.getByRole("button", { name: "预览" }).click();
+  await expect(manager.getByRole("list", { name: "来源预览" })).toContainText("Mapped prompt");
+  await manager.getByRole("button", { name: "保存来源" }).click();
+  await expect(manager.getByRole("listitem").filter({ hasText: "Nested catalog" })).toBeVisible();
+
+  await manager.getByLabel("条目路径").fill("__proto__.polluted");
+  await manager.getByRole("button", { name: "保存来源" }).click();
+  await expect(manager.getByRole("alert")).toContainText("field path");
+  await manager.getByLabel("条目路径").fill("payload.entries");
+  await manager.getByLabel("来源名称").fill("Nested catalog edited");
+  await manager.getByLabel("启用来源").uncheck();
+  await manager.getByRole("button", { name: "保存来源" }).click();
+  await expect(manager.getByRole("listitem").filter({ hasText: "Nested catalog edited" })).toContainText("已停用");
+  await manager.getByTitle("关闭来源管理").click();
+
+  await page.reload();
+  await page.getByRole("button", { name: "管理来源" }).click();
+  manager = page.getByRole("dialog", { name: "管理提示词来源" });
+  await expect(manager.getByRole("listitem").filter({ hasText: "Nested catalog edited" })).toContainText("已停用");
+
+  await manager.getByRole("button", { name: "新增来源" }).click();
+  await manager.getByLabel("来源名称").fill("HTML catalog");
+  await manager.getByLabel("来源解析格式").selectOption("html");
+  await manager.getByLabel("来源 URL").fill(htmlUrl);
+  await manager.getByLabel("条目选择器").fill(".prompt-card");
+  await manager.getByLabel("标题选择器").fill(".title");
+  await manager.getByLabel("正文选择器").fill(".prompt");
+  await manager.getByLabel("标签选择器").fill(".tag");
+  await manager.getByRole("button", { name: "预览" }).click();
+  await expect(manager.getByRole("list", { name: "来源预览" })).toContainText("HTML prompt");
+  await manager.getByRole("button", { name: "保存来源" }).click();
+  await expect(manager.getByRole("listitem").filter({ hasText: "HTML catalog" })).toBeVisible();
+
+  await manager.getByRole("listitem").filter({ hasText: "Nested catalog edited" }).getByRole("button").click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await manager.getByTitle("删除来源").click();
+  await expect(manager.getByRole("listitem").filter({ hasText: "Nested catalog edited" })).toHaveCount(0);
+  await manager.getByTitle("关闭来源管理").click();
+  await expect(page.getByText("Mapped prompt", { exact: true })).toHaveCount(0);
 });
 
 test("asset editor updates title, source, tags, notes, and text content", async ({ page }) => {
@@ -2155,6 +2339,7 @@ test("audio nodes expose the audio generation prompt", async ({ page }) => {
 
 test("browser runtime executes board commands, navigation, and protected snapshots", async ({ page, request }) => {
   await openFreshBoard(page);
+  await page.getByTitle("配置", { exact: true }).click();
   await expect.poll(async () => {
     const response = await request.get(`${agentUrl}/api/agent/status`, {
       headers: { Authorization: "Bearer e2e-token" },
@@ -2172,6 +2357,12 @@ test("browser runtime executes board commands, navigation, and protected snapsho
   };
   const state = await command("board.get_state");
   expect((state.project as { id?: string } | null)?.id).toBeTruthy();
+  const generationNodeId = await page.locator('[data-node-type="config"]').getAttribute("data-node-id");
+  expect(generationNodeId).toBeTruthy();
+  const generationStatus = await command("generation_get_status", { nodeIds: [generationNodeId] });
+  expect(generationStatus).toMatchObject({
+    nodes: [{ nodeId: generationNodeId, status: "queued", kind: "image" }],
+  });
 
   const created = await command("board.create_text_node", {
     title: "Runtime Note",
@@ -2240,22 +2431,43 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   let approvalBody: Record<string, unknown> | null = null;
   let messageBody: Record<string, unknown> | null = null;
   let interrupted = false;
+  let codexSessionCreated = false;
+  let activeCodexSessionId = "session-e2e";
   const sessionBodies: Record<string, unknown>[] = [];
   let eventStreamCount = 0;
+  let releaseInitialSessionGet!: () => void;
+  const initialSessionGet = new Promise<void>((resolve) => { releaseInitialSessionGet = resolve; });
   await page.route("**/api/agent/status", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({ connected: true, bridges: ["codex"], tools: [] }),
     });
   });
-  await page.route("**/api/codex/session", async (route) => {
+  await page.route(/\/api\/codex\/session(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET") {
+      if (!codexSessionCreated) {
+        await initialSessionGet;
+        await route.fulfill({ status: 404, body: "not found" });
+        return;
+      }
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ id: activeCodexSessionId, threadId: `thread-${activeCodexSessionId}`, profile: "default", running: !interrupted }),
+      });
+      return;
+    }
     if (route.request().method() === "POST") {
       sessionBodies.push(JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>);
+      codexSessionCreated = true;
+      if (sessionBodies.length > 1) activeCodexSessionId = `session-e2e-${sessionBodies.length}`;
     }
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ id: "session-e2e", threadId: "thread-e2e" }),
+      body: JSON.stringify({ id: activeCodexSessionId, threadId: `thread-${activeCodexSessionId}`, profile: "default", running: false }),
     });
+  });
+  await page.route("**/api/codex/session/*", async (route) => {
+    await route.fulfill({ status: 204 });
   });
   await page.route("**/api/codex/message", async (route) => {
     messageBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
@@ -2282,7 +2494,7 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
       body: JSON.stringify({ error: "temporary sync failure" }),
     });
   });
-  await page.route("**/api/codex/events?sessionId=session-e2e", async (route) => {
+  await page.route("**/api/codex/events?sessionId=*", async (route) => {
     eventStreamCount += 1;
     const event = eventStreamCount === 1
       ? { type: "notification", method: "agent_message_delta", params: { delta: "**hello from Codex** <script>bad()</script>" } }
@@ -2297,6 +2509,8 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await page.getByLabel("Local URL").fill("http://127.0.0.1:8790");
   await page.getByRole("button", { name: "连接" }).click();
   await page.getByRole("button", { name: "继续会话" }).click();
+  await expect.poll(() => sessionBodies).toHaveLength(1);
+  releaseInitialSessionGet();
   await expect(page.getByText("Agent project read failed: HTTP 503", { exact: false })).toBeVisible();
   await expect(page.getByPlaceholder("发送消息")).toBeVisible();
   await expect(page.getByText("hello from Codex")).toBeVisible();
@@ -2322,10 +2536,99 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await expect(page.getByText("Codex 请求审批")).toBeVisible();
   await page.getByTitle("允许").click();
   await expect.poll(() => approvalBody).toMatchObject({
-    sessionId: "session-e2e",
+    sessionId: "session-e2e-2",
     id: "approval-e2e",
     approve: true,
   });
+  await page.getByTitle("关闭 Codex 会话").click();
+  await page.getByRole("button", { name: "继续会话" }).click();
+  await expect.poll(() => sessionBodies).toHaveLength(3);
+  await expect(page.getByText("hello from Codex")).toHaveCount(0);
+});
+
+test("Codex session and running state stay synchronized across browser tabs", async ({ page, context }) => {
+  let created = false;
+  let running = false;
+  let activeSessionId = "session-shared";
+  let messageBody: Record<string, unknown> | null = null;
+  const installRoutes = async (target: Page) => {
+    await target.route("**/api/agent/status", async (route) => route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ connected: true, bridges: ["codex"], tools: [] }),
+    }));
+    await target.route(/\/api\/codex\/session(?:\?.*)?$/, async (route) => {
+      if (route.request().method() === "GET" && !created) {
+        await route.fulfill({ status: 404, body: "not found" });
+        return;
+      }
+      if (route.request().method() === "POST") created = true;
+      if (route.request().method() === "POST") {
+        const body = JSON.parse(route.request().postData() ?? "{}") as { fresh?: boolean };
+        if (body.fresh) activeSessionId = "session-shared-2";
+      }
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ id: activeSessionId, threadId: `thread-${activeSessionId}`, profile: "default", running }),
+      });
+    });
+    await target.route("**/api/codex/message", async (route) => {
+      messageBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
+      running = true;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    });
+    await target.route("**/api/codex/interrupt", async (route) => {
+      running = false;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    });
+    await target.route("**/api/codex/events?sessionId=*", async (route) => {
+      const isFresh = route.request().url().includes("session-shared-2");
+      await route.fulfill({
+        contentType: "text/event-stream",
+        body: isFresh ? "" : [
+          { type: "notification", method: "openboard/user_message", data: { id: "message-shared", text: "synced prior prompt" } },
+          { type: "notification", method: "agent_message_delta", params: { threadId: "thread-other", delta: "wrong thread message" } },
+        ].map((event) => `event: notification\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+      });
+    });
+    await target.route("**/api/projects/*", async (route) => route.fulfill({ status: 404, body: "not found" }));
+  };
+  const connectPanel = async (target: Page) => {
+    await target.getByTitle("本地 Agent").click();
+    await target.getByLabel("Local URL").fill("http://127.0.0.1:8790");
+    await target.getByRole("button", { name: "连接" }).click();
+  };
+
+  await installRoutes(page);
+  await openFreshBoard(page);
+  await connectPanel(page);
+  await page.getByRole("button", { name: "继续会话" }).click();
+  await expect(page.getByPlaceholder("发送消息")).toBeEnabled();
+
+  const second = await context.newPage();
+  await installRoutes(second);
+  await second.goto("/");
+  await expect(second.getByTitle("文本")).toBeVisible();
+  await connectPanel(second);
+  await expect(second.getByPlaceholder("发送消息")).toBeEnabled();
+  await expect(second.getByText("synced prior prompt")).toBeVisible();
+  await expect(second.getByText("wrong thread message")).toHaveCount(0);
+
+  await page.getByPlaceholder("发送消息").fill("shared running state");
+  await page.getByTitle("发送").click();
+  await expect.poll(() => messageBody).toMatchObject({
+    sessionId: "session-shared",
+    text: "shared running state",
+  });
+  expect(String(messageBody?.clientId)).toMatch(/^browser-[A-Za-z0-9]+$/);
+  await expect(second.getByPlaceholder("发送消息")).toBeDisabled();
+  await expect(second.getByRole("button", { name: "新会话" }).last()).toBeDisabled();
+
+  await page.getByTitle("停止").click();
+  await expect(second.getByPlaceholder("发送消息")).toBeEnabled();
+  await expect(second.getByRole("button", { name: "新会话" }).last()).toBeEnabled();
+  await page.getByRole("button", { name: "新会话" }).last().click();
+  await expect(second.getByText("synced prior prompt")).toHaveCount(0);
+  await second.close();
 });
 
 test("mobile asset and prompt pages keep primary actions usable", async ({ page }) => {

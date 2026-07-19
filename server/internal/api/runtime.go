@@ -29,6 +29,9 @@ type runtimeClient struct {
 	transport runtimeTransport
 	state     json.RawMessage
 	sequence  uint64
+	focusSeq  uint64
+	focused   bool
+	projectID string
 }
 
 type runtimeResult struct {
@@ -42,12 +45,16 @@ type pendingRuntimeCommand struct {
 }
 
 type runtimeHub struct {
-	mu       sync.Mutex
-	clients  map[string]*runtimeClient
-	active   *runtimeClient
-	sequence uint64
-	pending  map[string]pendingRuntimeCommand
-	tickets  map[string]time.Time
+	mu           sync.Mutex
+	clients      map[string]*runtimeClient
+	active       *runtimeClient
+	sequence     uint64
+	focusSeq     uint64
+	pending      map[string]pendingRuntimeCommand
+	tickets      map[string]time.Time
+	pinOwner     string
+	pinClientID  string
+	pinProjectID string
 }
 
 func newRuntimeHub() *runtimeHub {
@@ -96,6 +103,78 @@ func (h *runtimeHub) attach(transport runtimeTransport) *runtimeClient {
 	return client
 }
 
+func (h *runtimeHub) bestClientLocked() *runtimeClient {
+	var bestRecent *runtimeClient
+	var bestAny *runtimeClient
+	for _, candidate := range h.clients {
+		if bestAny == nil || candidate.sequence > bestAny.sequence {
+			bestAny = candidate
+		}
+		if candidate.focusSeq > 0 && (bestRecent == nil || candidate.focusSeq > bestRecent.focusSeq) {
+			bestRecent = candidate
+		}
+	}
+	if bestRecent != nil {
+		return bestRecent
+	}
+	return bestAny
+}
+
+func (h *runtimeHub) bestClientForProjectLocked(projectID string) *runtimeClient {
+	if projectID == "" {
+		return nil
+	}
+	var best *runtimeClient
+	for _, candidate := range h.clients {
+		if candidate.projectID != projectID {
+			continue
+		}
+		moreRecent := best == nil || candidate.focusSeq > best.focusSeq ||
+			(candidate.focusSeq == best.focusSeq && candidate.sequence > best.sequence)
+		if moreRecent {
+			best = candidate
+		}
+	}
+	return best
+}
+
+func (h *runtimeHub) claimClient(requested string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if requested != "" {
+		if client := h.clients[requested]; client != nil {
+			return client.id, true
+		}
+		return "", false
+	}
+	client := h.bestClientLocked()
+	if client == nil {
+		return "", false
+	}
+	return client.id, true
+}
+
+func (h *runtimeHub) pin(owner, clientID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if owner == "" || h.clients[clientID] == nil {
+		return
+	}
+	h.pinOwner = owner
+	h.pinClientID = clientID
+	h.pinProjectID = h.clients[clientID].projectID
+}
+
+func (h *runtimeHub) unpin(owner string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if owner != "" && h.pinOwner == owner {
+		h.pinOwner = ""
+		h.pinClientID = ""
+		h.pinProjectID = ""
+	}
+}
+
 func (h *runtimeHub) detach(client *runtimeClient, cause error) {
 	if cause == nil {
 		cause = errors.New("browser disconnected")
@@ -114,11 +193,14 @@ func (h *runtimeHub) detach(client *runtimeClient, cause error) {
 		}
 	}
 	if h.active == client {
-		h.active = nil
-		for _, candidate := range h.clients {
-			if h.active == nil || candidate.sequence > h.active.sequence {
-				h.active = candidate
-			}
+		h.active = h.bestClientLocked()
+	}
+	if h.pinClientID == client.id {
+		fallback := h.bestClientForProjectLocked(h.pinProjectID)
+		if fallback == nil {
+			h.pinClientID = ""
+		} else {
+			h.pinClientID = fallback.id
 		}
 	}
 	h.mu.Unlock()
@@ -149,12 +231,33 @@ func (h *runtimeHub) receive(client *runtimeClient, message runtimeEnvelope) err
 		if len(message.Data) == 0 || !json.Valid(message.Data) {
 			return errors.New("runtime state is invalid")
 		}
+		var state struct {
+			Focused   bool   `json:"focused"`
+			ProjectID string `json:"projectId"`
+		}
+		if json.Unmarshal(message.Data, &state) != nil {
+			return errors.New("runtime state is invalid")
+		}
+		if state.ProjectID != "" && !projectIDPattern.MatchString(state.ProjectID) {
+			return errors.New("runtime project ID is invalid")
+		}
 		h.mu.Lock()
 		if h.clients[client.id] == client {
+			becameFocused := state.Focused && !client.focused
 			h.sequence++
 			client.sequence = h.sequence
 			client.state = append(json.RawMessage(nil), message.Data...)
-			h.active = client
+			client.focused = state.Focused
+			client.projectID = state.ProjectID
+			if becameFocused {
+				h.focusSeq++
+				client.focusSeq = h.focusSeq
+			}
+			if becameFocused || h.active == nil {
+				h.active = client
+			} else if h.active == client {
+				h.active = h.bestClientLocked()
+			}
 		}
 		h.mu.Unlock()
 		return nil
@@ -207,7 +310,10 @@ func (h *runtimeHub) command(ctx context.Context, method string, params json.Raw
 	id := randomID("command")
 	waiter := make(chan runtimeResult, 1)
 	h.mu.Lock()
-	client := h.active
+	client := h.clients[h.pinClientID]
+	if client == nil && h.pinOwner == "" {
+		client = h.active
+	}
 	if client != nil {
 		h.pending[id] = pendingRuntimeCommand{client: client, waiter: waiter}
 	}

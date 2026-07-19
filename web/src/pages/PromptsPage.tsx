@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
-import type { PromptItem } from "@/types/board";
+import type { PromptItem, PromptSourceConfig } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
 import {
   fetchPromptSource,
   mergePromptSourceItems,
+  parsePromptSourceConfig,
+  PROMPT_SOURCE_LIMITS,
 } from "@/services/prompt-sources";
 import { PromptDetailDialog } from "@/components/prompts/PromptDetailDialog";
 import {
@@ -15,6 +17,7 @@ import {
   Plus,
   RefreshCw,
   SendToBack,
+  SlidersHorizontal,
   Trash2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -22,6 +25,7 @@ import {
   PromptEditorDialog,
   type PromptEditorValues,
 } from "@/components/prompts/PromptEditorDialog";
+import { PromptSourceManagerDialog } from "@/components/prompts/PromptSourceManagerDialog";
 
 const BUILTIN: PromptItem[] = [
   {
@@ -58,20 +62,25 @@ export function PromptsPage() {
   const navigate = useNavigate();
   const prompts = useBoardStore((s) => s.prompts);
   const setPrompts = useBoardStore((s) => s.setPrompts);
+  const flushPrompts = useBoardStore((s) => s.flushPrompts);
   const setAssets = useBoardStore((s) => s.setAssets);
+  const flushAssets = useBoardStore((s) => s.flushAssets);
   const config = useBoardStore((s) => s.config);
   const setConfig = useBoardStore((s) => s.setConfig);
+  const flushConfig = useBoardStore((s) => s.flushConfig);
   const [q, setQ] = useState("");
   const [source, setSource] = useState("all");
   const [tag, setTag] = useState("all");
   const [remoteUrl, setRemoteUrl] = useState(
-    config.promptSources?.[0] ?? "",
+    config.promptSources?.[0]?.url ?? "",
   );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<PromptItem | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<PromptItem | null>(null);
   const [editorMode, setEditorMode] = useState<"create" | "edit" | null>(null);
+  const [creatingPromptId, setCreatingPromptId] = useState("");
+  const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
 
   // Keep a fresh deployment empty. Built-in examples are opt-in via the
   // explicit restore action below, so demo content never appears silently.
@@ -100,11 +109,28 @@ export function PromptsPage() {
   );
   const savedSources = config.promptSources ?? [];
 
-  const mergeRemoteSource = async (url: string) => {
-    const items = await fetchPromptSource(url);
-    if (!items.length) throw new Error("未解析到提示词");
+  const mergeRemoteSource = async (sourceConfig: PromptSourceConfig) => {
+    const items = await fetchPromptSource(sourceConfig);
     const latest = useBoardStore.getState();
-    setPrompts(mergePromptSourceItems(latest.prompts, items));
+    setPrompts(mergePromptSourceItems(latest.prompts, items, sourceConfig.id));
+    await flushPrompts();
+    return items;
+  };
+
+  const saveSourceConfig = async (sourceConfig: PromptSourceConfig) => {
+    const latest = useBoardStore.getState().config;
+    const current = latest.promptSources ?? [];
+    const exists = current.some((item) => item.id === sourceConfig.id);
+    if (!exists && current.length >= PROMPT_SOURCE_LIMITS.maxSources) {
+      throw new Error(`提示词来源最多保存 ${PROMPT_SOURCE_LIMITS.maxSources} 个`);
+    }
+    setConfig({
+      ...latest,
+      promptSources: exists
+        ? current.map((item) => item.id === sourceConfig.id ? { ...sourceConfig } : item)
+        : [...current, { ...sourceConfig }],
+    });
+    await flushConfig();
   };
 
   const pullRemote = async () => {
@@ -115,12 +141,19 @@ export function PromptsPage() {
     setBusy(true);
     setErr(null);
     try {
-      await mergeRemoteSource(remoteUrl.trim());
-      const latest = useBoardStore.getState();
-      const sources = Array.from(
-        new Set([...(latest.config.promptSources ?? []), remoteUrl.trim()]),
-      );
-      setConfig({ ...latest.config, promptSources: sources });
+      const url = remoteUrl.trim();
+      const duplicate = (useBoardStore.getState().config.promptSources ?? [])
+        .find((sourceConfig) => sourceConfig.url === url);
+      const sourceConfig = duplicate ?? parsePromptSourceConfig({
+        id: uid("prompt-source"),
+        name: new URL(url).hostname,
+        url,
+        format: "auto",
+        enabled: true,
+        refreshMinutes: 0,
+      });
+      await mergeRemoteSource(sourceConfig);
+      await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -128,13 +161,15 @@ export function PromptsPage() {
     }
   };
 
-  const refreshRemote = async (url: string) => {
+  const refreshRemote = async (sourceConfig: PromptSourceConfig) => {
     setBusy(true);
     setErr(null);
     try {
-      await mergeRemoteSource(url);
+      await mergeRemoteSource(sourceConfig);
+      await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
     } catch (error) {
       setErr(error instanceof Error ? error.message : String(error));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -144,7 +179,10 @@ export function PromptsPage() {
     setBusy(true);
     setErr(null);
     try {
-      for (const url of savedSources) await mergeRemoteSource(url);
+      for (const sourceConfig of savedSources.filter((item) => item.enabled)) {
+        await mergeRemoteSource(sourceConfig);
+        await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
+      }
     } catch (error) {
       setErr(error instanceof Error ? error.message : String(error));
     } finally {
@@ -152,16 +190,32 @@ export function PromptsPage() {
     }
   };
 
-  const removeRemote = (url: string) => {
+  const removeRemote = async (sourceConfig: PromptSourceConfig) => {
+    setBusy(true);
     const latest = useBoardStore.getState().config;
     setConfig({
       ...latest,
-      promptSources: (latest.promptSources ?? []).filter((sourceUrl) => sourceUrl !== url),
+      promptSources: (latest.promptSources ?? []).filter((item) => item.id !== sourceConfig.id),
     });
-    if (remoteUrl === url) setRemoteUrl("");
+    setPrompts(useBoardStore.getState().prompts.filter((item) => item.sourceId !== sourceConfig.id));
+    try {
+      await Promise.all([flushConfig(), flushPrompts()]);
+      if (remoteUrl === sourceConfig.url) setRemoteUrl("");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const addPromptAsset = (prompt: PromptItem) => {
+  useEffect(() => {
+    const report = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: unknown }>).detail;
+      if (typeof detail?.message === "string") setErr(`提示词来源自动刷新失败：${detail.message}`);
+    };
+    window.addEventListener("openboard:prompt-source-error", report);
+    return () => window.removeEventListener("openboard:prompt-source-error", report);
+  }, []);
+
+  const addPromptAsset = async (prompt: PromptItem) => {
     const t = nowIso();
     const latestAssets = useBoardStore.getState().assets;
     setAssets([
@@ -177,6 +231,7 @@ export function PromptsPage() {
       },
       ...latestAssets,
     ]);
+    await flushAssets();
   };
 
   const insertPrompt = (prompt: PromptItem) => {
@@ -192,7 +247,7 @@ export function PromptsPage() {
     });
   };
 
-  const savePrompt = (values: PromptEditorValues) => {
+  const savePrompt = async (values: PromptEditorValues) => {
     const latest = useBoardStore.getState().prompts;
     if (editorMode === "edit" && editingPrompt) {
       setPrompts(latest.map((prompt) =>
@@ -203,7 +258,7 @@ export function PromptsPage() {
     } else {
       setPrompts([
         {
-          id: uid("prompt"),
+          id: creatingPromptId || uid("prompt"),
           title: values.title,
           body: values.body,
           tags: [...values.tags],
@@ -212,12 +267,15 @@ export function PromptsPage() {
         ...latest,
       ]);
     }
+    await flushPrompts();
     setEditingPrompt(null);
     setEditorMode(null);
+    setCreatingPromptId("");
   };
 
   const openLocalCopy = (prompt: PromptItem) => {
     setEditingPrompt({ ...prompt, id: "", source: "local", tags: [...prompt.tags] });
+    setCreatingPromptId(uid("prompt"));
     setEditorMode("create");
   };
 
@@ -235,6 +293,7 @@ export function PromptsPage() {
           className="inline-flex items-center gap-1.5 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white"
           onClick={() => {
             setEditingPrompt(null);
+            setCreatingPromptId(uid("prompt"));
             setEditorMode("create");
           }}
         >
@@ -271,9 +330,14 @@ export function PromptsPage() {
         <button
           type="button"
           className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
+          disabled={busy}
           onClick={() => {
+            setBusy(true);
             const current = useBoardStore.getState().prompts.filter((prompt) => prompt.source !== "builtin");
             setPrompts([...BUILTIN.map((prompt) => ({ ...prompt, tags: [...prompt.tags] })), ...current]);
+            void flushPrompts().catch((cause) =>
+              setErr(cause instanceof Error ? cause.message : String(cause)))
+              .finally(() => setBusy(false));
           }}
         >
           恢复内置
@@ -295,28 +359,47 @@ export function PromptsPage() {
         >
           {busy ? "拉取中…" : "拉取远程提示词"}
         </button>
-        {savedSources.length ? (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
+          onClick={() => setSourceManagerOpen(true)}
+        >
+          <SlidersHorizontal size={14} /> 管理来源
+        </button>
+        {savedSources.some((item) => item.enabled) ? (
           <button
             type="button"
-            className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm disabled:opacity-50"
             disabled={busy}
             onClick={() => void refreshAllRemote()}
           >
-            刷新全部来源
+            <RefreshCw size={14} /> 刷新全部
           </button>
         ) : null}
         {err ? <p className="w-full text-sm text-[var(--ob-danger)]">{err}</p> : null}
         {savedSources.length ? (
           <ul className="w-full divide-y divide-[var(--ob-line)] text-xs">
-            {savedSources.map((url) => (
-              <li key={url} className="flex min-w-0 items-center gap-2 py-2">
-                <span className="min-w-0 flex-1 truncate" title={url}>{url}</span>
+            {savedSources.map((sourceConfig) => (
+              <li key={sourceConfig.id} className="flex min-w-0 items-center gap-2 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium" title={sourceConfig.url}>{sourceConfig.name}</span>
+                    <span className="shrink-0 rounded-sm bg-[var(--ob-accent-soft)] px-1.5 py-0.5 uppercase text-[10px] text-[var(--ob-accent)]">{sourceConfig.format}</span>
+                    {!sourceConfig.enabled ? <span className="shrink-0 text-[var(--ob-muted)]">已停用</span> : null}
+                  </div>
+                  <p className="truncate text-[11px] text-[var(--ob-muted)]">
+                    {sourceConfig.url}
+                    {sourceConfig.lastFetchedAt
+                      ? ` · 最近同步 ${new Date(sourceConfig.lastFetchedAt).toLocaleString()}`
+                      : " · 尚未同步"}
+                  </p>
+                </div>
                 <button
                   type="button"
                   title="刷新提示词源"
                   className="rounded p-1 text-[var(--ob-muted)]"
-                  disabled={busy}
-                  onClick={() => void refreshRemote(url)}
+                  disabled={busy || !sourceConfig.enabled}
+                  onClick={() => void refreshRemote(sourceConfig).catch(() => undefined)}
                 >
                   <RefreshCw size={14} />
                 </button>
@@ -325,7 +408,12 @@ export function PromptsPage() {
                   title="移除提示词源"
                   className="rounded p-1 text-[var(--ob-danger)]"
                   disabled={busy}
-                  onClick={() => removeRemote(url)}
+                  onClick={() => {
+                    if (window.confirm(`移除提示词来源“${sourceConfig.name}”？`)) {
+                      void removeRemote(sourceConfig).catch((cause) =>
+                        setErr(cause instanceof Error ? cause.message : String(cause)));
+                    }
+                  }}
                 >
                   <Trash2 size={14} />
                 </button>
@@ -385,7 +473,8 @@ export function PromptsPage() {
                 title="加入素材"
                 aria-label="加入素材"
                 className="grid h-8 w-8 place-items-center rounded-md border border-[var(--ob-line)]"
-                onClick={() => addPromptAsset(p)}
+                onClick={() => void addPromptAsset(p).catch((cause) =>
+                  setErr(cause instanceof Error ? cause.message : String(cause)))}
               >
                 <FilePlus2 size={14} />
               </button>
@@ -409,6 +498,8 @@ export function PromptsPage() {
                     onClick={() => {
                       if (!window.confirm(`删除提示词“${p.title}”？`)) return;
                       setPrompts(useBoardStore.getState().prompts.filter((prompt) => prompt.id !== p.id));
+                      void flushPrompts().catch((cause) =>
+                        setErr(cause instanceof Error ? cause.message : String(cause)));
                     }}
                   >
                     <Trash2 size={14} />
@@ -440,7 +531,8 @@ export function PromptsPage() {
           if (selectedPrompt) void navigator.clipboard.writeText(selectedPrompt.body);
         }}
         onAddAsset={() => {
-          if (selectedPrompt) addPromptAsset(selectedPrompt);
+          if (selectedPrompt) void addPromptAsset(selectedPrompt).catch((cause) =>
+            setErr(cause instanceof Error ? cause.message : String(cause)));
         }}
         onInsert={() => {
           if (!selectedPrompt) return;
@@ -456,9 +548,24 @@ export function PromptsPage() {
         onClose={() => {
           setEditingPrompt(null);
           setEditorMode(null);
+          setCreatingPromptId("");
         }}
         onSave={savePrompt}
       />
+      {sourceManagerOpen ? <PromptSourceManagerDialog
+        open={sourceManagerOpen}
+        sources={savedSources}
+        busy={busy}
+        onClose={() => setSourceManagerOpen(false)}
+        onSave={saveSourceConfig}
+        onPreview={fetchPromptSource}
+        onRefresh={refreshRemote}
+        onRemove={async (sourceConfig) => {
+          if (!window.confirm(`移除提示词来源“${sourceConfig.name}”？`)) return false;
+          await removeRemote(sourceConfig);
+          return true;
+        }}
+      /> : null}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   fetchPromptSource,
   mergePromptSourceItems,
+  normalizePromptSourceConfigs,
   PROMPT_SOURCE_LIMITS,
 } from "./prompt-sources";
 
@@ -25,6 +26,7 @@ describe("remote prompt source limits", () => {
       body: "Body",
       tags: ["old"],
       source: "prompts.example",
+      sourceId: "catalog",
       coverUrl: "https://cdn.example/old.png",
     }];
     const refreshed = [{
@@ -33,15 +35,70 @@ describe("remote prompt source limits", () => {
       body: "Body",
       tags: ["new"],
       source: "prompts.example",
+      sourceId: "catalog",
       coverUrl: "https://cdn.example/new.png",
     }];
 
-    const result = mergePromptSourceItems(cached, refreshed);
+    const result = mergePromptSourceItems(cached, refreshed, "catalog");
 
-    expect(result).toEqual(refreshed);
+    expect(result).toEqual([{ ...refreshed[0], id: result[0].id }]);
     expect(result[0]).not.toBe(refreshed[0]);
     expect(cached[0].tags).toEqual(["old"]);
     expect(refreshed[0].tags).toEqual(["new"]);
+  });
+
+  test("replaces one remote source by stable identity without overwriting local prompts", () => {
+    const cached = [
+      { id: "local-one", title: "Shared", body: "Same", tags: [], source: "local" },
+      { id: "remote-old", title: "Remote", body: "Old", tags: [], source: "Catalog", sourceId: "catalog-one" },
+      { id: "other", title: "Other", body: "Keep", tags: [], source: "Other", sourceId: "catalog-two" },
+    ];
+    const refreshed = [
+      { id: "entry-one", title: "Shared", body: "Same", tags: ["remote"], source: "Catalog", sourceId: "catalog-one" },
+      { id: "entry-two", title: "Remote", body: "New", tags: [], source: "Catalog", sourceId: "catalog-one" },
+    ];
+
+    const merged = mergePromptSourceItems(cached, refreshed, "catalog-one");
+    expect(merged.find((item) => item.id === "local-one")?.source).toBe("local");
+    expect(merged.some((item) => item.body === "Old")).toBe(false);
+    expect(merged.some((item) => item.id === "other")).toBe(true);
+    expect(merged.filter((item) => item.sourceId === "catalog-one")).toHaveLength(2);
+    expect(new Set(merged.map((item) => item.id)).size).toBe(merged.length);
+
+    const second = mergePromptSourceItems(merged, [{
+      id: "entry-two", title: "Remote", body: "Newest", tags: [], source: "Catalog", sourceId: "catalog-one",
+    }], "catalog-one");
+    expect(second.filter((item) => item.sourceId === "catalog-one")).toHaveLength(1);
+    expect(second.find((item) => item.sourceId === "catalog-one")?.body).toBe("Newest");
+    expect(second.find((item) => item.sourceId === "catalog-one")?.id)
+      .toBe(merged.find((item) => item.body === "New")?.id);
+  });
+
+  test("an empty source clears only its tagged items and preserves unowned catalogs", () => {
+    const cached = [
+      { id: "builtin", title: "Built in", body: "Keep", tags: [], source: "Catalog" },
+      { id: "remote", title: "Remote", body: "Remove", tags: [], source: "Catalog", sourceId: "catalog-one" },
+      { id: "other", title: "Other", body: "Keep", tags: [], source: "Other", sourceId: "catalog-two" },
+    ];
+
+    const merged = mergePromptSourceItems(cached, [], "catalog-one");
+
+    expect(merged.map((item) => item.id)).toEqual(["builtin", "other"]);
+    expect(cached.map((item) => item.id)).toEqual(["builtin", "remote", "other"]);
+  });
+
+  test("preserves ambiguous unowned legacy prompts during a source refresh", () => {
+    const legacy = { id: "legacy", title: "Legacy", body: "Keep", tags: ["old"], source: "prompts.example" };
+    const refreshed = {
+      id: "remote", title: "Legacy", body: "Updated", tags: [], source: "prompts.example", sourceId: "legacy-1",
+    };
+
+    const merged = mergePromptSourceItems([legacy], [refreshed], "legacy-1");
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toEqual(legacy);
+    expect(merged[0]).not.toHaveProperty("sourceId");
+    expect(legacy).not.toHaveProperty("sourceId");
   });
 
   test("accepts a bounded JSON catalog", async () => {
@@ -60,6 +117,88 @@ describe("remote prompt source limits", () => {
     expect(init?.redirect).toBe("error");
   });
 
+  test("applies bounded declarative paths to nested JSON catalogs", async () => {
+    globalThis.fetch = mock(async () => jsonResponse({
+      payload: {
+        entries: [{
+          slug: "nested-one",
+          label: "Nested title",
+          value: "Nested body",
+          metadata: { tags: ["nested", "custom"] },
+          media: { cover: "https://cdn.example/cover.png", results: ["https://cdn.example/result.png"] },
+        }],
+      },
+    })) as typeof fetch;
+
+    const result = await fetchPromptSource({
+      id: "nested",
+      name: "Nested source",
+      url: "https://prompts.example/nested.json",
+      format: "json",
+      enabled: true,
+      refreshMinutes: 0,
+      mapping: {
+        itemsPath: "payload.entries",
+        idPath: "slug",
+        titlePath: "label",
+        bodyPath: "value",
+        tagsPath: "metadata.tags",
+        coverUrlPath: "media.cover",
+        resultUrlsPath: "media.results",
+      },
+    });
+
+    expect(result).toEqual([{
+      id: "nested-one",
+      title: "Nested title",
+      body: "Nested body",
+      tags: ["nested", "custom"],
+      source: "Nested source",
+      sourceId: "nested",
+      coverUrl: "https://cdn.example/cover.png",
+      resultUrls: ["https://cdn.example/result.png"],
+    }]);
+  });
+
+  test("rejects executable and unsafe declarative source fields", () => {
+    const normalized = normalizePromptSourceConfigs([
+      {
+        id: "scripted",
+        name: "Scripted",
+        url: "https://prompts.example/source.json",
+        format: "script",
+        script: "return fetch(url)",
+      },
+      {
+        id: "prototype",
+        name: "Prototype",
+        url: "https://prompts.example/source.json",
+        format: "json",
+        mapping: { bodyPath: "__proto__.polluted" },
+      },
+    ]);
+
+    expect(normalized).toEqual([]);
+  });
+
+  test("preserves the first bounded sources when persisted input exceeds the limit", () => {
+    const normalized = normalizePromptSourceConfigs(Array.from(
+      { length: PROMPT_SOURCE_LIMITS.maxSources + 1 },
+      (_, index) => ({
+        id: `source-${index}`,
+        name: `Source ${index}`,
+        url: `https://source-${index}.example/catalog.json`,
+        format: "json",
+        enabled: true,
+        refreshMinutes: 0,
+      }),
+    ));
+
+    expect(normalized).toHaveLength(PROMPT_SOURCE_LIMITS.maxSources);
+    expect(normalized[0]?.id).toBe("source-0");
+    expect(normalized.at(-1)?.id).toBe(`source-${PROMPT_SOURCE_LIMITS.maxSources - 1}`);
+  });
+
   test("rejects excessive entries instead of silently truncating", async () => {
     globalThis.fetch = mock(async () => jsonResponse(
       Array.from({ length: PROMPT_SOURCE_LIMITS.maxItems + 1 }, (_, index) => ({
@@ -72,7 +211,7 @@ describe("remote prompt source limits", () => {
       .rejects.toThrow("entries");
   });
 
-  test("rejects oversized fields and unsupported response MIME", async () => {
+  test("rejects oversized fields and HTML without a declarative mapping", async () => {
     globalThis.fetch = mock(async () => jsonResponse([{
       title: "x".repeat(PROMPT_SOURCE_LIMITS.maxTitleChars + 1),
       prompt: "Body",
@@ -84,7 +223,7 @@ describe("remote prompt source limits", () => {
       headers: { "content-type": "text/html" },
     })) as typeof fetch;
     await expect(fetchPromptSource("https://prompts.example/catalog.json"))
-      .rejects.toThrow("MIME");
+      .rejects.toThrow("mapping");
   });
 
   test("rejects excessive tag counts and tag field sizes", async () => {

@@ -10,6 +10,7 @@ import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 export function AssetsPage() {
   const assets = useBoardStore((s) => s.assets);
   const setAssets = useBoardStore((s) => s.setAssets);
+  const flushAssets = useBoardStore((s) => s.flushAssets);
   const insertAsset = useBoardStore((s) => s.insertAsset);
   const active = useBoardStore((s) => s.getActive());
   const [q, setQ] = useState("");
@@ -70,6 +71,7 @@ export function AssetsPage() {
       updatedAt: t,
     };
     setAssets([item, ...useBoardStore.getState().assets]);
+    await flushAssets();
   };
 
   const removeOrphanedBlob = async (storageKey: string | undefined, nextAssets: AssetItem[]) => {
@@ -92,7 +94,8 @@ export function AssetsPage() {
         content: values.content,
         updatedAt: nowIso(),
       };
-      setAssets([created, ...useBoardStore.getState().assets]);
+      setAssets([created, ...useBoardStore.getState().assets.filter((asset) => asset.id !== created.id)]);
+      await flushAssets();
       setCreating(false);
       setEditing(null);
       return;
@@ -118,6 +121,7 @@ export function AssetsPage() {
         : asset,
     );
     setAssets(nextAssets);
+    await flushAssets();
     if (replacement) await removeOrphanedBlob(editing.storageKey, nextAssets);
     setEditing(null);
   };
@@ -282,6 +286,7 @@ export function AssetsPage() {
                   void (async () => {
                     const nextAssets = useBoardStore.getState().assets.filter((item) => item.id !== a.id);
                     setAssets(nextAssets);
+                    await flushAssets();
                     await removeOrphanedBlob(a.storageKey, nextAssets);
                   })();
                 }}

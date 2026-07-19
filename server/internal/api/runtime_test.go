@@ -76,6 +76,14 @@ func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 		}{response.StatusCode, string(data)}
 	}()
 
+	_, readyData, err := connection.Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready runtimeEnvelope
+	if json.Unmarshal(readyData, &ready) != nil || ready.Type != "ready" {
+		t.Fatalf("invalid runtime ready message: %s", readyData)
+	}
 	_, data, err := connection.Read(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -265,6 +273,156 @@ func TestRuntimeKeepsMultipleBrowserTabsAndRoutesToMostRecent(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimePinsCommandsToInitiatingTabAndFallsBackAfterDisconnect(t *testing.T) {
+	hub := newRuntimeHub()
+	firstTransport := newFakeRuntimeTransport()
+	secondTransport := newFakeRuntimeTransport()
+	first := hub.attach(firstTransport)
+	second := hub.attach(secondTransport)
+	defer hub.detach(second, errors.New("test complete"))
+	if err := hub.receive(first, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"projectId":"board-one","focused":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.receive(second, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"projectId":"board-one","focused":false}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if claimed, ok := hub.claimClient(first.id); !ok || claimed != first.id {
+		t.Fatalf("claimed client = %q ok=%v, want %q", claimed, ok, first.id)
+	}
+	hub.pin("codex-turn", first.id)
+	done := make(chan error, 1)
+	go func() {
+		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		done <- err
+	}()
+	command := firstTransport.last(t)
+	if err := hub.receive(first, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	hub.detach(first, errors.New("initiating tab closed"))
+	go func() {
+		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		done <- err
+	}()
+	command = secondTransport.last(t)
+	if err := hub.receive(second, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	hub.unpin("codex-turn")
+}
+
+func TestRuntimeRejectsUnknownExplicitClientAndFallsBackOnlyWithinPinnedProject(t *testing.T) {
+	hub := newRuntimeHub()
+	firstTransport := newFakeRuntimeTransport()
+	sameProjectTransport := newFakeRuntimeTransport()
+	otherProjectTransport := newFakeRuntimeTransport()
+	first := hub.attach(firstTransport)
+	sameProject := hub.attach(sameProjectTransport)
+	otherProject := hub.attach(otherProjectTransport)
+	defer hub.detach(sameProject, errors.New("test complete"))
+	defer hub.detach(otherProject, errors.New("test complete"))
+
+	if _, ok := hub.claimClient("missing-client"); ok {
+		t.Fatal("unknown explicit client was silently rebound")
+	}
+	for client, state := range map[*runtimeClient]string{
+		first:        `{"projectId":"board-one","focused":true}`,
+		sameProject:  `{"projectId":"board-one","focused":false}`,
+		otherProject: `{"projectId":"board-two","focused":true}`,
+	} {
+		if err := hub.receive(client, runtimeEnvelope{Type: "state", Data: json.RawMessage(state)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub.pin("codex-turn", first.id)
+	hub.detach(first, errors.New("initiating tab closed"))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		done <- err
+	}()
+	command := sameProjectTransport.last(t)
+	if err := hub.receive(sameProject, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(otherProjectTransport.messages) != 0 {
+		t.Fatal("pinned command was routed to another project")
+	}
+}
+
+func TestRuntimeUnfocusedStateDoesNotStealRecentFocusedRouting(t *testing.T) {
+	hub := newRuntimeHub()
+	firstTransport := newFakeRuntimeTransport()
+	secondTransport := newFakeRuntimeTransport()
+	first := hub.attach(firstTransport)
+	second := hub.attach(secondTransport)
+	defer hub.detach(first, errors.New("test complete"))
+	defer hub.detach(second, errors.New("test complete"))
+
+	if err := hub.receive(first, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"route":"/","focused":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.receive(second, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"route":"/prompts","focused":false}`)}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		done <- err
+	}()
+	command := firstTransport.last(t)
+	if err := hub.receive(first, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeUsesHistoricalFocusWhenEveryTabIsBlurred(t *testing.T) {
+	hub := newRuntimeHub()
+	first := hub.attach(newFakeRuntimeTransport())
+	second := hub.attach(newFakeRuntimeTransport())
+	defer hub.detach(first, errors.New("test complete"))
+	defer hub.detach(second, errors.New("test complete"))
+
+	states := []struct {
+		client *runtimeClient
+		data   string
+	}{
+		{second, `{"projectId":"board-one","focused":true}`},
+		{second, `{"projectId":"board-one","focused":false}`},
+		{first, `{"projectId":"board-one","focused":true}`},
+		{first, `{"projectId":"board-one","focused":false}`},
+	}
+	for _, state := range states {
+		if err := hub.receive(state.client, runtimeEnvelope{Type: "state", Data: json.RawMessage(state.data)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if err := hub.receive(second, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"projectId":"board-one","focused":false}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed, ok := hub.claimClient("")
+	if !ok || claimed != first.id {
+		t.Fatalf("claimed=%q ok=%v, want most recently focused %q", claimed, ok, first.id)
 	}
 }
 

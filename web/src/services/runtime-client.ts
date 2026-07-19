@@ -15,6 +15,7 @@ export const RUNTIME_METHODS = [
   "prompt.search",
   "prompt.insert",
   "site.navigate",
+  "generation_get_status",
 ] as const;
 
 export type RuntimeMethod = typeof RUNTIME_METHODS[number];

@@ -10,6 +10,7 @@ import { generateImages, generateVideo } from "@/services/ai-client";
 import {
   createGenerationJob,
   deleteGenerationJob,
+  findInterruptedGenerationJobs,
   findUnreferencedGenerationStorageKeys,
   listAllGenerationJobs,
   listGenerationJobs,
@@ -23,6 +24,8 @@ import {
   getBlob,
   uploadMedia,
 } from "@/services/storage";
+import { completeGenerationActivity, getGenerationActivities } from "@/services/generation-activity";
+import { getRuntimeOwnerId } from "@/services/runtime-identity";
 
 type ResultItem = {
   url?: string;
@@ -64,7 +67,17 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
 
   const refresh = useCallback(async () => {
     const page = await listGenerationJobs({ projectId: project?.id, kind, page: 1, pageSize: 50 });
-    setJobs(page.items);
+    const interrupted = findInterruptedGenerationJobs(
+      page.items,
+      getRuntimeOwnerId(),
+      new Set(getGenerationActivities().filter((item) => item.status === "running").map((item) => item.id)),
+    );
+    const recovered = new Map((await Promise.all(interrupted.map((job) =>
+      updateGenerationJob(job.id, {
+        status: "failed",
+        error: "页面刷新后任务已中断，请重试",
+      })))).map((job) => [job.id, job]));
+    setJobs(page.items.map((job) => recovered.get(job.id) ?? job));
   }, [kind, project?.id]);
 
   useEffect(() => {
@@ -109,7 +122,9 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           referenceData.push(await blobToDataUrl(file));
         }
       }
-      const parameters = source?.parameters ?? (kind === "image"
+      const ownerClientId = getRuntimeOwnerId();
+      const parameters: Record<string, unknown> = {
+        ...(source?.parameters ?? (kind === "image"
         ? { size, quality, count, transparentBackground: transparent, referenceStorageKeys }
         : {
             seconds,
@@ -119,7 +134,9 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
             generateAudio,
             watermark,
             referenceStorageKeys,
-          });
+          })),
+        ...(ownerClientId ? { ownerClientId } : {}),
+      };
       job = await createGenerationJob({
         projectId: project?.id,
         kind,
@@ -143,6 +160,9 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           referenceDataUrls: referenceData.filter((value) => value.startsWith("data:image/")),
           systemPrompt: config.systemPrompt,
           signal: controller.signal,
+          activityId: job.id,
+          activitySurface: "image-workbench",
+          deferActivitySuccess: true,
         });
         for (const url of urls) {
           const media = await uploadMedia(url, "image");
@@ -165,6 +185,9 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           referenceVideos: referenceData.filter((value) => value.startsWith("data:video/")),
           referenceAudios: referenceData.filter((value) => value.startsWith("data:audio/")),
           signal: controller.signal,
+          activityId: job.id,
+          activitySurface: "video-workbench",
+          deferActivitySuccess: true,
         });
         if (!output.url) throw new Error("视频服务没有返回结果 URL");
         try {
@@ -175,6 +198,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
       }
       if (!items.length) throw new Error("模型服务没有返回生成结果");
       await updateGenerationJob(job.id, { status: "succeeded", result: { items } });
+      completeGenerationActivity(job.id, "succeeded");
       await refresh();
     } catch (cause) {
       const cancelled = controller.signal.aborted;
@@ -182,6 +206,11 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
         await Promise.allSettled(uploadedReferenceKeys.map(deleteStorageKey));
       }
       if (job) {
+        completeGenerationActivity(
+          job.id,
+          cancelled ? "cancelled" : "failed",
+          cancelled ? "已取消" : cause instanceof Error ? cause.message : String(cause),
+        );
         await updateGenerationJob(job.id, {
           status: cancelled ? "cancelled" : "failed",
           error: cancelled ? "已取消" : cause instanceof Error ? cause.message : String(cause),

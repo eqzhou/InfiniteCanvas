@@ -80,7 +80,9 @@ describe("remote media upload limits", () => {
 
   test("omits credentials and refuses redirects for external media", async () => {
     let init: RequestInit | undefined;
-    globalThis.fetch = mock(async (_input, requestInit) => {
+    let requested = "";
+    globalThis.fetch = mock(async (input, requestInit) => {
+      requested = String(input);
       init = requestInit;
       return new Response(null, {
         headers: {
@@ -90,7 +92,8 @@ describe("remote media upload limits", () => {
       });
     }) as typeof fetch;
 
-    await expect(uploadMedia("https://media.example/image.png", "image")).rejects.toThrow("too large");
+    await expect(uploadMedia("https://media.example/image.png?X-Amz-Signature=abc", "image")).rejects.toThrow("too large");
+    expect(requested).toContain("X-Amz-Signature=abc");
     expect(init?.credentials).toBe("omit");
     expect(init?.redirect).toBe("error");
     expect(init?.referrerPolicy).toBe("no-referrer");

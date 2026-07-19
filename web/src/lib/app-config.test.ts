@@ -41,4 +41,40 @@ describe("application configuration", () => {
       canvasPanelTab: "projects",
     });
   });
+
+  test("upgrades legacy prompt source URLs to bounded declarative configs", () => {
+    const base = createDefaultConfig();
+    const input = {
+      ...base,
+      promptSources: [
+        "https://prompts.example/catalog.json",
+        {
+          id: "nested-source",
+          name: "Nested catalog",
+          url: "https://nested.example/data.json",
+          format: "json",
+          enabled: true,
+          refreshMinutes: 30,
+          mapping: { itemsPath: "payload.entries", titlePath: "label", bodyPath: "value" },
+        },
+        { id: "unsafe", name: "Unsafe", url: "javascript:alert(1)", format: "script" },
+      ],
+    };
+
+    const normalized = normalizeAppConfig(input as unknown as ReturnType<typeof createDefaultConfig>);
+
+    expect(normalized.promptSources).toHaveLength(2);
+    expect(normalized.promptSources?.[0]).toMatchObject({
+      name: "prompts.example",
+      url: "https://prompts.example/catalog.json",
+      format: "auto",
+      enabled: true,
+    });
+    expect(normalized.promptSources?.[1]).toMatchObject({
+      id: "nested-source",
+      refreshMinutes: 30,
+      mapping: { itemsPath: "payload.entries", titlePath: "label", bodyPath: "value" },
+    });
+    expect(input.promptSources[0]).toBe("https://prompts.example/catalog.json");
+  });
 });

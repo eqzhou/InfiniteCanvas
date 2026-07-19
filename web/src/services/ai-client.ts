@@ -1,5 +1,4 @@
 import type { AiChannel } from "@/types/board";
-import { getBlob, storageKeyToDataUrl } from "@/services/storage";
 import { validateArkVideoRequest } from "@/lib/video-generation";
 import { getProvider } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
@@ -11,6 +10,12 @@ import {
   providerJsonFetch,
 } from "@/services/ai-adapters";
 import { applySystemPrompt } from "@/lib/app-config";
+import { runTrackedGeneration } from "@/services/generation-activity";
+export {
+  resolveMediaRefs,
+  resolveNodeImageDataUrl,
+  resolveNodeImageDataUrls,
+} from "@/services/media-references";
 
 function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -79,13 +84,24 @@ export async function listModels(channel: AiChannel, kind: AiProviderKind = "tex
   }
 }
 
-export async function generateText(options: {
+type TextGenerationOptions = {
   channel: AiChannel;
   model: string;
   prompt: string;
   images?: string[];
   systemPrompt?: string;
-}): Promise<string> {
+};
+
+export async function generateText(options: TextGenerationOptions): Promise<string> {
+  return runTrackedGeneration({
+    kind: "text",
+    prompt: options.prompt,
+    model: options.model,
+    providerId: options.channel.id,
+  }, () => generateTextRequest(options));
+}
+
+async function generateTextRequest(options: TextGenerationOptions): Promise<string> {
   const { channel, model, prompt, images = [], systemPrompt = "" } = options;
   const provider = getProvider(channel, "text");
   if (provider.protocol === "gemini") {
@@ -157,7 +173,7 @@ export async function generateText(options: {
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-export async function generateImages(options: {
+type ImageGenerationOptions = {
   channel: AiChannel;
   model: string;
   prompt: string;
@@ -168,7 +184,24 @@ export async function generateImages(options: {
   transparentBackground?: boolean;
   systemPrompt?: string;
   signal?: AbortSignal;
-}): Promise<string[]> {
+  activityId?: string;
+  activitySurface?: "canvas" | "image-workbench" | "other";
+  deferActivitySuccess?: boolean;
+};
+
+export async function generateImages(options: ImageGenerationOptions): Promise<string[]> {
+  return runTrackedGeneration({
+    id: options.activityId,
+    kind: "image",
+    prompt: options.prompt,
+    model: options.model,
+    providerId: options.channel.id,
+    surface: options.activitySurface,
+    deferSuccess: options.deferActivitySuccess,
+  }, () => generateImagesRequest(options));
+}
+
+async function generateImagesRequest(options: ImageGenerationOptions): Promise<string[]> {
   const {
     channel,
     model,
@@ -265,6 +298,9 @@ export type VideoGenOptions = {
   timeoutMs?: number;
   /** Poll cadence. Exposed for provider tuning and deterministic tests. */
   pollIntervalMs?: number;
+  activityId?: string;
+  activitySurface?: "canvas" | "video-workbench" | "other";
+  deferActivitySuccess?: boolean;
 };
 
 type VideoResult = { id: string; status: string; url?: string };
@@ -450,6 +486,20 @@ async function readJson(response: Response, label: string): Promise<unknown> {
 }
 
 export async function generateVideo(
+  options: VideoGenOptions,
+): Promise<VideoResult> {
+  return runTrackedGeneration({
+    id: options.activityId,
+    kind: "video",
+    prompt: options.prompt,
+    model: options.model,
+    providerId: options.channel.id,
+    surface: options.activitySurface,
+    deferSuccess: options.deferActivitySuccess,
+  }, () => generateVideoRequest(options));
+}
+
+async function generateVideoRequest(
   options: VideoGenOptions,
 ): Promise<VideoResult> {
   const {
@@ -689,13 +739,24 @@ async function downloadOpenAiVideo(
 }
 
 /** OpenAI-compatible speech synthesis → audio data URL/blob URL. */
-export async function generateSpeech(options: {
+type SpeechGenerationOptions = {
   channel: AiChannel;
   model?: string;
   input: string;
   voice?: string;
   format?: string;
-}): Promise<{ url: string; mimeType: string; blob: Blob }> {
+};
+
+export async function generateSpeech(options: SpeechGenerationOptions): Promise<{ url: string; mimeType: string; blob: Blob }> {
+  return runTrackedGeneration({
+    kind: "audio",
+    prompt: options.input,
+    model: options.model,
+    providerId: options.channel.id,
+  }, () => generateSpeechRequest(options));
+}
+
+async function generateSpeechRequest(options: SpeechGenerationOptions): Promise<{ url: string; mimeType: string; blob: Blob }> {
   const {
     channel,
     model = "gpt-4o-mini-tts",
@@ -722,84 +783,3 @@ export async function generateSpeech(options: {
   const url = URL.createObjectURL(blob);
   return { url, mimeType, blob };
 }
-
-export async function resolveNodeImageDataUrls(
-  storageKeys: string[],
-): Promise<string[]> {
-  const out: string[] = [];
-  for (const key of storageKeys) {
-    const data = await storageKeyToDataUrl(
-      key.startsWith("media:") ? "media" : "image",
-      key,
-    );
-    if (data) out.push(data);
-  }
-  return out;
-}
-
-export async function resolveNodeImageDataUrl(
-  storageKey: string | undefined,
-  fallbackContent: string | undefined,
-): Promise<string | null> {
-  if (storageKey) {
-    const [stored] = await resolveNodeImageDataUrls([storageKey]);
-    if (stored) return stored;
-  }
-  return fallbackContent?.startsWith("data:image/") ? fallbackContent : null;
-}
-
-/**
- * Prefer public http(s) URLs if already available on node content;
- * else convert local storageKey blobs to data URLs for upstreams that accept them.
- */
-export async function resolveMediaRefs(
-  items: Array<{ storageKey?: string; content?: string }>,
-  limit: number,
-): Promise<string[]> {
-  const out: string[] = [];
-  for (const item of items) {
-    if (out.length >= limit) break;
-    if (item.content && /^https?:\/\//i.test(item.content)) {
-      out.push(item.content);
-      continue;
-    }
-    if (item.storageKey) {
-      const kind = item.storageKey.startsWith("media:") ? "media" : "image";
-      try {
-        const data = await storageKeyToDataUrl(kind, item.storageKey);
-        if (data) {
-          out.push(data);
-          continue;
-        }
-      } catch {
-        // A live inline URL may still be usable while local storage is unavailable.
-      }
-    }
-    if (item.content?.startsWith("data:") || item.content?.startsWith("blob:")) {
-      if (item.content.startsWith("blob:")) {
-        try {
-          const blob = await (await fetch(item.content)).blob();
-          const data = await blobToDataUrl(blob);
-          out.push(data);
-        } catch {
-          // skip
-        }
-      } else {
-        out.push(item.content);
-      }
-    }
-  }
-  return out;
-}
-
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-}
-
-// keep getBlob imported for future binary multipart paths
-void getBlob;

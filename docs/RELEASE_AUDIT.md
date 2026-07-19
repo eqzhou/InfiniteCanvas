@@ -11,7 +11,7 @@ This is a release gate, not a legal opinion.
 - [x] PostgreSQL is authoritative, Redis is disposable, and provider keys are AES-GCM encrypted.
 - [x] Production build, cross-browser E2E, formal-storage E2E, and container smoke pass.
 - [x] Formal tests use isolated PostgreSQL/Redis/media stores and verify zero residue.
-- [x] The fail-closed OSV audit reported zero active records across 223 installed npm/Go package versions on 2026-07-18.
+- [x] The fail-closed OSV audit reported zero active records across 223 installed npm/Go package versions on 2026-07-19.
 
 The personal local single-user target is engineering-ready. The unchecked items
 below intentionally keep commercial/closed-source publication blocked; they do
@@ -21,7 +21,7 @@ not indicate missing local canvas functionality.
 
 - [x] Chromium, WebKit, and Firefox Playwright projects are configured.
 - [x] Full CI Playwright suite passes (136 passed, 8 intentional environment skips) across Chromium, WebKit, Firefox, and mobile Chromium in CI run `29621823209`.
-- [x] Production-build Chromium suite passes (36 passed) with isolated Go storage.
+- [x] Production-build Chromium suite passes (64 passed) with isolated Go storage.
 - [x] Touch and mobile flows are covered by mobile Chromium; Firefox desktop touch injection is skipped by design.
 - [x] Bun unit tests, TypeScript build, Go race tests, and `go vet` pass.
 - [x] CI performs a fail-closed OSV batch audit for installed npm and Go module versions.

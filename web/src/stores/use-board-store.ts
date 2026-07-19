@@ -102,7 +102,9 @@ type BoardState = {
   setConfig: (config: AppConfig) => void;
   flushConfig: () => Promise<void>;
   setAssets: (assets: AssetItem[]) => void;
+  flushAssets: () => Promise<void>;
   setPrompts: (prompts: PromptItem[]) => void;
+  flushPrompts: () => Promise<void>;
   addAssetFromNode: (nodeId: string) => Promise<void>;
   insertAsset: (assetId: string, position: Point) => Promise<void>;
   setShowMinimap: (v: boolean) => void;
@@ -214,6 +216,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         await Promise.all([
           saveProjects(nextProjects),
           saveAssets(assets),
+          savePrompts(prompts),
         ]);
         set({
           ready: true,
@@ -564,10 +567,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     assetWrites.enqueue(assets);
   },
 
+  flushAssets: () => assetWrites.flush(),
+
   setPrompts: (prompts) => {
     set({ prompts });
     promptWrites.enqueue(prompts);
   },
+
+  flushPrompts: () => promptWrites.flush(),
 
   addAssetFromNode: async (nodeId) => {
     const project = get().getActive();
@@ -753,6 +760,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       promptWrites.flush(),
     ]);
     const current = get();
+    const imported = structuredClone(snapshot);
     const previous: WorkspaceSnapshot = {
       projects: structuredClone(current.projects),
       assets: structuredClone(current.assets),
@@ -768,7 +776,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       await replaceGenerationJobs(value.generationJobs);
     };
     try {
-      await persistSnapshot(snapshot);
+      await persistSnapshot(imported);
     } catch (error) {
       try {
         await persistSnapshot(previous);
@@ -779,13 +787,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
     histories.clear();
     set({
-      projects: structuredClone(snapshot.projects),
-      activeProjectId: snapshot.projects[0]?.id ?? null,
+      projects: structuredClone(imported.projects),
+      activeProjectId: imported.projects[0]?.id ?? null,
       selectedIds: [],
       clipboard: null,
-      config: structuredClone(snapshot.config),
-      assets: structuredClone(snapshot.assets),
-      prompts: structuredClone(snapshot.prompts),
+      config: structuredClone(imported.config),
+      assets: structuredClone(imported.assets),
+      prompts: structuredClone(imported.prompts),
       connectingFrom: null,
     });
   },

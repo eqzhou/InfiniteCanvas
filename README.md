@@ -82,8 +82,14 @@ canvas.
 ### Phase 4 — Browser and Codex agent runtime
 - Multi-tab ticketed WebSocket with live state, atomic operations, snapshots, assets, prompts, and navigation
 - MCP stdio and owner-only remote connection file with compatibility tools
-- Continuous Codex threads, safe Markdown, structured logs, stop, attachments, and approvals
+- Client-scoped `generation_get_status` for canvas and workbench tasks
+- Continuous shared Codex threads, cross-tab running state, safe Markdown, structured logs, stop, attachments, and approvals
 - Independent OpenBoard Codex plugin installer and standard Claude MCP instructions
+
+### Public Unreleased prompt-source delta
+- Add/edit/disable/remove remote prompt sources with scheduled refresh
+- Declarative nested JSON mappings and bounded HTML selectors with preview
+- No arbitrary script execution; unsafe paths, explicit private hosts, redirects, credential-bearing URLs, and oversized content are rejected
 
 The detailed evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).
 
@@ -103,7 +109,7 @@ cd server && go test -race ./... && go vet ./...
 GitHub Actions runs the web tests, typecheck, production build, performance
 assertion, OSV dependency audit, cross-browser and production Playwright suites, Go race
 detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The Bun coverage report reaches 87.12% lines and 89.26% functions for covered
+pull requests. The Bun coverage report reaches 84.26% lines and 86.20% functions for covered
 library/service modules; browser-only UI and persistence paths are validated by
 Playwright and are outside that report.
 

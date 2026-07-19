@@ -1,8 +1,9 @@
-# OpenBoard v0.8.2 core and v0.9.0 public-delta parity
+# OpenBoard v0.8.2 core, v0.9.0, and public Unreleased parity
 
 This inventory freezes the engineering core to the publicly documented and
 black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
-explicit public interface delta listed for `v0.9.0`. It does not
+explicit public interface delta listed for `v0.9.0` and the four public
+Unreleased behaviors recorded on 2026-07-19. It does not
 claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
 an independent implementation with its own architecture, data model, UI,
 plugins, SDK, fixtures, and assets.
@@ -39,13 +40,17 @@ implementation evidence.
 | OpenAI text/image/video/audio and Ark/Seedance video contracts | `ai-client.test.ts`, `video-generation.test.ts`, image-to-video E2E |
 | Seedance 9 image/3 video/3 audio references, ratios, 480p/720p/1080p and smart/4-15s duration | `NodeActions.tsx`, `BoardNodeView.tsx`, `CreativeWorkbench.tsx`, `video-generation.test.ts` |
 | Assistant selected/upstream context, text/image generation, sessions, retry, insert and single/batch deletion | full assistant generation E2E and `assistant-sessions.test.ts` |
-| Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and multiple remote caches | prompt detail/library E2E and `prompt-sources.test.ts` |
+| Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and declaratively mapped remote sources | prompt detail/library E2E, prompt-source manager E2E, formal storage E2E, and `prompt-sources.test.ts` |
 | Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | full asset-library E2E and formal-storage E2E |
 | WebDAV project and full-workspace backup/restore with deduplicated media and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
 | Loopback New API query auto-configuration and remote-safe fragment configuration | `url-credentials.test.ts` and loopback-link E2E |
 | Plugin install/enable/update/rollback/uninstall, sandbox, permissions, SDK and five examples | plugin unit tests plus registry/SVG/panorama E2E |
 | Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, generation-job tests, cancellation/retry E2E, and formal E2E |
 | Multi-tab browser runtime, MCP tools, snapshots, Codex continuity, attachments, stop and approvals | Go runtime/MCP/Codex tests plus browser/Codex E2E |
+| Public Unreleased unified generation status query across canvas/image/video workbench | `generation_get_status` MCP schema, unified activity tests, workbench/Agent E2E, and formal reload/orphan-recovery E2E |
+| Public Unreleased client-scoped operations and focused-tab fallback | runtime pin/ownership Go tests and two-tab generation ownership E2E |
+| Public Unreleased shared Codex session/running state, approvals and exact turn completion | Codex replay/state/approval Go tests, `codex-events.test.ts`, and two-tab Codex E2E |
+| Public Unreleased addable custom prompt sources | safe JSON/HTML/Markdown mappings, migration tests, manager E2E, and PostgreSQL reload E2E |
 | PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
 | Resizable/collapsible canvas panel with project, element and asset tabs | panel persistence, element selection/location/export and asset-panel E2E |
 | Local prompt CRUD/copy/direct insertion and hover-revealed node names | prompt library and node-title E2E |
@@ -64,6 +69,10 @@ implementation evidence.
   assets, schemas and product identity are independently authored. The remote
   source mechanism is compatible, but upstream catalogs and content are not
   copied or bundled.
+- The public reference describes arbitrary custom prompt-source scripts.
+  OpenBoard intentionally provides bounded declarative JSON paths and HTML
+  selectors instead: no JavaScript, expressions, credential URLs, redirects,
+  or private-host sources execute inside the application.
 - OpenBoard adds audio nodes, workbenches, plugin isolation, the browser
   runtime, expanded MCP tools and a production-shaped local backend. These are
   additive and do not redefine the frozen reference requirements.
@@ -72,11 +81,11 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 211 Bun unit/integration tests; coverage threshold remains 80% or higher
+- [verified] 241 Bun unit/integration tests; 84.26% line and 86.20% function coverage
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
-- [verified] 51/51 desktop Chromium tests against the production Vite build and isolated Go data directory
-- [verified] 41 passed and 10 intentional desktop-only skips in production mobile Chromium
+- [verified] 64/64 desktop Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 52 passed and 12 intentional desktop-only skips in production mobile Chromium
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
@@ -106,7 +115,7 @@ implementation evidence.
 - [verified] Reproducible image request metadata, missing-reference preflight failure, and expandable multi-result batches
 - [verified] Draggable image split guides with normalized coordinates and lineage
 - [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
-- [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion; retry rejects missing references and history deletion preserves shared board/job media while reclaiming orphans
+- [verified] Image and video workbenches with provider/model/refs/parameters, generate/cancel/retry/history, download/delete/regenerate, and canvas insertion; retry rejects missing references, reload reconciles interrupted owned jobs, and history deletion preserves shared board/job media while reclaiming orphans
 - [verified] PostgreSQL generation-job migration, paginated CRUD and timestamp-preserving atomic bulk restore; IndexedDB compatibility in development mode
 - [verified] WebDAV full-workspace bundles include projects, assets, prompts, generation history and deduplicated media while preserving local credentials
 
@@ -125,6 +134,8 @@ implementation evidence.
 ## Prompt, video, and assistant workflows
 
 - [verified] Prompt search plus independent source/tag filters, multiple saved HTTPS sources, per-source/all refresh, and source removal
+- [verified] Add/edit/disable/delete source manager, legacy URL migration, active-tab scheduling with authoritative persisted merges, nested JSON field paths, bounded HTML selectors, preview, and PostgreSQL reload persistence
+- [verified] Executable source formats, prototype paths, unsafe selectors, credential-bearing URLs, redirects, explicit private hosts, oversized responses, and excessive entries are rejected
 - [verified] Prompt cover and bounded result-image galleries with detail preview and canvas insertion
 - [verified] Text/image nodes create connected video nodes; image-to-video includes the source image reference
 - [verified] Smart Seedance duration and Ark fast-model `1080p` preflight rejection
@@ -139,8 +150,11 @@ implementation evidence.
 - [verified] Browser-rendered PNG snapshots upload to protected Go file storage
 - [verified] MCP stdio lifecycle and remote execution through an owner-only `0600` connection file
 - [verified] Profile-level Codex thread continuity and explicit new session
+- [verified] `generation_get_status` queries canvas `nodeIds` and workbench `taskId` with client ownership validation
+- [verified] Codex turns pin all tools to the initiating browser ID; disconnect falls back only to the most recently focused same-project tab and foreign results are ignored
+- [verified] Shared Codex session, user-message history, approval resolution and running state synchronize across tabs; sequenced SSE reconnects without replay duplicates, events are thread-filtered, and only exact turn completion unlocks input
 - [verified] Turn interrupt, concurrent-start prevention, turn-ID race handling, and structured logs
-- [verified] Up to ten image attachments/30MB, MIME validation, `0600` files, and completion/failure/close cleanup
+- [verified] Up to ten image attachments/30MB, MIME validation, `0600` files, explicit pending-upload cancellation, completion/failure/close cleanup, and orphan purge on restart
 - [verified] Safe Markdown/GFM output, raw-HTML suppression, remote-image suppression, previews, stop, and approvals
 - [verified] Independent `plugins/openboard` installer and Claude standard-MCP instructions
 

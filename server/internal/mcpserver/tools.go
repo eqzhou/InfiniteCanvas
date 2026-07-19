@@ -120,6 +120,19 @@ var boardTools = []toolDefinition{
 		InputSchema: objectSchema(map[string]any{"path": map[string]any{"type": "string", "maxLength": 200}}, "path"),
 	},
 	{
+		Name:        "generation_get_status",
+		Title:       "Get generation task status",
+		Description: "Query unified canvas node or image/video workbench generation status in the bound browser tab.",
+		InputSchema: objectSchema(map[string]any{
+			"taskId": projectIDProperty(),
+			"nodeIds": map[string]any{
+				"type": "array", "minItems": 1, "maxItems": 100,
+				"items": projectIDProperty(), "uniqueItems": true,
+			},
+		}),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
 		Name:        "board.list_nodes",
 		Title:       "List board nodes",
 		Description: "List every node in a persisted OpenBoard project.",

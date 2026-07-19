@@ -1,14 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 test("formal local runtime persists projects, blobs, state, and Agent access", async ({ page, request }) => {
+  await page.route("https://formal-prompts.example/catalog.json", async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ payload: { entries: [{ label: "Formal prompt", value: "persisted prompt source body" }] } }),
+  }));
   await page.goto("/");
-  await expect(page.getByTitle("文本")).toBeVisible();
+  await expect(page.getByRole("button", { name: "文本", exact: true })).toBeVisible();
   await page.getByTitle("设置").click();
   await expect(page.getByRole("button", { name: "拉取文本模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取生图模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取视频模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取音频模型" })).toBeVisible();
-  await expect(page.getByText("API Key 经本地服务加密后存入 PostgreSQL，数据库中不保存明文。", { exact: false })).toBeVisible();
+  const encryptionNotice = page.getByText("API Key 经本地服务加密后存入 PostgreSQL，数据库中不保存明文。", { exact: false });
+  await encryptionNotice.scrollIntoViewIfNeeded();
+  await expect(encryptionNotice).toBeVisible();
   await page.getByRole("button", { name: "关闭" }).click();
 
   await page.getByTitle("文本").click();
@@ -48,12 +54,33 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("formal PostgreSQL persistence");
   await expect(page.locator('img[alt="图片"]').first()).toBeVisible();
 
+  await page.goto("/prompts");
+  await page.getByRole("button", { name: "管理来源" }).click();
+  let sourceManager = page.getByRole("dialog", { name: "管理提示词来源" });
+  await sourceManager.getByLabel("来源名称").fill("Formal source");
+  await sourceManager.getByLabel("来源解析格式").selectOption("json");
+  await sourceManager.getByLabel("来源 URL").fill("https://formal-prompts.example/catalog.json");
+  await sourceManager.getByLabel("条目路径").fill("payload.entries");
+  await sourceManager.getByLabel("标题路径").fill("label");
+  await sourceManager.getByLabel("正文路径").fill("value");
+  await sourceManager.getByRole("button", { name: "保存来源" }).click();
+  await sourceManager.getByRole("button", { name: "刷新" }).click();
+  await sourceManager.getByTitle("关闭来源管理").click();
+  await expect(page.getByText("Formal prompt", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Formal prompt", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "管理来源" }).click();
+  sourceManager = page.getByRole("dialog", { name: "管理提示词来源" });
+  await expect(sourceManager.getByRole("listitem").filter({ hasText: "Formal source" })).toBeVisible();
+  await sourceManager.getByTitle("关闭来源管理").click();
+
   await page.goto("/assets");
   await page.getByRole("button", { name: "新增文本" }).click();
   const creator = page.getByRole("dialog", { name: "新增素材" });
   await creator.getByLabel("标题").fill("Formal asset");
   await creator.getByLabel("内容").fill("Stored in PostgreSQL");
   await creator.getByRole("button", { name: "保存" }).click();
+  await expect(creator).toHaveCount(0);
   await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();
   await page.reload();
   await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();
@@ -107,6 +134,22 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
     createdAt: restoredAt,
     updatedAt: restoredAt,
   });
+  const ownerClientId = await page.evaluate(() => sessionStorage.getItem("openboard:runtime-owner-id"));
+  expect(ownerClientId).toMatch(/^owner-[A-Za-z0-9]+$/);
+  const orphaned = await request.post("/api/generation-jobs", { data: {
+    ...generation,
+    id: "formal-job-orphaned",
+    status: "running",
+    prompt: "interrupted by reload",
+    parameters: { ownerClientId },
+  } });
+  await expect(orphaned).toBeOK();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "文本", exact: true })).toBeVisible();
+  await expect.poll(async () => {
+    const response = await request.get("/api/generation-jobs/formal-job-orphaned");
+    return await response.json() as { status?: string; error?: string };
+  }).toMatchObject({ status: "failed", error: "页面刷新后任务已中断，请重试" });
   const cleared = await request.put("/api/generation-jobs", { data: [] });
   expect(cleared.status()).toBe(204);
 });

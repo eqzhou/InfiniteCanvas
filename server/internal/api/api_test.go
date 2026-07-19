@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"mime/multipart"
@@ -9,7 +10,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -24,7 +28,7 @@ func fakeCodexBinary(t *testing.T) string {
 		"    initialize) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
 		"    thread/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread-test\"}}}\\n' \"$id\" ;;\n" +
 		"    turn/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"turn\":{\"id\":\"turn-test\"}}}\\n' \"$id\" ;;\n" +
-		"    turn/interrupt) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
+		"    turn/interrupt) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\"; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-test\"}}}' ;;\n" +
 		"  esac\n" +
 		"done\n"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
@@ -62,6 +66,18 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	if interrupted.Code != http.StatusOK {
 		t.Fatalf("interrupt status=%d body=%s", interrupted.Code, interrupted.Body.String())
 	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		status := request(t, handler, http.MethodGet, "/api/codex/session?profile=default", nil)
+		var current codexSessionSnapshot
+		if json.Unmarshal(status.Body.Bytes(), &current) == nil && !current.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("interrupted session remained running: %s", status.Body.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	fresh := request(t, handler, http.MethodPost, "/api/codex/session", []byte(`{"fresh":true}`))
 	var freshSession struct {
 		ID string `json:"id"`
@@ -73,6 +89,111 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	if closed.Code != http.StatusNoContent {
 		t.Fatalf("close status=%d", closed.Code)
 	}
+}
+
+func TestConcurrentCodexResumeRequestsReuseOneSession(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slow-fake-codex.sh")
+	script := "#!/bin/sh\nwhile IFS= read -r line; do\n" +
+		"  id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9][0-9]*\\).*/\\1/p')\n" +
+		"  method=$(printf '%s' \"$line\" | sed -n 's/.*\"method\":\"\\([^\"]*\\)\".*/\\1/p')\n" +
+		"  case \"$method\" in\n" +
+		"    initialize) sleep 0.1; printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
+		"    thread/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread-test\"}}}\\n' \"$id\" ;;\n" +
+		"  esac\n" +
+		"done\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_CODEX_BIN", path)
+	handler := testHandler(t)
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/api/codex/session", bytes.NewReader([]byte(`{"fresh":true}`)))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			responses <- response
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(responses)
+
+	var ids []string
+	for response := range responses {
+		if response.Code != http.StatusOK {
+			t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+		}
+		var snapshot codexSessionSnapshot
+		if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil || snapshot.ID == "" {
+			t.Fatalf("invalid session response: %s", response.Body.String())
+		}
+		ids = append(ids, snapshot.ID)
+	}
+	if len(ids) != 2 || ids[0] != ids[1] {
+		t.Fatalf("concurrent resume returned different sessions: %v", ids)
+	}
+	closed := request(t, handler, http.MethodDelete, "/api/codex/session/"+ids[0], nil)
+	if closed.Code != http.StatusNoContent {
+		t.Fatalf("close status=%d", closed.Code)
+	}
+}
+
+func TestCodexTurnStartOutlivesCancelledHTTPRequest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "delayed-turn-codex.sh")
+	script := "#!/bin/sh\nwhile IFS= read -r line; do\n" +
+		"  id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9][0-9]*\\).*/\\1/p')\n" +
+		"  method=$(printf '%s' \"$line\" | sed -n 's/.*\"method\":\"\\([^\"]*\\)\".*/\\1/p')\n" +
+		"  case \"$method\" in\n" +
+		"    initialize) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
+		"    thread/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread-test\"}}}\\n' \"$id\" ;;\n" +
+		"    turn/start) sleep 0.15; printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"turn\":{\"id\":\"turn-delayed\"}}}\\n' \"$id\" ;;\n" +
+		"  esac\ndone\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_CODEX_BIN", path)
+	server := NewServer(dir)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	created := request(t, router, http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var session codexSessionSnapshot
+	if json.Unmarshal(created.Body.Bytes(), &session) != nil || session.ID == "" {
+		t.Fatalf("session=%s", created.Body.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/api/codex/message", strings.NewReader(
+		`{"sessionId":"`+session.ID+`","text":"hello"}`,
+	)).WithContext(ctx)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		router.ServeHTTP(response, req)
+		close(done)
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("turn/start did not finish after request cancellation")
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("message status=%d body=%s", response.Code, response.Body.String())
+	}
+	current, ok := server.findCodex(session.ID)
+	if !ok || !current.snapshot(false).Running {
+		t.Fatal("cancelled HTTP request discarded the active Codex turn")
+	}
+	current.close()
 }
 
 func TestCodexImageAttachmentsAreOwnerOnlyAndCleanedOnClose(t *testing.T) {
@@ -139,6 +260,19 @@ func TestCodexImageAttachmentsAreOwnerOnlyAndCleanedOnClose(t *testing.T) {
 	if message.Code != http.StatusOK {
 		t.Fatalf("message status=%d body=%s", message.Code, message.Body.String())
 	}
+	activeSession, ok := server.findCodex(session.ID)
+	if !ok {
+		t.Fatal("active Codex session was not found")
+	}
+	activeSession.mu.Lock()
+	foundUserMessage := false
+	for _, event := range activeSession.history {
+		foundUserMessage = foundUserMessage || event.Method == "openboard/user_message"
+	}
+	activeSession.mu.Unlock()
+	if !foundUserMessage {
+		t.Fatal("user message was not recorded for shared session replay")
+	}
 	closed := request(t, router, http.MethodDelete, "/api/codex/session/"+session.ID, nil)
 	if closed.Code != http.StatusNoContent {
 		t.Fatalf("close status=%d", closed.Code)
@@ -146,6 +280,103 @@ func TestCodexImageAttachmentsAreOwnerOnlyAndCleanedOnClose(t *testing.T) {
 	stored, _ = filepath.Glob(filepath.Join(dataDir, "codex-attachments", session.ID, "*"))
 	if len(stored) != 0 {
 		t.Fatalf("attachments were not cleaned: %v", stored)
+	}
+}
+
+func TestPendingCodexAttachmentCanBeCancelledAndStartupPurgesOrphans(t *testing.T) {
+	dataDir := t.TempDir()
+	orphanDir := filepath.Join(dataDir, "codex-attachments", "old-session")
+	if err := os.MkdirAll(orphanDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanDir, "old.png"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(dataDir)
+	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
+		t.Fatalf("startup did not purge orphan attachment directory: %v", err)
+	}
+	session := &codexSession{
+		id: "codex-one", profile: "default",
+		subs: make(map[chan codexEvent]struct{}), pendingAttachments: make(map[string]codexAttachment),
+	}
+	path := filepath.Join(dataDir, "codex-attachments", session.id, "image-one.png")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session.pendingAttachments["image-one"] = codexAttachment{ID: "image-one", Path: path}
+	server.codex.sessions[session.id] = session
+	server.codex.profiles[session.profile] = session.id
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	deleted := request(t, router, http.MethodDelete, "/api/codex/attachments/image-one?sessionId=codex-one", nil)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("cancelled attachment still exists: %v", err)
+	}
+}
+
+func TestCodexUserMessagePrecedesEarlyAssistantEvents(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-codex-early.sh")
+	script := "#!/bin/sh\nwhile IFS= read -r line; do\n" +
+		"  id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9][0-9]*\\).*/\\1/p')\n" +
+		"  method=$(printf '%s' \"$line\" | sed -n 's/.*\"method\":\"\\([^\"]*\\)\".*/\\1/p')\n" +
+		"  case \"$method\" in\n" +
+		"    initialize) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
+		"    thread/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread-test\"}}}\\n' \"$id\" ;;\n" +
+		"    turn/start) printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"agent_message_delta\",\"params\":{\"delta\":\"early\"}}'; printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"turn\":{\"id\":\"turn-test\"}}}\\n' \"$id\" ;;\n" +
+		"  esac\ndone\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_CODEX_BIN", bin)
+	server := NewServer(dir)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	created := request(t, router, http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var snapshot codexSessionSnapshot
+	if json.Unmarshal(created.Body.Bytes(), &snapshot) != nil || snapshot.ID == "" {
+		t.Fatalf("create=%s", created.Body.String())
+	}
+	message := request(t, router, http.MethodPost, "/api/codex/message", []byte(`{"sessionId":"`+snapshot.ID+`","text":"hello"}`))
+	if message.Code != http.StatusOK {
+		t.Fatalf("message status=%d body=%s", message.Code, message.Body.String())
+	}
+	session, _ := server.findCodex(snapshot.ID)
+	deadline := time.Now().Add(time.Second)
+	for {
+		session.mu.Lock()
+		methods := make([]string, len(session.history))
+		for index, event := range session.history {
+			methods[index] = event.Method
+		}
+		session.mu.Unlock()
+		userIndex, assistantIndex := -1, -1
+		for index, method := range methods {
+			if method == "openboard/user_message" {
+				userIndex = index
+			}
+			if method == "agent_message_delta" {
+				assistantIndex = index
+			}
+		}
+		if userIndex >= 0 && assistantIndex >= 0 {
+			if userIndex > assistantIndex {
+				t.Fatalf("user message followed assistant event: %v", methods)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("events did not arrive: %v", methods)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

@@ -52,9 +52,11 @@ func Mount(r chi.Router, dataDir string) {
 		r.Get("/runtime/ws", s.runtimeSocket)
 		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
+		r.Get("/codex/session", s.getCodexSession)
 		r.Post("/codex/message", s.sendCodexMessage)
 		r.Post("/codex/interrupt", s.interruptCodex)
 		r.Post("/codex/attachments", s.uploadCodexAttachments)
+		r.Delete("/codex/attachments/{id}", s.deleteCodexAttachment)
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
@@ -81,6 +83,7 @@ func Mount(r chi.Router, dataDir string) {
 }
 
 func NewServer(dataDir string) *Server {
+	purgeCodexAttachmentRoot(dataDir)
 	return &Server{
 		dataDir: dataDir,
 		uploads: make(chan struct{}, 2),
@@ -116,9 +119,11 @@ func MountServer(r chi.Router, s *Server) {
 		r.Get("/runtime/ws", s.runtimeSocket)
 		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
+		r.Get("/codex/session", s.getCodexSession)
 		r.Post("/codex/message", s.sendCodexMessage)
 		r.Post("/codex/interrupt", s.interruptCodex)
 		r.Post("/codex/attachments", s.uploadCodexAttachments)
+		r.Delete("/codex/attachments/{id}", s.deleteCodexAttachment)
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
@@ -208,6 +213,7 @@ func (s *Server) agentStatus(w http.ResponseWriter, _ *http.Request) {
 			"prompt.search",
 			"prompt.insert",
 			"site.navigate",
+			"generation_get_status",
 			"board.list_nodes",
 			"board.add_node",
 			"board.update_node",

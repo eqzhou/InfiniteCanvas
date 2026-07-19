@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 )
 
 var codexImageExtensions = map[string]string{
@@ -136,4 +138,34 @@ func removeCodexAttachments(attachments []codexAttachment) {
 		_ = os.Remove(directory)
 		_ = os.Remove(filepath.Dir(directory))
 	}
+}
+
+func (s *Server) deleteCodexAttachment(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
+	attachmentID := chi.URLParam(r, "id")
+	if !projectIDPattern.MatchString(sessionID) || !projectIDPattern.MatchString(attachmentID) {
+		http.Error(w, "valid sessionId and attachment ID are required", http.StatusBadRequest)
+		return
+	}
+	session, ok := s.findCodex(sessionID)
+	if !ok {
+		http.Error(w, "codex session not found", http.StatusNotFound)
+		return
+	}
+	session.mu.Lock()
+	attachment, ok := session.pendingAttachments[attachmentID]
+	if ok {
+		delete(session.pendingAttachments, attachmentID)
+	}
+	session.mu.Unlock()
+	if !ok {
+		http.Error(w, "pending Codex attachment not found", http.StatusNotFound)
+		return
+	}
+	removeCodexAttachments([]codexAttachment{attachment})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func purgeCodexAttachmentRoot(dataDir string) {
+	_ = os.RemoveAll(filepath.Join(dataDir, "codex-attachments"))
 }

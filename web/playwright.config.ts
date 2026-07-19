@@ -14,10 +14,10 @@ export default defineConfig({
   testDir: "./e2e",
   testMatch: formal ? "formal-storage.spec.ts" : "canvas.spec.ts",
   outputDir: "./node_modules/.cache/playwright-test-results",
-  fullyParallel: !formal,
+  fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI || production || formal ? 1 : undefined,
+  workers: 1,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: origin,
