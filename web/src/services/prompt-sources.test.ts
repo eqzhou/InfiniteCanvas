@@ -248,14 +248,25 @@ describe("remote prompt source limits", () => {
       .rejects.toThrow("tag");
   });
 
-  test("rejects private sources and unsafe cover URLs", async () => {
+  test("rejects private sources and soft-skips unsafe cover/result URLs", async () => {
     await expect(fetchPromptSource("https://127.0.0.1/catalog.json")).rejects.toThrow("private");
     globalThis.fetch = mock(async () => jsonResponse([{
       title: "Title",
       prompt: "Body",
       coverUrl: "http://covers.example/image.png",
+      images: [
+        "http://insecure.example/result.png",
+        "https://cdn.example/result.png",
+        "https://127.0.0.1/private.png",
+      ],
     }])) as typeof fetch;
-    await expect(fetchPromptSource("https://prompts.example/catalog.json")).rejects.toThrow("HTTPS");
+    const [item] = await fetchPromptSource("https://prompts.example/catalog.json");
+    expect(item).toMatchObject({
+      title: "Title",
+      body: "Body",
+      resultUrls: ["https://cdn.example/result.png"],
+    });
+    expect(item.coverUrl).toBeUndefined();
   });
 
   test("normalizes a bounded result image gallery", async () => {

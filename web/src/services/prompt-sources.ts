@@ -323,12 +323,9 @@ function extractMarkdownImages(block: string, baseUrl: string): string[] {
   const urls: string[] = [];
   const push = (raw: string | undefined) => {
     if (!raw) return;
-    try {
-      const resolved = boundedExternalUrl(raw, baseUrl);
-      if (resolved && !urls.includes(resolved)) urls.push(resolved);
-    } catch {
-      // Community catalogs often include broken or non-HTTPS media; skip them.
-    }
+    // Community catalogs often include broken or non-HTTPS media; skip them.
+    const resolved = safeBoundedExternalUrl(raw, baseUrl);
+    if (resolved && !urls.includes(resolved)) urls.push(resolved);
   };
   for (const match of block.matchAll(/!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
     push(match[1]);
@@ -500,6 +497,15 @@ function boundedExternalUrl(value: unknown, baseUrl: string): string | undefined
   return normalizeExternalHttpsUrl(new URL(value, baseUrl).toString());
 }
 
+/** Soft-skip invalid media URLs so one bad cover/result does not fail a catalog. */
+function safeBoundedExternalUrl(value: unknown, baseUrl: string): string | undefined {
+  try {
+    return boundedExternalUrl(value, baseUrl);
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeTags(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map(String)
@@ -510,10 +516,13 @@ function normalizeTags(value: unknown): string[] {
 
 function normalizeResultUrls(value: unknown, baseUrl: string): string[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
-    .map((item) => boundedExternalUrl(item, baseUrl)!)
-    .filter(Boolean);
+  const urls: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) continue;
+    const resolved = safeBoundedExternalUrl(item, baseUrl);
+    if (resolved && !urls.includes(resolved)) urls.push(resolved);
+  }
+  return urls;
 }
 
 function normalizePromptJson(data: unknown, source: PromptSourceConfig): PromptItem[] {
@@ -556,7 +565,7 @@ function normalizePromptJson(data: unknown, source: PromptSourceConfig): PromptI
       : firstDefined(o.resultUrls, o.images);
     const rawCover = mapping?.coverUrlPath ? readPath(o, mapping.coverUrlPath) : o.coverUrl;
     const rawId = mapping?.idPath ? readPath(o, mapping.idPath) : o.id;
-    const coverUrl = boundedExternalUrl(rawCover, source.url);
+    const coverUrl = safeBoundedExternalUrl(rawCover, source.url);
     const resultUrls = normalizeResultUrls(rawResultUrls, source.url);
     out.push(validatePromptItem({
       id: String(rawId ?? `json-${index + 1}`),
@@ -603,6 +612,8 @@ function normalizePromptHtml(text: string, source: PromptSourceConfig): PromptIt
     const results = source.html!.resultSelector
       ? [...element.querySelectorAll(source.html!.resultSelector)].map(elementValue).filter(Boolean)
       : [];
+    const coverUrl = safeBoundedExternalUrl(cover, source.url);
+    const resultUrls = normalizeResultUrls(results, source.url);
     return [validatePromptItem({
       id: `${source.id}-${index + 1}`,
       title,
@@ -610,8 +621,8 @@ function normalizePromptHtml(text: string, source: PromptSourceConfig): PromptIt
       tags,
       source: source.name,
       sourceId: source.id,
-      coverUrl: boundedExternalUrl(cover, source.url),
-      resultUrls: normalizeResultUrls(results, source.url),
+      ...(coverUrl ? { coverUrl } : {}),
+      ...(resultUrls.length ? { resultUrls } : {}),
     })];
   });
 }
