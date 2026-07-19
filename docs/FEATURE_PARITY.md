@@ -51,6 +51,7 @@ implementation evidence.
 | Public Unreleased client-scoped operations and focused-tab fallback | runtime pin/ownership Go tests and two-tab generation ownership E2E |
 | Public Unreleased shared Codex session/running state, approvals and exact turn completion | Codex replay/state/approval Go tests, `codex-events.test.ts`, and two-tab Codex E2E |
 | Public Unreleased addable custom prompt sources | safe JSON/HTML/Markdown mappings, migration tests, manager E2E, and PostgreSQL reload E2E |
+| Community prompt catalog one-click install | `prompt-source-presets.ts`, structured markdown/JSON parsers, prompt library E2E |
 | PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
 | Resizable/collapsible canvas panel with project, element and asset tabs | panel persistence, element selection/location/export and asset-panel E2E |
 | Local prompt CRUD/copy/direct insertion and hover-revealed node names | prompt library and node-title E2E |
@@ -81,7 +82,7 @@ implementation evidence.
 
 ## Verification summary
 
-- [verified] 241 Bun unit/integration tests; 84.26% line and 86.20% function coverage
+- [verified] 242 Bun unit/integration tests; 84.26% line and 86.20% function coverage
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 64/64 desktop Chromium tests against the production Vite build and isolated Go data directory
@@ -134,6 +135,8 @@ implementation evidence.
 ## Prompt, video, and assistant workflows
 
 - [verified] Prompt search plus independent source/tag filters, multiple saved HTTPS sources, per-source/all refresh, and source removal
+- [verified] One-click community catalog presets for five public prompt repositories with independent declarative mappings
+- [verified] Structured community Markdown parsing for labeled/fenced prompt blocks with section tags and image galleries
 - [verified] Add/edit/disable/delete source manager, legacy URL migration, active-tab scheduling with authoritative persisted merges, nested JSON field paths, bounded HTML selectors, preview, and PostgreSQL reload persistence
 - [verified] Executable source formats, prototype paths, unsafe selectors, credential-bearing URLs, redirects, explicit private hosts, oversized responses, and excessive entries are rejected
 - [verified] Prompt cover and bounded result-image galleries with detail preview and canvas insertion

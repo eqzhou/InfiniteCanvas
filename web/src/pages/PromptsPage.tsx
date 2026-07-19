@@ -8,6 +8,10 @@ import {
   parsePromptSourceConfig,
   PROMPT_SOURCE_LIMITS,
 } from "@/services/prompt-sources";
+import {
+  clonePresetSource,
+  COMMUNITY_PROMPT_SOURCE_PRESETS,
+} from "@/services/prompt-source-presets";
 import { PromptDetailDialog } from "@/components/prompts/PromptDetailDialog";
 import {
   Copy,
@@ -206,6 +210,30 @@ export function PromptsPage() {
     }
   };
 
+  const addCommunityPreset = async (presetId: string) => {
+    const preset = COMMUNITY_PROMPT_SOURCE_PRESETS.find((item) => item.id === presetId);
+    if (!preset) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const existing = (useBoardStore.getState().config.promptSources ?? [])
+        .find((item) => item.id === preset.source.id || item.url === preset.source.url);
+      // Community actions always re-enable the source so a disabled catalog can be
+      // refreshed from the one-click entry without opening the manager.
+      const sourceConfig = {
+        ...(existing ?? clonePresetSource(preset)),
+        enabled: true,
+      };
+      await mergeRemoteSource(sourceConfig);
+      await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
+      setRemoteUrl(sourceConfig.url);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     const report = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: unknown }>).detail;
@@ -344,7 +372,39 @@ export function PromptsPage() {
         </button>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-2 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3">
+      <div className="mb-4 space-y-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3">
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-medium">社区提示词源</h2>
+            <span className="text-[11px] text-[var(--ob-muted)]">一键接入公开目录（声明式解析，不执行远程脚本）</span>
+          </div>
+          <ul className="grid gap-2 sm:grid-cols-2" aria-label="社区提示词源">
+            {COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => {
+              const installed = savedSources.some((item) =>
+                item.id === preset.source.id || item.url === preset.source.url);
+              return (
+                <li
+                  key={preset.id}
+                  className="flex min-w-0 items-start gap-2 rounded-md border border-[var(--ob-line)] px-3 py-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{preset.name}</div>
+                    <p className="line-clamp-2 text-[11px] text-[var(--ob-muted)]">{preset.description}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-md border border-[var(--ob-line)] px-2 py-1 text-xs disabled:opacity-50"
+                    disabled={busy}
+                    onClick={() => void addCommunityPreset(preset.id)}
+                  >
+                    {installed ? "刷新" : "接入"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+        <div className="flex flex-wrap gap-2 border-t border-[var(--ob-line)] pt-3">
         <input
           className="min-w-0 flex-1 basis-full rounded-md border border-[var(--ob-line)] bg-transparent px-3 py-1.5 text-sm sm:basis-auto"
           placeholder="远程源 URL（raw JSON / Markdown）"
@@ -421,6 +481,7 @@ export function PromptsPage() {
             ))}
           </ul>
         ) : null}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -430,9 +491,18 @@ export function PromptsPage() {
             className="flex min-h-52 flex-col rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 transition-colors hover:border-[var(--ob-accent)]"
           >
             <div className="mb-1 flex items-center gap-2">
-              <h3 className="font-medium">{p.title}</h3>
-              <span className="text-xs text-[var(--ob-muted)]">{p.source}</span>
+              <h3 className="min-w-0 flex-1 truncate font-medium">{p.title}</h3>
+              <span className="shrink-0 text-xs text-[var(--ob-muted)]">{p.source}</span>
             </div>
+            {p.coverUrl ? (
+              <img
+                src={p.coverUrl}
+                alt=""
+                crossOrigin="anonymous"
+                referrerPolicy="no-referrer"
+                className="mb-2 h-28 w-full rounded-md bg-[var(--ob-canvas)] object-cover"
+              />
+            ) : null}
             <p className="line-clamp-4 flex-1 whitespace-pre-wrap text-sm leading-relaxed text-[var(--ob-muted)]">{p.body}</p>
             <div className="mt-2 flex flex-wrap gap-1">
               {p.tags.map((t) => (

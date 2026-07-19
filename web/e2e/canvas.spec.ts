@@ -1959,6 +1959,45 @@ test("prompt library filters tags and manages multiple persisted remote sources"
   await expect(page.locator("li").filter({ hasText: sources[1] })).toBeVisible();
 });
 
+test("community prompt presets can be installed from the prompt library", async ({ page }) => {
+  const presetUrl = "https://raw.githubusercontent.com/ZeroLu/awesome-gpt-image/main/README.zh-CN.md";
+  await page.route(presetUrl, async (route) => route.fulfill({
+    contentType: "text/markdown; charset=utf-8",
+    body: `# Awesome GPT Image
+
+## 摄影
+
+### 社区夜景
+<img src="https://cdn.example/community-cover.png" />
+
+**提示词:**
+\`\`\`text
+community neon street still
+\`\`\`
+`,
+  }));
+
+  await openFreshBoard(page);
+  await page.goto("/prompts");
+  const presetCard = page.getByRole("list", { name: "社区提示词源" })
+    .getByRole("listitem")
+    .filter({ hasText: "ZeroLu/awesome-gpt-image" });
+  await expect(presetCard).toBeVisible();
+  await presetCard.getByRole("button", { name: "接入" }).click();
+  await expect(page.getByText("社区夜景", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("community neon street still")).toBeVisible();
+  await expect(presetCard.getByRole("button", { name: "刷新" })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText("社区夜景", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("list", { name: "社区提示词源" })
+      .getByRole("listitem")
+      .filter({ hasText: "ZeroLu/awesome-gpt-image" })
+      .getByRole("button", { name: "刷新" }),
+  ).toBeVisible();
+});
+
 test("prompt source manager previews, persists, edits, disables, and removes declarative sources", async ({ page }) => {
   const jsonUrl = "https://mapped-prompts.example/catalog.json";
   const htmlUrl = "https://html-prompts.example/catalog.html";

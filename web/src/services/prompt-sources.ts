@@ -9,8 +9,8 @@ import { readBoundedResponse } from "@/services/remote-content";
 import { normalizeExternalHttpsUrl, normalizeExternalSourceUrl } from "@/lib/remote-url";
 
 export const PROMPT_SOURCE_LIMITS = {
-  maxBytes: 2 * 1024 * 1024,
-  maxItems: 1000,
+  maxBytes: 4 * 1024 * 1024,
+  maxItems: 20_000,
   maxIdChars: 200,
   maxTitleChars: 200,
   maxBodyChars: 20_000,
@@ -310,7 +310,150 @@ export async function fetchPromptSource(
   return normalizePromptMarkdown(text, source);
 }
 
+function stripMarkdownInline(value: string): string {
+  return value
+    .replace(/!\[[^\]]*]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/[`*_~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractMarkdownImages(block: string, baseUrl: string): string[] {
+  const urls: string[] = [];
+  const push = (raw: string | undefined) => {
+    if (!raw) return;
+    try {
+      const resolved = boundedExternalUrl(raw, baseUrl);
+      if (resolved && !urls.includes(resolved)) urls.push(resolved);
+    } catch {
+      // Community catalogs often include broken or non-HTTPS media; skip them.
+    }
+  };
+  for (const match of block.matchAll(/!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+    push(match[1]);
+  }
+  for (const match of block.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)) {
+    push(match[1]);
+  }
+  return urls.slice(0, PROMPT_SOURCE_LIMITS.maxResultUrls);
+}
+
+function extractFencedBodies(block: string): string[] {
+  const bodies: string[] = [];
+  for (const match of block.matchAll(/```[^\n]*\r?\n([\s\S]*?)\r?\n```/g)) {
+    const body = match[1].trim();
+    if (body) bodies.push(body);
+  }
+  return bodies;
+}
+
+function extractLabeledPromptBodies(block: string): string[] {
+  const bodies: string[] = [];
+  const patterns: RegExp[] = [
+    /\*\*提示词文本[:：]\*\*\s*`([\s\S]*?)`/g,
+    /\*\*提示词[:：]\*\*\s*`([\s\S]*?)`/g,
+    /-\s*\*\*提示词文本[:：]\*\*\s*`([\s\S]*?)`/g,
+    // Community catalogs often put the prompt body in the next fenced block.
+    /\*\*提示词(?:文本)?[:：]\*\*\s*(?:\r?\n)+\s*```[^\n]*\r?\n([\s\S]*?)\r?\n```/g,
+    /####[^\n]*提示词[^\n]*\r?\n\s*```[^\n]*\r?\n([\s\S]*?)\r?\n```/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of block.matchAll(pattern)) {
+      const body = match[1].trim();
+      if (body) bodies.push(body);
+    }
+  }
+  return bodies;
+}
+
+function extractSectionTags(heading: string): string[] {
+  const cleaned = heading
+    .replace(/[^\p{L}\p{N}/&、与 \-]+/gu, " ")
+    .trim();
+  if (!cleaned) return [];
+  // Skip table-of-contents style headings so they do not become prompt tags.
+  if (/^(目录|contents|toc|table of contents|索引|导航)$/i.test(cleaned)) return [];
+  return cleaned
+    .split(/\s*(?:\/|&|、|与|,|，)\s*/)
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0 && tag.length <= PROMPT_SOURCE_LIMITS.maxTagChars)
+    .slice(0, PROMPT_SOURCE_LIMITS.maxTags);
+}
+
+function pushBoundedPrompt(items: PromptItem[], item: PromptItem): void {
+  if (items.length >= PROMPT_SOURCE_LIMITS.maxItems) {
+    throw new Error(`Prompt source has too many entries (limit ${PROMPT_SOURCE_LIMITS.maxItems})`);
+  }
+  items.push(validatePromptItem(item));
+}
+
+function normalizeStructuredMarkdownSections(
+  text: string,
+  source: PromptSourceConfig,
+): PromptItem[] | null {
+  const headingMatches = [...text.matchAll(/^#{2,3}\s+(.+)$/gm)];
+  if (headingMatches.length < 2) return null;
+
+  const items: PromptItem[] = [];
+  let sectionTags: string[] = [];
+  let structuredHits = 0;
+
+  for (let index = 0; index < headingMatches.length; index += 1) {
+    const match = headingMatches[index]!;
+    const heading = stripMarkdownInline(match[1] ?? "");
+    const startOffset = match.index ?? 0;
+    const endOffset = index + 1 < headingMatches.length
+      ? (headingMatches[index + 1]!.index ?? text.length)
+      : text.length;
+    const block = text.slice(startOffset, endOffset);
+    const level = match[0].startsWith("###") ? 3 : 2;
+
+    if (level === 2) {
+      sectionTags = extractSectionTags(heading);
+      continue;
+    }
+
+    // Structured catalogs require an explicit prompt label. Bare fenced code under
+    // ### headings is common in docs and must not become a prompt entry.
+    const labeledBodies = extractLabeledPromptBodies(block);
+    if (!labeledBodies.length) continue;
+    const fencedBodies = extractFencedBodies(block);
+
+    // Prefer the adjacent fenced body when the labeled capture is only a short
+    // leftover and a substantial fence exists in the same section.
+    let body = labeledBodies[0]!;
+    if (fencedBodies.length) {
+      const labeled = labeledBodies[0]!;
+      if (labeled.length < 24 && fencedBodies[0]!.length > labeled.length) {
+        body = fencedBodies[0]!;
+      }
+    }
+
+    structuredHits += 1;
+    const images = extractMarkdownImages(block, source.url);
+    const titleMatch = heading.match(/^(?:No\.\s*\d+\s*[:：]\s*)?(.+)$/i);
+    const title = stripMarkdownInline(titleMatch?.[1] ?? heading) || `未命名 ${index + 1}`;
+    pushBoundedPrompt(items, {
+      id: `${source.id}-${structuredHits}`,
+      title,
+      body,
+      tags: [...sectionTags],
+      source: source.name,
+      sourceId: source.id,
+      ...(images[0] ? { coverUrl: images[0] } : {}),
+      ...(images.length > 1 ? { resultUrls: images.slice(1) } : {}),
+    });
+  }
+
+  if (structuredHits === 0) return null;
+  return items;
+}
+
 function normalizePromptMarkdown(text: string, source: PromptSourceConfig): PromptItem[] {
+  const structured = normalizeStructuredMarkdownSections(text, source);
+  if (structured) return structured;
+
   const blocks = text.split(/\n(?=#{1,3}\s+)/);
   if (blocks.length > PROMPT_SOURCE_LIMITS.maxItems) {
     throw new Error(`Prompt source has too many entries (limit ${PROMPT_SOURCE_LIMITS.maxItems})`);
@@ -319,9 +462,10 @@ function normalizePromptMarkdown(text: string, source: PromptSourceConfig): Prom
   for (const [index, block] of blocks.entries()) {
     const lines = block.trim().split("\n");
     if (!lines.length) continue;
-    const title = lines[0].replace(/^#+\s*/, "").trim() || "未命名";
+    const title = stripMarkdownInline(lines[0].replace(/^#+\s*/, "")) || "未命名";
     const body = lines.slice(1).join("\n").trim();
     if (!body) continue;
+    const images = extractMarkdownImages(block, source.url);
     items.push(validatePromptItem({
       id: `markdown-${index + 1}`,
       title,
@@ -329,6 +473,8 @@ function normalizePromptMarkdown(text: string, source: PromptSourceConfig): Prom
       tags: [],
       source: source.name,
       sourceId: source.id,
+      ...(images[0] ? { coverUrl: images[0] } : {}),
+      ...(images.length > 1 ? { resultUrls: images.slice(1) } : {}),
     }));
   }
   return items;
@@ -393,11 +539,15 @@ function normalizePromptJson(data: unknown, source: PromptSourceConfig): PromptI
     const mapping = source.mapping;
     const rawTitle = mapping?.titlePath
       ? readPath(o, mapping.titlePath)
-      : firstDefined(o.title, o.name);
+      : firstDefined(o.title, o.title_cn, o.title_en, o.name, o.label);
     const rawBody = mapping?.bodyPath
       ? readPath(o, mapping.bodyPath)
-      : firstDefined(o.body, o.prompt, o.content, o.text);
-    const title = String(rawTitle ?? "未命名");
+      : firstDefined(o.body, o.prompt, o.content, o.text, o.value);
+    // If mapped title path is empty, fall back to common bilingual fields.
+    const fallbackTitle = firstDefined(o.title, o.title_cn, o.title_en, o.name, o.label);
+    const title = String((rawTitle !== undefined && rawTitle !== null && String(rawTitle).trim())
+      ? rawTitle
+      : (fallbackTitle ?? "未命名"));
     const body = String(rawBody ?? "");
     if (!body) continue;
     const rawTags = mapping?.tagsPath ? readPath(o, mapping.tagsPath) : o.tags;
@@ -406,6 +556,8 @@ function normalizePromptJson(data: unknown, source: PromptSourceConfig): PromptI
       : firstDefined(o.resultUrls, o.images);
     const rawCover = mapping?.coverUrlPath ? readPath(o, mapping.coverUrlPath) : o.coverUrl;
     const rawId = mapping?.idPath ? readPath(o, mapping.idPath) : o.id;
+    const coverUrl = boundedExternalUrl(rawCover, source.url);
+    const resultUrls = normalizeResultUrls(rawResultUrls, source.url);
     out.push(validatePromptItem({
       id: String(rawId ?? `json-${index + 1}`),
       title,
@@ -413,8 +565,8 @@ function normalizePromptJson(data: unknown, source: PromptSourceConfig): PromptI
       tags: normalizeTags(rawTags),
       source: source.name,
       sourceId: source.id,
-      coverUrl: boundedExternalUrl(rawCover, source.url),
-      resultUrls: normalizeResultUrls(rawResultUrls, source.url),
+      ...(coverUrl ? { coverUrl } : {}),
+      ...(resultUrls.length ? { resultUrls } : {}),
     }));
   }
   return out;
