@@ -242,7 +242,7 @@ async function executeRuntimeCommand(
       if (taskId && !task) {
         let stored = await getGenerationJob(taskId);
         const owner = stored?.parameters.ownerClientId;
-        let visible = !owner || owner === getRuntimeOwnerId();
+        let visible = stored?.status !== "running" || !owner || owner === getRuntimeOwnerId();
         if (stored && findInterruptedGenerationJobs(
           [stored],
           getRuntimeOwnerId(),

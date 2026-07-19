@@ -1081,6 +1081,7 @@ test("Agent sees one unified running generation task from the image workbench", 
       headers: { Authorization: "Bearer e2e-token" },
       data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
     });
+    if (!fallback.ok()) return undefined;
     return (await fallback.json() as { task?: { status?: string } }).task?.status;
   }).toBe("running");
 
@@ -1100,6 +1101,7 @@ test("Agent sees one unified running generation task from the image workbench", 
       headers: { Authorization: "Bearer e2e-token" },
       data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
     });
+    if (!afterReload.ok()) return undefined;
     return (await afterReload.json() as { task?: { status?: string } }).task?.status;
   }).toBe("succeeded");
 });

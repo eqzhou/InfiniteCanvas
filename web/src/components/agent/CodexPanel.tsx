@@ -130,6 +130,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   useEffect(() => {
     if (!sessionId) return;
     const source = subscribeCodexEvents(connection, sessionId, (event) => {
+      if (sessionIdRef.current !== sessionId) return;
       setReconnecting(false);
       setError((current) => current?.startsWith("Codex 事件流正在重连：") ? null : current);
       if (event.method === "openboard/session_state") {
