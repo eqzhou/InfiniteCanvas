@@ -4,10 +4,8 @@ import { BoardCanvas } from "@/components/canvas/BoardCanvas";
 import { AssistantPanel } from "@/components/assistant/AssistantPanel";
 import {
   Archive,
-  Boxes,
   Download,
   FolderPlus,
-  Image as ImageIcon,
   ListChecks,
   LocateFixed,
   PanelLeftClose,
@@ -21,7 +19,8 @@ import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { exportNodeSelection } from "@/lib/node-export";
 import type { BoardNode } from "@/types/board";
-import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
+import { CanvasAssetsPanel } from "@/components/canvas/CanvasAssetsPanel";
+import { CanvasPromptsPanel } from "@/components/canvas/CanvasPromptsPanel";
 
 const NODE_TYPE_LABELS: Record<BoardNode["type"], string> = {
   text: "文本",
@@ -38,14 +37,10 @@ export function HomePage() {
   const projects = useBoardStore((s) => s.projects);
   const activeProjectId = useBoardStore((s) => s.activeProjectId);
   const activeProject = useBoardStore((s) => s.projects.find((project) => project.id === s.activeProjectId) ?? null);
-  const assets = useBoardStore((s) => s.assets);
-  const setAssets = useBoardStore((s) => s.setAssets);
-  const flushAssets = useBoardStore((s) => s.flushAssets);
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const setActiveProject = useBoardStore((s) => s.setActiveProject);
   const setSelected = useBoardStore((s) => s.setSelected);
   const setViewport = useBoardStore((s) => s.setViewport);
-  const insertAsset = useBoardStore((s) => s.insertAsset);
   const showAssistant = useBoardStore((s) => s.showAssistant);
   const createProject = useBoardStore((s) => s.createProject);
   const renameProject = useBoardStore((s) => s.renameProject);
@@ -87,7 +82,7 @@ export function HomePage() {
     setConfig({ ...latest, ...patch });
   };
 
-  const changePanelTab = (tab: "projects" | "elements" | "assets") => {
+  const changePanelTab = (tab: "projects" | "elements" | "assets" | "prompts") => {
     updatePanelConfig({ canvasPanelTab: tab });
     void flushConfig();
   };
@@ -130,16 +125,6 @@ export function HomePage() {
     anchor.download = `画布元素-${selected.length}.zip`;
     anchor.click();
     URL.revokeObjectURL(url);
-  };
-
-  const deleteSidebarAsset = async (assetId: string) => {
-    const state = useBoardStore.getState();
-    const asset = state.assets.find((item) => item.id === assetId);
-    if (!asset) return;
-    const nextAssets = state.assets.filter((item) => item.id !== assetId);
-    setAssets(nextAssets);
-    await flushAssets();
-    await deleteAssetBlobIfUnreferenced(asset.storageKey, state.projects, nextAssets);
   };
 
   const sorted = useMemo(
@@ -328,11 +313,12 @@ export function HomePage() {
             }}
           />
         </div>
-        <div role="tablist" aria-label="工作区视图" className="grid grid-cols-3 border-b border-[var(--ob-line)] px-2 pt-1">
+        <div role="tablist" aria-label="工作区视图" className="grid grid-cols-4 border-b border-[var(--ob-line)] px-2 pt-1">
           {([
             ["projects", "项目"],
             ["elements", "元素"],
             ["assets", "素材"],
+            ["prompts", "提示词"],
           ] as const).map(([value, label]) => (
             <button
               key={value}
@@ -449,58 +435,8 @@ export function HomePage() {
               <p className="p-3 text-sm text-[var(--ob-muted)]">当前画布没有元素</p>
             )
           ) : null}
-          {panelTab === "assets" ? (
-            assets.length ? (
-              <ul role="list" aria-label="侧栏素材" className="grid grid-cols-2 gap-2">
-                {assets.map((asset) => (
-                  <li key={asset.id} className="group relative min-h-24 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[var(--ob-canvas)]">
-                    {asset.kind === "image" && asset.coverUrl ? (
-                      <img src={asset.coverUrl} alt={asset.title} className="h-24 w-full object-cover" />
-                    ) : asset.kind === "video" && asset.coverUrl ? (
-                      <video src={asset.coverUrl} aria-label={asset.title} muted preload="metadata" className="h-24 w-full bg-black object-contain" />
-                    ) : asset.kind === "audio" && asset.coverUrl ? (
-                      <div className="grid h-24 place-items-center px-2 text-xs text-[var(--ob-muted)]">音频</div>
-                    ) : (
-                      <p className="line-clamp-4 p-2 text-xs leading-relaxed">{asset.content || asset.title}</p>
-                    )}
-                    <button
-                      type="button"
-                      aria-label={`插入素材 ${asset.title}`}
-                      title="插入画布"
-                      className="absolute inset-0 grid place-items-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
-                      onClick={() => {
-                        if (!activeProject) return;
-                        void insertAsset(asset.id, {
-                          x: (window.innerWidth / 2 - activeProject.viewport.x) / activeProject.viewport.k,
-                          y: (window.innerHeight / 2 - activeProject.viewport.y) / activeProject.viewport.k,
-                        });
-                      }}
-                    >
-                      <ImageIcon size={18} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`删除素材 ${asset.title}`}
-                      title="删除素材"
-                      className="absolute right-1 top-1 z-10 grid h-7 w-7 place-items-center rounded-sm bg-[var(--ob-panel)] text-[var(--ob-danger)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus:opacity-100"
-                      onClick={() => {
-                        if (!confirm(`删除素材“${asset.title}”？`)) return;
-                        void deleteSidebarAsset(asset.id).catch((error) =>
-                          alert(error instanceof Error ? error.message : String(error)));
-                      }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="grid place-items-center gap-2 p-6 text-center text-sm text-[var(--ob-muted)]">
-                <Boxes size={22} />
-                <span>暂无素材</span>
-              </div>
-            )
-          ) : null}
+          {panelTab === "assets" ? <CanvasAssetsPanel /> : null}
+          {panelTab === "prompts" ? <CanvasPromptsPanel /> : null}
         </div>
         <div
           role="separator"

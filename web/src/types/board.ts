@@ -271,7 +271,7 @@ export type AppConfig = {
   localAgentUrl?: string;
   canvasPanelWidth?: number;
   canvasPanelCollapsed?: boolean;
-  canvasPanelTab?: "projects" | "elements" | "assets";
+  canvasPanelTab?: "projects" | "elements" | "assets" | "prompts";
 };
 
 export type ClipboardPayload = {

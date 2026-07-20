@@ -201,7 +201,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           updateNode(node.id, { metadata: { status: "success" } });
         }
       }
-      setText("");
+      // Keep the last prompt so users can refine and resubmit.
     } catch (err) {
       updateNode(node.id, {
         metadata: {

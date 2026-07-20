@@ -91,6 +91,8 @@ canvas.
 - Declarative nested JSON mappings and bounded HTML selectors with preview
 - One-click community catalog presets for five public prompt repositories
 - Structured Markdown parsing for labeled/fenced community prompt blocks
+- Canvas left-panel prompt library tab grouped by source with insert/copy
+- Node prompt input retains content after generation completes
 - No arbitrary script execution; unsafe paths, explicit private hosts, redirects, credential-bearing URLs, and oversized content are rejected
 
 The detailed evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).

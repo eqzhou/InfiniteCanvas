@@ -1998,6 +1998,59 @@ community neon street still
   ).toBeVisible();
 });
 
+
+test("canvas prompt panel groups library entries by source and inserts them", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.goto("/prompts");
+  await page.getByRole("button", { name: "新建提示词" }).click();
+  const editor = page.getByRole("dialog", { name: "新建提示词" });
+  await editor.getByLabel("标题").fill("侧栏夜景");
+  await editor.getByLabel("提示词内容").fill("neon alley with rain reflections");
+  await editor.getByLabel("标签").fill("city");
+  await editor.getByRole("button", { name: "保存提示词" }).click();
+  await expect(page.getByText("侧栏夜景", { exact: true })).toBeVisible();
+
+  await page.goto("/");
+  await openProjectPanel(page);
+  const panel = page.getByRole("complementary", { name: "项目侧栏" });
+  await panel.getByRole("tab", { name: "提示词" }).click();
+  const library = panel.getByRole("list", { name: "侧栏提示词库" });
+  await expect(library.getByText("local", { exact: true })).toBeVisible();
+  await expect(library.getByText("侧栏夜景", { exact: true })).toBeVisible();
+  await library.getByRole("button", { name: "插入提示词 侧栏夜景" }).click();
+  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("neon alley with rain reflections");
+  await page.reload();
+  await openProjectPanel(page);
+  await expect(panel.getByRole("tab", { name: "提示词", selected: true })).toBeVisible();
+});
+
+test("node prompt bar keeps the draft after a successful image generation", async ({ page }) => {
+  await page.route("https://keep-prompt.example/v1/images/generations", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC" }],
+      }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://keep-prompt.example/v1");
+  await page.getByLabel("生图 API Key").fill("keep-prompt-key");
+  await page.getByLabel("生图模型", { exact: true }).fill("keep-prompt-image");
+  await closeSettings(page);
+
+  await page.getByTitle("图片", { exact: true }).click();
+  const imageNode = page.locator('[data-node-type="image"]').first();
+  await imageNode.locator("[data-node-header]").click();
+  const promptInput = imageNode.getByRole("textbox", { name: "节点生成提示词" });
+  await expect(promptInput).toBeVisible();
+  await promptInput.fill("keep this cinematic still prompt");
+  await imageNode.getByTitle("发送 (Ctrl/Cmd+Enter)").click();
+  await expect.poll(async () => imageNode.locator("img").count()).toBeGreaterThan(0);
+  await expect(promptInput).toContainText("keep this cinematic still prompt");
+});
+
 test("prompt source manager previews, persists, edits, disables, and removes declarative sources", async ({ page }) => {
   const jsonUrl = "https://mapped-prompts.example/catalog.json";
   const htmlUrl = "https://html-prompts.example/catalog.html";

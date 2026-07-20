@@ -33,6 +33,12 @@ describe("application configuration", () => {
     });
     expect(normalizeAppConfig({
       ...base,
+      canvasPanelTab: "prompts",
+    })).toMatchObject({
+      canvasPanelTab: "prompts",
+    });
+    expect(normalizeAppConfig({
+      ...base,
       canvasPanelWidth: 10,
       canvasPanelTab: "invalid" as "projects",
     })).toMatchObject({

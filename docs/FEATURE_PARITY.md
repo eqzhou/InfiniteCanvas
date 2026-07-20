@@ -52,8 +52,10 @@ implementation evidence.
 | Public Unreleased shared Codex session/running state, approvals and exact turn completion | Codex replay/state/approval Go tests, `codex-events.test.ts`, and two-tab Codex E2E |
 | Public Unreleased addable custom prompt sources | safe JSON/HTML/Markdown mappings, migration tests, manager E2E, and PostgreSQL reload E2E |
 | Community prompt catalog one-click install | `prompt-source-presets.ts`, structured markdown/JSON parsers, prompt library E2E |
+| Public Unreleased canvas prompt-library tab grouped by source | `CanvasPromptsPanel.tsx`, grouping unit tests, canvas prompt-panel E2E |
+| Public Unreleased keep node prompt after generation | `NodePromptBar.tsx` retains draft text after successful generate |
 | PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
-| Resizable/collapsible canvas panel with project, element and asset tabs | panel persistence, element selection/location/export and asset-panel E2E |
+| Resizable/collapsible canvas panel with project, element, asset and prompt tabs | panel persistence, element selection/location/export and asset/prompt-panel E2E |
 | Local prompt CRUD/copy/direct insertion and hover-revealed node names | prompt library and node-title E2E |
 | Image/video/audio asset upload, preview, insertion, deletion and archive restore | asset E2E and `workspace-bundle.test.ts` |
 | Active-canvas archive from the top bar and bounded multi-element ZIP export | project lifecycle and element panel E2E plus `node-export.test.ts` |
@@ -140,6 +142,8 @@ implementation evidence.
 - [verified] Add/edit/disable/delete source manager, legacy URL migration, active-tab scheduling with authoritative persisted merges, nested JSON field paths, bounded HTML selectors, preview, and PostgreSQL reload persistence
 - [verified] Executable source formats, prototype paths, unsafe selectors, credential-bearing URLs, redirects, explicit private hosts, oversized responses, and excessive entries are rejected
 - [verified] Prompt cover and bounded result-image galleries with detail preview and canvas insertion
+- [verified] Canvas left panel prompt-library tab groups prompts by source with collapse and insert/copy actions
+- [verified] Node prompt bar keeps the last prompt text after a successful generation so users can refine and resubmit
 - [verified] Text/image nodes create connected video nodes; image-to-video includes the source image reference
 - [verified] Smart Seedance duration and Ark fast-model `1080p` preflight rejection
 - [verified] Config nodes preview ordered text, image, video, and audio inputs; reordering changes the actual Ark reference request order
