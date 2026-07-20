@@ -164,14 +164,22 @@ describe("remote prompt source limits", () => {
     }]);
   });
 
-  test("rejects executable and unsafe declarative source fields", () => {
+  test("accepts script sources while rejecting unsafe declarative paths", () => {
     const normalized = normalizePromptSourceConfigs([
       {
         id: "scripted",
         name: "Scripted",
         url: "https://prompts.example/source.json",
         format: "script",
-        script: "return fetch(url)",
+        script: "return helpers.parseJson(text)",
+        enabled: true,
+        refreshMinutes: 0,
+      },
+      {
+        id: "script-missing",
+        name: "Missing script",
+        url: "https://prompts.example/source.json",
+        format: "script",
       },
       {
         id: "prototype",
@@ -182,7 +190,80 @@ describe("remote prompt source limits", () => {
       },
     ]);
 
-    expect(normalized).toEqual([]);
+    expect(normalized).toHaveLength(1);
+    expect(normalized[0]).toMatchObject({
+      id: "scripted",
+      format: "script",
+      script: "return helpers.parseJson(text)",
+    });
+  });
+
+  test("executes a local script transform against fetched source text", async () => {
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({
+      payload: {
+        rows: [
+          { slug: "a", label: "Alpha", value: "first prompt", marks: ["x"] },
+          { slug: "b", label: "Beta", value: "second prompt" },
+        ],
+      },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "scripted",
+      name: "Scripted catalog",
+      url: "https://prompts.example/custom.json",
+      format: "script",
+      enabled: true,
+      refreshMinutes: 0,
+      script: `
+        const data = helpers.parseJson(text);
+        return data.payload.rows.map((row) => ({
+          id: row.slug,
+          title: row.label,
+          body: row.value,
+          tags: row.marks ?? [],
+        }));
+      `,
+    });
+
+    expect(items).toEqual([
+      {
+        id: "a",
+        title: "Alpha",
+        body: "first prompt",
+        tags: ["x"],
+        source: "Scripted catalog",
+        sourceId: "scripted",
+      },
+      {
+        id: "b",
+        title: "Beta",
+        body: "second prompt",
+        tags: [],
+        source: "Scripted catalog",
+        sourceId: "scripted",
+      },
+    ]);
+  });
+
+  test("rejects empty or invalid script bodies", async () => {
+    globalThis.fetch = mock(async () => new Response("[]", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+    await expect(fetchPromptSource({
+      id: "bad-script",
+      name: "Bad script",
+      url: "https://prompts.example/custom.json",
+      format: "script",
+      enabled: true,
+      refreshMinutes: 0,
+      script: "return 42",
+    })).rejects.toThrow("array of prompt items");
   });
 
   test("preserves the first bounded sources when persisted input exceeds the limit", () => {

@@ -2108,6 +2108,21 @@ test("prompt source manager previews, persists, edits, disables, and removes dec
   await expect(manager.getByRole("listitem").filter({ hasText: "Nested catalog edited" })).toContainText("已停用");
 
   await manager.getByRole("button", { name: "新增来源" }).click();
+  await manager.getByLabel("来源名称").fill("Script catalog");
+  await manager.getByLabel("来源解析格式").selectOption("script");
+  await manager.getByLabel("来源 URL").fill(jsonUrl);
+  await manager.getByLabel("转换脚本").fill(`const data = helpers.parseJson(text);
+return (data.payload?.entries ?? data).map((item) => ({
+  id: item.slug || item.id,
+  title: item.label || item.title,
+  body: item.value || item.prompt || item.body,
+}));`);
+  await manager.getByRole("button", { name: "预览" }).click();
+  await expect(manager.getByRole("list", { name: "来源预览" })).toContainText("Mapped prompt");
+  await manager.getByRole("button", { name: "保存来源" }).click();
+  await expect(manager.getByRole("listitem").filter({ hasText: "Script catalog" })).toBeVisible();
+
+  await manager.getByRole("button", { name: "新增来源" }).click();
   await manager.getByLabel("来源名称").fill("HTML catalog");
   await manager.getByLabel("来源解析格式").selectOption("html");
   await manager.getByLabel("来源 URL").fill(htmlUrl);

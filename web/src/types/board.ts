@@ -189,7 +189,7 @@ export type PromptItem = {
   resultUrls?: string[];
 };
 
-export type PromptSourceFormat = "auto" | "json" | "markdown" | "html";
+export type PromptSourceFormat = "auto" | "json" | "markdown" | "html" | "script";
 export type PromptSourceMapping = {
   itemsPath?: string;
   idPath?: string;
@@ -216,6 +216,8 @@ export type PromptSourceConfig = {
   refreshMinutes: number;
   mapping?: PromptSourceMapping;
   html?: PromptSourceHtmlMapping;
+  /** Local transform script for format=script. Receives (text, url, helpers). */
+  script?: string;
   lastFetchedAt?: string;
 };
 

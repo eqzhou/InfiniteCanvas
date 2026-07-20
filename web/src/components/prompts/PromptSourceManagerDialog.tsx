@@ -55,6 +55,7 @@ function cloneSource(source: PromptSourceConfig): PromptSourceConfig {
     ...source,
     mapping: source.mapping ? { ...source.mapping } : undefined,
     html: source.html ? { ...source.html } : undefined,
+    script: source.script,
   };
 }
 
@@ -151,11 +152,19 @@ export function PromptSourceManagerDialog({
                 <input aria-label="来源名称" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" maxLength={120} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
               </label>
               <label className="text-sm">解析格式
-                <select aria-label="来源解析格式" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" value={draft.format} onChange={(event) => setDraft((current) => ({ ...current, format: event.target.value as PromptSourceConfig["format"], html: event.target.value === "html" ? current.html ?? { itemSelector: "", bodySelector: "" } : current.html }))}>
+                <select aria-label="来源解析格式" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" value={draft.format} onChange={(event) => setDraft((current) => ({
+                  ...current,
+                  format: event.target.value as PromptSourceConfig["format"],
+                  html: event.target.value === "html" ? current.html ?? { itemSelector: "", bodySelector: "" } : current.html,
+                  script: event.target.value === "script"
+                    ? (current.script ?? "const data = helpers.parseJson(text);\nreturn Array.isArray(data) ? data : (data.items ?? data.prompts ?? []);")
+                    : current.script,
+                }))}>
                   <option value="auto">自动识别</option>
                   <option value="json">JSON</option>
                   <option value="markdown">Markdown</option>
                   <option value="html">HTML</option>
+                  <option value="script">脚本转换</option>
                 </select>
               </label>
               <label className="text-sm sm:col-span-2">来源 URL
@@ -201,6 +210,24 @@ export function PromptSourceManagerDialog({
                     </label>
                   ))}
                 </div>
+              </fieldset>
+            ) : null}
+
+            {draft.format === "script" ? (
+              <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
+                <legend className="px-1 text-sm font-medium">转换脚本</legend>
+                <p className="mb-2 text-xs text-[var(--ob-muted)]">
+                  本地执行：函数参数为 <code>text</code>、<code>url</code>、<code>helpers</code>。需同步 <code>return</code> 提示词数组；每项至少包含 <code>title</code>/<code>body</code>（或 <code>prompt</code>）。
+                  helpers 提供 <code>parseJson</code>、<code>queryAll</code>、<code>absoluteUrl</code>。
+                </p>
+                <textarea
+                  aria-label="转换脚本"
+                  className="min-h-40 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 font-mono text-xs text-[var(--ob-ink)]"
+                  spellCheck={false}
+                  value={draft.script ?? ""}
+                  onChange={(event) => setDraft((current) => ({ ...current, script: event.target.value }))}
+                  placeholder={"const data = helpers.parseJson(text);\nreturn (data.items ?? []).map((item) => ({\n  id: item.id,\n  title: item.title,\n  body: item.prompt,\n  tags: item.tags,\n}));"}
+                />
               </fieldset>
             ) : null}
 

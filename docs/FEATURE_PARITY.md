@@ -50,7 +50,7 @@ implementation evidence.
 | Public Unreleased unified generation status query across canvas/image/video workbench | `generation_get_status` MCP schema, unified activity tests, workbench/Agent E2E, and formal reload/orphan-recovery E2E |
 | Public Unreleased client-scoped operations and focused-tab fallback | runtime pin/ownership Go tests and two-tab generation ownership E2E |
 | Public Unreleased shared Codex session/running state, approvals and exact turn completion | Codex replay/state/approval Go tests, `codex-events.test.ts`, and two-tab Codex E2E |
-| Public Unreleased addable custom prompt sources | safe JSON/HTML/Markdown mappings, migration tests, manager E2E, and PostgreSQL reload E2E |
+| Public Unreleased addable custom prompt sources | JSON/HTML/Markdown mappings plus local transform scripts, migration tests, manager E2E, and PostgreSQL reload E2E |
 | Community prompt catalog one-click install | `prompt-source-presets.ts`, structured markdown/JSON parsers, prompt library E2E |
 | Public Unreleased canvas prompt-library tab grouped by source | `CanvasPromptsPanel.tsx`, grouping unit tests, canvas prompt-panel E2E |
 | Public Unreleased keep node prompt after generation | `NodePromptBar.tsx` retains draft text after successful generate |
@@ -75,10 +75,10 @@ implementation evidence.
   assets, schemas and product identity are independently authored. The remote
   source mechanism is compatible, but upstream catalogs and content are not
   copied or bundled.
-- The public reference describes arbitrary custom prompt-source scripts.
-  OpenBoard intentionally provides bounded declarative JSON paths and HTML
-  selectors instead: no JavaScript, expressions, credential URLs, redirects,
-  or private-host sources execute inside the application.
+- Prompt sources support declarative JSON/HTML/Markdown mappings and optional
+  local transform scripts. Scripts run only as user-authored source config on
+  already-fetched text; credential URLs, redirects, and private-host source URLs
+  remain rejected.
 - OpenBoard adds audio nodes, workbenches, plugin isolation, the browser
   runtime, expanded MCP tools and a production-shaped local backend. These are
   additive and do not redefine the frozen reference requirements.
@@ -141,6 +141,7 @@ implementation evidence.
 
 - [verified] Prompt search plus independent source/tag filters, multiple saved HTTPS sources, per-source/all refresh, and source removal
 - [verified] One-click community catalog presets for five public prompt repositories with independent declarative mappings
+- [verified] Local transform scripts can convert non-standard fetched catalogs into prompt arrays with parseJson/queryAll helpers
 - [verified] Structured community Markdown parsing for labeled/fenced prompt blocks with section tags and image galleries
 - [verified] Add/edit/disable/delete source manager, legacy URL migration, active-tab scheduling with authoritative persisted merges, nested JSON field paths, bounded HTML selectors, preview, and PostgreSQL reload persistence
 - [verified] Executable source formats, prototype paths, unsafe selectors, credential-bearing URLs, redirects, explicit private hosts, oversized responses, and excessive entries are rejected

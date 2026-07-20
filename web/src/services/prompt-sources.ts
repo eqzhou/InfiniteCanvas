@@ -24,6 +24,7 @@ export const PROMPT_SOURCE_LIMITS = {
   maxSourceNameChars: 120,
   maxPathChars: 200,
   maxSelectorChars: 240,
+  maxScriptChars: 64 * 1024,
 } as const;
 
 const PROMPT_MIME_TYPES = [
@@ -31,13 +32,18 @@ const PROMPT_MIME_TYPES = [
   "text/plain",
   "text/markdown",
   "text/html",
+  "application/javascript",
+  "text/javascript",
+  "application/xml",
+  "text/xml",
+  "application/octet-stream",
 ] as const;
 
 const SOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const FIELD_PATH = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 const SIMPLE_SELECTOR = /^[A-Za-z0-9_#.\-\s>\[\]="']+$/;
 const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-const SOURCE_FORMATS = new Set<PromptSourceFormat>(["auto", "json", "markdown", "html"]);
+const SOURCE_FORMATS = new Set<PromptSourceFormat>(["auto", "json", "markdown", "html", "script"]);
 
 function normalizeFieldPath(value: unknown): string | undefined {
   if (value === undefined || value === "") return undefined;
@@ -133,6 +139,17 @@ export function parsePromptSourceConfig(value: unknown, index = 0): PromptSource
   const mapping = normalizeMapping(input.mapping);
   const html = normalizeHtmlMapping(input.html);
   if (format === "html" && !html) throw new Error("HTML prompt source mapping is required");
+  let script: string | undefined;
+  if (input.script !== undefined && input.script !== "") {
+    if (typeof input.script !== "string") throw new Error("Prompt source script must be text");
+    if (input.script.length > PROMPT_SOURCE_LIMITS.maxScriptChars) {
+      throw new Error(`Prompt source script exceeds ${PROMPT_SOURCE_LIMITS.maxScriptChars} characters`);
+    }
+    script = input.script;
+  }
+  if (format === "script" && !script?.trim()) {
+    throw new Error("Script prompt source requires a transform script");
+  }
   const lastFetchedAt = typeof input.lastFetchedAt === "string" &&
     !Number.isNaN(Date.parse(input.lastFetchedAt)) ? input.lastFetchedAt : undefined;
   return {
@@ -144,6 +161,7 @@ export function parsePromptSourceConfig(value: unknown, index = 0): PromptSource
     refreshMinutes: refresh,
     mapping,
     html,
+    script,
     lastFetchedAt,
   };
 }
@@ -276,7 +294,7 @@ export function mergePromptSourceItems(
   return merged;
 }
 
-/** Clean-room remote prompt fetch: user-configured declarative JSON/text/HTML sources. */
+/** Remote prompt fetch: declarative JSON/text/HTML sources, plus local transform scripts. */
 export async function fetchPromptSource(
   input: string | PromptSourceConfig,
 ): Promise<PromptItem[]> {
@@ -294,6 +312,9 @@ export async function fetchPromptSource(
     mimeTypes: PROMPT_MIME_TYPES,
   });
   const text = new TextDecoder("utf-8", { fatal: true }).decode(remote.bytes);
+  if (source.format === "script") {
+    return normalizePromptScript(text, source);
+  }
   const format = source.format === "auto"
     ? remote.mimeType === "application/json" || text.trim().startsWith("[") || text.trim().startsWith("{")
       ? "json"
@@ -308,6 +329,109 @@ export async function fetchPromptSource(
   }
   if (format === "html") return normalizePromptHtml(text, source);
   return normalizePromptMarkdown(text, source);
+}
+
+function scriptHelpers(baseUrl: string) {
+  return {
+    parseJson(value: string): unknown {
+      return JSON.parse(value) as unknown;
+    },
+    queryAll(html: string, selector: string): Array<{ text: string; html: string; attr: (name: string) => string }> {
+      if (typeof DOMParser === "undefined") {
+        throw new Error("HTML helpers are unavailable in this runtime");
+      }
+      if (typeof selector !== "string" || !selector.trim()) {
+        throw new Error("queryAll selector is required");
+      }
+      const document = new DOMParser().parseFromString(html, "text/html");
+      return [...document.querySelectorAll(selector)].map((element) => ({
+        text: element.textContent?.trim() ?? "",
+        html: element.innerHTML,
+        attr: (name: string) => {
+          if (typeof name !== "string" || !name.trim()) return "";
+          return element.getAttribute(name) ?? "";
+        },
+      }));
+    },
+    absoluteUrl(value: string): string {
+      if (typeof value !== "string" || !value.trim()) {
+        throw new Error("absoluteUrl requires a non-empty string");
+      }
+      return new URL(value, baseUrl).toString();
+    },
+  };
+}
+
+function normalizePromptScript(text: string, source: PromptSourceConfig): PromptItem[] {
+  const script = source.script?.trim();
+  if (!script) throw new Error("Script prompt source requires a transform script");
+  let runner: (content: string, url: string, helpers: ReturnType<typeof scriptHelpers>) => unknown;
+  try {
+    // Local-only transform: the script body is user-authored configuration.
+    // eslint-disable-next-line no-new-func
+    runner = new Function(
+      "text",
+      "url",
+      "helpers",
+      `"use strict";
+${script}`,
+    ) as typeof runner;
+  } catch (cause) {
+    throw new Error(`Prompt source script is invalid: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+
+  let produced: unknown;
+  try {
+    produced = runner(text, source.url, scriptHelpers(source.url));
+  } catch (cause) {
+    throw new Error(`Prompt source script failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+
+  // Allow sync arrays or Promise-returning scripts for local convenience.
+  if (produced && typeof (produced as PromiseLike<unknown>).then === "function") {
+    throw new Error("Prompt source script must return items synchronously");
+  }
+
+  if (!Array.isArray(produced)) {
+    if (produced && typeof produced === "object") {
+      const record = produced as { items?: unknown; prompts?: unknown };
+      if (Array.isArray(record.items)) produced = record.items;
+      else if (Array.isArray(record.prompts)) produced = record.prompts;
+      else throw new Error("Prompt source script must return an array of prompt items");
+    } else {
+      throw new Error("Prompt source script must return an array of prompt items");
+    }
+  }
+
+  const rows = produced as unknown[];
+  if (rows.length > PROMPT_SOURCE_LIMITS.maxItems) {
+    throw new Error(`Prompt source has too many entries (limit ${PROMPT_SOURCE_LIMITS.maxItems})`);
+  }
+
+  const out: PromptItem[] = [];
+  for (const [index, item] of rows.entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const o = item as Record<string, unknown>;
+    const title = String(o.title ?? o.name ?? o.label ?? `未命名 ${index + 1}`);
+    const body = String(o.body ?? o.prompt ?? o.content ?? o.text ?? "");
+    if (!body.trim()) continue;
+    const coverUrl = safeBoundedExternalUrl(o.coverUrl ?? o.cover, source.url);
+    const resultUrls = normalizeResultUrls(
+      firstDefined(o.resultUrls, o.images, o.results),
+      source.url,
+    );
+    out.push(validatePromptItem({
+      id: String(o.id ?? `${source.id}-${index + 1}`),
+      title,
+      body,
+      tags: normalizeTags(o.tags),
+      source: source.name,
+      sourceId: source.id,
+      ...(coverUrl ? { coverUrl } : {}),
+      ...(resultUrls.length ? { resultUrls } : {}),
+    }));
+  }
+  return out;
 }
 
 function stripMarkdownInline(value: string): string {
