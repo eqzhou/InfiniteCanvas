@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ImagePlus, Plus, Send, Square, Unplug, X } from "lucide-react";
+import { ArrowDown, Check, ImagePlus, Plus, Send, Square, Unplug, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -29,6 +29,9 @@ import {
   type SharedTurnStatus,
 } from "@/services/codex-session-sync";
 import { getRuntimeClientId } from "@/services/runtime-identity";
+import { createNode } from "@/lib/defaults";
+import { uid } from "@/lib/id";
+import { attachUploadedImage, useBoardStore } from "@/stores/use-board-store";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = SharedTurnStatus;
@@ -50,6 +53,50 @@ function MarkdownMessage({ text }: { text: string }) {
   );
 }
 
+
+async function insertAttachmentImageNodes(files: File[]): Promise<void> {
+  if (!files.length) return;
+  const state = useBoardStore.getState();
+  const project = state.getActive();
+  if (!project) return;
+  const viewport = project.viewport ?? { x: 0, y: 0, k: 1 };
+  const center = {
+    x: (window.innerWidth / 2 - viewport.x) / viewport.k,
+    y: (window.innerHeight / 2 - viewport.y) / viewport.k,
+  };
+  const imageIds: string[] = [];
+  for (const [index, file] of files.entries()) {
+    const id = await attachUploadedImage(file, {
+      x: center.x - 180 + index * 36,
+      y: center.y - 120 + index * 28,
+    });
+    imageIds.push(id);
+  }
+  if (!imageIds.length) return;
+  const config = createNode(
+    "config",
+    { x: center.x + 220, y: center.y - 40 },
+    {
+      title: "图片生成",
+      metadata: {
+        generationMode: "image",
+        prompt: "",
+        status: "idle",
+      },
+    },
+  );
+  state.updateActive((current) => ({
+    ...current,
+    nodes: [...current.nodes, config],
+    edges: [
+      ...current.edges,
+      ...imageIds.map((from) => ({ id: uid("edge"), from, to: config.id })),
+    ],
+  }));
+  state.setSelected([config.id, ...imageIds]);
+  await state.persistNow();
+}
+
 export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const [session, setSession] = useState<CodexSession | null>(null);
   const [text, setText] = useState("");
@@ -61,10 +108,13 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [showJumpBottom, setShowJumpBottom] = useState(false);
   const syncRef = useRef<ReturnType<typeof createCodexSessionSync> | null>(null);
   const turnStatusRef = useRef<TurnStatus>("idle");
   const sharedRevisionRef = useRef(0);
   const sessionIdRef = useRef<string | undefined>(undefined);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
   const previews = useMemo(() => files.map((file) => ({ file, url: URL.createObjectURL(file) })), [files]);
   const sessionId = session?.id;
 
@@ -77,6 +127,30 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   }, [sessionId]);
 
   useEffect(() => () => previews.forEach((preview) => URL.revokeObjectURL(preview.url)), [previews]);
+
+  const updateStickToBottom = () => {
+    const node = transcriptRef.current;
+    if (!node) return;
+    const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+    const nearBottom = distance <= 48;
+    stickToBottomRef.current = nearBottom;
+    setShowJumpBottom(!nearBottom && node.scrollHeight > node.clientHeight + 8);
+  };
+
+  const scrollTranscriptToBottom = (behavior: ScrollBehavior = "auto") => {
+    const node = transcriptRef.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior });
+    stickToBottomRef.current = true;
+    setShowJumpBottom(false);
+  };
+
+  useEffect(() => {
+    if (!sessionId) return;
+    if (stickToBottomRef.current) scrollTranscriptToBottom("smooth");
+    else updateStickToBottom();
+  }, [messages, sessionId]);
+
 
   useEffect(() => {
     let active = true;
@@ -242,8 +316,19 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     setReconnecting(false);
     let attachments: Awaited<ReturnType<typeof uploadCodexAttachments>> = [];
     try {
-      attachments = files.length
-        ? await uploadCodexAttachments(connection, session.id, files)
+      const pendingFiles = files.slice();
+      if (pendingFiles.length) {
+        try {
+          await insertAttachmentImageNodes(pendingFiles);
+        } catch (cause) {
+          setLogs((current) => [
+            ...current.slice(-99),
+            `画布附件节点创建失败：${cause instanceof Error ? cause.message : String(cause)}`,
+          ]);
+        }
+      }
+      attachments = pendingFiles.length
+        ? await uploadCodexAttachments(connection, session.id, pendingFiles)
         : [];
       setText("");
       setFiles([]);
@@ -322,13 +407,34 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
         </button>
       ) : (
         <>
-          <div className="mb-1 max-h-48 space-y-2 overflow-auto rounded border border-[var(--ob-line)] p-2">
-            {messages.length ? messages.slice(-120).map((message, index) => (
-              <div key={message.id ?? `${index}-${message.role}`} className={message.role === "user" ? "text-[var(--ob-muted)]" : "prose-openboard"}>
-                <strong>{message.role === "user" ? "你" : "Codex"}：</strong>
-                {message.role === "assistant" ? <MarkdownMessage text={message.text} /> : message.text}
-              </div>
-            )) : <span className="text-[var(--ob-muted)]">等待消息</span>}
+          <div className="relative mb-1">
+            <div
+              ref={transcriptRef}
+              onScroll={updateStickToBottom}
+              className="max-h-48 space-y-2 overflow-auto rounded border border-[var(--ob-line)] p-2"
+            >
+              {messages.length ? messages.slice(-120).map((message, index) => (
+                <div
+                  key={message.id ?? `${index}-${message.role}`}
+                  className={message.role === "user"
+                    ? "ml-8 rounded-lg bg-[var(--ob-accent-soft)] px-2 py-1 text-[var(--ob-text)]"
+                    : "mr-4 prose-openboard"}
+                >
+                  {message.role === "assistant" ? <MarkdownMessage text={message.text} /> : message.text}
+                </div>
+              )) : <span className="text-[var(--ob-muted)]">等待消息</span>}
+            </div>
+            {showJumpBottom ? (
+              <button
+                type="button"
+                title="回到底部"
+                className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full border border-[var(--ob-line)] bg-[var(--ob-bg)] px-2 py-1 text-[10px] shadow-sm"
+                onClick={() => scrollTranscriptToBottom("smooth")}
+              >
+                <ArrowDown size={12} />
+                回到底部
+              </button>
+            ) : null}
           </div>
           {logs.length ? (
             <details className="mb-1 rounded border border-[var(--ob-line)] px-2 py-1">

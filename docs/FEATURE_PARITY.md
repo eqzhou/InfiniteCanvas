@@ -54,6 +54,9 @@ implementation evidence.
 | Community prompt catalog one-click install | `prompt-source-presets.ts`, structured markdown/JSON parsers, prompt library E2E |
 | Public Unreleased canvas prompt-library tab grouped by source | `CanvasPromptsPanel.tsx`, grouping unit tests, canvas prompt-panel E2E |
 | Public Unreleased keep node prompt after generation | `NodePromptBar.tsx` retains draft text after successful generate |
+| Public Unreleased Codex user bubbles and open assistant replies | `CodexPanel.tsx` right-biased user bubbles and unlabeled assistant markdown |
+| Public Unreleased Codex transcript stick-to-bottom and jump control | transcript auto-scroll plus `回到底部` when browsing history |
+| Public Unreleased Codex image attachments create canvas image/config flow | `insertAttachmentImageNodes` + Codex attachment E2E |
 | PostgreSQL authority, Redis cache, encrypted secrets and isolated formal testing | store/API tests, formal E2E, container smoke |
 | Resizable/collapsible canvas panel with project, element, asset and prompt tabs | panel persistence, element selection/location/export and asset/prompt-panel E2E |
 | Local prompt CRUD/copy/direct insertion and hover-revealed node names | prompt library and node-title E2E |
@@ -163,6 +166,9 @@ implementation evidence.
 - [verified] Turn interrupt, concurrent-start prevention, turn-ID race handling, and structured logs
 - [verified] Up to ten image attachments/30MB, MIME validation, `0600` files, explicit pending-upload cancellation, completion/failure/close cleanup, and orphan purge on restart
 - [verified] Safe Markdown/GFM output, raw-HTML suppression, remote-image suppression, previews, stop, and approvals
+- [verified] Codex user messages render as right-biased accent bubbles; assistant replies stay open left Markdown without role labels
+- [verified] Codex transcript sticks to the latest message and exposes a jump-to-bottom control when the user scrolls up
+- [verified] Codex image attachments become canvas image nodes connected into an image-generation config flow before the agent turn starts
 - [verified] Independent `plugins/openboard` installer and Claude standard-MCP instructions
 
 ## Product boundary

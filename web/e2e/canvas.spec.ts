@@ -2622,6 +2622,13 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     text: "inspect this image",
     attachmentIds: ["image-e2e"],
   });
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+  await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
+  await expect(page.locator('[data-node-type="config"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
+  const transcript = page.locator("div.max-h-48");
+  await expect(transcript.locator("strong").filter({ hasText: /^你$/ })).toHaveCount(0);
+  await expect(transcript.locator("strong").filter({ hasText: /^Codex$/ })).toHaveCount(0);
+  await expect(transcript.getByText("hello from Codex")).toBeVisible();
   await page.getByTitle("停止").click();
   await expect.poll(() => interrupted).toBe(true);
   expect(sessionBodies[0]).toEqual({ profile: "default", fresh: false });
