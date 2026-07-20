@@ -249,6 +249,34 @@ describe("remote prompt source limits", () => {
     ]);
   });
 
+  test("keeps script bodies with template literals intact", async () => {
+    globalThis.fetch = mock(async () => new Response(JSON.stringify([
+      { title: "T", prompt: "body" },
+    ]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "tpl",
+      name: "Template script",
+      url: "https://prompts.example/custom.json",
+      format: "script",
+      enabled: true,
+      refreshMinutes: 0,
+      script: "const data = helpers.parseJson(text);\nconst prefix = `id:${data[0].title}`;\nreturn data.map((item) => ({ id: prefix, title: item.title, body: item.prompt }));",
+    });
+
+    expect(items).toEqual([{
+      id: "id:T",
+      title: "T",
+      body: "body",
+      tags: [],
+      source: "Template script",
+      sourceId: "tpl",
+    }]);
+  });
+
   test("rejects empty or invalid script bodies", async () => {
     globalThis.fetch = mock(async () => new Response("[]", {
       status: 200,

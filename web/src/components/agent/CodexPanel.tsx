@@ -65,36 +65,49 @@ async function insertAttachmentImageNodes(files: File[]): Promise<void> {
     y: (window.innerHeight / 2 - viewport.y) / viewport.k,
   };
   const imageIds: string[] = [];
-  for (const [index, file] of files.entries()) {
-    const id = await attachUploadedImage(file, {
-      x: center.x - 180 + index * 36,
-      y: center.y - 120 + index * 28,
-    });
-    imageIds.push(id);
-  }
-  if (!imageIds.length) return;
-  const config = createNode(
-    "config",
-    { x: center.x + 220, y: center.y - 40 },
-    {
-      title: "图片生成",
-      metadata: {
-        generationMode: "image",
-        prompt: "",
-        status: "idle",
+  try {
+    for (const [index, file] of files.entries()) {
+      const id = await attachUploadedImage(file, {
+        x: center.x - 180 + index * 36,
+        y: center.y - 120 + index * 28,
+      });
+      imageIds.push(id);
+    }
+    if (!imageIds.length) return;
+    const config = createNode(
+      "config",
+      { x: center.x + 220, y: center.y - 40 },
+      {
+        title: "图片生成",
+        metadata: {
+          generationMode: "image",
+          prompt: "",
+          status: "idle",
+        },
       },
-    },
-  );
-  state.updateActive((current) => ({
-    ...current,
-    nodes: [...current.nodes, config],
-    edges: [
-      ...current.edges,
-      ...imageIds.map((from) => ({ id: uid("edge"), from, to: config.id })),
-    ],
-  }));
-  state.setSelected([config.id, ...imageIds]);
-  await state.persistNow();
+    );
+    state.updateActive((current) => ({
+      ...current,
+      nodes: [...current.nodes, config],
+      edges: [
+        ...current.edges,
+        ...imageIds.map((from) => ({ id: uid("edge"), from, to: config.id })),
+      ],
+    }));
+    state.setSelected([config.id, ...imageIds]);
+    await state.persistNow();
+  } catch (cause) {
+    if (imageIds.length) {
+      const orphaned = new Set(imageIds);
+      useBoardStore.getState().updateActive((current) => ({
+        ...current,
+        nodes: current.nodes.filter((node) => !orphaned.has(node.id)),
+        edges: current.edges.filter((edge) => !orphaned.has(edge.from) && !orphaned.has(edge.to)),
+      }));
+      useBoardStore.getState().setSelected([]);
+    }
+    throw cause;
+  }
 }
 
 export function CodexPanel({ connection }: { connection: AgentConnection }) {
@@ -147,7 +160,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
 
   useEffect(() => {
     if (!sessionId) return;
-    if (stickToBottomRef.current) scrollTranscriptToBottom("smooth");
+    if (stickToBottomRef.current) scrollTranscriptToBottom("auto");
     else updateStickToBottom();
   }, [messages, sessionId]);
 

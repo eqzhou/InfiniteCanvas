@@ -343,8 +343,17 @@ function scriptHelpers(baseUrl: string) {
       if (typeof selector !== "string" || !selector.trim()) {
         throw new Error("queryAll selector is required");
       }
+      if (typeof html !== "string") {
+        throw new Error("queryAll html must be text");
+      }
       const document = new DOMParser().parseFromString(html, "text/html");
-      return [...document.querySelectorAll(selector)].map((element) => ({
+      let elements: Element[];
+      try {
+        elements = [...document.querySelectorAll(selector)];
+      } catch (cause) {
+        throw new Error(`queryAll selector is invalid: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+      return elements.map((element) => ({
         text: element.textContent?.trim() ?? "",
         html: element.innerHTML,
         attr: (name: string) => {
@@ -367,14 +376,14 @@ function normalizePromptScript(text: string, source: PromptSourceConfig): Prompt
   if (!script) throw new Error("Script prompt source requires a transform script");
   let runner: (content: string, url: string, helpers: ReturnType<typeof scriptHelpers>) => unknown;
   try {
-    // Local-only transform: the script body is user-authored configuration.
+    // Local-only transform: user-authored config. Concatenate (do not template)
+    // so script bodies may contain backticks or ${...} safely.
     // eslint-disable-next-line no-new-func
     runner = new Function(
       "text",
       "url",
       "helpers",
-      `"use strict";
-${script}`,
+      '"use strict";\n' + script,
     ) as typeof runner;
   } catch (cause) {
     throw new Error(`Prompt source script is invalid: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -387,7 +396,7 @@ ${script}`,
     throw new Error(`Prompt source script failed: ${cause instanceof Error ? cause.message : String(cause)}`);
   }
 
-  // Allow sync arrays or Promise-returning scripts for local convenience.
+  // Scripts must return a synchronous array (or {items|prompts}); async is rejected.
   if (produced && typeof (produced as PromiseLike<unknown>).then === "function") {
     throw new Error("Prompt source script must return items synchronously");
   }
