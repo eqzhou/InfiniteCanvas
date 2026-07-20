@@ -896,6 +896,9 @@ export function BoardCanvas() {
             width={size.w}
             height={size.h}
             onJump={(viewport) => setViewport(viewport)}
+            className={selectedIds.length
+              ? "absolute right-3 top-3 z-10 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:right-4 sm:top-4 sm:rounded-lg"
+              : "absolute bottom-3 right-3 z-10 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:bottom-4 sm:right-4 sm:rounded-lg"}
           />
         ) : null}
       </div>

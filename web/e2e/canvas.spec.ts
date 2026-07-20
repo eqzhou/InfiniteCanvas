@@ -2046,7 +2046,7 @@ test("node prompt bar keeps the draft after a successful image generation", asyn
   const promptInput = imageNode.getByRole("textbox", { name: "节点生成提示词" });
   await expect(promptInput).toBeVisible();
   await promptInput.fill("keep this cinematic still prompt");
-  await imageNode.getByTitle("发送 (Ctrl/Cmd+Enter)").click();
+  await promptInput.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
   await expect.poll(async () => imageNode.locator("img").count()).toBeGreaterThan(0);
   await expect(promptInput).toContainText("keep this cinematic still prompt");
 });

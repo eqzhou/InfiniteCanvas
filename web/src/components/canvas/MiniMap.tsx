@@ -7,12 +7,14 @@ export function MiniMap({
   width,
   height,
   onJump,
+  className,
 }: {
   nodes: BoardNode[];
   viewport: Viewport;
   width: number;
   height: number;
   onJump: (v: Viewport) => void;
+  className?: string;
 }) {
   const bounds = useMemo(() => {
     if (!nodes.length) return { minX: -400, minY: -300, maxX: 400, maxY: 300 };
@@ -53,7 +55,7 @@ export function MiniMap({
     <button
       type="button"
       aria-label="画布小地图"
-      className="absolute bottom-3 right-3 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:bottom-4 sm:right-4 sm:rounded-lg"
+      className={className ?? "absolute bottom-3 right-3 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:bottom-4 sm:right-4 sm:rounded-lg"}
       style={{ width: mw, height: mh }}
       onClick={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();
