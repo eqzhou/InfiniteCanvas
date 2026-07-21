@@ -313,7 +313,7 @@ export function HomePage() {
             }}
           />
         </div>
-        <div role="tablist" aria-label="工作区视图" className="grid grid-cols-4 border-b border-[var(--ob-line)] px-2 pt-1">
+        <div role="tablist" aria-label="工作区视图" className="relative grid grid-cols-4 border-b border-[var(--ob-line)] px-2 pt-1">
           {([
             ["projects", "项目"],
             ["elements", "元素"],
@@ -325,9 +325,9 @@ export function HomePage() {
               type="button"
               role="tab"
               aria-selected={panelTab === value}
-              className={`relative px-2 py-2 text-xs ${
+              className={`relative z-[1] px-2 py-2 text-xs transition-colors ${
                 panelTab === value
-                  ? "font-medium text-[var(--ob-accent)] after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-[var(--ob-accent)]"
+                  ? "font-medium text-[var(--ob-accent)]"
                   : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
               }`}
               onClick={() => changePanelTab(value)}
@@ -335,6 +335,15 @@ export function HomePage() {
               {label}
             </button>
           ))}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute bottom-0 left-2 h-0.5 w-[calc((100%-1rem)/4)] bg-[var(--ob-accent)] transition-transform duration-200 ease-out"
+            style={{
+              transform: `translateX(${
+                ({ projects: 0, elements: 1, assets: 2, prompts: 3 } as const)[panelTab] * 100
+              }%)`,
+            }}
+          />
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-2">
           {panelTab === "projects" ? (

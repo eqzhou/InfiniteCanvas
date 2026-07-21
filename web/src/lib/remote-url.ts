@@ -1,19 +1,23 @@
+export type ExternalUrlPolicy = {
+  /** Allow http only for private/loopback hosts (local personal deployments). */
+  allowHttpOnPrivateHosts?: boolean;
+  /** Allow loopback and private LAN hosts. */
+  allowPrivateHosts?: boolean;
+};
+
 export function normalizeExternalHttpsUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("External URL is invalid");
-  }
-  if (url.protocol !== "https:") throw new Error("External URL must use HTTPS");
-  if (url.username || url.password) throw new Error("External URL must not include credentials");
-  if (url.hash) throw new Error("External URL must not include a fragment");
-  if (isPrivateHost(url.hostname)) throw new Error("External URL must not target a private host");
-  return url.toString();
+  return normalizeExternalUrl(raw, {
+    allowHttpOnPrivateHosts: false,
+    allowPrivateHosts: false,
+  });
 }
 
+/** Prompt-source URLs for local personal use: HTTPS public hosts, or local http(s) hosts. */
 export function normalizeExternalSourceUrl(raw: string): string {
-  const normalized = normalizeExternalHttpsUrl(raw);
+  const normalized = normalizeExternalUrl(raw, {
+    allowHttpOnPrivateHosts: true,
+    allowPrivateHosts: true,
+  });
   const url = new URL(normalized);
   for (const key of url.searchParams.keys()) {
     if (/(^|[-_.])(token|secret|api[-_.]?key|key|sig|signature|credential|authorization|auth)([-_.]|$)/i.test(key)) {
@@ -21,6 +25,33 @@ export function normalizeExternalSourceUrl(raw: string): string {
     }
   }
   return normalized;
+}
+
+function normalizeExternalUrl(raw: string, policy: ExternalUrlPolicy): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("External URL is invalid");
+  }
+
+  const privateHost = isPrivateHost(url.hostname);
+  if (url.protocol === "https:") {
+    // ok
+  } else if (url.protocol === "http:") {
+    if (!policy.allowHttpOnPrivateHosts || !privateHost) {
+      throw new Error("External URL must use HTTPS");
+    }
+  } else {
+    throw new Error("External URL must use HTTPS");
+  }
+
+  if (url.username || url.password) throw new Error("External URL must not include credentials");
+  if (url.hash) throw new Error("External URL must not include a fragment");
+  if (privateHost && !policy.allowPrivateHosts) {
+    throw new Error("External URL must not target a private host");
+  }
+  return url.toString();
 }
 
 function isPrivateHost(rawHostname: string): boolean {

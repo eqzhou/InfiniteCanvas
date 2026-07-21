@@ -76,9 +76,10 @@ implementation evidence.
   source mechanism is compatible, but upstream catalogs and content are not
   copied or bundled.
 - Prompt sources support declarative JSON/HTML/Markdown mappings and optional
-  local transform scripts. Scripts run only as user-authored source config on
-  already-fetched text; credential URLs, redirects, and private-host source URLs
-  remain rejected.
+  local transform scripts. Scripts may be async and call fetchText/fetchJson.
+  Public media/image URLs remain HTTPS-first; personal local deployments may use
+  loopback/LAN http(s) prompt-source URLs. Credential query parameters and
+  redirects remain rejected.
 - OpenBoard adds audio nodes, workbenches, plugin isolation, the browser
   runtime, expanded MCP tools and a production-shaped local backend. These are
   additive and do not redefine the frozen reference requirements.
@@ -146,6 +147,9 @@ implementation evidence.
 - [verified] Prompt center 「我的提示词」 tab for local manage / save-from-public / canvas use
 - [verified] Canvas prompt library supports cross-source search and inserts with title preserved
 - [verified] Local transform scripts can convert non-standard fetched catalogs into prompt arrays with parseJson/queryAll helpers
+- [verified] Custom prompt-source scripts may async fetchText/fetchJson additional URLs (local-friendly source URL policy for loopback/LAN)
+- [verified] Prompt source URLs accept personal local http(s) hosts (127.0.0.1/localhost/private LAN) while public media stays HTTPS-first
+- [verified] Canvas left-panel tab underline slides between projects/elements/assets/prompts
 - [verified] Structured community Markdown parsing for labeled/fenced prompt blocks with section tags and image galleries
 - [verified] Add/edit/disable/delete source manager, legacy URL migration, active-tab scheduling with authoritative persisted merges, nested JSON field paths, bounded HTML selectors, preview, and PostgreSQL reload persistence
 - [verified] Executable source formats, prototype paths, unsafe selectors, credential-bearing URLs, redirects, explicit private hosts, oversized responses, and excessive entries are rejected

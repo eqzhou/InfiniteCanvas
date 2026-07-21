@@ -14,7 +14,7 @@ describe("external HTTPS URL policy", () => {
     expect(() => normalizeExternalSourceUrl(signed)).toThrow("credentials");
   });
 
-  test("rejects plaintext, credentials, fragments, and explicit private hosts", () => {
+  test("rejects plaintext public hosts, credentials, and fragments for general HTTPS policy", () => {
     expect(() => normalizeExternalHttpsUrl("http://cdn.example.com/a")).toThrow("HTTPS");
     expect(() => normalizeExternalHttpsUrl("https://user:pass@cdn.example.com/a")).toThrow("credentials");
     expect(() => normalizeExternalHttpsUrl("https://cdn.example.com/a#secret")).toThrow("fragment");
@@ -28,6 +28,16 @@ describe("external HTTPS URL policy", () => {
     ]) {
       expect(() => normalizeExternalHttpsUrl(url)).toThrow("private");
     }
+  });
+
+  test("allows local personal prompt-source hosts over http/https while keeping public HTTP blocked", () => {
+    expect(normalizeExternalSourceUrl("http://127.0.0.1:8790/prompts.json"))
+      .toBe("http://127.0.0.1:8790/prompts.json");
+    expect(normalizeExternalSourceUrl("http://localhost:3000/catalog.md"))
+      .toBe("http://localhost:3000/catalog.md");
+    expect(normalizeExternalSourceUrl("https://192.168.1.20/prompts.json"))
+      .toBe("https://192.168.1.20/prompts.json");
+    expect(() => normalizeExternalSourceUrl("http://cdn.example.com/a")).toThrow("HTTPS");
     for (const url of [
       "https://cdn.example.com/a?token=secret",
       "https://cdn.example.com/a?X-Amz-Signature=secret",

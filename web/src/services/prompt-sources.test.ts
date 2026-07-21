@@ -357,18 +357,34 @@ describe("remote prompt source limits", () => {
       .rejects.toThrow("tag");
   });
 
-  test("rejects private sources and soft-skips unsafe cover/result URLs", async () => {
-    await expect(fetchPromptSource("https://127.0.0.1/catalog.json")).rejects.toThrow("private");
-    globalThis.fetch = mock(async () => jsonResponse([{
-      title: "Title",
-      prompt: "Body",
-      coverUrl: "http://covers.example/image.png",
-      images: [
-        "http://insecure.example/result.png",
-        "https://cdn.example/result.png",
-        "https://127.0.0.1/private.png",
-      ],
-    }])) as typeof fetch;
+  test("allows local personal sources and soft-skips unsafe public cover/result URLs", async () => {
+    globalThis.fetch = mock(async (input) => {
+      const url = String(input);
+      if (url.includes("127.0.0.1")) {
+        return jsonResponse([{ title: "Local", prompt: "loopback body" }]);
+      }
+      return jsonResponse([{
+        title: "Title",
+        prompt: "Body",
+        coverUrl: "http://covers.example/image.png",
+        images: [
+          "http://insecure.example/result.png",
+          "https://cdn.example/result.png",
+          "ftp://cdn.example/skip.png",
+        ],
+      }]);
+    }) as typeof fetch;
+
+    const local = await fetchPromptSource("http://127.0.0.1:8790/catalog.json");
+    expect(local).toEqual([{
+      id: "json-1",
+      title: "Local",
+      body: "loopback body",
+      tags: [],
+      source: "127.0.0.1",
+      sourceId: "legacy-1",
+    }]);
+
     const [item] = await fetchPromptSource("https://prompts.example/catalog.json");
     expect(item).toMatchObject({
       title: "Title",
@@ -376,6 +392,50 @@ describe("remote prompt source limits", () => {
       resultUrls: ["https://cdn.example/result.png"],
     });
     expect(item.coverUrl).toBeUndefined();
+  });
+
+  test("executes async script fetch helpers for custom catalog scraping", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/index.json")) {
+        return new Response(JSON.stringify({
+          items: [{ title: "Remote A", prompt: "body-a", tags: ["remote"] }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("bootstrap", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+    }) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "async-script",
+      name: "Async scraper",
+      url: "https://prompts.example/bootstrap.txt",
+      format: "script",
+      enabled: true,
+      refreshMinutes: 0,
+      script: `
+        const catalog = await helpers.fetchJson("https://prompts.example/index.json");
+        return catalog.items.map((item) => ({
+          title: item.title,
+          body: item.prompt,
+          tags: item.tags,
+        }));
+      `,
+    });
+
+    expect(items).toEqual([{
+      id: "async-script-1",
+      title: "Remote A",
+      body: "body-a",
+      tags: ["remote"],
+      source: "Async scraper",
+      sourceId: "async-script",
+    }]);
+    expect(calls.some((url) => url.includes("/index.json"))).toBe(true);
   });
 
   test("normalizes a bounded result image gallery", async () => {

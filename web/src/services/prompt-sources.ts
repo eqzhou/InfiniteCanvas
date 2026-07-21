@@ -323,26 +323,17 @@ export async function fetchPromptSource(
   input: string | PromptSourceConfig,
 ): Promise<PromptItem[]> {
   const source = parsePromptSourceConfig(input, 0);
-  const normalizedUrl = source.url;
-  const res = await fetch(normalizedUrl, {
-    method: "GET",
-    redirect: "error",
-    credentials: "omit",
-    referrerPolicy: "no-referrer",
-  });
-  if (!res.ok) throw new Error(`拉取失败 ${res.status}`);
-  const remote = await readBoundedResponse(res, {
-    maxBytes: PROMPT_SOURCE_LIMITS.maxBytes,
-    mimeTypes: PROMPT_MIME_TYPES,
-  });
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(remote.bytes);
+  // Script sources may fetch additional URLs themselves (fetchText/fetchJson).
+  // Primary URL is still required as a stable identity / bootstrap URL.
   if (source.format === "script") {
-    return normalizePromptScript(text, source);
+    return runPromptScript(source);
   }
+
+  const text = await fetchBoundedText(source.url);
   const format = source.format === "auto"
-    ? remote.mimeType === "application/json" || text.trim().startsWith("[") || text.trim().startsWith("{")
+    ? text.trim().startsWith("[") || text.trim().startsWith("{")
       ? "json"
-      : remote.mimeType === "text/html" || /^\s*<!doctype\s+html|^\s*<html[\s>]/i.test(text)
+      : /^\s*<!doctype\s+html|^\s*<html[\s>]/i.test(text)
         ? "html"
         : "markdown"
     : source.format;
@@ -355,10 +346,42 @@ export async function fetchPromptSource(
   return normalizePromptMarkdown(text, source);
 }
 
+async function fetchBoundedText(url: string): Promise<string> {
+  const res = await fetch(url, {
+    method: "GET",
+    redirect: "error",
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+  if (!res.ok) throw new Error(`拉取失败 ${res.status}`);
+  const remote = await readBoundedResponse(res, {
+    maxBytes: PROMPT_SOURCE_LIMITS.maxBytes,
+    mimeTypes: PROMPT_MIME_TYPES,
+  });
+  return new TextDecoder("utf-8", { fatal: true }).decode(remote.bytes);
+}
+
 function scriptHelpers(baseUrl: string) {
   return {
     parseJson(value: string): unknown {
       return JSON.parse(value) as unknown;
+    },
+    async fetchText(target: string): Promise<string> {
+      if (typeof target !== "string" || !target.trim()) {
+        throw new Error("fetchText requires a non-empty URL");
+      }
+      const absolute = new URL(target, baseUrl).toString();
+      // Keep the same local-friendly source URL policy for script network access.
+      const normalized = normalizeExternalSourceUrl(absolute);
+      return fetchBoundedText(normalized);
+    },
+    async fetchJson(target: string): Promise<unknown> {
+      if (typeof target !== "string" || !target.trim()) {
+        throw new Error("fetchJson requires a non-empty URL");
+      }
+      const absolute = new URL(target, baseUrl).toString();
+      const normalized = normalizeExternalSourceUrl(absolute);
+      return JSON.parse(await fetchBoundedText(normalized)) as unknown;
     },
     queryAll(html: string, selector: string): Array<{ text: string; html: string; attr: (name: string) => string }> {
       if (typeof DOMParser === "undefined") {
@@ -395,19 +418,36 @@ function scriptHelpers(baseUrl: string) {
   };
 }
 
-function normalizePromptScript(text: string, source: PromptSourceConfig): PromptItem[] {
+async function runPromptScript(source: PromptSourceConfig): Promise<PromptItem[]> {
   const script = source.script?.trim();
   if (!script) throw new Error("Script prompt source requires a transform script");
-  let runner: (content: string, url: string, helpers: ReturnType<typeof scriptHelpers>) => unknown;
+
+  let bootstrapText = "";
+  try {
+    bootstrapText = await fetchBoundedText(source.url);
+  } catch (cause) {
+    // Optional bootstrap body: scripts can fully self-fetch via helpers.fetchText/fetchJson.
+    bootstrapText = "";
+    if (!(cause instanceof Error)) {
+      throw new Error(`Prompt source bootstrap fetch failed: ${String(cause)}`);
+    }
+  }
+
+  let runner: (
+    content: string,
+    url: string,
+    helpers: ReturnType<typeof scriptHelpers>,
+  ) => unknown;
   try {
     // Local-only transform: user-authored config. Concatenate (do not template)
     // so script bodies may contain backticks or ${...} safely.
+    // Wrap in an async IIFE so top-level await / fetchText / fetchJson work.
     // eslint-disable-next-line no-new-func
     runner = new Function(
       "text",
       "url",
       "helpers",
-      '"use strict";\n' + script,
+      '"use strict"; return (async () => {\n' + script + "\n})();",
     ) as typeof runner;
   } catch (cause) {
     throw new Error(`Prompt source script is invalid: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -415,16 +455,15 @@ function normalizePromptScript(text: string, source: PromptSourceConfig): Prompt
 
   let produced: unknown;
   try {
-    produced = runner(text, source.url, scriptHelpers(source.url));
+    produced = await runner(bootstrapText, source.url, scriptHelpers(source.url));
   } catch (cause) {
     throw new Error(`Prompt source script failed: ${cause instanceof Error ? cause.message : String(cause)}`);
   }
 
-  // Scripts must return a synchronous array (or {items|prompts}); async is rejected.
-  if (produced && typeof (produced as PromiseLike<unknown>).then === "function") {
-    throw new Error("Prompt source script must return items synchronously");
-  }
+  return normalizeScriptRows(produced, source);
+}
 
+function normalizeScriptRows(produced: unknown, source: PromptSourceConfig): PromptItem[] {
   if (!Array.isArray(produced)) {
     if (produced && typeof produced === "object") {
       const record = produced as { items?: unknown; prompts?: unknown };
@@ -450,7 +489,7 @@ function normalizePromptScript(text: string, source: PromptSourceConfig): Prompt
     if (!body.trim()) continue;
     const coverUrl = safeBoundedExternalUrl(o.coverUrl ?? o.cover, source.url);
     const resultUrls = normalizeResultUrls(
-      firstDefined(o.resultUrls, o.images, o.results),
+      firstDefined(o.resultUrls, o.images, o.results, o.referenceImageUrls),
       source.url,
     );
     out.push(validatePromptItem({
@@ -651,7 +690,14 @@ function firstDefined(...values: unknown[]): unknown {
 
 function boundedExternalUrl(value: unknown, baseUrl: string): string | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
-  return normalizeExternalHttpsUrl(new URL(value, baseUrl).toString());
+  const absolute = new URL(value, baseUrl).toString();
+  try {
+    // Public media (including signed CDN query strings).
+    return normalizeExternalHttpsUrl(absolute);
+  } catch {
+    // Local personal deployments may host media on loopback/LAN.
+    return normalizeExternalSourceUrl(absolute);
+  }
 }
 
 /** Soft-skip invalid media URLs so one bad cover/result does not fail a catalog. */

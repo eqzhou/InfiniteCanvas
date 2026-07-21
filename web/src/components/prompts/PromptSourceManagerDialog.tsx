@@ -236,14 +236,38 @@ export function PromptSourceManagerDialog({
 
             {!draftIsBuiltIn && draft.format === "script" ? (
               <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
-                <legend className="px-1 text-sm font-medium">转换脚本</legend>
+                <legend className="px-1 text-sm font-medium">自定义抓取脚本</legend>
                 <p className="mb-2 text-xs text-[var(--ob-muted)]">
-                  本地执行：函数参数为 <code>text</code>、<code>url</code>、<code>helpers</code>。需同步 <code>return</code> 提示词数组；每项至少包含 <code>title</code>/<code>body</code>（或 <code>prompt</code>）。
-                  helpers 提供 <code>parseJson</code>、<code>queryAll</code>、<code>absoluteUrl</code>。
+                  本地执行：参数为 <code>text</code>（来源 URL 正文，可空）、<code>url</code>、<code>helpers</code>。
+                  可同步或 <code>async</code> <code>return</code> 提示词数组；每项至少含 <code>title</code>/<code>body</code>（或 <code>prompt</code>）。
+                  helpers：<code>parseJson</code>、<code>fetchText</code>、<code>fetchJson</code>、<code>queryAll</code>、<code>absoluteUrl</code>。
+                  支持本机 <code>http://127.0.0.1</code> / <code>localhost</code> 源。
                 </p>
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-sm border border-[var(--ob-line)] px-2 py-1 text-xs hover:bg-[var(--ob-accent-soft)]"
+                    onClick={() => setDraft((current) => ({
+                      ...current,
+                      script: "const data = helpers.parseJson(text);\nreturn Array.isArray(data)\n  ? data\n  : (data.items ?? data.prompts ?? []);",
+                    }))}
+                  >
+                    插入同步模板
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-sm border border-[var(--ob-line)] px-2 py-1 text-xs hover:bg-[var(--ob-accent-soft)]"
+                    onClick={() => setDraft((current) => ({
+                      ...current,
+                      script: "const textBody = await helpers.fetchText(url);\nconst data = helpers.parseJson(textBody);\nreturn (Array.isArray(data) ? data : (data.items ?? data.prompts ?? [])).map((item) => ({\n  id: item.id,\n  title: item.title ?? item.name,\n  body: item.prompt ?? item.body ?? item.content,\n  tags: item.tags,\n  coverUrl: item.coverUrl,\n}));",
+                    }))}
+                  >
+                    插入异步抓取模板
+                  </button>
+                </div>
                 <textarea
                   aria-label="转换脚本"
-                  className="min-h-40 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 font-mono text-xs text-[var(--ob-ink)]"
+                  className="min-h-48 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 font-mono text-xs text-[var(--ob-ink)]"
                   spellCheck={false}
                   value={draft.script ?? ""}
                   onChange={(event) => setDraft((current) => ({ ...current, script: event.target.value }))}

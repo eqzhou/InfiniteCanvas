@@ -216,7 +216,7 @@ export type PromptSourceConfig = {
   refreshMinutes: number;
   mapping?: PromptSourceMapping;
   html?: PromptSourceHtmlMapping;
-  /** Local transform script for format=script. Receives (text, url, helpers). */
+  /** Local fetch/transform script for format=script. Receives (text, url, helpers); may be async. */
   script?: string;
   /** Homepage or repository URL for display only. */
   homepage?: string;
