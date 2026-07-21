@@ -87,6 +87,11 @@ canvas.
 - Codex user bubbles, open assistant replies, auto-scroll, jump-to-bottom, and attachment-to-canvas image/config flow
 - Independent OpenBoard Codex plugin installer and standard Claude MCP instructions
 
+### Optional product features
+- Optional Google Analytics 4 / Baidu analytics via `VITE_ANALYTICS_GA4_ID` / `VITE_ANALYTICS_BAIDU_ID` or `window.__RUNTIME_CONFIG__` (default off)
+- Top-bar version badge opens a local CHANGELOG release modal
+- Canvas sidebar asset tab can upload image/video assets
+
 ### Public Unreleased prompt-source delta
 - Add/edit/disable/remove remote prompt sources with scheduled refresh
 - Built-in catalogs load Image Prompts unified JSON (including Banana Prompt Quicker)

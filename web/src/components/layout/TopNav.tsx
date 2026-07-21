@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { exportProjectBundle } from "@/lib/project-bundle";
+import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
 
 export function TopNav({
   onOpenSettings,
@@ -133,6 +134,7 @@ export function TopNav({
         >
           {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
         </button>
+        <VersionReleaseModal />
         <button
           type="button"
           className="rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] sm:p-2"

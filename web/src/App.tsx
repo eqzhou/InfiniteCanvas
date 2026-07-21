@@ -14,6 +14,8 @@ import { PluginsPage } from "@/pages/PluginsPage";
 import { ImageWorkbenchPage } from "@/pages/ImageWorkbenchPage";
 import { VideoWorkbenchPage } from "@/pages/VideoWorkbenchPage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
+import { initAnalytics } from "@/lib/analytics";
+import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
 
 export function App() {
   const hydrate = useBoardStore((s) => s.hydrate);
@@ -88,6 +90,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    initAnalytics();
+  }, []);
+
+  useEffect(() => {
     const dark =
       theme === "dark" ||
       (theme === "system" &&
@@ -128,6 +134,7 @@ export function App() {
       <LocalAgentPanel />
       <BrowserRuntime />
       <PromptSourceScheduler />
+      <AnalyticsTracker />
     </div>
   );
 }

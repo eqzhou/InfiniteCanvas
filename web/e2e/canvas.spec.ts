@@ -2188,6 +2188,22 @@ test("asset library uploads, persists, previews, and inserts video media", async
   await expect(page.locator('[data-node-type="video"]')).toHaveCount(1);
 });
 
+test("canvas asset panel can upload image assets", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop canvas asset panel is covered here.");
+  await openFreshBoard(page);
+  const panel = page.getByRole("complementary", { name: "项目侧栏" });
+  await panel.getByRole("tab", { name: "素材" }).click();
+  await panel.locator('input[aria-label="上传侧栏图片素材"]').setInputFiles({
+    name: "sidebar-upload.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
+  });
+  await expect(panel.getByRole("button", { name: "插入素材 sidebar-upload.png" })).toBeVisible();
+  await page.reload();
+  await panel.getByRole("tab", { name: "素材" }).click();
+  await expect(panel.getByRole("button", { name: "插入素材 sidebar-upload.png" })).toBeVisible();
+});
+
 test("canvas asset panel inserts and deletes persisted assets", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop canvas asset panel is covered here.");
   await openFreshBoard(page);
