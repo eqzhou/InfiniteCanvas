@@ -69,12 +69,16 @@ export function PromptSourceManagerDialog({
   onRefresh,
   onRemove,
 }: Props) {
-  const [draft, setDraft] = useState<PromptSourceConfig>(() =>
-    sources[0] ? cloneSource(sources[0]) : newSource());
+  const [draft, setDraft] = useState<PromptSourceConfig>(() => {
+    const custom = sources.find((source) => !source.builtIn);
+    return custom ? cloneSource(custom) : newSource();
+  });
   const [preview, setPreview] = useState<PromptItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const persisted = sources.some((source) => source.id === draft.id);
+  const draftIsBuiltIn = draft.builtIn === true || sources.some((source) =>
+    source.id === draft.id && source.builtIn);
 
   if (!open) return null;
 
@@ -156,12 +160,17 @@ export function PromptSourceManagerDialog({
           </aside>
 
           <div className="min-h-0 overflow-auto p-4">
+            {draftIsBuiltIn ? (
+              <p className="mb-3 rounded-sm border border-[var(--ob-line)] bg-[var(--ob-canvas)] px-3 py-2 text-xs text-[var(--ob-muted)]">
+                内置 Image Prompts 来源的地址与映射由注册表维护，仅可启用/停用和设置自动刷新。
+              </p>
+            ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-sm">来源名称
-                <input aria-label="来源名称" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" maxLength={120} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
+                <input aria-label="来源名称" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" maxLength={120} value={draft.name} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
               </label>
               <label className="text-sm">解析格式
-                <select aria-label="来源解析格式" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" value={draft.format} onChange={(event) => setDraft((current) => ({
+                <select aria-label="来源解析格式" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" value={draft.format} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({
                   ...current,
                   format: event.target.value as PromptSourceConfig["format"],
                   html: event.target.value === "html" ? current.html ?? { itemSelector: "", bodySelector: "" } : current.html,
@@ -177,10 +186,10 @@ export function PromptSourceManagerDialog({
                 </select>
               </label>
               <label className="text-sm sm:col-span-2">来源 URL
-                <input aria-label="来源 URL" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" placeholder="https://example.com/prompts.json 或 Image Prompts 标准 JSON" value={draft.url} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
+                <input aria-label="来源 URL" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" placeholder="https://example.com/prompts.json 或 Image Prompts 标准 JSON" value={draft.url} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
               </label>
               <label className="text-sm sm:col-span-2">主页（可选）
-                <input aria-label="来源主页" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" placeholder="https://github.com/..." value={draft.homepage ?? ""} onChange={(event) => setDraft((current) => ({ ...current, homepage: event.target.value || undefined }))} />
+                <input aria-label="来源主页" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" placeholder="https://github.com/..." value={draft.homepage ?? ""} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, homepage: event.target.value || undefined }))} />
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} />
@@ -199,7 +208,7 @@ export function PromptSourceManagerDialog({
               </label>
             </div>
 
-            {draft.format === "json" || draft.format === "auto" ? (
+            {!draftIsBuiltIn && (draft.format === "json" || draft.format === "auto") ? (
               <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
                 <legend className="px-1 text-sm font-medium">JSON 字段映射</legend>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -212,7 +221,7 @@ export function PromptSourceManagerDialog({
               </fieldset>
             ) : null}
 
-            {draft.format === "html" ? (
+            {!draftIsBuiltIn && draft.format === "html" ? (
               <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
                 <legend className="px-1 text-sm font-medium">HTML 选择器</legend>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -225,7 +234,7 @@ export function PromptSourceManagerDialog({
               </fieldset>
             ) : null}
 
-            {draft.format === "script" ? (
+            {!draftIsBuiltIn && draft.format === "script" ? (
               <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
                 <legend className="px-1 text-sm font-medium">转换脚本</legend>
                 <p className="mb-2 text-xs text-[var(--ob-muted)]">
@@ -261,7 +270,7 @@ export function PromptSourceManagerDialog({
         </div>
 
         <footer className="flex flex-wrap items-center gap-2 border-t border-[var(--ob-line)] px-4 py-3">
-          {persisted ? (
+          {persisted && !draftIsBuiltIn ? (
             <button type="button" disabled={busy || working} className="grid h-9 w-9 place-items-center rounded-sm text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-50" title="删除来源" onClick={() => {
               setWorking(true);
               setError(null);

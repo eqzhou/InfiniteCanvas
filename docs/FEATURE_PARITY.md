@@ -141,6 +141,7 @@ implementation evidence.
 
 - [verified] Prompt search plus independent source/tag filters, multiple saved HTTPS sources, per-source/all refresh, and source removal
 - [verified] One-click community catalog presets for Image Prompts unified JSON registry (including Banana Prompt Quicker)
+- [verified] Built-in Image Prompts catalogs are always present after hydrate and preserve enablement/status on merge
 - [verified] Prompt-source cards show count, sync status, and last success time; failed refresh keeps last success cache
 - [verified] Prompt center 「我的提示词」 tab for local manage / save-from-public / canvas use
 - [verified] Canvas prompt library supports cross-source search and inserts with title preserved

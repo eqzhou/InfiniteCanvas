@@ -217,6 +217,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           saveProjects(nextProjects),
           saveAssets(assets),
           savePrompts(prompts),
+          // Persist merged built-in prompt sources so reloads and formal storage keep them.
+          saveConfig(hydratedConfig),
         ]);
         set({
           ready: true,

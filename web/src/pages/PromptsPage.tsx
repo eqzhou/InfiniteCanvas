@@ -153,15 +153,35 @@ export function PromptsPage() {
   const saveSourceConfig = async (sourceConfig: PromptSourceConfig) => {
     const latest = useBoardStore.getState().config;
     const current = latest.promptSources ?? [];
-    const exists = current.some((item) => item.id === sourceConfig.id);
-    if (!exists && current.length >= PROMPT_SOURCE_LIMITS.maxSources) {
+    const existing = current.find((item) => item.id === sourceConfig.id);
+    // Built-in registry sources keep their URL/mapping; only enablement/schedule/status update.
+    if (existing?.builtIn || sourceConfig.builtIn) {
+      setConfig({
+        ...latest,
+        promptSources: current.map((item) =>
+          item.id === sourceConfig.id
+            ? {
+              ...item,
+              enabled: sourceConfig.enabled,
+              refreshMinutes: sourceConfig.refreshMinutes,
+              lastFetchedAt: sourceConfig.lastFetchedAt ?? item.lastFetchedAt,
+              lastSuccessAt: sourceConfig.lastSuccessAt ?? item.lastSuccessAt,
+              lastError: sourceConfig.lastError,
+              itemCount: sourceConfig.itemCount ?? item.itemCount,
+            }
+            : item),
+      });
+      await flushConfig();
+      return;
+    }
+    if (!existing && current.length >= PROMPT_SOURCE_LIMITS.maxSources) {
       throw new Error(`提示词来源最多保存 ${PROMPT_SOURCE_LIMITS.maxSources} 个`);
     }
     setConfig({
       ...latest,
-      promptSources: exists
-        ? current.map((item) => item.id === sourceConfig.id ? { ...sourceConfig } : item)
-        : [...current, { ...sourceConfig }],
+      promptSources: existing
+        ? current.map((item) => item.id === sourceConfig.id ? { ...sourceConfig, builtIn: false } : item)
+        : [...current, { ...sourceConfig, builtIn: false }],
     });
     await flushConfig();
   };

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { applySystemPrompt, normalizeAppConfig, SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
+import { applySystemPrompt, mergeBuiltinPromptSources, normalizeAppConfig, SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
+import { COMMUNITY_PROMPT_SOURCE_PRESETS } from "@/services/prompt-source-presets";
 import { createDefaultConfig } from "@/lib/defaults";
 
 describe("application configuration", () => {
@@ -68,19 +69,48 @@ describe("application configuration", () => {
     };
 
     const normalized = normalizeAppConfig(input as unknown as ReturnType<typeof createDefaultConfig>);
+    const builtinCount = COMMUNITY_PROMPT_SOURCE_PRESETS.length;
 
-    expect(normalized.promptSources).toHaveLength(2);
-    expect(normalized.promptSources?.[0]).toMatchObject({
+    // Built-in Image Prompts catalogs are always present, then custom sources.
+    expect(normalized.promptSources?.length).toBe(builtinCount + 2);
+    expect(normalized.promptSources?.slice(0, builtinCount).every((source) => source.builtIn)).toBe(true);
+    expect(normalized.promptSources?.[builtinCount]).toMatchObject({
       name: "prompts.example",
       url: "https://prompts.example/catalog.json",
       format: "auto",
       enabled: true,
     });
-    expect(normalized.promptSources?.[1]).toMatchObject({
+    expect(normalized.promptSources?.[builtinCount + 1]).toMatchObject({
       id: "nested-source",
       refreshMinutes: 30,
       mapping: { itemsPath: "payload.entries", titlePath: "label", bodyPath: "value" },
     });
     expect(input.promptSources[0]).toBe("https://prompts.example/catalog.json");
+  });
+
+  test("merges built-in catalogs while preserving enablement and status", () => {
+    const banana = COMMUNITY_PROMPT_SOURCE_PRESETS.find((item) => item.id === "banana-prompt-quicker")!;
+    const merged = mergeBuiltinPromptSources([
+      {
+        ...banana.source,
+        enabled: false,
+        lastSuccessAt: "2026-07-21T00:00:00.000Z",
+        itemCount: 12,
+      },
+      {
+        id: "custom-json",
+        name: "Custom",
+        url: "https://custom.example/prompts.json",
+        format: "json",
+        enabled: true,
+        refreshMinutes: 0,
+      },
+    ]);
+    const kept = merged.find((item) => item.id === "banana-prompt-quicker");
+    expect(kept?.enabled).toBe(false);
+    expect(kept?.itemCount).toBe(12);
+    expect(kept?.builtIn).toBe(true);
+    expect(merged.some((item) => item.id === "custom-json")).toBe(true);
+    expect(merged.filter((item) => item.builtIn).length).toBe(COMMUNITY_PROMPT_SOURCE_PRESETS.length);
   });
 });

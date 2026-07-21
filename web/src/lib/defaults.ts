@@ -7,6 +7,7 @@ import type {
   NodeType,
 } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
+import { clonePresetSource, COMMUNITY_PROMPT_SOURCE_PRESETS } from "@/services/prompt-source-presets";
 
 export const DEFAULT_NODE_SIZE: Record<NodeType, { width: number; height: number }> = {
   text: { width: 280, height: 180 },
@@ -50,7 +51,7 @@ export function createDefaultConfig(): AppConfig {
     webdavUrl: "",
     webdavUser: "",
     webdavPass: "",
-    promptSources: [],
+    promptSources: COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => clonePresetSource(preset)),
     plugins: [],
     disabledPluginIds: [],
     localAgentUrl: "http://127.0.0.1:8790",

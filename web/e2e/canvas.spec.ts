@@ -1979,7 +1979,8 @@ test("community prompt presets can be installed from the prompt library", async 
     .getByRole("listitem")
     .filter({ hasText: "ZeroLu/awesome-gpt-image" });
   await expect(presetCard).toBeVisible();
-  await presetCard.getByRole("button", { name: "接入" }).click();
+  // Built-in Image Prompts catalogs are always installed; one-click refreshes them.
+  await presetCard.getByRole("button", { name: "刷新" }).click();
   await expect(page.getByText("社区夜景", { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("community neon street still")).toBeVisible();
   await expect(presetCard.getByRole("button", { name: "刷新" })).toBeVisible();
@@ -2078,6 +2079,8 @@ test("prompt source manager previews, persists, edits, disables, and removes dec
   await page.goto("/prompts");
   await page.getByRole("button", { name: "管理来源" }).click();
   let manager = page.getByRole("dialog", { name: "管理提示词来源" });
+  // Built-in Image Prompts catalogs always exist; create a custom source explicitly.
+  await manager.getByRole("button", { name: "新增来源" }).click();
   await manager.getByLabel("来源名称").fill("Nested catalog");
   await manager.getByLabel("来源解析格式").selectOption("json");
   await manager.getByLabel("来源 URL").fill(jsonUrl);
