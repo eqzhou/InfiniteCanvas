@@ -9,6 +9,12 @@ import {
   PROMPT_SOURCE_LIMITS,
 } from "@/services/prompt-sources";
 import {
+  clearPromptSourceCache,
+  promptSourceSignature,
+  readPromptSourceCache,
+  writePromptSourceCache,
+} from "@/services/prompt-source-cache";
+import {
   clonePresetSource,
   COMMUNITY_PROMPT_SOURCE_PRESETS,
 } from "@/services/prompt-source-presets";
@@ -85,31 +91,44 @@ export function PromptsPage() {
   const [editorMode, setEditorMode] = useState<"create" | "edit" | null>(null);
   const [creatingPromptId, setCreatingPromptId] = useState("");
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"library" | "mine">("library");
 
   // Keep a fresh deployment empty. Built-in examples are opt-in via the
   // explicit restore action below, so demo content never appears silently.
   const all = prompts;
+  const minePrompts = useMemo(
+    () => all.filter((p) => p.source === "local" || p.sourceId === "personal"),
+    [all],
+  );
+  const libraryPrompts = useMemo(
+    () => all.filter((p) => p.source !== "local" && p.sourceId !== "personal"),
+    [all],
+  );
+  const scoped = activeTab === "mine" ? minePrompts : all;
   const filtered = useMemo(() => {
-    return all.filter((p) => {
-      if (source !== "all" && p.source !== source) return false;
-      if (tag !== "all" && !p.tags.includes(tag)) return false;
+    return scoped.filter((p) => {
+      if (activeTab === "library" && source !== "all" && p.source !== source) return false;
+      if (activeTab === "library" && tag !== "all" && !p.tags.includes(tag)) return false;
       if (!q.trim()) return true;
       const s = q.toLowerCase();
       return (
         p.title.toLowerCase().includes(s) ||
         p.body.toLowerCase().includes(s) ||
-        p.tags.some((t) => t.toLowerCase().includes(s))
+        p.tags.some((t) => t.toLowerCase().includes(s)) ||
+        p.source.toLowerCase().includes(s)
       );
     });
-  }, [all, q, source, tag]);
+  }, [scoped, q, source, tag, activeTab]);
 
   const sources = useMemo(
-    () => ["all", ...Array.from(new Set(all.map((p) => p.source)))],
-    [all],
+    () => ["all", ...Array.from(new Set(libraryPrompts.map((p) => p.source)))],
+    [libraryPrompts],
   );
   const tags = useMemo(
-    () => ["all", ...Array.from(new Set(all.flatMap((prompt) => prompt.tags))).sort()],
-    [all],
+    () => ["all", ...Array.from(new Set(
+      (activeTab === "mine" ? minePrompts : libraryPrompts).flatMap((prompt) => prompt.tags),
+    )).sort()],
+    [activeTab, libraryPrompts, minePrompts],
   );
   const savedSources = config.promptSources ?? [];
 
@@ -118,7 +137,17 @@ export function PromptsPage() {
     const latest = useBoardStore.getState();
     setPrompts(mergePromptSourceItems(latest.prompts, items, sourceConfig.id));
     await flushPrompts();
-    return items;
+    const successAt = nowIso();
+    await writePromptSourceCache({
+      sourceId: sourceConfig.id,
+      items,
+      count: items.length,
+      fetchedAt: Date.now(),
+      lastSuccessAt: successAt,
+      lastError: "",
+      signature: promptSourceSignature(sourceConfig),
+    });
+    return { items, successAt };
   };
 
   const saveSourceConfig = async (sourceConfig: PromptSourceConfig) => {
@@ -156,8 +185,14 @@ export function PromptsPage() {
         enabled: true,
         refreshMinutes: 0,
       });
-      await mergeRemoteSource(sourceConfig);
-      await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
+      const { successAt, items } = await mergeRemoteSource(sourceConfig);
+      await saveSourceConfig({
+        ...sourceConfig,
+        lastFetchedAt: successAt,
+        lastSuccessAt: successAt,
+        lastError: undefined,
+        itemCount: items.length,
+      });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -169,10 +204,31 @@ export function PromptsPage() {
     setBusy(true);
     setErr(null);
     try {
-      await mergeRemoteSource(sourceConfig);
-      await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
+      const { successAt, items } = await mergeRemoteSource(sourceConfig);
+      await saveSourceConfig({
+        ...sourceConfig,
+        lastFetchedAt: successAt,
+        lastSuccessAt: successAt,
+        lastError: undefined,
+        itemCount: items.length,
+      });
     } catch (error) {
-      setErr(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setErr(message);
+      // Keep last successful prompts/cache; only record the failure on the source card.
+      const cached = await readPromptSourceCache(sourceConfig.id);
+      await saveSourceConfig({
+        ...sourceConfig,
+        lastFetchedAt: nowIso(),
+        lastSuccessAt: sourceConfig.lastSuccessAt ?? cached?.lastSuccessAt,
+        lastError: message,
+        itemCount: sourceConfig.itemCount ?? cached?.count,
+      });
+      if (cached?.items?.length) {
+        const latest = useBoardStore.getState();
+        setPrompts(mergePromptSourceItems(latest.prompts, cached.items, sourceConfig.id));
+        await flushPrompts();
+      }
       throw error;
     } finally {
       setBusy(false);
@@ -182,19 +238,48 @@ export function PromptsPage() {
   const refreshAllRemote = async () => {
     setBusy(true);
     setErr(null);
+    const failures: string[] = [];
     try {
       for (const sourceConfig of savedSources.filter((item) => item.enabled)) {
-        await mergeRemoteSource(sourceConfig);
-        await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
+        try {
+          const { successAt, items } = await mergeRemoteSource(sourceConfig);
+          await saveSourceConfig({
+            ...sourceConfig,
+            lastFetchedAt: successAt,
+            lastSuccessAt: successAt,
+            lastError: undefined,
+            itemCount: items.length,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          failures.push(`${sourceConfig.name}: ${message}`);
+          const cached = await readPromptSourceCache(sourceConfig.id);
+          await saveSourceConfig({
+            ...sourceConfig,
+            lastFetchedAt: nowIso(),
+            lastSuccessAt: sourceConfig.lastSuccessAt ?? cached?.lastSuccessAt,
+            lastError: message,
+            itemCount: sourceConfig.itemCount ?? cached?.count,
+          });
+          if (cached?.items?.length) {
+            const latest = useBoardStore.getState();
+            setPrompts(mergePromptSourceItems(latest.prompts, cached.items, sourceConfig.id));
+            await flushPrompts();
+          }
+        }
       }
-    } catch (error) {
-      setErr(error instanceof Error ? error.message : String(error));
+      if (failures.length) {
+        setErr(`部分来源更新失败（已保留上次成功内容）：${failures.join("；")}`);
+      }
     } finally {
       setBusy(false);
     }
   };
 
   const removeRemote = async (sourceConfig: PromptSourceConfig) => {
+    if (sourceConfig.builtIn) {
+      throw new Error("内置提示词来源不能删除，可停用或刷新");
+    }
     setBusy(true);
     const latest = useBoardStore.getState().config;
     setConfig({
@@ -203,7 +288,7 @@ export function PromptsPage() {
     });
     setPrompts(useBoardStore.getState().prompts.filter((item) => item.sourceId !== sourceConfig.id));
     try {
-      await Promise.all([flushConfig(), flushPrompts()]);
+      await Promise.all([flushConfig(), flushPrompts(), clearPromptSourceCache(sourceConfig.id)]);
       if (remoteUrl === sourceConfig.url) setRemoteUrl("");
     } finally {
       setBusy(false);
@@ -224,8 +309,14 @@ export function PromptsPage() {
         ...(existing ?? clonePresetSource(preset)),
         enabled: true,
       };
-      await mergeRemoteSource(sourceConfig);
-      await saveSourceConfig({ ...sourceConfig, lastFetchedAt: nowIso() });
+      const { successAt, items } = await mergeRemoteSource(sourceConfig);
+      await saveSourceConfig({
+        ...sourceConfig,
+        lastFetchedAt: successAt,
+        lastSuccessAt: successAt,
+        lastError: undefined,
+        itemCount: items.length,
+      });
       setRemoteUrl(sourceConfig.url);
     } catch (error) {
       setErr(error instanceof Error ? error.message : String(error));
@@ -301,10 +392,20 @@ export function PromptsPage() {
     setCreatingPromptId("");
   };
 
-  const openLocalCopy = (prompt: PromptItem) => {
-    setEditingPrompt({ ...prompt, id: "", source: "local", tags: [...prompt.tags] });
-    setCreatingPromptId(uid("prompt"));
-    setEditorMode("create");
+  const saveToMine = async (prompt: PromptItem) => {
+    const latest = useBoardStore.getState().prompts;
+    const next: PromptItem = {
+      id: uid("prompt"),
+      title: prompt.title,
+      body: prompt.body,
+      tags: [...prompt.tags],
+      source: "local",
+      ...(prompt.coverUrl ? { coverUrl: prompt.coverUrl } : {}),
+      ...(prompt.resultUrls?.length ? { resultUrls: [...prompt.resultUrls] } : {}),
+    };
+    setPrompts([next, ...latest]);
+    await flushPrompts();
+    setActiveTab("mine");
   };
 
   const usePrompt = (prompt: PromptItem) => {
@@ -315,11 +416,12 @@ export function PromptsPage() {
   return (
     <div className="mx-auto h-full max-w-6xl overflow-auto p-4 sm:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-semibold">提示词库</h1>
+        <h1 className="text-xl font-semibold">提示词中心</h1>
         <button
           type="button"
           className="inline-flex items-center gap-1.5 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white"
           onClick={() => {
+            setActiveTab("mine");
             setEditingPrompt(null);
             setCreatingPromptId(uid("prompt"));
             setEditorMode("create");
@@ -329,38 +431,43 @@ export function PromptsPage() {
         </button>
         <input
           className="w-full rounded-md border border-[var(--ob-line)] bg-transparent px-3 py-1.5 text-sm sm:ml-auto sm:w-auto"
-          placeholder="搜索标题/标签…"
+          placeholder="搜索标题/内容/标签/来源…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <select
-          aria-label="提示词来源"
-          className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
-        >
-          {sources.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="提示词标签"
-          className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
-          value={tag}
-          onChange={(event) => setTag(event.target.value)}
-        >
-          {tags.map((value) => (
-            <option key={value} value={value}>{value === "all" ? "全部标签" : value}</option>
-          ))}
-        </select>
+        {activeTab === "library" ? (
+          <>
+            <select
+              aria-label="提示词来源"
+              className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+            >
+              {sources.map((s) => (
+                <option key={s} value={s}>
+                  {s === "all" ? "全部来源" : s}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="提示词标签"
+              className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
+              value={tag}
+              onChange={(event) => setTag(event.target.value)}
+            >
+              {tags.map((value) => (
+                <option key={value} value={value}>{value === "all" ? "全部标签" : value}</option>
+              ))}
+            </select>
+          </>
+        ) : null}
         <button
           type="button"
           className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
           disabled={busy}
           onClick={() => {
             setBusy(true);
+            setActiveTab("library");
             const current = useBoardStore.getState().prompts.filter((prompt) => prompt.source !== "builtin");
             setPrompts([...BUILTIN.map((prompt) => ({ ...prompt, tags: [...prompt.tags] })), ...current]);
             void flushPrompts().catch((cause) =>
@@ -371,12 +478,32 @@ export function PromptsPage() {
           恢复内置
         </button>
       </div>
+      <div className="mb-4 flex gap-1 border-b border-[var(--ob-line)]" role="tablist" aria-label="提示词中心分类">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "library"}
+          className={`px-3 py-2 text-sm ${activeTab === "library" ? "border-b-2 border-[var(--ob-accent)] font-medium text-[var(--ob-accent)]" : "text-[var(--ob-muted)]"}`}
+          onClick={() => setActiveTab("library")}
+        >
+          提示词库 ({libraryPrompts.length})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "mine"}
+          className={`px-3 py-2 text-sm ${activeTab === "mine" ? "border-b-2 border-[var(--ob-accent)] font-medium text-[var(--ob-accent)]" : "text-[var(--ob-muted)]"}`}
+          onClick={() => setActiveTab("mine")}
+        >
+          我的提示词 ({minePrompts.length})
+        </button>
+      </div>
 
-      <div className="mb-4 space-y-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3">
+      {activeTab === "library" ? <div className="mb-4 space-y-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3">
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-medium">社区提示词源</h2>
-            <span className="text-[11px] text-[var(--ob-muted)]">一键接入公开目录（声明式解析，不执行远程脚本）</span>
+            <span className="text-[11px] text-[var(--ob-muted)]">一键接入 Image Prompts 统一 JSON 目录</span>
           </div>
           <ul className="grid gap-2 sm:grid-cols-2" aria-label="社区提示词源">
             {COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => {
@@ -445,13 +572,20 @@ export function PromptsPage() {
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate font-medium" title={sourceConfig.url}>{sourceConfig.name}</span>
                     <span className="shrink-0 rounded-sm bg-[var(--ob-accent-soft)] px-1.5 py-0.5 uppercase text-[10px] text-[var(--ob-accent)]">{sourceConfig.format}</span>
+                    {sourceConfig.builtIn ? <span className="shrink-0 text-[10px] text-[var(--ob-muted)]">内置</span> : null}
                     {!sourceConfig.enabled ? <span className="shrink-0 text-[var(--ob-muted)]">已停用</span> : null}
+                    {sourceConfig.lastError
+                      ? <span className="shrink-0 rounded-sm bg-red-500/15 px-1.5 py-0.5 text-[10px] text-[var(--ob-danger)]" title={sourceConfig.lastError}>失败</span>
+                      : sourceConfig.lastSuccessAt
+                        ? <span className="shrink-0 rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-600">正常</span>
+                        : <span className="shrink-0 text-[10px] text-[var(--ob-muted)]">未同步</span>}
                   </div>
                   <p className="truncate text-[11px] text-[var(--ob-muted)]">
-                    {sourceConfig.url}
-                    {sourceConfig.lastFetchedAt
-                      ? ` · 最近同步 ${new Date(sourceConfig.lastFetchedAt).toLocaleString()}`
-                      : " · 尚未同步"}
+                    {(sourceConfig.homepage || sourceConfig.url)}
+                    {typeof sourceConfig.itemCount === "number" ? ` · ${sourceConfig.itemCount} 条` : ""}
+                    {sourceConfig.lastSuccessAt
+                      ? ` · 上次成功 ${new Date(sourceConfig.lastSuccessAt).toLocaleString()}`
+                      : " · 尚未成功拉取"}
                   </p>
                 </div>
                 <button
@@ -463,26 +597,28 @@ export function PromptsPage() {
                 >
                   <RefreshCw size={14} />
                 </button>
-                <button
-                  type="button"
-                  title="移除提示词源"
-                  className="rounded p-1 text-[var(--ob-danger)]"
-                  disabled={busy}
-                  onClick={() => {
-                    if (window.confirm(`移除提示词来源“${sourceConfig.name}”？`)) {
-                      void removeRemote(sourceConfig).catch((cause) =>
-                        setErr(cause instanceof Error ? cause.message : String(cause)));
-                    }
-                  }}
-                >
-                  <Trash2 size={14} />
-                </button>
+                {!sourceConfig.builtIn ? (
+                  <button
+                    type="button"
+                    title="移除提示词源"
+                    className="rounded p-1 text-[var(--ob-danger)]"
+                    disabled={busy}
+                    onClick={() => {
+                      if (window.confirm(`移除提示词来源“${sourceConfig.name}”？`)) {
+                        void removeRemote(sourceConfig).catch((cause) =>
+                          setErr(cause instanceof Error ? cause.message : String(cause)));
+                      }
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>
         ) : null}
         </div>
-      </div>
+      </div> : null}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {filtered.map((p) => (
@@ -579,9 +715,10 @@ export function PromptsPage() {
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1"
-                  onClick={() => openLocalCopy(p)}
+                  onClick={() => void saveToMine(p).catch((cause) =>
+                    setErr(cause instanceof Error ? cause.message : String(cause)))}
                 >
-                  <FilePlus2 size={14} /> 另存为
+                  <FilePlus2 size={14} /> 保存到我的
                 </button>
               )}
             </div>
@@ -590,7 +727,9 @@ export function PromptsPage() {
       </div>
       {!filtered.length ? (
         <p className="py-10 text-center text-sm text-[var(--ob-muted)]">
-          暂无提示词。可以恢复内置示例，或拉取远程提示词源。
+          {activeTab === "mine"
+            ? "还没有我的提示词。可从公共库保存，或点击新建。"
+            : "暂无提示词。可以恢复内置示例，或接入社区 / 远程提示词源。"}
         </p>
       ) : null}
       <PromptDetailDialog

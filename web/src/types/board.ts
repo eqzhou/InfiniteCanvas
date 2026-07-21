@@ -218,7 +218,17 @@ export type PromptSourceConfig = {
   html?: PromptSourceHtmlMapping;
   /** Local transform script for format=script. Receives (text, url, helpers). */
   script?: string;
+  /** Homepage or repository URL for display only. */
+  homepage?: string;
   lastFetchedAt?: string;
+  /** Last successful refresh timestamp (kept when a later refresh fails). */
+  lastSuccessAt?: string;
+  /** Last refresh error message, cleared on success. */
+  lastError?: string;
+  /** Prompt count from the last successful refresh. */
+  itemCount?: number;
+  /** Built-in registry sources cannot be deleted. */
+  builtIn?: boolean;
 };
 
 export type AiChannel = {

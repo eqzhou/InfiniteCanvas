@@ -405,13 +405,19 @@ describe("remote prompt source limits", () => {
 
 
 describe("community prompt source presets", () => {
-  test("exposes five independent public catalog presets", () => {
-    expect(COMMUNITY_PROMPT_SOURCE_PRESETS).toHaveLength(5);
+  test("exposes Image Prompts registry presets including Banana Prompt Quicker", () => {
+    expect(COMMUNITY_PROMPT_SOURCE_PRESETS.length).toBeGreaterThanOrEqual(6);
+    const banana = COMMUNITY_PROMPT_SOURCE_PRESETS.find((item) => item.id === "banana-prompt-quicker");
+    expect(banana).toBeDefined();
+    expect(banana!.source.url).toContain("yukkcat/image-prompts");
+    expect(banana!.source.format).toBe("json");
     for (const preset of COMMUNITY_PROMPT_SOURCE_PRESETS) {
       const source = clonePresetSource(preset);
       expect(source.id).toBe(preset.id);
       expect(source.url.startsWith("https://")).toBe(true);
-      expect(source.format === "markdown" || source.format === "json").toBe(true);
+      expect(source.format).toBe("json");
+      expect(source.builtIn).toBe(true);
+      expect(source.mapping?.bodyPath).toBe("prompt");
       // Preset clones must be independent of the catalog table.
       source.name = "mutated";
       expect(preset.source.name).not.toBe("mutated");
@@ -612,6 +618,49 @@ plain body two
       tags: ["海报设计"],
       source: "Bilingual",
       sourceId: "bilingual-json",
+    }]);
+  });
+});
+
+describe("image prompts unified JSON", () => {
+  test("maps referenceImageUrls as result gallery by default", async () => {
+    globalThis.fetch = mock(async () => jsonResponse([
+      {
+        id: "banana-prompt-quicker:demo",
+        title: "苹果风格海报",
+        prompt: "apple style poster",
+        coverUrl: "https://cdn.example/apple.png",
+        referenceImageUrls: ["https://cdn.example/ref1.jpg"],
+        tags: ["工作", "海报"],
+      },
+    ])) as typeof fetch;
+
+    const result = await fetchPromptSource({
+      id: "banana-prompt-quicker",
+      name: "Banana Prompt Quicker",
+      url: "https://raw.githubusercontent.com/yukkcat/image-prompts/main/dist/sources/banana-prompt-quicker.json",
+      format: "json",
+      enabled: true,
+      refreshMinutes: 0,
+      mapping: {
+        idPath: "id",
+        titlePath: "title",
+        bodyPath: "prompt",
+        tagsPath: "tags",
+        coverUrlPath: "coverUrl",
+        resultUrlsPath: "referenceImageUrls",
+      },
+    });
+
+    expect(result).toEqual([{
+      id: "banana-prompt-quicker:demo",
+      title: "苹果风格海报",
+      body: "apple style poster",
+      tags: ["工作", "海报"],
+      source: "Banana Prompt Quicker",
+      sourceId: "banana-prompt-quicker",
+      coverUrl: "https://cdn.example/apple.png",
+      resultUrls: ["https://cdn.example/ref1.jpg"],
     }]);
   });
 });

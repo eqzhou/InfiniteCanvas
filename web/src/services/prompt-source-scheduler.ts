@@ -24,6 +24,8 @@ type SchedulerDependencies = {
 function sameSourceDefinition(left: PromptSourceConfig, right: PromptSourceConfig): boolean {
   return left.name === right.name && left.url === right.url && left.format === right.format && left.enabled === right.enabled &&
     left.refreshMinutes === right.refreshMinutes && left.lastFetchedAt === right.lastFetchedAt &&
+    (left.script ?? "") === (right.script ?? "") &&
+    (left.homepage ?? "") === (right.homepage ?? "") &&
     JSON.stringify(left.mapping ?? null) === JSON.stringify(right.mapping ?? null) &&
     JSON.stringify(left.html ?? null) === JSON.stringify(right.html ?? null);
 }
@@ -77,18 +79,46 @@ export async function refreshDuePromptSources(
       if (!current?.enabled || !sameSourceDefinition(source, current) || !dependencies.isActive()) continue;
       const currentPrompts = await dependencies.loadPrompts();
       if (!dependencies.isActive()) continue;
+      const successAt = new Date(now).toISOString();
       state.setPrompts(mergePromptSourceItems(currentPrompts, items, source.id));
       state.setConfig({
         ...currentConfig,
         promptSources: (currentConfig.promptSources ?? []).map((item) =>
-          item.id === source.id ? { ...item, lastFetchedAt: new Date(now).toISOString() } : item),
+          item.id === source.id
+            ? {
+              ...item,
+              lastFetchedAt: successAt,
+              lastSuccessAt: successAt,
+              lastError: undefined,
+              itemCount: items.length,
+            }
+            : item),
       });
       await dependencies.flush();
     } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      try {
+        const state = dependencies.getState();
+        const currentConfig = await dependencies.loadConfig() ?? state.config;
+        state.setConfig({
+          ...currentConfig,
+          promptSources: (currentConfig.promptSources ?? []).map((item) =>
+            item.id === source.id
+              ? {
+                ...item,
+                lastFetchedAt: new Date(now).toISOString(),
+                lastError: message,
+              }
+              : item),
+        });
+        await dependencies.flush();
+      } catch {
+        // Status write is best-effort.
+      }
       window.dispatchEvent(new CustomEvent("openboard:prompt-source-error", {
         detail: {
           sourceId: source.id,
-          message: cause instanceof Error ? cause.message : String(cause),
+          message,
         },
       }));
     } finally {

@@ -140,7 +140,10 @@ implementation evidence.
 ## Prompt, video, and assistant workflows
 
 - [verified] Prompt search plus independent source/tag filters, multiple saved HTTPS sources, per-source/all refresh, and source removal
-- [verified] One-click community catalog presets for five public prompt repositories with independent declarative mappings
+- [verified] One-click community catalog presets for Image Prompts unified JSON registry (including Banana Prompt Quicker)
+- [verified] Prompt-source cards show count, sync status, and last success time; failed refresh keeps last success cache
+- [verified] Prompt center 「我的提示词」 tab for local manage / save-from-public / canvas use
+- [verified] Canvas prompt library supports cross-source search and inserts with title preserved
 - [verified] Local transform scripts can convert non-standard fetched catalogs into prompt arrays with parseJson/queryAll helpers
 - [verified] Structured community Markdown parsing for labeled/fenced prompt blocks with section tags and image galleries
 - [verified] Add/edit/disable/delete source manager, legacy URL migration, active-tab scheduling with authoritative persisted merges, nested JSON field paths, bounded HTML selectors, preview, and PostgreSQL reload persistence

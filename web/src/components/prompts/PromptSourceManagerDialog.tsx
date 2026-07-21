@@ -138,7 +138,16 @@ export function PromptSourceManagerDialog({
                     }}
                   >
                     <span className="block truncate text-sm font-medium">{source.name}</span>
-                    <span className="block truncate text-[11px] text-[var(--ob-muted)]">{source.format} · {source.enabled ? "已启用" : "已停用"}</span>
+                    <span className="block truncate text-[11px] text-[var(--ob-muted)]">
+                      {source.format} · {source.enabled ? "已启用" : "已停用"}
+                      {typeof source.itemCount === "number" ? ` · ${source.itemCount} 条` : ""}
+                      {source.lastError ? " · 失败" : source.lastSuccessAt ? " · 正常" : " · 未同步"}
+                    </span>
+                    {source.lastSuccessAt ? (
+                      <span className="block truncate text-[10px] text-[var(--ob-muted)]">
+                        上次成功 {new Date(source.lastSuccessAt).toLocaleString()}
+                      </span>
+                    ) : null}
                   </button>
                 </div>
               ))}
@@ -168,7 +177,10 @@ export function PromptSourceManagerDialog({
                 </select>
               </label>
               <label className="text-sm sm:col-span-2">来源 URL
-                <input aria-label="来源 URL" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" placeholder="https://example.com/prompts.json" value={draft.url} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
+                <input aria-label="来源 URL" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" placeholder="https://example.com/prompts.json 或 Image Prompts 标准 JSON" value={draft.url} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
+              </label>
+              <label className="text-sm sm:col-span-2">主页（可选）
+                <input aria-label="来源主页" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2" placeholder="https://github.com/..." value={draft.homepage ?? ""} onChange={(event) => setDraft((current) => ({ ...current, homepage: event.target.value || undefined }))} />
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} />

@@ -89,14 +89,11 @@ canvas.
 
 ### Public Unreleased prompt-source delta
 - Add/edit/disable/remove remote prompt sources with scheduled refresh
-- Declarative nested JSON mappings, bounded HTML selectors, and local transform scripts with preview
-- One-click community catalog presets for five public prompt repositories
-- Structured Markdown parsing for labeled/fenced community prompt blocks
-- Canvas left-panel prompt library tab grouped by source with insert/copy
-- Node prompt input retains content after generation completes
-- Codex panel uses right-biased user bubbles, open assistant replies, stick-to-bottom, and jump-to-bottom
-- Codex image attachments insert connected canvas image and generation-config nodes
-- Optional local transform scripts for non-standard catalogs; unsafe source URLs, redirects, credential-bearing URLs, and oversized content are still rejected
+- Built-in catalogs load Image Prompts unified JSON (including Banana Prompt Quicker)
+- Source cards show item count, sync status, and last success time
+- Independent source cache keeps last success when refresh fails
+- Prompt center 「我的提示词」: local manage, save from public library, canvas use
+- Canvas prompt library cross-source search and title-preserving insert
 
 The detailed evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).
 

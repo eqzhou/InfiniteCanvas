@@ -152,6 +152,25 @@ export function parsePromptSourceConfig(value: unknown, index = 0): PromptSource
   }
   const lastFetchedAt = typeof input.lastFetchedAt === "string" &&
     !Number.isNaN(Date.parse(input.lastFetchedAt)) ? input.lastFetchedAt : undefined;
+  const lastSuccessAt = typeof input.lastSuccessAt === "string" &&
+    !Number.isNaN(Date.parse(input.lastSuccessAt)) ? input.lastSuccessAt : undefined;
+  const lastError = typeof input.lastError === "string" && input.lastError.trim()
+    ? input.lastError.trim().slice(0, 500)
+    : undefined;
+  const itemCount = typeof input.itemCount === "number" &&
+    Number.isInteger(input.itemCount) && input.itemCount >= 0
+    ? Math.min(input.itemCount, PROMPT_SOURCE_LIMITS.maxItems)
+    : undefined;
+  let homepage: string | undefined;
+  if (input.homepage !== undefined && input.homepage !== "") {
+    if (typeof input.homepage !== "string") throw new Error("Prompt source homepage must be text");
+    try {
+      homepage = normalizeExternalHttpsUrl(input.homepage.trim());
+    } catch {
+      // Homepage is display-only; drop invalid values instead of failing the source.
+      homepage = undefined;
+    }
+  }
   return {
     id,
     name: name.trim(),
@@ -162,7 +181,12 @@ export function parsePromptSourceConfig(value: unknown, index = 0): PromptSource
     mapping,
     html,
     script,
+    homepage,
     lastFetchedAt,
+    lastSuccessAt,
+    lastError,
+    itemCount,
+    builtIn: input.builtIn === true,
   };
 }
 
@@ -695,8 +719,10 @@ function normalizePromptJson(data: unknown, source: PromptSourceConfig): PromptI
     const rawTags = mapping?.tagsPath ? readPath(o, mapping.tagsPath) : o.tags;
     const rawResultUrls = mapping?.resultUrlsPath
       ? readPath(o, mapping.resultUrlsPath)
-      : firstDefined(o.resultUrls, o.images);
-    const rawCover = mapping?.coverUrlPath ? readPath(o, mapping.coverUrlPath) : o.coverUrl;
+      : firstDefined(o.resultUrls, o.referenceImageUrls, o.images, o.results);
+    const rawCover = mapping?.coverUrlPath
+      ? readPath(o, mapping.coverUrlPath)
+      : firstDefined(o.coverUrl, o.preview, o.cover);
     const rawId = mapping?.idPath ? readPath(o, mapping.idPath) : o.id;
     const coverUrl = safeBoundedExternalUrl(rawCover, source.url);
     const resultUrls = normalizeResultUrls(rawResultUrls, source.url);

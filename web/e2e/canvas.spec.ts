@@ -1960,21 +1960,17 @@ test("prompt library filters tags and manages multiple persisted remote sources"
 });
 
 test("community prompt presets can be installed from the prompt library", async ({ page }) => {
-  const presetUrl = "https://raw.githubusercontent.com/ZeroLu/awesome-gpt-image/main/README.zh-CN.md";
+  const presetUrl = "https://raw.githubusercontent.com/yukkcat/image-prompts/main/dist/sources/awesome-gpt-image.json";
   await page.route(presetUrl, async (route) => route.fulfill({
-    contentType: "text/markdown; charset=utf-8",
-    body: `# Awesome GPT Image
-
-## 摄影
-
-### 社区夜景
-<img src="https://cdn.example/community-cover.png" />
-
-**提示词:**
-\`\`\`text
-community neon street still
-\`\`\`
-`,
+    contentType: "application/json",
+    body: JSON.stringify([{
+      id: "awesome-gpt-image:community-night",
+      title: "社区夜景",
+      prompt: "community neon street still",
+      coverUrl: "https://cdn.example/community-cover.png",
+      referenceImageUrls: ["https://cdn.example/community-cover.png"],
+      tags: ["摄影"],
+    }]),
   }));
 
   await openFreshBoard(page);
@@ -2014,11 +2010,14 @@ test("canvas prompt panel groups library entries by source and inserts them", as
   await openProjectPanel(page);
   const panel = page.getByRole("complementary", { name: "项目侧栏" });
   await panel.getByRole("tab", { name: "提示词" }).click();
+  await panel.getByLabel("搜索画布提示词库").fill("侧栏夜景");
   const library = panel.getByRole("list", { name: "侧栏提示词库" });
   await expect(library.getByText("local", { exact: true })).toBeVisible();
   await expect(library.getByText("侧栏夜景", { exact: true })).toBeVisible();
   await library.getByRole("button", { name: "插入提示词 侧栏夜景" }).click();
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("neon alley with rain reflections");
+  // Inserted text node keeps the prompt title on the node header.
+  await expect(page.locator('[data-node-type="text"]').getByTitle("侧栏夜景")).toBeVisible();
   await page.reload();
   await openProjectPanel(page);
   await expect(panel.getByRole("tab", { name: "提示词", selected: true })).toBeVisible();
