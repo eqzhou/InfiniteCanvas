@@ -51,7 +51,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
       ? rawSystemPrompt.slice(0, SYSTEM_PROMPT_MAX_LENGTH)
       : "",
     canvasPanelWidth: typeof rawPanelWidth === "number" && Number.isFinite(rawPanelWidth)
-      ? Math.min(420, Math.max(220, Math.round(rawPanelWidth)))
+      ? Math.min(420, Math.max(240, Math.round(rawPanelWidth)))
       : 256,
     canvasPanelCollapsed: config.canvasPanelCollapsed === true,
     canvasPanelTab: rawPanelTab === "elements" || rawPanelTab === "assets" || rawPanelTab === "prompts"

@@ -93,8 +93,17 @@ export function HomePage() {
     setSelected([node.id]);
     if (viewportAnimationRef.current !== null) cancelAnimationFrame(viewportAnimationRef.current);
     const start = { ...project.viewport };
-    const canvasWidth = Math.max(320, window.innerWidth - panelWidth - (showAssistant ? 340 : 0));
-    const canvasHeight = Math.max(240, window.innerHeight - 104);
+    const canvasRect = document
+      .querySelector<HTMLElement>('[data-testid="canvas-surface"]')
+      ?.getBoundingClientRect();
+    const assistantRect = document
+      .querySelector<HTMLElement>('aside[aria-label="画布助手"]')
+      ?.getBoundingClientRect();
+    const visibleCanvasWidth = canvasRect && assistantRect && assistantRect.left < canvasRect.right
+      ? Math.max(1, assistantRect.left - canvasRect.left)
+      : canvasRect?.width;
+    const canvasWidth = Math.max(320, visibleCanvasWidth ?? window.innerWidth - panelWidth);
+    const canvasHeight = Math.max(240, canvasRect?.height ?? window.innerHeight - 104);
     const target = {
       k: start.k,
       x: canvasWidth / 2 - (node.position.x + node.width / 2) * start.k,
@@ -137,10 +146,13 @@ export function HomePage() {
   }
 
   return (
-    <div className="relative flex h-full min-h-0">
+    <div
+      className="relative flex h-full min-h-0 min-w-0 overflow-hidden"
+      data-testid="workspace-shell"
+    >
       <button
         type="button"
-        className={`absolute left-2 top-2 z-[60] h-9 w-9 place-items-center rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)] ${panelCollapsed ? "grid" : "grid md:hidden"}`}
+        className={`absolute left-2 top-2 z-[60] h-9 w-9 place-items-center rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)] ${projectsOpen ? "hidden" : panelCollapsed ? "grid" : "grid md:hidden"}`}
         title={panelCollapsed ? "展开侧栏" : "项目"}
         onClick={() => {
           if (window.innerWidth >= 768) {
@@ -162,14 +174,18 @@ export function HomePage() {
       ) : null}
       <aside
         aria-label="项目侧栏"
-        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} relative w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel)] md:w-[var(--canvas-panel-width)]`}
+        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : showAssistant ? "md:hidden xl:relative xl:flex" : "md:relative md:flex"} w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel)] md:w-[var(--canvas-panel-width)]`}
         style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
-        <div className="flex items-center gap-2 border-b border-[var(--ob-line)] p-3">
-          <strong className="text-sm">工作区</strong>
+        <div className="flex min-h-12 items-center gap-1 border-b border-[var(--ob-line)] px-2 py-2">
+          {panelWidth >= 300 ? (
+            <strong className="mr-auto truncate text-sm">工作区</strong>
+          ) : (
+            <span className="mr-auto sr-only">工作区</span>
+          )}
           <button
             type="button"
-            className="ml-auto rounded p-1 hover:bg-[var(--ob-accent-soft)] md:hidden"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] md:hidden"
             title="关闭"
             onClick={() => setProjectsOpen(false)}
           >
@@ -177,7 +193,7 @@ export function HomePage() {
           </button>
           <button
             type="button"
-            className="ml-auto hidden rounded p-1 hover:bg-[var(--ob-accent-soft)] md:grid"
+            className="hidden h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] md:grid"
             title="收起侧栏"
             onClick={() => updatePanelConfig({ canvasPanelCollapsed: true })}
           >
@@ -187,7 +203,7 @@ export function HomePage() {
             <>
               <button
                 type="button"
-                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
                 title="新建"
                 onClick={() => createProject(`画布 ${projects.length + 1}`)}
               >
@@ -195,7 +211,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
                 title="导入 JSON"
                 onClick={() => fileRef.current?.click()}
               >
@@ -203,7 +219,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
                 title="导出当前"
                 onClick={() => {
                   const p = exportActiveProject();
@@ -221,7 +237,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
                 title="导出完整包"
                 onClick={() => {
                   void (async () => {
@@ -245,7 +261,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="rounded p-1 text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
                 title="删除勾选"
                 disabled={!checked.length}
                 onClick={() => {
@@ -266,7 +282,7 @@ export function HomePage() {
                 type="button"
                 aria-label="全选元素"
                 title="全选元素"
-                className="rounded p-1 hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
                 disabled={!activeProject?.nodes.length}
                 onClick={() => {
                   const ids = activeProject?.nodes.map((node) => node.id) ?? [];
@@ -280,7 +296,7 @@ export function HomePage() {
                 type="button"
                 aria-label="导出所选元素"
                 title="导出所选元素"
-                className="rounded p-1 hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
                 disabled={!checkedNodes.length}
                 onClick={() => void exportCheckedNodes().catch((error) =>
                   alert(error instanceof Error ? error.message : String(error)))}
@@ -337,7 +353,7 @@ export function HomePage() {
           ))}
           <span
             aria-hidden
-            className="pointer-events-none absolute bottom-0 left-2 h-0.5 w-[calc((100%-1rem)/4)] bg-[var(--ob-accent)] transition-transform duration-200 ease-out"
+            className="pointer-events-none absolute bottom-0 left-2 h-0.5 w-[calc((100%_-_1rem)/4)] bg-[var(--ob-accent)] transition-transform duration-200 ease-out"
             style={{
               transform: `translateX(${
                 ({ projects: 0, elements: 1, assets: 2, prompts: 3 } as const)[panelTab] * 100
@@ -451,7 +467,7 @@ export function HomePage() {
           role="separator"
           aria-label="调整项目侧栏宽度"
           aria-orientation="vertical"
-          aria-valuemin={220}
+          aria-valuemin={240}
           aria-valuemax={420}
           aria-valuenow={panelWidth}
           tabIndex={0}
@@ -465,7 +481,7 @@ export function HomePage() {
             const move = (moveEvent: MouseEvent) => {
               const resize = panelResizeRef.current;
               if (!resize) return;
-              const nextWidth = Math.min(420, Math.max(220, resize.startWidth + moveEvent.clientX - resize.startX));
+              const nextWidth = Math.min(420, Math.max(240, resize.startWidth + moveEvent.clientX - resize.startX));
               panelWidthRef.current = nextWidth;
               setPanelWidth(nextWidth);
             };
@@ -481,7 +497,7 @@ export function HomePage() {
           onKeyDown={(event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
             event.preventDefault();
-            const nextWidth = Math.min(420, Math.max(220, panelWidth + (event.key === "ArrowRight" ? 16 : -16)));
+            const nextWidth = Math.min(420, Math.max(240, panelWidth + (event.key === "ArrowRight" ? 16 : -16)));
             setPanelWidth(nextWidth);
             panelWidthRef.current = nextWidth;
             updatePanelConfig({ canvasPanelWidth: nextWidth });

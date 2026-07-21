@@ -57,6 +57,7 @@ export function BoardCanvas() {
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const connectingFrom = useBoardStore((s) => s.connectingFrom);
   const showMinimap = useBoardStore((s) => s.showMinimap);
+  const panelCollapsed = useBoardStore((s) => s.config.canvasPanelCollapsed === true);
   const setViewport = useBoardStore((s) => s.setViewport);
   const setSelected = useBoardStore((s) => s.setSelected);
   const toggleSelect = useBoardStore((s) => s.toggleSelect);
@@ -572,6 +573,7 @@ export function BoardCanvas() {
   return (
     <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden">
       <CanvasToolbar
+        reservePanelToggle={panelCollapsed}
         onAdd={(type) => {
           const center = screenToWorld(
             { x: size.w / 2, y: size.h / 2 },

@@ -43,7 +43,7 @@ describe("application configuration", () => {
       canvasPanelWidth: 10,
       canvasPanelTab: "invalid" as "projects",
     })).toMatchObject({
-      canvasPanelWidth: 220,
+      canvasPanelWidth: 240,
       canvasPanelCollapsed: false,
       canvasPanelTab: "projects",
     });

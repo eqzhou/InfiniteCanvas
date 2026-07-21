@@ -6,11 +6,19 @@ const agentUrl = process.env.OPENBOARD_E2E_PRODUCTION === "1"
 const pngPixelBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWP8z8AARAjAhGBCWIQFAIPRAgYQO+IXAAAAAElFTkSuQmCC";
 const pngReplacementBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWNk+A+ESIAJiQ1mEhYAAILSAgahbK2jAAAAAElFTkSuQmCC";
 
-async function openFreshBoard(page: Page) {
+async function openFreshBoard(
+  page: Page,
+  { requireProjectPanel = true }: { requireProjectPanel?: boolean } = {},
+) {
   await page.goto("/");
   await expect(page.getByTitle("文本")).toBeVisible();
+  if (!requireProjectPanel) return;
   if ((page.viewportSize()?.width ?? 1440) < 768) {
     await page.getByTitle("项目").click();
+  }
+  const projectTab = page.getByRole("tab", { name: "项目" });
+  if (await projectTab.getAttribute("aria-selected") !== "true") {
+    await projectTab.click();
   }
   await expect(page.locator('input[value="我的第一个画布"]')).toHaveCount(1);
   if ((page.viewportSize()?.width ?? 1440) < 768) {
@@ -111,7 +119,15 @@ test("desktop project panel resizes, collapses, and persists its width", async (
 
   await panel.getByTitle("收起侧栏").click();
   await expect(panel).toBeHidden();
-  await page.getByTitle("展开侧栏").click();
+  const expandPanel = page.getByTitle("展开侧栏");
+  const firstTool = page.getByRole("toolbar", { name: "画布工具栏" })
+    .getByTitle("文本", { exact: true });
+  const expandBox = await expandPanel.boundingBox();
+  const firstToolBox = await firstTool.boundingBox();
+  expect(expandBox).not.toBeNull();
+  expect(firstToolBox).not.toBeNull();
+  expect(expandBox!.x + expandBox!.width).toBeLessThanOrEqual(firstToolBox!.x);
+  await expandPanel.click();
   await expect(panel).toBeVisible();
   expect((await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
 
@@ -768,7 +784,7 @@ test("settings keeps provider configuration structured without responsive overfl
     { width: 390, height: 844 },
   ]) {
     await page.setViewportSize(viewport);
-    await openFreshBoard(page);
+    await openFreshBoard(page, { requireProjectPanel: false });
     await page.getByTitle("设置").click();
 
     const dialog = page.getByRole("dialog", { name: "设置" });
@@ -2791,6 +2807,26 @@ test("mobile assistant can be opened and closed without hiding the canvas", asyn
   await expect(page.getByText("画布助手", { exact: true })).toHaveCount(0);
 });
 
+test("compact navigation keeps secondary actions reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFreshBoard(page);
+
+  await page.getByTitle("更多").click();
+  const menu = page.getByRole("menu", { name: "更多操作" });
+  await expect(menu.getByRole("menuitem", { name: "本地 Agent" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "快捷键" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "切换主题" })).toBeVisible();
+  const versionItem = menu.getByTitle("查看版本更新");
+  await expect(versionItem).toBeVisible();
+  await expect(versionItem).toHaveAttribute("role", "menuitem");
+
+  const wasDark = await page.locator("html").evaluate((element) => element.classList.contains("dark"));
+  await menu.getByRole("menuitem", { name: "切换主题" }).click();
+  await expect.poll(() => page.locator("html").evaluate((element) => element.classList.contains("dark")))
+    .toBe(!wasDark);
+  await expect(menu).toHaveCount(0);
+});
+
 test("mobile canvas controls stay compact and do not overlap", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFreshBoard(page);
@@ -2816,6 +2852,39 @@ test("mobile canvas controls stay compact and do not overlap", async ({ page }) 
   );
   expect(overlaps).toBe(false);
 });
+
+for (const viewport of [
+  { label: "tablet", width: 768, height: 900 },
+  { label: "compact desktop", width: 1024, height: 900 },
+]) {
+  test(`${viewport.label} avoids competing docked sidebars while the assistant is open`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await openFreshBoard(page, { requireProjectPanel: false });
+
+    const surface = page.getByTestId("canvas-surface");
+    const assistant = page.getByRole("complementary", { name: "画布助手" });
+    const projectPanel = page.getByRole("complementary", { name: "项目侧栏" });
+    await expect(surface).toBeVisible();
+    await expect(assistant).toBeVisible();
+    await expect(projectPanel).toBeHidden();
+
+    const surfaceBox = await surface.boundingBox();
+    const assistantBox = await assistant.boundingBox();
+    expect(surfaceBox).not.toBeNull();
+    expect(assistantBox).not.toBeNull();
+    expect(surfaceBox!.width).toBe(viewport.width);
+    expect(surfaceBox!.height).toBeGreaterThan(700);
+    expect(assistantBox!.x).toBeGreaterThanOrEqual(0);
+    expect(assistantBox!.x + assistantBox!.width).toBeLessThanOrEqual(viewport.width);
+
+    await assistant.getByTitle("关闭助手").click();
+    await expect(assistant).toHaveCount(0);
+    await expect(projectPanel).toBeVisible();
+    const canvasAfterClose = await surface.boundingBox();
+    expect(canvasAfterClose!.width).toBeLessThan(surfaceBox!.width);
+    expect(canvasAfterClose!.width).toBeGreaterThanOrEqual(viewport.width - 420);
+  });
+}
 
 test("desktop canvas toolbar exposes every core action without scrolling", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

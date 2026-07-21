@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { Link, useLocation } from "react-router-dom";
 import {
@@ -7,6 +8,7 @@ import {
   HelpCircle,
   LayoutDashboard,
   MessageSquare,
+  MoreHorizontal,
   Moon,
   Puzzle,
   Settings,
@@ -17,6 +19,7 @@ import {
 import { cn } from "@/lib/cn";
 import { exportProjectBundle } from "@/lib/project-bundle";
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export function TopNav({
   onOpenSettings,
@@ -34,11 +37,27 @@ export function TopNav({
   const setShowLocalAgent = useBoardStore((s) => s.setShowLocalAgent);
   const activeProject = useBoardStore((s) =>
     s.projects.find((project) => project.id === s.activeProjectId) ?? null);
+  const [compactMenuOpen, setCompactMenuOpen] = useState(false);
+  useEscapeDismiss(compactMenuOpen, () => setCompactMenuOpen(false), 40);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setConfig({ ...config, theme: next });
     document.documentElement.classList.toggle("dark", next === "dark");
+  };
+
+  const downloadActiveProject = () => {
+    if (!activeProject) return;
+    void exportProjectBundle(activeProject)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${activeProject.title || "openboard"}.openboard`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((error) => alert(error instanceof Error ? error.message : String(error)));
   };
 
   const links = [
@@ -50,14 +69,14 @@ export function TopNav({
   ];
 
   return (
-    <header className="flex h-14 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 sm:gap-3 sm:px-4">
-      <div className="flex items-center gap-2 font-semibold tracking-tight">
+    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 overflow-hidden border-b border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 sm:gap-2 sm:px-3 lg:gap-3 lg:px-4">
+      <div className="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
         <span className="inline-grid h-8 w-8 place-items-center rounded-md bg-[var(--ob-accent)] text-white">
           OB
         </span>
-        <span className="hidden sm:inline">OpenBoard</span>
+        <span className="hidden lg:inline">OpenBoard</span>
       </div>
-      <nav className="flex items-center gap-0.5 sm:ml-4 sm:gap-1">
+      <nav className="ob-toolbar-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto sm:ml-2 sm:gap-1 lg:ml-4">
         {links.map((l) => {
           const Icon = l.icon;
           const active = location.pathname === l.to || (l.to.startsWith("/workbench") && location.pathname.startsWith("/workbench"));
@@ -65,54 +84,45 @@ export function TopNav({
             <Link
               key={l.to}
               to={l.to}
+              aria-label={l.label}
               className={cn(
-                "inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm sm:px-3",
+                "inline-flex h-9 shrink-0 items-center gap-1 rounded-md px-2 text-sm lg:px-3",
                 active
                   ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
                   : "text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]",
               )}
             >
               <Icon size={16} />
-              <span className="hidden sm:inline">{l.label}</span>
+              <span className="hidden xl:inline">{l.label}</span>
             </Link>
           );
         })}
       </nav>
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
         {location.pathname === "/" ? (
           <button
             type="button"
-            className="rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] disabled:opacity-40 sm:p-2"
+            className="hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] disabled:opacity-40 lg:grid"
             title="导出当前画布包"
             disabled={!activeProject}
-            onClick={() => {
-              if (!activeProject) return;
-              void exportProjectBundle(activeProject)
-                .then((blob) => {
-                  const url = URL.createObjectURL(blob);
-                  const anchor = document.createElement("a");
-                  anchor.href = url;
-                  anchor.download = `${activeProject.title || "openboard"}.openboard`;
-                  anchor.click();
-                  URL.revokeObjectURL(url);
-                })
-                .catch((error) => alert(error instanceof Error ? error.message : String(error)));
-            }}
+            onClick={downloadActiveProject}
           >
             <Archive size={18} />
           </button>
         ) : null}
         <button
           type="button"
-          className="rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] sm:p-2"
+          className="grid h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
           title="助手面板"
+          aria-controls="canvas-assistant"
+          aria-expanded={showAssistant}
           onClick={() => setShowAssistant(!showAssistant)}
         >
           <MessageSquare size={18} />
         </button>
         <button
           type="button"
-          className={`rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] sm:p-2 ${showLocalAgent ? "bg-[var(--ob-accent-soft)]" : ""}`}
+          className={`hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] lg:grid ${showLocalAgent ? "bg-[var(--ob-accent-soft)]" : ""}`}
           title="本地 Agent"
           onClick={() => setShowLocalAgent(!showLocalAgent)}
         >
@@ -120,7 +130,7 @@ export function TopNav({
         </button>
         <button
           type="button"
-          className="hidden rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] sm:block sm:p-2"
+          className="hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] lg:grid"
           title="快捷键"
           onClick={() => setShowShortcuts(true)}
         >
@@ -128,16 +138,100 @@ export function TopNav({
         </button>
         <button
           type="button"
-          className="hidden rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] sm:block sm:p-2"
+          className="hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] lg:grid"
           title="主题"
           onClick={toggleTheme}
         >
           {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
         </button>
-        <VersionReleaseModal />
+        <div className="hidden lg:block">
+          <VersionReleaseModal />
+        </div>
+        <div className="lg:hidden">
+          <button
+            type="button"
+            className="grid h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+            title="更多"
+            aria-haspopup="menu"
+            aria-expanded={compactMenuOpen}
+            onClick={() => setCompactMenuOpen((open) => !open)}
+          >
+            <MoreHorizontal size={18} />
+          </button>
+          {compactMenuOpen ? (
+            <>
+              <button
+                type="button"
+                aria-label="关闭更多操作"
+                className="fixed inset-0 z-[80] cursor-default bg-transparent"
+                onClick={() => setCompactMenuOpen(false)}
+              />
+              <div
+                role="menu"
+                aria-label="更多操作"
+                className="fixed right-2 top-14 z-[90] w-48 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
+              >
+                {location.pathname === "/" ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!activeProject}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                    onClick={() => {
+                      downloadActiveProject();
+                      setCompactMenuOpen(false);
+                    }}
+                  >
+                    <Archive size={16} />
+                    导出当前画布
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
+                  onClick={() => {
+                    setShowLocalAgent(!showLocalAgent);
+                    setCompactMenuOpen(false);
+                  }}
+                >
+                  <Bot size={16} />
+                  本地 Agent
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
+                  onClick={() => {
+                    setShowShortcuts(true);
+                    setCompactMenuOpen(false);
+                  }}
+                >
+                  <HelpCircle size={16} />
+                  快捷键
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
+                  onClick={() => {
+                    toggleTheme();
+                    setCompactMenuOpen(false);
+                  }}
+                >
+                  {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+                  切换主题
+                </button>
+                <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
+                  <VersionReleaseModal menuItem />
+                </div>
+              </div>
+            </>
+          ) : null}
+        </div>
         <button
           type="button"
-          className="rounded-md p-1.5 hover:bg-[var(--ob-accent-soft)] sm:p-2"
+          className="grid h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
           title="设置"
           onClick={onOpenSettings}
         >

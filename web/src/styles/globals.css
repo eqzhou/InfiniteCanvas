@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --ob-bg: #f4f1ea;
   --ob-panel: #fffdf8;
   --ob-ink: #1c1917;
@@ -10,6 +10,7 @@
   --ob-accent: #0f766e;
   --ob-accent-soft: #ccfbf1;
   --ob-danger: #b91c1c;
+  --ob-warning: #a16207;
   --ob-node: #ffffff;
   --ob-shadow: 0 10px 30px rgba(28, 25, 23, 0.08);
   --ob-canvas: #efe8dc;
@@ -19,6 +20,7 @@
 }
 
 html.dark {
+  color-scheme: dark;
   --ob-bg: #0c0a09;
   --ob-panel: #1c1917;
   --ob-ink: #fafaf9;
@@ -27,6 +29,7 @@ html.dark {
   --ob-accent: #2dd4bf;
   --ob-accent-soft: #134e4a;
   --ob-danger: #f87171;
+  --ob-warning: #fbbf24;
   --ob-node: #292524;
   --ob-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
   --ob-canvas: #12100e;
@@ -47,11 +50,19 @@ body,
   background: var(--ob-bg);
   color: var(--ob-ink);
   font-family:
-    "IBM Plex Sans",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
     "Segoe UI",
     "PingFang SC",
     "Noto Sans SC",
     sans-serif;
+}
+
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 button,

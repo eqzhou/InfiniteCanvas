@@ -10,6 +10,7 @@ working-tree action was clean-room compliant.
 |---|---|---|
 | `web/src/lib` geometry, history, indexes, gestures | Original implementation from public behavior requirements and standard algorithms | Unit tests in the same module; no upstream files are vendored |
 | React canvas and panels | Original implementation with independently chosen OpenBoard name, copy, colors, and layout | Playwright flows and screenshots generated in this repository |
+| `docs/screenshots/final-responsive-canvas.png` | Screenshot generated from the local OpenBoard implementation at 1440×900 after the responsive shell review; no upstream visual asset is embedded | Browser geometry checks at 1440, 1024, 768, and 390 pixels plus responsive Playwright coverage |
 | Go API, MCP, and Codex bridge | Original implementation using public HTTP, MCP, and JSON-RPC protocol concepts | Go tests, race detector, and fake app-server integration test |
 | Fixtures under `web/e2e` | Independently generated test data | Test source records fixture bytes and expected behavior |
 | AI adapters and image/video workbenches | Original provider-neutral contracts based on public protocol documentation | Mock-provider unit tests, workbench E2E, and formal generation-job persistence |

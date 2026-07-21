@@ -19,14 +19,14 @@ function tagClass(type: string): string {
   return "bg-[var(--ob-accent-soft)] text-[var(--ob-muted)]";
 }
 
-export function VersionReleaseModal() {
+export function VersionReleaseModal({ menuItem = false }: { menuItem?: boolean } = {}) {
   const bundled = useMemo(localReleases, []);
   const [open, setOpen] = useState(false);
   const [latestVersion, setLatestVersion] = useState(APP_VERSION);
   const [releases, setReleases] = useState<ReleaseInfo[]>(bundled);
   const [checking, setChecking] = useState(false);
   const hasNew = isNewerVersion(latestVersion, APP_VERSION);
-  useEscapeDismiss(open, () => setOpen(false));
+  useEscapeDismiss(open, () => setOpen(false), 100);
 
   const checkLatest = useCallback(async (showError = false) => {
     setChecking(true);
@@ -51,14 +51,17 @@ export function VersionReleaseModal() {
     <>
       <button
         type="button"
-        className="relative rounded-md px-2 py-1 text-xs font-medium text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]"
+        role={menuItem ? "menuitem" : undefined}
+        className={menuItem
+          ? "relative flex w-full items-center rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
+          : "relative rounded-md px-2 py-1 text-xs font-medium text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]"}
         title="查看版本更新"
         onClick={() => {
           setOpen(true);
           void checkLatest(true);
         }}
       >
-        {APP_VERSION}
+        {menuItem ? `版本更新 · ${APP_VERSION}` : APP_VERSION}
         {hasNew ? (
           <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />
         ) : null}

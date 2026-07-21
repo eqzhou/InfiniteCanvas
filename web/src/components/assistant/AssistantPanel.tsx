@@ -296,12 +296,16 @@ export function AssistantPanel() {
   };
 
   return (
-    <aside className="absolute inset-0 z-50 flex h-full w-full shrink-0 flex-col border-l border-[var(--ob-line)] bg-[var(--ob-panel)] md:static md:w-[340px]">
+    <aside
+      id="canvas-assistant"
+      aria-label="画布助手"
+      className="absolute inset-y-0 right-0 z-50 flex h-full w-full shrink-0 flex-col border-l border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)] sm:w-[360px] xl:static xl:w-[340px] xl:shadow-none"
+    >
       <div className="flex items-center gap-2 border-b border-[var(--ob-line)] px-3 py-2">
         <strong className="text-sm">画布助手</strong>
         <button
           type="button"
-          className="ml-auto rounded p-1 hover:bg-[var(--ob-accent-soft)] md:hidden"
+          className="ml-auto grid h-8 w-8 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] xl:hidden"
           title="关闭助手"
           onClick={() => setShowAssistant(false)}
         >

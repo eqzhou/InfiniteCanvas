@@ -14,6 +14,7 @@ import {
   Undo2,
   Upload,
 } from "lucide-react";
+import { cn } from "@/lib/cn";
 
 export function CanvasToolbar({
   onAdd,
@@ -22,6 +23,7 @@ export function CanvasToolbar({
   onImportAudios,
   onOpenAssets,
   onFitView,
+  reservePanelToggle = false,
 }: {
   onAdd: (type: NodeType) => void;
   onImportImages: (files: File[]) => void | Promise<void>;
@@ -29,6 +31,7 @@ export function CanvasToolbar({
   onImportAudios?: (files: File[]) => void | Promise<void>;
   onOpenAssets?: () => void;
   onFitView?: () => void;
+  reservePanelToggle?: boolean;
 }) {
   const undo = useBoardStore((s) => s.undo);
   const redo = useBoardStore((s) => s.redo);
@@ -41,7 +44,10 @@ export function CanvasToolbar({
     <div
       role="toolbar"
       aria-label="画布工具栏"
-      className="ob-toolbar-scroll flex min-h-12 w-full min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel)] py-2 pl-14 pr-3 sm:px-3"
+      className={cn(
+        "ob-toolbar-scroll flex min-h-14 w-full min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel)] py-2 pr-3",
+        reservePanelToggle ? "pl-14" : "pl-14 sm:pl-3",
+      )}
     >
       <Tool label="文本" onClick={() => onAdd("text")}>
         <Type size={16} />
@@ -167,7 +173,7 @@ function Tool({
       title={label}
       aria-label={label}
       onClick={onClick}
-      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1.5 text-sm ${
+      className={`inline-flex min-h-9 shrink-0 items-center gap-1 rounded-md border px-2 text-sm ${
         active
           ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]"
           : "border-[var(--ob-line)] hover:bg-[var(--ob-accent-soft)]"
