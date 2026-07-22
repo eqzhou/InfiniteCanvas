@@ -19,14 +19,24 @@ function tagClass(type: string): string {
   return "bg-[var(--ob-accent-soft)] text-[var(--ob-muted)]";
 }
 
-export function VersionReleaseModal({ menuItem = false }: { menuItem?: boolean } = {}) {
+export function VersionReleaseModal({
+  menuItem = false,
+  onClose,
+}: {
+  menuItem?: boolean;
+  onClose?: () => void;
+} = {}) {
   const bundled = useMemo(localReleases, []);
   const [open, setOpen] = useState(false);
   const [latestVersion, setLatestVersion] = useState(APP_VERSION);
   const [releases, setReleases] = useState<ReleaseInfo[]>(bundled);
   const [checking, setChecking] = useState(false);
   const hasNew = isNewerVersion(latestVersion, APP_VERSION);
-  useEscapeDismiss(open, () => setOpen(false), 100);
+  const close = () => {
+    setOpen(false);
+    onClose?.();
+  };
+  useEscapeDismiss(open, close, 100);
 
   const checkLatest = useCallback(async (showError = false) => {
     setChecking(true);
@@ -79,7 +89,7 @@ export function VersionReleaseModal({ menuItem = false }: { menuItem?: boolean }
               <button
                 type="button"
                 className="ml-auto rounded-md px-2 py-1 text-sm text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)]"
-                onClick={() => setOpen(false)}
+                onClick={close}
               >
                 关闭
               </button>

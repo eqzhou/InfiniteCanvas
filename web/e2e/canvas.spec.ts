@@ -161,6 +161,9 @@ test("canvas element panel selects, locates, and batch exports nodes", async ({ 
   expect(download.suggestedFilename()).toMatch(/画布元素-2\.zip$/);
 
   await elements.getByRole("button", { name: "定位文本" }).click();
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await expect(panel).toBeHidden();
+  }
   await expect(page.locator('[data-node-type="text"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
   await page.reload();
   await openProjectPanel(page);

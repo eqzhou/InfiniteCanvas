@@ -2,8 +2,9 @@
 
 :root {
   color-scheme: light;
-  --ob-bg: #f4f1ea;
+  --ob-bg: #f3f0e8;
   --ob-panel: #fffdf8;
+  --ob-panel-glass: color-mix(in srgb, #fffdf8 92%, transparent);
   --ob-ink: #1c1917;
   --ob-muted: #78716c;
   --ob-line: #d6d3d1;
@@ -13,16 +14,23 @@
   --ob-warning: #a16207;
   --ob-node: #ffffff;
   --ob-shadow: 0 10px 30px rgba(28, 25, 23, 0.08);
-  --ob-canvas: #efe8dc;
-  --ob-grid: rgba(28, 25, 23, 0.08);
+  --ob-shadow-lg: 0 18px 40px rgba(28, 25, 23, 0.12);
+  --ob-canvas: #ebe4d6;
+  --ob-grid: rgba(28, 25, 23, 0.07);
   --ob-port: #0f766e;
   --ob-select: #0d9488;
+  --ob-glow: color-mix(in srgb, var(--ob-accent) 12%, transparent);
+  --ob-radius: 0.75rem;
+  --ob-radius-lg: 1rem;
+  --ob-duration: 180ms;
+  --ob-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 html.dark {
   color-scheme: dark;
   --ob-bg: #0c0a09;
   --ob-panel: #1c1917;
+  --ob-panel-glass: color-mix(in srgb, #1c1917 88%, transparent);
   --ob-ink: #fafaf9;
   --ob-muted: #a8a29e;
   --ob-line: #44403c;
@@ -32,10 +40,12 @@ html.dark {
   --ob-warning: #fbbf24;
   --ob-node: #292524;
   --ob-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  --ob-shadow-lg: 0 22px 48px rgba(0, 0, 0, 0.45);
   --ob-canvas: #12100e;
   --ob-grid: rgba(250, 250, 249, 0.06);
   --ob-port: #2dd4bf;
   --ob-select: #5eead4;
+  --ob-glow: color-mix(in srgb, var(--ob-accent) 14%, transparent);
 }
 
 * {
@@ -47,7 +57,11 @@ body,
 #root {
   margin: 0;
   height: 100%;
-  background: var(--ob-bg);
+  background-color: var(--ob-bg);
+  background-image:
+    radial-gradient(ellipse 55% 40% at 12% 18%, var(--ob-glow), transparent 70%),
+    radial-gradient(ellipse 45% 35% at 88% 8%, color-mix(in srgb, var(--ob-accent) 8%, transparent), transparent 65%);
+  background-attachment: fixed;
   color: var(--ob-ink);
   font-family:
     system-ui,
@@ -55,8 +69,12 @@ body,
     BlinkMacSystemFont,
     "Segoe UI",
     "PingFang SC",
+    "Hiragino Sans GB",
     "Noto Sans SC",
+    "Microsoft YaHei",
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html,
@@ -76,6 +94,17 @@ button {
   cursor: pointer;
 }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--ob-accent);
+  outline-offset: 2px;
+}
+
 .ob-toolbar-scroll {
   scrollbar-width: none;
 }
@@ -85,10 +114,256 @@ button {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--ob-muted) 50%, transparent);
+  background: color-mix(in srgb, var(--ob-muted) 35%, transparent);
   border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ob-muted) 55%, transparent);
+  background-clip: content-box;
+}
+
+/* Shared surface primitives — prefer these over one-off Tailwind stacks */
+.ob-surface {
+  border: 1px solid var(--ob-line);
+  background: var(--ob-panel);
+  border-radius: var(--ob-radius);
+  box-shadow: var(--ob-shadow);
+}
+
+.ob-surface-glass {
+  border: 1px solid var(--ob-line);
+  background: var(--ob-panel-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: var(--ob-radius-lg);
+  box-shadow: var(--ob-shadow-lg);
+}
+
+.ob-card {
+  border: 1px solid var(--ob-line);
+  background: var(--ob-panel);
+  border-radius: var(--ob-radius-lg);
+  box-shadow: var(--ob-shadow);
+  transition:
+    border-color var(--ob-duration) var(--ob-ease),
+    box-shadow var(--ob-duration) var(--ob-ease),
+    transform var(--ob-duration) var(--ob-ease);
+}
+
+.ob-card:hover {
+  border-color: color-mix(in srgb, var(--ob-accent) 35%, var(--ob-line));
+  box-shadow: var(--ob-shadow-lg);
+}
+
+.ob-field {
+  width: 100%;
+  border: 1px solid var(--ob-line);
+  border-radius: 0.625rem;
+  background: var(--ob-canvas);
+  padding: 0.55rem 0.75rem;
+  color: var(--ob-ink);
+  transition:
+    border-color var(--ob-duration) var(--ob-ease),
+    box-shadow var(--ob-duration) var(--ob-ease);
+}
+
+.ob-field:focus {
+  border-color: var(--ob-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ob-accent) 22%, transparent);
+  outline: none;
+}
+
+.ob-field:disabled {
+  opacity: 0.5;
+}
+
+.ob-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--ob-line);
+  background: var(--ob-panel);
+  padding: 0.45rem 0.85rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ob-ink);
+  transition:
+    background-color var(--ob-duration) var(--ob-ease),
+    border-color var(--ob-duration) var(--ob-ease),
+    color var(--ob-duration) var(--ob-ease),
+    opacity var(--ob-duration) var(--ob-ease);
+}
+
+.ob-btn:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+}
+
+.ob-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ob-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-color: transparent;
+  background: var(--ob-accent);
+  color: #fff;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ob-accent) 35%, transparent);
+  transition:
+    background-color var(--ob-duration) var(--ob-ease),
+    opacity var(--ob-duration) var(--ob-ease);
+}
+
+.ob-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ob-accent) 88%, #000);
+  color: #fff;
+}
+
+.ob-btn-primary:disabled,
+.ob-btn-danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ob-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ob-muted);
+}
+
+.ob-btn-ghost:hover:not(:disabled) {
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+}
+
+.ob-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--ob-danger) 28%, var(--ob-line));
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-color: color-mix(in srgb, var(--ob-danger) 28%, var(--ob-line));
+  color: var(--ob-danger);
+  transition:
+    background-color var(--ob-duration) var(--ob-ease),
+    border-color var(--ob-duration) var(--ob-ease),
+    opacity var(--ob-duration) var(--ob-ease);
+}
+
+.ob-btn-danger:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ob-danger) 12%, transparent);
+  color: var(--ob-danger);
+}
+
+.ob-icon-btn {
+  display: grid;
+  place-items: center;
+  height: 2.25rem;
+  width: 2.25rem;
+  border-radius: 0.625rem;
+  color: var(--ob-muted);
+  transition:
+    background-color var(--ob-duration) var(--ob-ease),
+    color var(--ob-duration) var(--ob-ease);
+}
+
+.ob-icon-btn:hover:not(:disabled) {
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+}
+
+.ob-icon-btn:disabled {
+  opacity: 0.4;
+}
+
+.ob-icon-btn[aria-pressed="true"],
+.ob-icon-btn.is-active {
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ob-accent) 25%, transparent);
+}
+
+.ob-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: var(--ob-canvas);
+  padding: 0.15rem 0.55rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--ob-muted);
+}
+
+.ob-status-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--ob-muted);
+  vertical-align: middle;
+}
+
+.ob-status-dot[data-status="succeeded"] {
+  background: #16a34a;
+}
+
+.ob-status-dot[data-status="running"] {
+  background: #2563eb;
+  animation: ob-pulse 1.4s ease-in-out infinite;
+}
+
+.ob-status-dot[data-status="failed"] {
+  background: var(--ob-danger);
+}
+
+@keyframes ob-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .ob-card:hover {
+    transform: none;
+  }
 }

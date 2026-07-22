@@ -35,13 +35,13 @@ function PluginCard({
   onEnabledChange: (enabled: boolean) => void;
 }) {
   return (
-    <article className="flex min-h-48 flex-col rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
-      <div className="flex min-w-0 items-start gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
+    <article className="ob-card flex min-h-48 flex-col p-5">
+      <div className="flex min-w-0 items-start gap-4">
+        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
           <Box size={20} />
         </span>
-        <div className="min-w-0">
-          <h2 className="truncate font-medium">{manifest.name}</h2>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate font-semibold text-[var(--ob-ink)]">{manifest.name}</h2>
           <p className="text-xs text-[var(--ob-muted)]">
             {builtin ? "内置" : "已安装"} · {manifest.id} · v{manifest.version}
           </p>
@@ -64,25 +64,21 @@ function PluginCard({
       <div className="mt-auto flex items-center gap-2 pt-4">
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          className="ob-btn-primary rounded-lg px-3 py-1.5 text-sm font-medium"
           disabled={!enabled}
           onClick={onAdd}
         >
           <Plus size={15} /> 添加到画布
         </button>
         {update && onUpdate ? (
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
-            onClick={onUpdate}
-          >
+          <button type="button" className="ob-btn" onClick={onUpdate}>
             <RefreshCw size={15} /> 升级到 v{update.version}
           </button>
         ) : null}
         {onRemove ? (
           <button
             type="button"
-            className="ml-auto rounded-md p-1.5 text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)]"
+            className="ob-btn-danger ml-auto rounded-lg p-2"
             title="卸载插件"
             onClick={onRemove}
           >
@@ -230,7 +226,7 @@ export function PluginsPage() {
             <input
               type="url"
               inputMode="url"
-              className="w-full rounded-md border border-[var(--ob-line)] bg-transparent px-3 py-2 text-sm"
+              className="ob-field"
               placeholder="https://registry.example/openboard.json"
               value={registrySource}
               onChange={(event) => setRegistrySource(event.target.value)}
@@ -238,7 +234,7 @@ export function PluginsPage() {
           </label>
           <button
             type="button"
-            className="inline-flex items-center justify-center gap-2 rounded-md border border-[var(--ob-line)] px-3 py-2 text-sm disabled:opacity-50"
+            className="ob-btn"
             disabled={busy || !registrySource.trim()}
             onClick={() => void loadRegistry()}
           >
@@ -251,7 +247,7 @@ export function PluginsPage() {
             <input
               type="url"
               inputMode="url"
-              className="w-full rounded-md border border-[var(--ob-line)] bg-transparent px-3 py-2 text-sm"
+              className="ob-field"
               placeholder="https://example.com/plugin.json"
               value={source}
               onChange={(event) => setSource(event.target.value)}
@@ -259,7 +255,7 @@ export function PluginsPage() {
           </label>
           <button
             type="button"
-            className="inline-flex items-center justify-center gap-2 rounded-md border border-[var(--ob-line)] px-3 py-2 text-sm disabled:opacity-50"
+            className="ob-btn"
             disabled={busy || !source.trim()}
             onClick={() => void install()}
           >
@@ -332,14 +328,14 @@ export function PluginsPage() {
           />
         ))}
         {registry.filter((entry) => !installed.some((plugin) => plugin.id === entry.id) && !builtinIds.has(entry.id)).map((entry) => (
-          <article key={entry.id} className="flex min-h-48 flex-col rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
-            <div className="flex items-start gap-3">
-              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"><Box size={20} /></span>
-              <div className="min-w-0"><h2 className="truncate font-medium">{entry.name}</h2><p className="text-xs text-[var(--ob-muted)]">{entry.id} · v{entry.version}</p></div>
-              <span className="ml-auto text-xs text-[var(--ob-muted)]">注册表</span>
+          <article key={entry.id} className="ob-card flex min-h-48 flex-col p-5">
+            <div className="flex items-start gap-4">
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"><Box size={20} /></span>
+              <div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-[var(--ob-ink)]">{entry.name}</h2><p className="text-xs text-[var(--ob-muted)]">{entry.id} · v{entry.version}</p></div>
+              <span className="ob-chip ml-auto">注册表</span>
             </div>
-            <p className="mt-3 line-clamp-3 text-sm text-[var(--ob-muted)]">{entry.description}</p>
-            <button type="button" disabled={busy} className="mt-auto inline-flex w-fit items-center gap-1 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50" onClick={() => void prepareRegistryInstall(entry)}>
+            <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-[var(--ob-muted)]">{entry.description}</p>
+            <button type="button" disabled={busy} className="ob-btn-primary mt-auto w-fit rounded-lg px-4 py-1.5 text-sm font-medium" onClick={() => void prepareRegistryInstall(entry)}>
               <Download size={15} /> 安装
             </button>
           </article>
@@ -347,14 +343,14 @@ export function PluginsPage() {
       </div>
       </div>
       {pendingManifest ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-black/40 p-4 backdrop-blur-sm">
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="plugin-install-title"
-            className="w-full max-w-lg rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-shadow)]"
+            className="ob-surface-glass w-full max-w-lg p-6"
           >
-            <h2 id="plugin-install-title" className="text-base font-semibold">
+            <h2 id="plugin-install-title" className="text-lg font-semibold text-[var(--ob-ink)]">
               安装 {pendingManifest.name}
             </h2>
             <p className="mt-2 text-sm text-[var(--ob-muted)]">
@@ -382,7 +378,7 @@ export function PluginsPage() {
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
+                className="ob-btn"
                 onClick={() => {
                   setPendingManifest(null);
                   setConsented([]);
@@ -393,7 +389,7 @@ export function PluginsPage() {
               <button
                 type="button"
                 disabled={busy || consented.length !== pendingManifest.permissions.length}
-                className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                className="ob-btn-primary rounded-lg px-4 py-2 text-sm font-medium"
                 onClick={() => void confirmInstall()}
               >
                 同意并安装

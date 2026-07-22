@@ -131,13 +131,14 @@ export function AssetsPage() {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-semibold">我的素材</h1>
         <input
-          className="w-full rounded-md border border-[var(--ob-line)] bg-transparent px-3 py-1.5 text-sm sm:ml-auto sm:w-auto"
+          className="ob-field w-full sm:ml-auto sm:w-64"
+          aria-label="搜索素材"
           placeholder="搜索…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
         <select
-          className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
+          className="ob-field w-auto cursor-pointer"
           value={kind}
           onChange={(e) => setKind(e.target.value as typeof kind)}
         >
@@ -147,14 +148,10 @@ export function AssetsPage() {
           <option value="video">视频</option>
           <option value="audio">音频</option>
         </select>
-        <button
-          type="button"
-          className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
-          onClick={addText}
-        >
+        <button type="button" className="ob-btn" onClick={addText}>
           新增文本
         </button>
-        <label className="cursor-pointer rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm">
+        <label className="ob-btn cursor-pointer">
           上传图片
           <input
             type="file"
@@ -167,7 +164,7 @@ export function AssetsPage() {
             }}
           />
         </label>
-        <label className="cursor-pointer rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm">
+        <label className="ob-btn cursor-pointer">
           上传视频
           <input
             type="file"
@@ -180,7 +177,7 @@ export function AssetsPage() {
             }}
           />
         </label>
-        <label className="cursor-pointer rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm">
+        <label className="ob-btn cursor-pointer">
           上传音频
           <input
             type="file"
@@ -195,17 +192,14 @@ export function AssetsPage() {
         </label>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {pageItems.map((a) => (
-          <article
-            key={a.id}
-            className="rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3 shadow-[var(--ob-shadow)]"
-          >
+          <article key={a.id} className="ob-card flex flex-col overflow-hidden p-4">
             {a.kind === "image" && a.coverUrl ? (
               <img
                 src={a.coverUrl}
                 alt={a.title}
-                className="mb-2 h-40 w-full rounded object-cover"
+                className="mb-3 h-40 w-full rounded-xl object-cover"
               />
             ) : null}
             {a.kind === "video" && a.coverUrl ? (
@@ -214,23 +208,25 @@ export function AssetsPage() {
                 aria-label={a.title}
                 muted
                 preload="metadata"
-                className="mb-2 h-40 w-full rounded bg-black object-contain"
+                className="mb-3 h-40 w-full rounded-xl bg-black object-contain"
               />
             ) : null}
             {a.kind === "audio" && a.coverUrl ? (
-              <div className="mb-2 grid h-24 place-items-center rounded bg-[var(--ob-canvas)] px-3">
+              <div className="mb-3 grid h-32 place-items-center rounded-xl bg-[var(--ob-canvas)] px-3">
                 <audio src={a.coverUrl} aria-label={a.title} controls preload="none" className="w-full" />
               </div>
             ) : null}
-            <h3 className="font-medium">{a.title}</h3>
-            {a.source ? <p className="truncate text-xs text-[var(--ob-muted)]">{a.source}</p> : null}
-            <p className="mt-1 line-clamp-3 text-sm text-[var(--ob-muted)]">
-              {a.kind === "text" ? a.content : a.mimeType}
-            </p>
-            <div className="mt-3 flex gap-2 text-sm">
+            <div className="flex-1">
+              <h3 className="font-semibold text-[var(--ob-ink)]">{a.title}</h3>
+              {a.source ? <p className="mt-0.5 truncate text-xs text-[var(--ob-muted)]">{a.source}</p> : null}
+              <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-[var(--ob-muted)]">
+                {a.kind === "text" ? a.content : a.mimeType}
+              </p>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--ob-line)] pt-3 text-sm">
               <button
                 type="button"
-                className="rounded border border-[var(--ob-line)] px-2 py-1"
+                className="ob-btn"
                 onClick={() => {
                   if (!active) {
                     alert("请先打开一个画布项目");
@@ -248,7 +244,7 @@ export function AssetsPage() {
               {a.kind === "text" ? (
                 <button
                   type="button"
-                  className="rounded border border-[var(--ob-line)] px-2 py-1"
+                  className="ob-btn"
                   onClick={() => void navigator.clipboard.writeText(a.content ?? "")}
                 >
                   复制
@@ -257,7 +253,7 @@ export function AssetsPage() {
               {a.kind !== "text" && a.storageKey ? (
                 <button
                   type="button"
-                  className="rounded border border-[var(--ob-line)] px-2 py-1"
+                  className="ob-btn"
                   onClick={() =>
                     void downloadStorageKey(
                       a.storageKey!,
@@ -270,7 +266,7 @@ export function AssetsPage() {
               ) : null}
               <button
                 type="button"
-                className="rounded border border-[var(--ob-line)] px-2 py-1"
+                className="ob-btn"
                 onClick={() => {
                   setCreating(false);
                   setEditing(a);
@@ -280,7 +276,7 @@ export function AssetsPage() {
               </button>
               <button
                 type="button"
-                className="rounded border border-[var(--ob-line)] px-2 py-1 text-[var(--ob-danger)]"
+                className="ob-btn-danger ml-auto rounded-lg px-2.5 py-1.5 text-sm font-medium"
                 onClick={() => {
                   if (!window.confirm(`删除素材“${a.title}”？`)) return;
                   void (async () => {
@@ -300,21 +296,21 @@ export function AssetsPage() {
       {!filtered.length ? (
         <p className="mt-10 text-center text-[var(--ob-muted)]">暂无素材</p>
       ) : (
-        <div className="mt-6 flex items-center justify-center gap-3 text-sm">
+        <div className="mt-8 flex items-center justify-center gap-4 text-sm">
           <button
             type="button"
-            className="rounded border border-[var(--ob-line)] px-3 py-1 disabled:opacity-40"
+            className="ob-btn"
             disabled={page <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
           >
             上一页
           </button>
-          <span className="text-[var(--ob-muted)]">
-            {page} / {totalPages} · 共 {filtered.length}
+          <span className="ob-chip px-4 py-1.5 text-xs">
+            {page} / {totalPages} <span className="mx-2 opacity-50">·</span> 共 {filtered.length}
           </span>
           <button
             type="button"
-            className="rounded border border-[var(--ob-line)] px-3 py-1 disabled:opacity-40"
+            className="ob-btn"
             disabled={page >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
           >

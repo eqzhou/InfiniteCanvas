@@ -20,7 +20,7 @@ export function PromptDetailDialog({
   useEscapeDismiss(open && Boolean(prompt), onClose);
   if (!open || !prompt) return null;
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/45 p-4">
       <div
         role="dialog"
         aria-modal="true"

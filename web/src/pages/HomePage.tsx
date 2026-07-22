@@ -90,6 +90,7 @@ export function HomePage() {
   const focusNode = (node: BoardNode) => {
     const project = useBoardStore.getState().getActive();
     if (!project) return;
+    setProjectsOpen(false);
     setSelected([node.id]);
     if (viewportAnimationRef.current !== null) cancelAnimationFrame(viewportAnimationRef.current);
     const start = { ...project.viewport };
@@ -152,7 +153,7 @@ export function HomePage() {
     >
       <button
         type="button"
-        className={`absolute left-2 top-2 z-[60] h-9 w-9 place-items-center rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)] ${projectsOpen ? "hidden" : panelCollapsed ? "grid" : "grid md:hidden"}`}
+        className={`absolute left-2 top-2 z-[60] h-10 w-10 place-items-center rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] ${projectsOpen ? "hidden" : panelCollapsed ? "grid" : "grid md:hidden"}`}
         title={panelCollapsed ? "展开侧栏" : "项目"}
         onClick={() => {
           if (window.innerWidth >= 768) {
@@ -174,7 +175,7 @@ export function HomePage() {
       ) : null}
       <aside
         aria-label="项目侧栏"
-        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : showAssistant ? "md:hidden xl:relative xl:flex" : "md:relative md:flex"} w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel)] md:w-[var(--canvas-panel-width)]`}
+        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : showAssistant ? "md:hidden xl:relative xl:flex" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
         style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
         <div className="flex min-h-12 items-center gap-1 border-b border-[var(--ob-line)] px-2 py-2">
@@ -341,10 +342,10 @@ export function HomePage() {
               type="button"
               role="tab"
               aria-selected={panelTab === value}
-              className={`relative z-[1] px-2 py-2 text-xs transition-colors ${
+              className={`relative z-[1] rounded-lg px-2 py-2 text-sm transition-colors duration-150 ${
                 panelTab === value
-                  ? "font-medium text-[var(--ob-accent)]"
-                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+                  ? "font-semibold text-[var(--ob-accent)]"
+                  : "font-medium text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)]/50 hover:text-[var(--ob-ink)]"
               }`}
               onClick={() => changePanelTab(value)}
             >
@@ -367,10 +368,10 @@ export function HomePage() {
             {sorted.map((p) => (
             <div
               key={p.id}
-              className={`group mb-1 rounded-lg border px-2 py-2 ${
+              className={`group mb-2 rounded-xl border px-3 py-3 transition-colors duration-150 ${
                 p.id === activeProjectId
-                  ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]"
-                  : "border-transparent hover:border-[var(--ob-line)]"
+                  ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)] shadow-sm"
+                  : "border-transparent bg-transparent hover:border-[var(--ob-line)] hover:bg-[var(--ob-canvas)]"
               }`}
             >
               <div className="flex items-start gap-2">

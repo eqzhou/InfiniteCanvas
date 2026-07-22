@@ -249,45 +249,45 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--ob-canvas)]">
-      <header className="flex flex-wrap items-center gap-2 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] px-4 py-3">
+      <header className="flex flex-wrap items-center gap-2 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 backdrop-blur-md">
         <h1 className="mr-3 text-base font-semibold">{kind === "image" ? "图片创作工作台" : "视频创作工作台"}</h1>
-        <Link className={`rounded px-3 py-1.5 text-sm ${kind === "image" ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]" : ""}`} to="/workbench/image">图片</Link>
-        <Link className={`rounded px-3 py-1.5 text-sm ${kind === "video" ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]" : ""}`} to="/workbench/video">视频</Link>
+        <Link className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${kind === "image" ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]" : "text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]"}`} to="/workbench/image">图片</Link>
+        <Link className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${kind === "video" ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]" : "text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]"}`} to="/workbench/video">视频</Link>
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[360px_1fr]">
-        <section className="border-b border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 lg:border-b-0 lg:border-r">
-          <div className="space-y-3 text-sm">
-            <label className="block">提示词<textarea className="mt-1 min-h-32 w-full resize-y rounded border border-[var(--ob-line)] bg-transparent p-2" value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>
-            <label className="block">Provider<select className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={channelId} onChange={(event) => setChannelId(event.target.value)}>{config.channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label className="block">模型<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={model} onChange={(event) => setModel(event.target.value)} /></label>
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[380px_1fr]">
+        <section className="relative z-10 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-shadow)] lg:border-b-0 lg:border-r">
+          <div className="space-y-4 text-sm font-medium">
+            <label className="block">提示词<textarea className="ob-field mt-2 min-h-32 resize-y" value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>
+            <label className="block">Provider<select className="ob-field mt-2 cursor-pointer" value={channelId} onChange={(event) => setChannelId(event.target.value)}>{config.channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label className="block">模型<input className="ob-field mt-2" value={model} onChange={(event) => setModel(event.target.value)} /></label>
             {kind === "image" ? (
-              <div className="grid grid-cols-2 gap-2">
-                <label>尺寸<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={size} onChange={(event) => setSize(event.target.value)} /></label>
-                <label>质量<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={quality} onChange={(event) => setQuality(event.target.value)} /></label>
-                <label>数量<input type="number" min={1} max={8} className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={count} onChange={(event) => setCount(Number(event.target.value) || 1)} /></label>
-                <label className="flex items-center gap-2 self-end pb-2"><input type="checkbox" checked={transparent} onChange={(event) => setTransparent(event.target.checked)} />透明背景</label>
+              <div className="grid grid-cols-2 gap-3">
+                <label>尺寸<input className="ob-field mt-1.5" value={size} onChange={(event) => setSize(event.target.value)} /></label>
+                <label>质量<input className="ob-field mt-1.5" value={quality} onChange={(event) => setQuality(event.target.value)} /></label>
+                <label>数量<input type="number" min={1} max={8} className="ob-field mt-1.5" value={count} onChange={(event) => setCount(Number(event.target.value) || 1)} /></label>
+                <label className="flex cursor-pointer items-center gap-2 self-end pb-2.5"><input type="checkbox" checked={transparent} onChange={(event) => setTransparent(event.target.checked)} />透明背景</label>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <label>秒数<input type="number" min={4} max={15} disabled={smartDuration} className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2 disabled:opacity-50" value={seconds} onChange={(event) => setSeconds(Number(event.target.value) || 5)} /></label>
-                <label>比例<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={ratio} onChange={(event) => setRatio(event.target.value)} /></label>
-                <label>清晰度<input className="mt-1 w-full rounded border border-[var(--ob-line)] bg-transparent p-2" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label>
-                <label className="flex items-center gap-2 self-end pb-2"><input type="checkbox" checked={smartDuration} onChange={(event) => setSmartDuration(event.target.checked)} />智能时长</label>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={generateAudio} onChange={(event) => setGenerateAudio(event.target.checked)} />生成声音</label>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={watermark} onChange={(event) => setWatermark(event.target.checked)} />水印</label>
+              <div className="grid grid-cols-2 gap-3">
+                <label>秒数<input type="number" min={4} max={15} disabled={smartDuration} className="ob-field mt-1.5" value={seconds} onChange={(event) => setSeconds(Number(event.target.value) || 5)} /></label>
+                <label>比例<input className="ob-field mt-1.5" value={ratio} onChange={(event) => setRatio(event.target.value)} /></label>
+                <label>清晰度<input className="ob-field mt-1.5" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label>
+                <label className="flex cursor-pointer items-center gap-2 self-end pb-2.5"><input type="checkbox" checked={smartDuration} onChange={(event) => setSmartDuration(event.target.checked)} />智能时长</label>
+                <label className="flex cursor-pointer items-center gap-2"><input type="checkbox" checked={generateAudio} onChange={(event) => setGenerateAudio(event.target.checked)} />生成声音</label>
+                <label className="flex cursor-pointer items-center gap-2"><input type="checkbox" checked={watermark} onChange={(event) => setWatermark(event.target.checked)} />水印</label>
               </div>
             )}
-            <label className="block">参考素材<input type="file" multiple accept="image/*,video/*,audio/*" className="mt-1 block w-full text-xs" onChange={(event) => setReferences(Array.from(event.target.files ?? []))} /></label>
-            <div className="flex gap-2">
-              <button type="button" className="flex flex-1 items-center justify-center gap-2 rounded bg-[var(--ob-accent)] px-3 py-2 text-white disabled:opacity-50" disabled={busy} onClick={() => void run()}>{kind === "image" ? <ImagePlus size={16} /> : <Video size={16} />}{busy ? "生成中" : "生成"}</button>
-              <button type="button" title="停止" className="rounded border border-[var(--ob-line)] p-2 disabled:opacity-40" disabled={!busy} onClick={() => abortRef.current?.abort()}><Square size={16} /></button>
+            <label className="block">参考素材<input type="file" multiple accept="image/*,video/*,audio/*" className="mt-2 block w-full cursor-pointer text-xs file:mr-4 file:rounded-full file:border-0 file:bg-[var(--ob-accent-soft)] file:px-4 file:py-2 file:text-sm file:font-semibold file:text-[var(--ob-accent)] hover:file:bg-[var(--ob-accent)] hover:file:text-white" onChange={(event) => setReferences(Array.from(event.target.files ?? []))} /></label>
+            <div className="flex gap-2 pt-2">
+              <button type="button" aria-label="生成" className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold" disabled={busy} onClick={() => void run()}>{kind === "image" ? <ImagePlus size={18} /> : <Video size={18} />}{busy ? "生成中..." : "开始生成"}</button>
+              <button type="button" title="停止" className="ob-btn-danger rounded-xl p-3" disabled={!busy} onClick={() => abortRef.current?.abort()}><Square size={18} /></button>
             </div>
             {error ? <p role="alert" className="text-[var(--ob-danger)]">{error}</p> : null}
           </div>
         </section>
-        <section className="min-w-0 p-4">
-          <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold">生成历史</h2><button type="button" title="刷新" onClick={() => void refresh()}><RefreshCw size={16} /></button></div>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        <section className="min-w-0 p-6">
+          <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-semibold text-[var(--ob-ink)]">生成历史</h2><button type="button" title="刷新" className="ob-icon-btn" onClick={() => void refresh()}><RefreshCw size={18} /></button></div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             {jobs.map((job) => <HistoryRow key={job.id} job={job} onRetry={() => void run(job)} onInsert={(item) => insert(item, job)} onDelete={async () => {
               await deleteGenerationJob(job.id);
               const state = useBoardStore.getState();
@@ -316,10 +316,10 @@ function HistoryRow({ job, onRetry, onInsert, onDelete }: { job: GenerationJob; 
   const items = resultItems(job);
   const [inserting, setInserting] = useState<number | null>(null);
   const [inserted, setInserted] = useState<number | null>(null);
-  return <article className="rounded border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3">
-    <div className="mb-2 flex items-start gap-2"><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{job.prompt}</div><div className="text-xs text-[var(--ob-muted)]">{job.status} · {job.model || "默认模型"}</div></div><button type="button" title="重试" onClick={onRetry}><RefreshCw size={15} /></button><button type="button" title="删除" onClick={() => void onDelete()}><Trash2 size={15} /></button></div>
+  return <article className="ob-card p-4">
+    <div className="mb-3 flex items-start gap-3"><div className="min-w-0 flex-1"><div className="truncate text-base font-semibold text-[var(--ob-ink)]">{job.prompt}</div><div className="mt-0.5 text-xs font-medium text-[var(--ob-muted)]"><span className="ob-status-dot mr-1" data-status={job.status}></span>{job.status} · {job.model || "默认模型"}</div></div><button type="button" className="ob-icon-btn h-8 w-8" title="重试" onClick={onRetry}><RefreshCw size={16} /></button><button type="button" className="ob-btn-danger rounded-lg p-1.5" title="删除" onClick={() => void onDelete()}><Trash2 size={16} /></button></div>
     {job.error ? <p className="mb-2 text-xs text-[var(--ob-danger)]">{job.error}</p> : null}
-    <div className="grid grid-cols-2 gap-2">{items.map((item, index) => <div key={item.storageKey ?? item.url ?? index} className="min-w-0"><MediaPreview item={item} video={job.kind === "video"} /><div className="mt-1 flex gap-1"><button type="button" className="rounded border border-[var(--ob-line)] p-1" title="下载" onClick={() => item.storageKey ? void downloadStorageKey(item.storageKey, `${job.kind}-${index + 1}.${job.kind === "video" ? "mp4" : "png"}`) : downloadURL(item.url)}><Download size={14} /></button><button type="button" disabled={inserting !== null} className="rounded border border-[var(--ob-line)] px-2 py-1 text-xs disabled:opacity-50" onClick={() => void (async () => {
+    <div className="grid grid-cols-2 gap-3">{items.map((item, index) => <div key={item.storageKey ?? item.url ?? index} className="group flex min-w-0 flex-col"><div className="overflow-hidden rounded-xl bg-[var(--ob-canvas)]"><MediaPreview item={item} video={job.kind === "video"} /></div><div className="mt-2 flex gap-2"><button type="button" className="ob-icon-btn h-8 w-8 border border-[var(--ob-line)]" title="下载" onClick={() => item.storageKey ? void downloadStorageKey(item.storageKey, `${job.kind}-${index + 1}.${job.kind === "video" ? "mp4" : "png"}`) : downloadURL(item.url)}><Download size={16} /></button><button type="button" disabled={inserting !== null} className="ob-btn flex-1 px-3 py-1.5 text-xs" onClick={() => void (async () => {
       setInserting(index);
       try {
         await onInsert(item);
@@ -343,7 +343,7 @@ function MediaPreview({ item, video }: { item: ResultItem; video: boolean }) {
     });
     return () => { if (objectURL) URL.revokeObjectURL(objectURL); };
   }, [item.storageKey]);
-  if (!url) return <div className="grid aspect-video place-items-center bg-[var(--ob-canvas)] text-xs text-[var(--ob-muted)]">结果不可用</div>;
+  if (!url) return <div className="grid aspect-video place-items-center text-xs font-medium text-[var(--ob-muted)]">结果不可用</div>;
   return video ? <video src={url} controls className="aspect-video w-full object-contain" /> : <img src={url} alt="生成结果" className="aspect-video w-full object-contain" />;
 }
 

@@ -91,23 +91,23 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-2 sm:p-5">
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/40 p-2 backdrop-blur-sm sm:p-5">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)]"
+        className="ob-surface-glass flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden"
       >
         <header className="flex min-h-16 items-center gap-4 border-b border-[var(--ob-line)] px-4 sm:px-6">
           <div>
-            <h2 id="settings-title" className="text-base font-semibold">设置</h2>
+            <h2 id="settings-title" className="text-lg font-semibold">设置</h2>
             <p className="text-xs text-[var(--ob-muted)]">本地工作区配置</p>
           </div>
           <button
             type="button"
             aria-label="关闭"
             title="关闭"
-            className="ml-auto grid h-9 w-9 place-items-center rounded-md text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-50"
+            className="ob-icon-btn ml-auto"
             disabled={closing}
             onClick={requestClose}
           >

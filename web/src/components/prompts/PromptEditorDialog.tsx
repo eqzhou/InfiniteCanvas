@@ -69,7 +69,7 @@ export function PromptEditorDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-3 sm:p-5">
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/45 p-3 sm:p-5">
       <div
         role="dialog"
         aria-modal="true"

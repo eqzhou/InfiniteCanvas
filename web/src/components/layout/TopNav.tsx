@@ -63,20 +63,20 @@ export function TopNav({
   const links = [
     { to: "/", label: "画布", icon: LayoutDashboard },
     { to: "/assets", label: "素材", icon: Bookmark },
-    { to: "/prompts", label: "提示词", icon: Sparkles },
+    { to: "/prompts", label: "提示词", ariaLabel: "提示库页面", icon: Sparkles },
     { to: "/plugins", label: "插件", icon: Puzzle },
     { to: "/workbench/image", label: "工作台", icon: WandSparkles },
   ];
 
   return (
-    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 overflow-hidden border-b border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 sm:gap-2 sm:px-3 lg:gap-3 lg:px-4">
+    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-2 shadow-[var(--ob-shadow)] backdrop-blur-md sm:gap-2 sm:px-3 lg:gap-3 lg:px-4">
       <div className="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
-        <span className="inline-grid h-8 w-8 place-items-center rounded-md bg-[var(--ob-accent)] text-white">
+        <span className="inline-grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent)] text-sm font-bold text-white shadow-sm">
           OB
         </span>
-        <span className="hidden lg:inline">OpenBoard</span>
+        <span className="hidden text-[var(--ob-ink)] lg:inline">OpenBoard</span>
       </div>
-      <nav className="ob-toolbar-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto sm:ml-2 sm:gap-1 lg:ml-4">
+      <nav className="ob-toolbar-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:ml-2 lg:ml-4">
         {links.map((l) => {
           const Icon = l.icon;
           const active = location.pathname === l.to || (l.to.startsWith("/workbench") && location.pathname.startsWith("/workbench"));
@@ -84,11 +84,11 @@ export function TopNav({
             <Link
               key={l.to}
               to={l.to}
-              aria-label={l.label}
+              aria-label={"ariaLabel" in l ? l.ariaLabel : `${l.label}页面`}
               className={cn(
-                "inline-flex h-9 shrink-0 items-center gap-1 rounded-md px-2 text-sm lg:px-3",
+                "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors duration-150 lg:px-3.5",
                 active
-                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
+                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)] shadow-sm"
                   : "text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]",
               )}
             >
@@ -98,11 +98,11 @@ export function TopNav({
           );
         })}
       </nav>
-      <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
         {location.pathname === "/" ? (
           <button
             type="button"
-            className="hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] disabled:opacity-40 lg:grid"
+            className="ob-icon-btn hidden disabled:opacity-40 lg:grid"
             title="导出当前画布包"
             disabled={!activeProject}
             onClick={downloadActiveProject}
@@ -112,7 +112,7 @@ export function TopNav({
         ) : null}
         <button
           type="button"
-          className="grid h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+          className={cn("ob-icon-btn", showAssistant && "is-active")}
           title="助手面板"
           aria-controls="canvas-assistant"
           aria-expanded={showAssistant}
@@ -122,7 +122,7 @@ export function TopNav({
         </button>
         <button
           type="button"
-          className={`hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] lg:grid ${showLocalAgent ? "bg-[var(--ob-accent-soft)]" : ""}`}
+          className={cn("ob-icon-btn hidden lg:grid", showLocalAgent && "is-active")}
           title="本地 Agent"
           onClick={() => setShowLocalAgent(!showLocalAgent)}
         >
@@ -130,7 +130,7 @@ export function TopNav({
         </button>
         <button
           type="button"
-          className="hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] lg:grid"
+          className="ob-icon-btn hidden lg:grid"
           title="快捷键"
           onClick={() => setShowShortcuts(true)}
         >
@@ -138,7 +138,7 @@ export function TopNav({
         </button>
         <button
           type="button"
-          className="hidden h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] lg:grid"
+          className="ob-icon-btn hidden lg:grid"
           title="主题"
           onClick={toggleTheme}
         >
@@ -150,7 +150,7 @@ export function TopNav({
         <div className="lg:hidden">
           <button
             type="button"
-            className="grid h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+            className="ob-icon-btn"
             title="更多"
             aria-haspopup="menu"
             aria-expanded={compactMenuOpen}
@@ -169,7 +169,7 @@ export function TopNav({
               <div
                 role="menu"
                 aria-label="更多操作"
-                className="fixed right-2 top-14 z-[90] w-48 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
+                className="ob-surface-glass fixed right-2 top-14 z-[90] w-48 p-1.5"
               >
                 {location.pathname === "/" ? (
                   <button
@@ -223,7 +223,7 @@ export function TopNav({
                   切换主题
                 </button>
                 <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
-                  <VersionReleaseModal menuItem />
+                  <VersionReleaseModal menuItem onClose={() => setCompactMenuOpen(false)} />
                 </div>
               </div>
             </>
@@ -231,7 +231,7 @@ export function TopNav({
         </div>
         <button
           type="button"
-          className="grid h-9 w-9 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+          className="ob-icon-btn"
           title="设置"
           onClick={onOpenSettings}
         >

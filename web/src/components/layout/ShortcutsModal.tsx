@@ -27,11 +27,22 @@ export function ShortcutsModal() {
   useEscapeDismiss(open, () => setShowShortcuts(false));
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold">画布快捷键</h2>
-          <button type="button" onClick={() => setShowShortcuts(false)}>
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/40 p-4 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcuts-title"
+        className="ob-surface-glass w-full max-w-md p-6"
+      >
+        <div className="mb-4 flex items-center justify-between border-b border-[var(--ob-line)] pb-3">
+          <h2 id="shortcuts-title" className="text-lg font-semibold text-[var(--ob-ink)]">
+            画布快捷键
+          </h2>
+          <button
+            type="button"
+            className="ob-btn-ghost rounded-lg px-2.5 py-1.5 text-sm"
+            onClick={() => setShowShortcuts(false)}
+          >
             关闭
           </button>
         </div>
