@@ -235,8 +235,11 @@ export function AssetsPage() {
                   void insertAsset(a.id, {
                     x: 80 + Math.random() * 120,
                     y: 80 + Math.random() * 120,
+                  }).then(() => {
+                    alert("已插入当前画布");
+                  }).catch((cause) => {
+                    alert(cause instanceof Error ? cause.message : String(cause));
                   });
-                  alert("已插入当前画布");
                 }}
               >
                 插入画布
