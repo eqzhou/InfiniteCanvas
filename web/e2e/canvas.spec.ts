@@ -26,6 +26,15 @@ async function openFreshBoard(
   }
 }
 
+
+async function openCodexPanel(page: Page) {
+  await page.getByTitle("本地 Agent").click();
+  const codexTab = page.getByRole("tab", { name: "Codex" });
+  if (await codexTab.count()) {
+    await codexTab.click();
+  }
+}
+
 async function closeSettings(page: Page) {
   await page.getByRole("button", { name: "关闭" }).click();
   await expect(page.getByRole("heading", { name: "设置" })).toHaveCount(0);
@@ -2654,6 +2663,8 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await page.getByTitle("本地 Agent").click();
   await page.getByLabel("Local URL").fill("http://127.0.0.1:8790");
   await page.getByRole("button", { name: "连接" }).click();
+  const codexTab = page.getByRole("tab", { name: "Codex" });
+  if (await codexTab.count()) await codexTab.click();
   await page.getByRole("button", { name: "继续会话" }).click();
   await expect.poll(() => sessionBodies).toHaveLength(1);
   releaseInitialSessionGet();
@@ -2754,6 +2765,8 @@ test("Codex session and running state stay synchronized across browser tabs", as
   await installRoutes(page);
   await openFreshBoard(page);
   await connectPanel(page);
+  const codexTab = page.getByRole("tab", { name: "Codex" });
+  if (await codexTab.count()) await codexTab.click();
   await page.getByRole("button", { name: "继续会话" }).click();
   await expect(page.getByPlaceholder("发送消息")).toBeEnabled();
 

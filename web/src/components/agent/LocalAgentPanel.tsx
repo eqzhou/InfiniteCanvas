@@ -42,7 +42,7 @@ export function LocalAgentPanel() {
   const [error, setError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [generationTasks, setGenerationTasks] = useState(getGenerationActivities);
-  const [agentTab, setAgentTab] = useState<"codex" | "claude">("claude");
+  const [agentTab, setAgentTab] = useState<"codex" | "claude">("codex");
   const [baseUrl, setBaseUrl] = useState(() => resolveAgentBaseUrl(
     config.localAgentUrl,
     readAgentToken(),
@@ -267,19 +267,6 @@ export function LocalAgentPanel() {
             <button
               type="button"
               role="tab"
-              aria-selected={agentTab === "claude"}
-              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                agentTab === "claude"
-                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
-                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
-              }`}
-              onClick={() => setAgentTab("claude")}
-            >
-              Claude
-            </button>
-            <button
-              type="button"
-              role="tab"
               aria-selected={agentTab === "codex"}
               className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
                 agentTab === "codex"
@@ -289,6 +276,19 @@ export function LocalAgentPanel() {
               onClick={() => setAgentTab("codex")}
             >
               Codex
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={agentTab === "claude"}
+              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                agentTab === "claude"
+                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
+                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+              }`}
+              onClick={() => setAgentTab("claude")}
+            >
+              Claude
             </button>
             {status?.claude?.available === false ? (
               <span className="ml-auto self-center text-[10px] text-[var(--ob-muted)]">未检测到 claude CLI</span>
