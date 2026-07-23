@@ -109,7 +109,7 @@ export function ContextMenu({
       <div
         role="menu"
         aria-label={state.nodeId ? "节点菜单" : "画布菜单"}
-        className="fixed z-[80] w-44 overflow-y-auto rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow-lg)]"
+        className="ob-surface fixed z-[80] w-44 overflow-y-auto p-1 shadow-[var(--ob-shadow-lg)]"
         style={{
           left,
           top,
@@ -125,7 +125,7 @@ export function ContextMenu({
               key={item.label}
               type="button"
               role="menuitem"
-              className="flex min-h-9 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] disabled:opacity-40"
+              className="ob-btn-ghost w-full justify-start gap-2 px-3 py-2"
               disabled={item.disabled}
               onClick={() => {
                 onClose();

@@ -91,12 +91,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   };
 
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/40 p-2 backdrop-blur-sm sm:p-5">
+    <div className="ob-overlay z-[120] p-2 sm:p-5">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="ob-surface-glass flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden"
+        className="ob-dialog ob-surface-glass flex w-full max-w-5xl flex-col overflow-hidden"
       >
         <header className="flex min-h-16 items-center gap-4 border-b border-[var(--ob-line)] px-4 sm:px-6">
           <div>
@@ -121,7 +121,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="grid gap-3 sm:grid-cols-[minmax(180px,0.8fr)_minmax(240px,1.2fr)_40px]">
               <Field label="当前渠道">
                 <select
-                  className="field"
+                  className="ob-field"
                   aria-label="当前渠道"
                   value={config.activeChannelId ?? ""}
                   onChange={(e) => setConfig({ ...config, activeChannelId: e.target.value })}
@@ -133,7 +133,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               </Field>
               <Field label="渠道名称">
                 <input
-                  className="field"
+                  className="ob-field"
                   value={channel.name}
                   onChange={(e) => updateChannel({ name: e.target.value })}
                 />
@@ -142,7 +142,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 type="button"
                 aria-label="添加渠道"
                 title="添加渠道"
-                className="mt-5 grid h-9 w-9 place-items-center rounded-md border border-[var(--ob-line)] hover:bg-[var(--ob-accent-soft)]"
+                className="ob-icon-btn mt-5"
                 onClick={() => {
                   const next = createDefaultChannel();
                   setConfig({
@@ -183,7 +183,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               <SectionTitle title="生成偏好" />
               <Field label="全局系统提示词">
                 <textarea
-                  className="field min-h-28 resize-y"
+                  className="ob-field min-h-28 resize-y"
                   maxLength={SYSTEM_PROMPT_MAX_LENGTH}
                   value={config.systemPrompt}
                   onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
@@ -193,13 +193,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
             <div className="grid content-start grid-cols-1 gap-3 sm:grid-cols-3 lg:mt-8 lg:grid-cols-1">
               <Field label="图片尺寸">
-                <input className="field" value={config.imageSize} onChange={(e) => setConfig({ ...config, imageSize: e.target.value })} />
+                <input className="ob-field" value={config.imageSize} onChange={(e) => setConfig({ ...config, imageSize: e.target.value })} />
               </Field>
               <Field label="图片质量">
-                <input className="field" value={config.imageQuality} onChange={(e) => setConfig({ ...config, imageQuality: e.target.value })} />
+                <input className="ob-field" value={config.imageQuality} onChange={(e) => setConfig({ ...config, imageQuality: e.target.value })} />
               </Field>
               <Field label="默认数量">
-                <input className="field" type="number" min={1} max={8} value={config.imageCount} onChange={(e) => setConfig({ ...config, imageCount: Number(e.target.value) || 1 })} />
+                <input className="ob-field" type="number" min={1} max={8} value={config.imageCount} onChange={(e) => setConfig({ ...config, imageCount: Number(e.target.value) || 1 })} />
               </Field>
             </div>
           </section>
@@ -208,19 +208,19 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <SectionTitle title="WebDAV 备份" />
             <div className="grid gap-3 lg:grid-cols-[1.4fr_0.7fr_0.7fr]">
               <Field label="WebDAV URL">
-                <input className="field" value={config.webdavUrl ?? ""} onChange={(e) => setConfig({ ...config, webdavUrl: e.target.value })} placeholder="https://example.com/dav/openboard" />
+                <input className="ob-field" value={config.webdavUrl ?? ""} onChange={(e) => setConfig({ ...config, webdavUrl: e.target.value })} placeholder="https://example.com/dav/openboard" />
               </Field>
               <Field label="用户名">
-                <input className="field" value={config.webdavUser ?? ""} onChange={(e) => setConfig({ ...config, webdavUser: e.target.value })} />
+                <input className="ob-field" value={config.webdavUser ?? ""} onChange={(e) => setConfig({ ...config, webdavUser: e.target.value })} />
               </Field>
               <Field label="密码">
-                <input className="field" type="password" value={config.webdavPass ?? ""} onChange={(e) => setConfig({ ...config, webdavPass: e.target.value })} />
+                <input className="ob-field" type="password" value={config.webdavPass ?? ""} onChange={(e) => setConfig({ ...config, webdavPass: e.target.value })} />
               </Field>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  className="btn"
+                  className="ob-btn"
                   onClick={() => {
                     void (async () => {
                       try {
@@ -240,7 +240,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 </button>
                 <button
                   type="button"
-                  className="btn"
+                  className="ob-btn"
                   onClick={() => {
                     void (async () => {
                       try {
@@ -264,7 +264,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 </button>
                 <button
                   type="button"
-                  className="btn"
+                  className="ob-btn"
                   onClick={() => {
                     void (async () => {
                       try {
@@ -285,7 +285,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 </button>
                 <button
                   type="button"
-                  className="btn"
+                  className="ob-btn"
                   onClick={() => {
                     void (async () => {
                       try {
@@ -318,12 +318,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         </div>
       </div>
-      <style>{`
-        .field { width: 100%; min-height: 36px; border: 1px solid var(--ob-line); border-radius: 6px; padding: 7px 9px; background: var(--ob-panel); color: var(--ob-ink); outline: none; }
-        .field:focus { border-color: var(--ob-select); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ob-select) 18%, transparent); }
-        .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; border: 1px solid var(--ob-line); border-radius: 6px; padding: 7px 10px; background: transparent; }
-        .btn:hover { background: var(--ob-accent-soft); }
-      `}</style>
     </div>
   );
 }
@@ -355,7 +349,7 @@ function ProviderRow({
       <div className="grid gap-2 md:grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] md:items-center">
         <div className="flex items-center gap-2 font-medium"><Icon size={16} className="text-[var(--ob-accent)]" />{label}</div>
         <CompactField label="协议">
-          <select className="field" aria-label={`${label}协议`} value={provider.protocol} onChange={(e) => onChange({ protocol: e.target.value as typeof provider.protocol })}>
+          <select className="ob-field" aria-label={`${label}协议`} value={provider.protocol} onChange={(e) => onChange({ protocol: e.target.value as typeof provider.protocol })}>
             <option value="openai">OpenAI</option>
             <option value="ark">Ark / Seedance</option>
             <option value="gemini">Gemini</option>
@@ -363,15 +357,15 @@ function ProviderRow({
           </select>
         </CompactField>
         <CompactField label="服务 URL">
-          <input className="field" aria-label={`${label} URL`} value={provider.baseUrl} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder="服务 URL" />
+          <input className="ob-field" aria-label={`${label} URL`} value={provider.baseUrl} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder="服务 URL" />
         </CompactField>
         <CompactField label="API Key">
-          <input className="field" aria-label={`${label} API Key`} type="password" value={provider.apiKey} onChange={(e) => onChange({ apiKey: e.target.value })} placeholder="API Key" />
+          <input className="ob-field" aria-label={`${label} API Key`} type="password" value={provider.apiKey} onChange={(e) => onChange({ apiKey: e.target.value })} placeholder="API Key" />
         </CompactField>
         <CompactField label="模型">
-          <input className="field" aria-label={`${label}模型`} value={provider.model} onChange={(e) => onChange({ model: e.target.value })} placeholder="模型名称" />
+          <input className="ob-field" aria-label={`${label}模型`} value={provider.model} onChange={(e) => onChange({ model: e.target.value })} placeholder="模型名称" />
         </CompactField>
-        <button type="button" className="grid h-9 w-9 place-items-center rounded-md border border-[var(--ob-line)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-50" aria-label={`拉取${label}模型`} title={`拉取${label}模型`} disabled={disabled} onClick={onPull}>
+        <button type="button" className="ob-icon-btn disabled:opacity-50" aria-label={`拉取${label}模型`} title={`拉取${label}模型`} disabled={disabled} onClick={onPull}>
           <RefreshCw size={16} className={busy ? "animate-spin" : ""} />
         </button>
       </div>
@@ -418,14 +412,14 @@ function TemplateEditor({
     <div className="mt-2">
       <textarea
         aria-label="声明式模板 JSON"
-        className="field min-h-40 resize-y font-mono text-xs"
+        className="ob-field min-h-40 resize-y font-mono text-xs"
         value={source}
         onChange={(event) => setSource(event.target.value)}
       />
       <div className="mt-1 flex items-center gap-2">
         <button
           type="button"
-          className="btn"
+          className="ob-btn"
           onClick={() => {
             try {
               const parsed = JSON.parse(source) as AiTemplateConfig;

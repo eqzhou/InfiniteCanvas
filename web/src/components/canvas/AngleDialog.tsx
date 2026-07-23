@@ -20,8 +20,8 @@ export function AngleDialog({
   useEscapeDismiss(open, onClose);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
-      <div className="w-full max-w-md rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
+    <div className="ob-overlay-canvas p-4">
+      <div className="ob-dialog max-w-md p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="font-semibold">多角度变换</h3>
           <button type="button" onClick={onClose}>
@@ -42,7 +42,7 @@ export function AngleDialog({
           角度（度）
           <input
             type="number"
-            className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+            className="ob-field px-2 py-1"
             value={deg}
             onChange={(e) => setDeg(Number(e.target.value) || 0)}
           />
@@ -52,7 +52,7 @@ export function AngleDialog({
             <button
               key={p}
               type="button"
-              className="rounded border border-[var(--ob-line)] px-2 py-0.5 text-xs hover:bg-[var(--ob-accent-soft)]"
+              className="ob-btn px-2 py-0.5 text-xs"
               onClick={() => setDeg(p)}
             >
               {p}°
@@ -62,14 +62,14 @@ export function AngleDialog({
         <div className="flex justify-end gap-2">
           <button
             type="button"
-            className="rounded-md border border-[var(--ob-line)] px-3 py-1.5"
+            className="ob-btn px-3 py-1.5"
             onClick={onClose}
           >
             取消
           </button>
           <button
             type="button"
-            className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-white"
+            className="ob-btn-primary px-3 py-1.5"
             onClick={() => onConfirm(deg)}
           >
             生成变换节点

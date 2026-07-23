@@ -139,13 +139,13 @@ export function LocalAgentPanel() {
   if (!show) return null;
 
   return (
-    <div className={`absolute bottom-16 left-2 right-2 z-[60] max-h-[calc(100vh-5rem)] w-auto overflow-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3 shadow-[var(--ob-shadow)] sm:left-auto sm:w-96 ${showAssistant ? "sm:right-[356px]" : "sm:right-4"}`}>
+    <div className={`ob-surface absolute bottom-16 left-2 right-2 z-[60] max-h-[calc(100vh-5rem)] w-auto overflow-auto p-3 sm:left-auto sm:w-96 ${showAssistant ? "sm:right-[356px]" : "sm:right-4"}`}>
       <div className="mb-2 flex items-center gap-2">
         <Bot size={16} className="text-[var(--ob-accent)]" />
         <strong className="text-sm">本地 Agent</strong>
         <button
           type="button"
-          className="ml-auto rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+          className="ob-btn-ghost ml-auto p-1"
           title="刷新"
           onClick={() => void refresh()}
         >
@@ -153,7 +153,7 @@ export function LocalAgentPanel() {
         </button>
         <button
           type="button"
-          className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+          className="ob-btn-ghost p-1"
           title="关闭"
           onClick={() => setShow(false)}
         >
@@ -171,7 +171,7 @@ export function LocalAgentPanel() {
               setBaseUrl(event.target.value);
               setStatus(null);
             }}
-            className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5"
+            className="ob-field"
             placeholder={DEFAULT_AGENT_BASE_URL}
           />
         </label>
@@ -185,12 +185,12 @@ export function LocalAgentPanel() {
               setToken(event.target.value);
               setStatus(null);
             }}
-            className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5"
+            className="ob-field"
           />
         </label>
         <button
           type="button"
-          className="inline-flex items-center justify-center gap-1.5 rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-xs text-white disabled:opacity-50"
+          className="ob-btn-primary gap-1.5 text-xs"
           disabled={busy || !baseUrl.trim()}
           onClick={() => void connect()}
         >
@@ -268,11 +268,7 @@ export function LocalAgentPanel() {
               type="button"
               role="tab"
               aria-selected={agentTab === "codex"}
-              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                agentTab === "codex"
-                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
-                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
-              }`}
+              className="ob-tab"
               onClick={() => setAgentTab("codex")}
             >
               Codex
@@ -281,11 +277,7 @@ export function LocalAgentPanel() {
               type="button"
               role="tab"
               aria-selected={agentTab === "claude"}
-              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                agentTab === "claude"
-                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
-                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
-              }`}
+              className="ob-tab"
               onClick={() => setAgentTab("claude")}
             >
               Claude

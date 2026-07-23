@@ -457,25 +457,28 @@ export function PromptsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--ob-canvas)]">
-      <div className="shrink-0 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 backdrop-blur-md sm:px-6">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3">
+      <div className="shrink-0 relative overflow-hidden px-4 py-5 sm:px-6 shadow-sm border-b border-[var(--ob-line)]/50 z-10 bg-[var(--ob-panel-glass)] backdrop-blur-xl">
+        <div className="absolute inset-0 bg-gradient-to-r from-[var(--ob-accent)]/5 via-transparent to-transparent opacity-80 pointer-events-none" />
+        <div className="absolute top-0 right-0 h-64 w-64 rounded-full bg-[var(--ob-accent)]/10 blur-[80px] -translate-y-1/2 translate-x-1/3 pointer-events-none" />
+        <div className="relative mx-auto flex max-w-7xl flex-col gap-5">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h1
                 aria-label="提示词库"
-                className="text-lg font-semibold tracking-tight text-[var(--ob-ink)]"
+                className="text-2xl font-bold tracking-tight text-[var(--ob-ink)] flex items-center gap-2.5"
               >
+                <div className="h-2 w-2 rounded-full bg-[var(--ob-accent)] shadow-[0_0_10px_var(--ob-accent)]" />
                 提示词中心
               </h1>
-              <p className="text-xs text-[var(--ob-muted)]">
+              <p className="mt-1.5 text-sm font-medium text-[var(--ob-muted)]">
                 浏览、筛选并插入画布 · 库 {libraryPrompts.length} · 我的 {minePrompts.length}
               </p>
             </div>
-            <div className="ml-auto flex flex-wrap items-center gap-2">
+            <div className="ml-auto flex flex-wrap items-center gap-2.5">
               {activeTab === "library" ? (
                 <button
                   type="button"
-                  className="ob-btn"
+                  className="ob-btn ob-btn-sm rounded-lg bg-[var(--ob-canvas)]"
                   onClick={() => setSourcesOpen((open) => !open)}
                   aria-expanded={sourcesOpen}
                 >
@@ -483,7 +486,7 @@ export function PromptsPage() {
                   来源
                   <span className="ob-chip">{enabledSources}/{savedSources.length || 0}</span>
                   {failedSources ? (
-                    <span className="rounded-full bg-[color-mix(in_srgb,var(--ob-danger)_14%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ob-danger)]">
+                    <span className="rounded-full bg-[color-mix(in_srgb,var(--ob-danger)_14%,transparent)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--ob-danger)]">
                       {failedSources} 失败
                     </span>
                   ) : null}
@@ -491,7 +494,7 @@ export function PromptsPage() {
               ) : null}
               <button
                 type="button"
-                className="ob-btn"
+                className="ob-btn ob-btn-sm rounded-lg bg-[var(--ob-canvas)]"
                 disabled={busy}
                 onClick={restoreBuiltinPrompts}
               >
@@ -500,7 +503,7 @@ export function PromptsPage() {
               <button
                 type="button"
                 aria-label="新建提示词"
-                className="ob-btn-primary rounded-lg px-3.5 py-2 text-sm font-medium"
+                className="ob-btn-primary ob-btn-sm rounded-lg shadow-sm shadow-[var(--ob-accent)]/20"
                 onClick={() => {
                   setActiveTab("mine");
                   setEditingPrompt(null);
@@ -513,9 +516,9 @@ export function PromptsPage() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-[var(--ob-panel)]/60 p-1.5 shadow-sm backdrop-blur-md border border-[var(--ob-line)]/50">
             <div
-              className="inline-flex rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-0.5 shadow-sm"
+              className="inline-flex rounded-xl bg-[var(--ob-canvas)]/80 p-0.5 shadow-inner border border-[var(--ob-line)]/40"
               role="tablist"
               aria-label="提示词中心分类"
             >
@@ -523,31 +526,31 @@ export function PromptsPage() {
                 type="button"
                 role="tab"
                 aria-selected={activeTab === "library"}
-                className={`inline-flex items-center gap-1.5 rounded-[0.65rem] px-3 py-1.5 text-sm transition-colors ${
+                className={`ob-tab rounded-lg px-4 py-1.5 text-sm font-medium border-b-0 transition-all ${
                   activeTab === "library"
-                    ? "bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)]"
-                    : "font-medium text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+                    ? "bg-[var(--ob-accent-soft)] !text-[var(--ob-accent)] shadow-sm"
+                    : "bg-transparent hover:text-[var(--ob-ink)]"
                 }`}
                 onClick={() => setActiveTab("library")}
               >
-                <Library size={14} />
+                <Library size={14} className="mr-1" />
                 提示词库
-                <span className="tabular-nums opacity-80">{libraryPrompts.length}</span>
+                <span className="tabular-nums opacity-80 ml-1">{libraryPrompts.length}</span>
               </button>
               <button
                 type="button"
                 role="tab"
                 aria-selected={activeTab === "mine"}
-                className={`inline-flex items-center gap-1.5 rounded-[0.65rem] px-3 py-1.5 text-sm transition-colors ${
+                className={`ob-tab rounded-lg px-4 py-1.5 text-sm font-medium border-b-0 transition-all ${
                   activeTab === "mine"
-                    ? "bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)]"
-                    : "font-medium text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+                    ? "bg-[var(--ob-accent-soft)] !text-[var(--ob-accent)] shadow-sm"
+                    : "bg-transparent hover:text-[var(--ob-ink)]"
                 }`}
                 onClick={() => setActiveTab("mine")}
               >
-                <UserRound size={14} />
+                <UserRound size={14} className="mr-1" />
                 我的
-                <span className="tabular-nums opacity-80">{minePrompts.length}</span>
+                <span className="tabular-nums opacity-80 ml-1">{minePrompts.length}</span>
               </button>
             </div>
 
@@ -559,7 +562,7 @@ export function PromptsPage() {
                 aria-hidden
               />
               <input
-                className="ob-field w-full !pl-9"
+                className="w-full bg-transparent px-3 py-1.5 pl-9 text-sm text-[var(--ob-ink)] placeholder-[var(--ob-muted)] outline-none transition-all focus:ring-2 focus:ring-[var(--ob-accent)]/30 rounded-xl"
                 placeholder="搜索标题 / 内容 / 标签 / 来源"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -568,26 +571,27 @@ export function PromptsPage() {
 
             {activeTab === "library" ? (
               <>
+                <div className="h-4 w-px bg-[var(--ob-line)]/80 hidden sm:block mx-1" />
                 <select
                   aria-label="提示词来源"
-                  className="ob-field w-auto max-w-[10rem] cursor-pointer"
+                  className="bg-transparent text-sm font-medium text-[var(--ob-ink)] cursor-pointer outline-none hover:text-[var(--ob-accent)] transition-colors pr-1"
                   value={source}
                   onChange={(e) => setSource(e.target.value)}
                 >
                   {sources.map((s) => (
-                    <option key={s} value={s}>
+                    <option key={s} value={s} className="bg-[var(--ob-panel)]">
                       {s === "all" ? "全部来源" : s}
                     </option>
                   ))}
                 </select>
                 <select
                   aria-label="提示词标签"
-                  className="ob-field w-auto max-w-[9rem] cursor-pointer"
+                  className="bg-transparent text-sm font-medium text-[var(--ob-ink)] cursor-pointer outline-none hover:text-[var(--ob-accent)] transition-colors pr-2"
                   value={tag}
                   onChange={(event) => setTag(event.target.value)}
                 >
                   {tags.map((value) => (
-                    <option key={value} value={value}>
+                    <option key={value} value={value} className="bg-[var(--ob-panel)]">
                       {value === "all" ? "全部标签" : value}
                     </option>
                   ))}
@@ -595,7 +599,7 @@ export function PromptsPage() {
               </>
             ) : null}
 
-            <span className="ml-auto hidden text-xs text-[var(--ob-muted)] sm:inline">
+            <span className="ml-auto hidden text-xs font-medium text-[var(--ob-muted)] sm:inline pr-2">
               显示 {filtered.length}
               {(q || source !== "all" || tag !== "all") ? " · 已筛选" : ""}
             </span>
@@ -622,7 +626,7 @@ export function PromptsPage() {
                   <button
                     type="button"
                     aria-label="管理来源"
-                    className="ob-btn"
+                    className="ob-btn ob-btn-sm"
                     onClick={() => setSourceManagerOpen(true)}
                   >
                     <SlidersHorizontal size={14} /> 管理
@@ -630,7 +634,7 @@ export function PromptsPage() {
                   {enabledSources ? (
                     <button
                       type="button"
-                      className="ob-btn"
+                      className="ob-btn ob-btn-sm"
                       disabled={busy}
                       onClick={() => void refreshAllRemote()}
                     >
@@ -642,27 +646,27 @@ export function PromptsPage() {
 
               <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="border-b border-[var(--ob-line)] p-4 lg:border-b-0 lg:border-r">
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--ob-muted)]">
+                  <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--ob-muted)] pl-1">
                     社区一键接入
                   </div>
-                  <ul className="grid gap-2 sm:grid-cols-2" aria-label="社区提示词源">
+                  <ul className="grid gap-3 sm:grid-cols-2" aria-label="社区提示词源">
                     {COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => {
                       const installed = savedSources.some((item) =>
                         item.id === preset.source.id || item.url === preset.source.url);
                       return (
                         <li
                           key={preset.id}
-                          className="flex min-w-0 items-start gap-2 rounded-xl border border-[var(--ob-line)] bg-[var(--ob-canvas)]/60 px-3 py-2.5"
+                          className="group/preset flex min-w-0 items-start gap-2.5 rounded-2xl border border-[var(--ob-line)]/60 bg-[var(--ob-canvas)]/30 px-3.5 py-3 transition-all hover:bg-[var(--ob-panel)] hover:shadow-sm"
                         >
                           <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-medium text-[var(--ob-ink)]">{preset.name}</div>
-                            <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-[var(--ob-muted)]">
+                            <div className="truncate text-sm font-bold text-[var(--ob-ink)] group-hover/preset:text-[var(--ob-accent)] transition-colors">{preset.name}</div>
+                            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-[var(--ob-muted)]">
                               {preset.description}
                             </p>
                           </div>
                           <button
                             type="button"
-                            className="ob-btn shrink-0 px-2.5 py-1 text-xs"
+                            className="ob-btn ob-btn-sm shrink-0 rounded-lg"
                             disabled={busy}
                             onClick={() => void addCommunityPreset(preset.id)}
                           >
@@ -688,7 +692,7 @@ export function PromptsPage() {
                     <button
                       type="button"
                       aria-label="拉取远程提示词"
-                      className="ob-btn-primary shrink-0 rounded-lg px-3 py-2 text-sm font-medium"
+                      className="ob-btn-primary ob-btn-sm shrink-0"
                       disabled={busy}
                       onClick={() => void pullRemote()}
                     >
@@ -734,7 +738,7 @@ export function PromptsPage() {
                           <button
                             type="button"
                             title="刷新提示词源"
-                            className="ob-icon-btn h-8 w-8"
+                            className="ob-icon-btn ob-icon-btn-sm"
                             disabled={busy || !sourceConfig.enabled}
                             onClick={() => void refreshRemote(sourceConfig).catch(() => undefined)}
                           >
@@ -744,7 +748,7 @@ export function PromptsPage() {
                             <button
                               type="button"
                               title="移除提示词源"
-                              className="ob-btn-danger rounded-lg p-1.5"
+                              className="ob-btn-danger ob-btn-sm p-1.5"
                               disabled={busy}
                               onClick={() => {
                                 if (window.confirm(`移除提示词来源“${sourceConfig.name}”？`)) {
@@ -770,128 +774,129 @@ export function PromptsPage() {
           ) : null}
 
           {filtered.length ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {filtered.map((p) => {
                 const isLocal = p.source === "local" || p.sourceId === "personal";
                 return (
                   <article
                     key={p.id}
-                    className="ob-card group flex min-h-[13.5rem] flex-col overflow-hidden p-0"
+                    className="ob-card group flex min-h-[14.5rem] flex-col overflow-hidden p-0 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-[var(--ob-accent)]/5 hover:border-[var(--ob-accent-soft)]"
                   >
                     {p.coverUrl ? (
-                      <div className="relative h-28 overflow-hidden border-b border-[var(--ob-line)] bg-[var(--ob-canvas)]">
+                      <div className="relative h-32 overflow-hidden border-b border-[var(--ob-line)]/50 bg-[var(--ob-canvas)]">
+                        <div className="absolute inset-0 bg-black/5 group-hover:bg-transparent transition-colors z-10 pointer-events-none" />
                         <img
                           src={p.coverUrl}
                           alt=""
                           crossOrigin="anonymous"
                           referrerPolicy="no-referrer"
-                          className="h-full w-full object-cover"
+                          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                         />
                       </div>
                     ) : null}
-                    <div className="flex min-h-0 flex-1 flex-col p-3.5">
-                      <div className="mb-1.5 flex items-start gap-2">
-                        <h3 className="min-w-0 flex-1 truncate text-[0.95rem] font-semibold leading-snug text-[var(--ob-ink)]">
+                    <div className="flex min-h-0 flex-1 flex-col p-4 sm:p-5 relative">
+                      <div className="mb-2 flex items-start gap-2">
+                        <h3 className="min-w-0 flex-1 truncate text-base font-bold leading-snug text-[var(--ob-ink)] group-hover:text-[var(--ob-accent)] transition-colors">
                           {p.title}
                         </h3>
-                        <span className="ob-chip shrink-0 max-w-[7rem] truncate" title={p.source}>
+                        <span className="ob-chip shrink-0 max-w-[7rem] truncate bg-[var(--ob-canvas)] border-[var(--ob-line)]/40 font-medium" title={p.source}>
                           {p.source}
                         </span>
                       </div>
-                      <p className="line-clamp-3 flex-1 whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ob-muted)]">
+                      <p className="line-clamp-3 flex-1 whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ob-muted)] group-hover:text-[var(--ob-ink)] transition-colors">
                         {p.body}
                       </p>
                       {p.tags.length ? (
-                        <div className="mt-2 flex flex-wrap gap-1">
+                        <div className="mt-3 flex flex-wrap gap-1.5">
                           {p.tags.slice(0, 4).map((t) => (
                             <span
                               key={t}
-                              className="rounded-md bg-[var(--ob-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ob-accent)]"
+                              className="rounded-full bg-[var(--ob-accent-soft)]/50 border border-[var(--ob-accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--ob-accent)] transition-colors group-hover:bg-[var(--ob-accent-soft)]"
                             >
                               {t}
                             </span>
                           ))}
                           {p.tags.length > 4 ? (
-                            <span className="ob-chip">+{p.tags.length - 4}</span>
+                            <span className="ob-chip rounded-full border-none bg-[var(--ob-canvas)]">+{p.tags.length - 4}</span>
                           ) : null}
                         </div>
                       ) : null}
-                      <div className="mt-3 flex items-center gap-1.5 border-t border-[var(--ob-line)] pt-2.5">
+                      
+                      {/* Action Bar */}
+                      <div className="mt-4 flex items-center gap-1.5 pt-3 border-t border-[var(--ob-line)]/40 transition-all duration-200">
                         <button
                           type="button"
                           aria-label="插入画布"
-                          className="ob-btn-primary rounded-lg px-2.5 py-1.5 text-xs font-medium"
+                          className="ob-btn-primary ob-btn-sm flex-1 rounded-lg h-7"
                           onClick={() => usePrompt(p)}
                         >
                           <SendToBack size={13} /> 插入
                         </button>
                         <button
                           type="button"
-                          className="ob-btn px-2.5 py-1.5 text-xs"
+                          className="ob-btn ob-btn-sm rounded-lg h-7"
                           onClick={() => setSelectedPrompt(p)}
                         >
-                          <Eye size={13} /> 详情
+                          <Eye size={13} />
                         </button>
                         <button
                           type="button"
                           title="复制提示词"
                           aria-label="复制提示词"
-                          className="ob-icon-btn h-8 w-8"
+                          className="ob-icon-btn ob-icon-btn-sm bg-[var(--ob-canvas)] h-7 w-7"
                           onClick={() => void navigator.clipboard.writeText(p.body)}
                         >
-                          <Copy size={14} />
+                          <Copy size={13} />
                         </button>
                         <button
                           type="button"
                           title="加入素材"
                           aria-label="加入素材"
-                          className="ob-icon-btn h-8 w-8"
+                          className="ob-icon-btn ob-icon-btn-sm bg-[var(--ob-canvas)] h-7 w-7"
                           onClick={() => void addPromptAsset(p).catch((cause) =>
                             setErr(cause instanceof Error ? cause.message : String(cause)))}
                         >
-                          <FilePlus2 size={14} />
+                          <FilePlus2 size={13} />
                         </button>
-                        <div className="ml-auto flex items-center gap-1">
-                          {isLocal ? (
-                            <>
-                              <button
-                                type="button"
-                                className="ob-icon-btn h-8 w-8"
-                                title="编辑"
-                                aria-label="编辑"
-                                onClick={() => {
-                                  setEditingPrompt(p);
-                                  setEditorMode("edit");
-                                }}
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                className="ob-btn-danger rounded-lg p-1.5"
-                                title="删除"
-                                aria-label="删除"
-                                onClick={() => {
-                                  if (!window.confirm(`删除提示词“${p.title}”？`)) return;
-                                  setPrompts(useBoardStore.getState().prompts.filter((prompt) => prompt.id !== p.id));
-                                  void flushPrompts().catch((cause) =>
-                                    setErr(cause instanceof Error ? cause.message : String(cause)));
-                                }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </>
-                          ) : (
+                        {isLocal ? (
+                          <>
                             <button
                               type="button"
-                              className="ob-btn px-2.5 py-1.5 text-xs"
-                              onClick={() => void saveToMine(p).catch((cause) =>
-                                setErr(cause instanceof Error ? cause.message : String(cause)))}
+                              className="ob-icon-btn ob-icon-btn-sm bg-[var(--ob-canvas)] h-7 w-7"
+                              title="编辑"
+                              aria-label="编辑"
+                              onClick={() => {
+                                setEditingPrompt(p);
+                                setEditorMode("edit");
+                              }}
                             >
-                              保存到我的
+                              <Pencil size={13} />
                             </button>
-                          )}
-                        </div>
+                            <button
+                              type="button"
+                              className="ob-btn-danger ob-btn-sm p-1 ml-auto rounded-lg h-7 w-7 flex items-center justify-center"
+                              title="删除"
+                              aria-label="删除"
+                              onClick={() => {
+                                if (!window.confirm(`删除提示词“${p.title}”？`)) return;
+                                setPrompts(useBoardStore.getState().prompts.filter((prompt) => prompt.id !== p.id));
+                                void flushPrompts().catch((cause) =>
+                                  setErr(cause instanceof Error ? cause.message : String(cause)));
+                              }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className="ob-btn ob-btn-sm ml-auto rounded-lg h-7"
+                            onClick={() => void saveToMine(p).catch((cause) =>
+                              setErr(cause instanceof Error ? cause.message : String(cause)))}
+                          >
+                            收藏
+                          </button>
+                        )}
                       </div>
                     </div>
                   </article>
@@ -899,41 +904,47 @@ export function PromptsPage() {
               })}
             </div>
           ) : (
-            <div className="ob-card flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
-                {activeTab === "mine" ? <UserRound size={22} /> : <Library size={22} />}
+            <div className="flex flex-col items-center justify-center gap-5 px-6 py-28 text-center bg-gradient-to-b from-transparent to-[var(--ob-panel)]/30 rounded-3xl border border-dashed border-[var(--ob-line)]/50 mt-8 mx-4">
+              <div className="relative grid h-20 w-20 place-items-center rounded-3xl bg-gradient-to-br from-[var(--ob-accent-soft)] to-[var(--ob-canvas)] text-[var(--ob-accent)] shadow-xl shadow-[var(--ob-accent)]/10 ring-1 ring-[var(--ob-line)]/50">
+                <div className="absolute inset-0 rounded-3xl bg-[var(--ob-accent)]/20 blur-2xl -z-10" />
+                {activeTab === "mine" ? <UserRound size={32} strokeWidth={1.5} /> : <Library size={32} strokeWidth={1.5} />}
               </div>
-              <div>
-                <p className="text-sm font-medium text-[var(--ob-ink)]">
-                  {activeTab === "mine" ? "还没有我的提示词" : "当前没有可显示的提示词"}
+              <div className="relative z-10">
+                <p className="text-xl font-bold text-[var(--ob-ink)] tracking-tight">
+                  {activeTab === "mine" ? "还没有专属提示词" : "当前没有可显示的提示词"}
                 </p>
-                <p className="mt-1 max-w-md text-xs leading-relaxed text-[var(--ob-muted)]">
+                <p className="mt-3 max-w-md text-[15px] leading-relaxed text-[var(--ob-muted)] font-medium">
                   {activeTab === "mine"
-                    ? "从公共库保存，或点击右上角新建。"
-                    : "展开「来源」接入社区 / 远程目录，或恢复内置示例。"}
+                    ? "浏览库中丰富的提示词收藏到这里，或者点击新建打造你的专属模板库。"
+                    : "你可以展开「来源」一键接入社区目录，或恢复内置的优秀示例。"}
                 </p>
               </div>
-              {activeTab === "library" ? (
-                <div className="flex flex-wrap justify-center gap-2">
-                  {!sourcesOpen ? (
-                    <button type="button" className="ob-btn" onClick={() => setSourcesOpen(true)}>
-                      查看来源
+              <div className="mt-2 relative z-10 flex gap-3">
+                {activeTab === "library" ? (
+                  <>
+                    {!sourcesOpen ? (
+                      <button type="button" className="ob-btn-primary rounded-xl px-5 py-2.5 font-bold shadow-md shadow-[var(--ob-accent)]/20 transition-transform hover:-translate-y-0.5" onClick={() => setSourcesOpen(true)}>
+                        <RefreshCw size={15} className="mr-2" /> 接入来源
+                      </button>
+                    ) : null}
+                    <button type="button" className="ob-btn rounded-xl px-5 py-2.5 font-bold transition-transform hover:-translate-y-0.5" onClick={restoreBuiltinPrompts}>
+                      恢复内置示例
                     </button>
-                  ) : null}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="ob-btn-primary rounded-lg px-3 py-2 text-sm font-medium"
-                  onClick={() => {
-                    setEditingPrompt(null);
-                    setCreatingPromptId(uid("prompt"));
-                    setEditorMode("create");
-                  }}
-                >
-                  <Plus size={15} /> 新建提示词
-                </button>
-              )}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="ob-btn-primary rounded-xl px-5 py-2.5 font-bold shadow-md shadow-[var(--ob-accent)]/20 transition-transform hover:-translate-y-0.5"
+                    onClick={() => {
+                      setEditingPrompt(null);
+                      setCreatingPromptId(uid("prompt"));
+                      setEditorMode("create");
+                    }}
+                  >
+                    <Plus size={16} className="-ml-0.5 mr-1" /> 新建提示词
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

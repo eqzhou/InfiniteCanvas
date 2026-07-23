@@ -218,7 +218,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   return (
     <div
-      className="absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-2 shadow-[var(--ob-shadow)]"
+      className="ob-surface absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 p-2"
       onPointerDown={(e) => e.stopPropagation()}
     >
       <PromptChipInput
@@ -230,7 +230,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       />
       <button
         type="button"
-        className="rounded-md bg-[var(--ob-accent)] p-2 text-white disabled:opacity-50"
+        className="ob-btn-primary p-2 shrink-0"
         disabled={busy || !text.trim()}
         onClick={() => void send()}
         title="发送 (Ctrl/Cmd+Enter)"

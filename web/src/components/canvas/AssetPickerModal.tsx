@@ -37,18 +37,18 @@ export function AssetPickerModal({
   const pos = at ?? { x: 120, y: 120 };
 
   return (
-    <div className="fixed inset-0 z-[90] grid place-items-center bg-black/40 p-4">
-      <div className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)]">
+    <div className="ob-overlay z-[90] p-4 bg-black/40">
+      <div className="ob-dialog flex-col max-h-[80vh] w-full max-w-2xl">
         <div className="flex items-center gap-2 border-b border-[var(--ob-line)] px-4 py-3">
           <strong>从素材插入</strong>
           <input
-            className="ml-auto rounded border border-[var(--ob-line)] bg-transparent px-2 py-1 text-sm"
+            className="ob-field ml-auto px-2 py-1 text-sm max-w-48"
             placeholder="搜索…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
           <select
-            className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1 text-sm"
+            className="ob-field px-2 py-1 text-sm"
             value={kind}
             onChange={(e) => setKind(e.target.value as typeof kind)}
           >
@@ -66,7 +66,7 @@ export function AssetPickerModal({
               <button
                 key={a.id}
                 type="button"
-                className="rounded-lg border border-[var(--ob-line)] p-2 text-left hover:border-[var(--ob-accent)]"
+                className="ob-card p-2 text-left"
                 onClick={() => {
                   void insertAsset(a.id, pos);
                   onClose();

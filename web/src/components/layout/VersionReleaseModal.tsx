@@ -77,18 +77,18 @@ export function VersionReleaseModal({
         ) : null}
       </button>
       {open ? (
-        <div className="fixed inset-0 z-[130] grid place-items-center bg-black/45 p-3" role="presentation">
+        <div className="ob-overlay z-[130] p-3" role="presentation">
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby="version-release-title"
-            className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)]"
+            className="ob-dialog flex flex-col max-w-2xl"
           >
-            <header className="flex items-center gap-2 border-b border-[var(--ob-line)] px-4 py-3">
+            <header className="ob-dialog-header px-4 py-3">
               <h2 id="version-release-title" className="text-base font-semibold">版本更新</h2>
               <button
                 type="button"
-                className="ml-auto rounded-md px-2 py-1 text-sm text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)]"
+                className="ob-btn-ghost ml-auto px-2 py-1 text-sm text-[var(--ob-muted)]"
                 onClick={close}
               >
                 关闭
@@ -113,7 +113,7 @@ export function VersionReleaseModal({
                 <div className="mt-1 text-base font-semibold">{latestVersion}</div>
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto p-4">
+            <div className="ob-dialog-body flex-1 min-h-0 overflow-auto p-4">
               <ol className="space-y-5">
                 {releases.map((release) => (
                   <li key={`${release.version}-${release.date}`}>

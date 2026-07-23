@@ -97,8 +97,8 @@ export function ImageToolsDialog({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
-      <div className="w-full max-w-md rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
+    <div className="ob-overlay-canvas p-4">
+      <div className="ob-dialog max-w-md p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="font-semibold">{title}</h3>
           <button type="button" onClick={cancel}>
@@ -176,12 +176,12 @@ export function ImageToolsDialog({
             </label>
             {selectedProvider?.kind === "cloud" ? (
               <label className="col-span-2 flex flex-col gap-1">
-                <span className="text-[var(--ob-muted)]">局部重绘提示词</span>
+                <span className="ob-label">局部重绘提示词</span>
                 <textarea
                   value={prompt}
                   maxLength={4000}
                   rows={3}
-                  className="resize-none rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                  className="ob-field resize-none px-2 py-1"
                   onChange={(event) => setPrompt(event.target.value)}
                 />
               </label>
@@ -193,7 +193,7 @@ export function ImageToolsDialog({
           <label className="mt-3 flex flex-col gap-1 text-sm">
             处理方式
             <select
-              className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+              className="ob-field px-2 py-1"
               value={providerId}
               disabled={running}
               onChange={(event) => setProviderId(event.target.value)}
@@ -209,7 +209,7 @@ export function ImageToolsDialog({
           <label className="flex flex-col gap-1 text-sm">
             放大倍数
             <select
-              className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+              className="ob-field px-2 py-1"
               value={scale}
               onChange={(e) => setScale(Number(e.target.value))}
             >
@@ -218,7 +218,7 @@ export function ImageToolsDialog({
               <option value={3}>3x</option>
               <option value={4}>4x</option>
             </select>
-            <span className="text-xs text-[var(--ob-muted)]">
+            <span className="ob-label">
               {selectedProvider?.kind === "cloud"
                 ? "调用当前 AI 渠道的超分接口；不支持时仅回退到该渠道的图像编辑接口。"
                 : "浏览器 Canvas 插值，不调用云端模型。"}
@@ -228,15 +228,15 @@ export function ImageToolsDialog({
 
         {mode === "split" ? (
           <div className="flex flex-wrap gap-2 text-sm">
-            <button type="button" className="rounded border border-[var(--ob-line)] px-2 py-1" onClick={() => setVertical((current) => [...current, 0.5])}>
+            <button type="button" className="ob-btn px-2 py-1" onClick={() => setVertical((current) => [...current, 0.5])}>
               新增纵线
             </button>
-            <button type="button" className="rounded border border-[var(--ob-line)] px-2 py-1" onClick={() => setHorizontal((current) => [...current, 0.5])}>
+            <button type="button" className="ob-btn px-2 py-1" onClick={() => setHorizontal((current) => [...current, 0.5])}>
               新增横线
             </button>
             <button
               type="button"
-              className="rounded border border-[var(--ob-line)] px-2 py-1 disabled:opacity-40"
+              className="ob-btn px-2 py-1 disabled:opacity-40"
               disabled={!selectedGuide}
               onClick={() => {
                 if (!selectedGuide) return;
@@ -250,7 +250,7 @@ export function ImageToolsDialog({
             >
               删除选中线
             </button>
-            <button type="button" className="rounded border border-[var(--ob-line)] px-2 py-1" onClick={() => {
+            <button type="button" className="ob-btn px-2 py-1" onClick={() => {
               setVertical([0.5]);
               setHorizontal([0.5]);
               setSelectedGuide(null);
@@ -268,12 +268,12 @@ export function ImageToolsDialog({
         {error ? <p className="mt-2 text-sm text-red-500">{error}</p> : null}
 
         <div className="mt-4 flex justify-end gap-2">
-          <button type="button" className="rounded-md border border-[var(--ob-line)] px-3 py-1.5" onClick={cancel}>
+          <button type="button" className="ob-btn px-3 py-1.5" onClick={cancel}>
             取消
           </button>
           <button
             type="button"
-            className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-white"
+            className="ob-btn-primary px-3 py-1.5"
             disabled={running || ((mode === "mask" || mode === "upscale") && !selectedProvider) ||
               (mode === "mask" && selectedProvider?.kind === "cloud" && !prompt.trim())}
             onClick={() => void execute()}
@@ -304,13 +304,13 @@ function Num({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[var(--ob-muted)]">{label}</span>
+      <span className="ob-label">{label}</span>
       <input
         type="number"
         step={step}
         min={min}
         max={max}
-        className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+        className="ob-field px-2 py-1"
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
       />

@@ -305,7 +305,7 @@ export function AssistantPanel() {
         <strong className="text-sm">画布助手</strong>
         <button
           type="button"
-          className="ml-auto grid h-8 w-8 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] xl:hidden"
+          className="ob-icon-btn ml-auto h-8 w-8 xl:hidden"
           title="关闭助手"
           onClick={() => setShowAssistant(false)}
         >
@@ -313,7 +313,7 @@ export function AssistantPanel() {
         </button>
         <button
           type="button"
-          className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+          className="ob-icon-btn h-8 w-8"
           title="新会话"
           onClick={() => {
             const s = createEmptySession();
@@ -328,9 +328,7 @@ export function AssistantPanel() {
         </button>
         <button
           type="button"
-          className={`rounded p-1 hover:bg-[var(--ob-accent-soft)] ${
-            managingSessions ? "bg-[var(--ob-accent-soft)]" : ""
-          }`}
+          className="ob-icon-btn h-8 w-8"
           title={managingSessions ? "退出会话管理" : "管理会话"}
           aria-pressed={managingSessions}
           onClick={() => {
@@ -342,7 +340,7 @@ export function AssistantPanel() {
         </button>
         <button
           type="button"
-          className="rounded p-1 hover:bg-[var(--ob-accent-soft)]"
+          className="ob-icon-btn h-8 w-8"
           title="删除会话"
           onClick={() => {
             updateActive((p) => {
@@ -390,7 +388,7 @@ export function AssistantPanel() {
             </div>
             <button
               type="button"
-              className="flex w-full items-center justify-center gap-1 rounded bg-[var(--ob-danger)] px-2 py-1.5 text-xs text-white disabled:opacity-50"
+              className="ob-btn-danger w-full justify-center text-xs"
               disabled={!selectedSessionIds.length}
               onClick={() => {
                 const selected = new Set(selectedSessionIds);
@@ -417,7 +415,7 @@ export function AssistantPanel() {
           </div>
         ) : (
           <select
-            className="w-full rounded border border-[var(--ob-line)] bg-transparent px-2 py-1 text-sm"
+            className="ob-field text-sm"
             value={session.id}
             onChange={(e) =>
               updateActive((p) => ({ ...p, activeChatId: e.target.value }), {
@@ -496,7 +494,7 @@ export function AssistantPanel() {
             {references.map((r) => (
               <span
                 key={r.nodeId}
-                className="rounded bg-[var(--ob-accent-soft)] px-1.5 py-0.5 text-[11px]"
+                className="ob-chip"
               >
                 {r.kind}:{r.label}
               </span>
@@ -505,17 +503,21 @@ export function AssistantPanel() {
         ) : (
           <p className="mb-2 text-xs text-[var(--ob-muted)]">选中节点可作为引用</p>
         )}
-        <div className="mb-2 flex gap-1.5 text-xs font-medium">
+        <div className="mb-2 flex gap-1.5" role="tablist">
           <button
             type="button"
-            className={`rounded-lg px-3 py-1.5 transition-colors ${mode === "ask" ? "bg-[var(--ob-accent)] font-semibold text-white" : "bg-[var(--ob-canvas)] text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"}`}
+            role="tab"
+            aria-selected={mode === "ask"}
+            className={`ob-tab rounded-lg text-xs ${mode === "ask" ? "bg-[var(--ob-accent)] !text-white !border-transparent" : "bg-[var(--ob-canvas)]"}`}
             onClick={() => setMode("ask")}
           >
             问答
           </button>
           <button
             type="button"
-            className={`rounded-lg px-3 py-1.5 transition-colors ${mode === "image" ? "bg-[var(--ob-accent)] font-semibold text-white" : "bg-[var(--ob-canvas)] text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"}`}
+            role="tab"
+            aria-selected={mode === "image"}
+            className={`ob-tab rounded-lg text-xs ${mode === "image" ? "bg-[var(--ob-accent)] !text-white !border-transparent" : "bg-[var(--ob-canvas)]"}`}
             onClick={() => setMode("image")}
           >
             生图

@@ -34,6 +34,7 @@ export function PluginNodeFrame({ node, manifest }: Props) {
 function SandboxedPluginNodeFrame({ node, manifest }: Props) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const updateNode = useBoardStore((state) => state.updateNode);
+  const persistNow = useBoardStore((state) => state.persistNow);
   const [nonce] = useState(() => crypto.randomUUID());
   const [quarantined, setQuarantined] = useState(false);
   const sourceDocument = useMemo(
@@ -55,19 +56,27 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
       const patch = pendingPatchRef.current;
       pendingPatchRef.current = null;
       if (!patch) return;
+      let changed = false;
       updateNode(nodeRef.current.id, (current) => {
         const title = patch.title ?? current.title;
         const sameState = patch.state === undefined ||
           JSON.stringify(patch.state) === JSON.stringify(current.metadata.pluginState ?? {});
         if (title === current.title && sameState) return current;
-        return {
+        changed = true;
+        const next = {
           ...current,
           title,
           metadata: patch.state === undefined
             ? current.metadata
             : { ...current.metadata, pluginState: patch.state },
         };
+        nodeRef.current = next;
+        return next;
       }, { history: false });
+      if (changed) {
+        // Debounced by LatestWrite; flush ensures formal server storage sees pluginState before reload.
+        void persistNow();
+      }
     };
 
     const consumeMessage = (value: unknown): boolean => {
@@ -103,6 +112,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
         };
         nodeRef.current = next;
         updateNode(current.id, next, { history: false });
+        void persistNow();
         return { title: next.title, state: { ...(next.metadata.pluginState ?? {}) } };
       },
       listAssets: (query) => {
@@ -291,7 +301,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
       window.removeEventListener("message", receive);
       if (patchFrameRef.current !== null) cancelAnimationFrame(patchFrameRef.current);
     };
-  }, [manifest, nonce, updateNode]);
+  }, [manifest, nonce, updateNode, persistNow]);
 
   if (quarantined) {
     return (

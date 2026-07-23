@@ -109,31 +109,33 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
                         key={prompt.id}
                         className="rounded-md border border-transparent px-2 py-1.5 hover:border-[var(--ob-line)]"
                       >
-                        <div className="flex items-start gap-1">
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-medium">{prompt.title}</div>
-                            <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-[var(--ob-muted)]">
-                              {prompt.body}
-                            </p>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="truncate text-sm font-semibold text-[var(--ob-ink)] flex-1">{prompt.title}</div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                title="插入画布"
+                                aria-label={`插入提示词 ${prompt.title}`}
+                                className="grid h-7 w-7 place-items-center rounded-md text-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)] transition-colors"
+                                onClick={() => insertPrompt(prompt)}
+                              >
+                                <SendToBack size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                title="复制提示词"
+                                aria-label={`复制提示词 ${prompt.title}`}
+                                className="grid h-7 w-7 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] transition-colors"
+                                onClick={() => void navigator.clipboard.writeText(prompt.body)}
+                              >
+                                <Copy size={14} />
+                              </button>
+                            </div>
                           </div>
-                          <button
-                            type="button"
-                            title="插入画布"
-                            aria-label={`插入提示词 ${prompt.title}`}
-                            className="grid h-7 w-7 shrink-0 place-items-center rounded-sm text-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)]"
-                            onClick={() => insertPrompt(prompt)}
-                          >
-                            <SendToBack size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            title="复制提示词"
-                            aria-label={`复制提示词 ${prompt.title}`}
-                            className="grid h-7 w-7 shrink-0 place-items-center rounded-sm hover:bg-[var(--ob-accent-soft)]"
-                            onClick={() => void navigator.clipboard.writeText(prompt.body)}
-                          >
-                            <Copy size={14} />
-                          </button>
+                          <p className="line-clamp-2 text-[11px] leading-relaxed text-[var(--ob-muted)]">
+                            {prompt.body}
+                          </p>
                         </div>
                       </li>
                     ))}

@@ -50,8 +50,8 @@ export function CropDialog({ node, open, onClose, onConfirm }: Props) {
   const scale = natural.w ? 280 / Math.max(natural.w, natural.h) : 1;
 
   return createPortal(
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-shadow)]">
+    <div className="ob-overlay-canvas p-4">
+      <div className="ob-dialog max-w-lg p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="font-semibold">裁剪图片</h3>
           <button type="button" onClick={onClose}>
@@ -80,14 +80,14 @@ export function CropDialog({ node, open, onClose, onConfirm }: Props) {
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            className="rounded-md border border-[var(--ob-line)] px-3 py-1.5"
+            className="ob-btn px-3 py-1.5"
             onClick={onClose}
           >
             取消
           </button>
           <button
             type="button"
-            className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-white"
+            className="ob-btn-primary px-3 py-1.5"
             onClick={() =>
               onConfirm({
                 x: Math.max(0, x),
@@ -119,12 +119,12 @@ function Num({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[var(--ob-muted)]">
+      <span className="ob-label">
         {label} {max ? `(0-${max})` : ""}
       </span>
       <input
         type="number"
-        className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+        className="ob-field px-2 py-1"
         value={value}
         onChange={(e) => onChange(Number(e.target.value) || 0)}
       />

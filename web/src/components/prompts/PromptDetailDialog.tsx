@@ -20,19 +20,19 @@ export function PromptDetailDialog({
   useEscapeDismiss(open && Boolean(prompt), onClose);
   if (!open || !prompt) return null;
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/45 p-4">
+    <div className="ob-overlay z-[120] p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="prompt-detail-title"
-        className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-shadow)]"
+        className="ob-dialog max-w-2xl p-5"
       >
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
             <h2 id="prompt-detail-title" className="text-lg font-semibold">{prompt.title}</h2>
             <p className="text-xs text-[var(--ob-muted)]">来源：{prompt.source}</p>
           </div>
-          <button type="button" title="关闭详情" className="rounded-md p-1 text-[var(--ob-muted)]" onClick={onClose}>
+          <button type="button" title="关闭详情" className="ob-btn-ghost p-1 text-[var(--ob-muted)]" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
@@ -77,14 +77,14 @@ export function PromptDetailDialog({
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
-            className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
+            className="ob-btn text-sm"
             onClick={onCopy}
           >
             复制提示词
           </button>
           <button
             type="button"
-            className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm"
+            className="ob-btn text-sm"
             onClick={onAddAsset}
           >
             加入素材
@@ -92,7 +92,7 @@ export function PromptDetailDialog({
           {onInsert ? (
             <button
               type="button"
-              className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white"
+              className="ob-btn-primary text-sm"
               onClick={onInsert}
             >
               插入当前画布文本节点

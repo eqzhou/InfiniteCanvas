@@ -201,6 +201,7 @@ select:focus-visible,
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--ob-ink);
+  white-space: nowrap;
   transition:
     background-color var(--ob-duration) var(--ob-ease),
     border-color var(--ob-duration) var(--ob-ease),
@@ -231,6 +232,7 @@ select:focus-visible,
   border-color: transparent;
   background: var(--ob-accent);
   color: #fff;
+  white-space: nowrap;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ob-accent) 35%, transparent);
   transition:
     background-color var(--ob-duration) var(--ob-ease),
@@ -254,6 +256,19 @@ select:focus-visible,
   color: var(--ob-muted);
 }
 
+.ob-btn-sm {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  gap: 0.25rem;
+  border-radius: 0.5rem;
+}
+
+.ob-icon-btn-sm {
+  height: 1.75rem;
+  width: 1.75rem;
+  border-radius: 0.5rem;
+}
+
 .ob-btn-ghost:hover:not(:disabled) {
   background: var(--ob-accent-soft);
   color: var(--ob-accent);
@@ -270,6 +285,7 @@ select:focus-visible,
   font-weight: 500;
   border-color: color-mix(in srgb, var(--ob-danger) 28%, var(--ob-line));
   color: var(--ob-danger);
+  white-space: nowrap;
   transition:
     background-color var(--ob-duration) var(--ob-ease),
     border-color var(--ob-duration) var(--ob-ease),
@@ -341,6 +357,127 @@ select:focus-visible,
 
 .ob-status-dot[data-status="failed"] {
   background: var(--ob-danger);
+}
+
+/* Dialog / Modal overlay */
+.ob-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, #000 42%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* Dialog container — sits inside .ob-overlay */
+.ob-dialog {
+  width: 100%;
+  max-height: 92vh;
+  overflow: auto;
+  border: 1px solid var(--ob-line);
+  border-radius: var(--ob-radius-lg);
+  background: var(--ob-panel);
+  box-shadow: var(--ob-shadow-lg);
+}
+
+.ob-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--ob-line);
+}
+
+.ob-dialog-header h2 {
+  flex: 1;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.ob-dialog-body {
+  padding: 1rem;
+}
+
+.ob-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--ob-line);
+}
+
+/* Canvas-level overlays use a lower z-index */
+.ob-overlay-canvas {
+  z-index: 60;
+}
+
+/* Tab bar primitives */
+.ob-tab {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ob-muted);
+  border-bottom: 2px solid transparent;
+  transition:
+    color var(--ob-duration) var(--ob-ease),
+    border-color var(--ob-duration) var(--ob-ease);
+}
+
+.ob-tab:hover {
+  color: var(--ob-ink);
+}
+
+.ob-tab[aria-selected="true"] {
+  color: var(--ob-accent);
+  font-weight: 600;
+  border-bottom-color: var(--ob-accent);
+}
+
+/* Form label */
+.ob-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--ob-muted);
+}
+
+/* Section separator */
+.ob-separator {
+  height: 1px;
+  background: var(--ob-line);
+  border: 0;
+  margin: 0;
+}
+
+/* File upload label styled as button */
+.ob-file-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--ob-line);
+  background: var(--ob-panel);
+  padding: 0.45rem 0.85rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ob-ink);
+  cursor: pointer;
+  transition:
+    background-color var(--ob-duration) var(--ob-ease),
+    border-color var(--ob-duration) var(--ob-ease),
+    color var(--ob-duration) var(--ob-ease);
+}
+
+.ob-file-btn:hover {
+  border-color: transparent;
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
 }
 
 @keyframes ob-pulse {

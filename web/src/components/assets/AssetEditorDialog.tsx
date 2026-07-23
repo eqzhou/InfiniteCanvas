@@ -46,12 +46,12 @@ export function AssetEditorDialog({
 
   if (!asset) return null;
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/45 p-4">
+    <div className="ob-overlay z-[120] p-4">
       <form
         role="dialog"
         aria-modal="true"
         aria-labelledby="asset-editor-title"
-        className="max-h-[90vh] w-full max-w-xl overflow-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-shadow)]"
+        className="ob-dialog max-w-xl p-5"
         onSubmit={(event) => {
           event.preventDefault();
           if (!title.trim() || busy) return;
@@ -71,31 +71,31 @@ export function AssetEditorDialog({
       >
         <div className="mb-4 flex items-center gap-2">
           <h2 id="asset-editor-title" className="font-semibold">{mode === "create" ? "新增素材" : "编辑素材"}</h2>
-          <button type="button" title="关闭编辑" className="ml-auto rounded-md p-1" onClick={onClose}>
+          <button type="button" title="关闭编辑" className="ob-btn-ghost ml-auto p-1" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm">
             <span>标题</span>
-            <input id="asset-title" aria-label="标题" className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={title} onChange={(event) => setTitle(event.target.value)} />
+            <input id="asset-title" aria-label="标题" className="ob-field" value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm">
             <span>来源</span>
-            <input aria-label="来源" className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={source} onChange={(event) => setSource(event.target.value)} />
+            <input aria-label="来源" className="ob-field" value={source} onChange={(event) => setSource(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm sm:col-span-2">
             标签
-            <input className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={tags} onChange={(event) => setTags(event.target.value)} />
+            <input className="ob-field" value={tags} onChange={(event) => setTags(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm sm:col-span-2">
             备注
-            <textarea className="min-h-20 resize-y rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={notes} onChange={(event) => setNotes(event.target.value)} />
+            <textarea className="ob-field min-h-20 resize-y" value={notes} onChange={(event) => setNotes(event.target.value)} />
           </label>
           {asset.kind === "text" ? (
             <label className="grid gap-1 text-sm sm:col-span-2">
               <span>内容</span>
-              <textarea aria-label="内容" className="min-h-40 resize-y rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={content} onChange={(event) => setContent(event.target.value)} />
+              <textarea aria-label="内容" className="ob-field min-h-40 resize-y" value={content} onChange={(event) => setContent(event.target.value)} />
             </label>
           ) : (
             <label className="grid gap-1 text-sm sm:col-span-2">
@@ -106,8 +106,8 @@ export function AssetEditorDialog({
         </div>
         {error ? <p role="alert" className="mt-3 text-sm text-[var(--ob-danger)]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" className="rounded-md border border-[var(--ob-line)] px-3 py-1.5 text-sm" onClick={onClose}>取消</button>
-          <button type="submit" disabled={busy || !title.trim()} className="rounded-md bg-[var(--ob-accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50">
+          <button type="button" className="ob-btn text-sm" onClick={onClose}>取消</button>
+          <button type="submit" disabled={busy || !title.trim()} className="ob-btn-primary text-sm disabled:opacity-50">
             {busy ? "保存中" : "保存"}
           </button>
         </div>

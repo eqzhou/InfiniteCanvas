@@ -29,7 +29,7 @@ export function ImagePreviewDialog({
       aria-modal="true"
       aria-label="图片预览"
       tabIndex={-1}
-      className="fixed inset-0 z-[100] grid place-items-center bg-black/80 p-4"
+      className="ob-overlay bg-black/80 p-4"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

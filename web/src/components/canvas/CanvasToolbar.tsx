@@ -64,7 +64,7 @@ export function CanvasToolbar({
       <Tool label="音频" onClick={() => onAdd("audio")}>
         <Music2 size={16} />
       </Tool>
-      <label aria-label="导入图片" title="导入图片" className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]">
+      <label aria-label="导入图片" title="导入图片" className="ob-file-btn shrink-0">
         <Upload size={16} />
         <span className="sr-only">导入图片</span>
         <input
@@ -82,7 +82,7 @@ export function CanvasToolbar({
         />
       </label>
       {onImportVideos ? (
-        <label aria-label="导入视频" title="导入视频" className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]">
+        <label aria-label="导入视频" title="导入视频" className="ob-file-btn shrink-0">
           <Film size={16} />
           <span className="sr-only">导入视频</span>
           <input
@@ -101,7 +101,7 @@ export function CanvasToolbar({
         </label>
       ) : null}
       {onImportAudios ? (
-        <label aria-label="导入音频" title="导入音频" className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]">
+        <label aria-label="导入音频" title="导入音频" className="ob-file-btn shrink-0">
           <Music2 size={16} />
           <span className="sr-only">导入音频</span>
           <input
@@ -173,11 +173,11 @@ function Tool({
       title={label}
       aria-label={label}
       onClick={onClick}
-      className={`inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border px-2 text-sm font-medium transition-colors ${
-        active
-          ? "border-transparent bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)]"
-          : "border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]"
-      }`}
+      aria-pressed={active}
+      className={cn(
+        "ob-btn h-9 shrink-0 gap-1 px-2",
+        active && "border-transparent bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)]"
+      )}
     >
       {children}
       <span className={compact ? "sr-only" : "hidden sm:inline"}>{label}</span>

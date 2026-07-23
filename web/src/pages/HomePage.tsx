@@ -186,7 +186,7 @@ export function HomePage() {
           )}
           <button
             type="button"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] md:hidden"
+            className="ob-icon-btn h-8 w-8 shrink-0 md:hidden"
             title="关闭"
             onClick={() => setProjectsOpen(false)}
           >
@@ -194,7 +194,7 @@ export function HomePage() {
           </button>
           <button
             type="button"
-            className="hidden h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] md:grid"
+            className="ob-icon-btn hidden h-8 w-8 shrink-0 md:grid"
             title="收起侧栏"
             onClick={() => updatePanelConfig({ canvasPanelCollapsed: true })}
           >
@@ -204,7 +204,7 @@ export function HomePage() {
             <>
               <button
                 type="button"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+                className="ob-icon-btn h-8 w-8 shrink-0"
                 title="新建"
                 onClick={() => createProject(`画布 ${projects.length + 1}`)}
               >
@@ -212,7 +212,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+                className="ob-icon-btn h-8 w-8 shrink-0"
                 title="导入 JSON"
                 onClick={() => fileRef.current?.click()}
               >
@@ -220,7 +220,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+                className="ob-icon-btn h-8 w-8 shrink-0"
                 title="导出当前"
                 onClick={() => {
                   const p = exportActiveProject();
@@ -238,7 +238,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)]"
+                className="ob-icon-btn h-8 w-8 shrink-0"
                 title="导出完整包"
                 onClick={() => {
                   void (async () => {
@@ -262,7 +262,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                className="ob-icon-btn h-8 w-8 shrink-0 !text-[var(--ob-danger)]"
                 title="删除勾选"
                 disabled={!checked.length}
                 onClick={() => {
@@ -283,7 +283,7 @@ export function HomePage() {
                 type="button"
                 aria-label="全选元素"
                 title="全选元素"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                className="ob-icon-btn h-8 w-8 shrink-0"
                 disabled={!activeProject?.nodes.length}
                 onClick={() => {
                   const ids = activeProject?.nodes.map((node) => node.id) ?? [];
@@ -297,7 +297,7 @@ export function HomePage() {
                 type="button"
                 aria-label="导出所选元素"
                 title="导出所选元素"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] disabled:opacity-40"
+                className="ob-icon-btn h-8 w-8 shrink-0"
                 disabled={!checkedNodes.length}
                 onClick={() => void exportCheckedNodes().catch((error) =>
                   alert(error instanceof Error ? error.message : String(error)))}
@@ -342,10 +342,8 @@ export function HomePage() {
               type="button"
               role="tab"
               aria-selected={panelTab === value}
-              className={`relative z-[1] rounded-lg px-2 py-2 text-sm transition-colors duration-150 ${
-                panelTab === value
-                  ? "font-semibold text-[var(--ob-accent)]"
-                  : "font-medium text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)]/50 hover:text-[var(--ob-ink)]"
+              className={`ob-tab relative z-[1] rounded-lg text-sm border-b-0 ${
+                panelTab === value ? "" : ""
               }`}
               onClick={() => changePanelTab(value)}
             >

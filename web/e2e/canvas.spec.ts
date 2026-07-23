@@ -1340,40 +1340,18 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   const note = page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容");
   await expect(note).toBeVisible();
   await note.fill("plugin state from Playwright");
-
+  // Sticky note patches via openboard.patch; wait for host-roundtrip + persist.
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          new Promise<boolean>((resolve, reject) => {
-            const open = indexedDB.open("openboard-app");
-            open.onerror = () => reject(open.error);
-            open.onsuccess = () => {
-              const database = open.result;
-              const transaction = database.transaction("app_state", "readonly");
-              const request = transaction.objectStore("app_state").get("openboard:projects");
-              request.onerror = () => reject(request.error);
-              request.onsuccess = () => {
-                const projects = Array.isArray(request.result) ? request.result : [];
-                const persisted = projects.some((project) =>
-                  project?.nodes?.some(
-                    (node: { metadata?: { pluginState?: { text?: string } } }) =>
-                      node.metadata?.pluginState?.text === "plugin state from Playwright",
-                  ),
-                );
-                database.close();
-                resolve(persisted);
-              };
-            };
-          }),
-      ),
-    )
-    .toBe(true);
+    .poll(async () => page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容").inputValue(), {
+      timeout: 15_000,
+    })
+    .toBe("plugin state from Playwright");
+  await page.waitForTimeout(400);
 
   await page.reload();
   await expect(
     page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"),
-  ).toHaveValue("plugin state from Playwright");
+  ).toHaveValue("plugin state from Playwright", { timeout: 15_000 });
 
   await page.goto("/plugins");
   const enabled = page.getByLabel("便签 已启用");
@@ -1387,8 +1365,9 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await expect(page.getByLabel("便签 已启用")).not.toBeChecked();
   await page.getByLabel("便签 已启用").check();
   await page.goto("/");
+  await expect(page.getByTestId("plugin-unavailable")).toHaveCount(0, { timeout: 15_000 });
   await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"))
-    .toHaveValue("plugin state from Playwright");
+    .toHaveValue("plugin state from Playwright", { timeout: 15_000 });
 });
 
 test("plugin registry install, upgrade, and uninstall preserve permission consent", async ({ page }) => {

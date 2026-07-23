@@ -102,16 +102,16 @@ export function PromptSourceManagerDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/55 p-3" role="presentation">
+    <div className="ob-overlay z-[120] p-3" role="presentation">
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="prompt-source-manager-title"
-        className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)]"
+        className="ob-dialog flex flex-col max-w-5xl"
       >
-        <header className="flex items-center gap-2 border-b border-[var(--ob-line)] px-4 py-3">
+        <header className="ob-dialog-header px-4 py-3">
           <h2 id="prompt-source-manager-title" className="text-base font-semibold">管理提示词来源</h2>
-          <button type="button" className="ml-auto grid h-8 w-8 place-items-center rounded-sm hover:bg-[var(--ob-accent-soft)]" title="关闭来源管理" onClick={onClose}>
+          <button type="button" className="ob-btn-ghost ml-auto p-1" title="关闭来源管理" onClick={onClose}>
             <X size={17} />
           </button>
         </header>
@@ -120,7 +120,7 @@ export function PromptSourceManagerDialog({
           <aside className="min-h-0 overflow-auto border-b border-[var(--ob-line)] p-2 md:border-b-0 md:border-r">
             <button
               type="button"
-              className="mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-sm border border-[var(--ob-line)] px-3 py-2 text-sm"
+              className="ob-btn mb-2 w-full justify-center gap-1.5 text-sm"
               onClick={() => {
                 setDraft(newSource());
                 setPreview([]);
@@ -167,10 +167,10 @@ export function PromptSourceManagerDialog({
             ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-sm">来源名称
-                <input aria-label="来源名称" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" maxLength={120} value={draft.name} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
+                <input aria-label="来源名称" className="ob-field mt-1 disabled:opacity-60" maxLength={120} value={draft.name} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
               </label>
               <label className="text-sm">解析格式
-                <select aria-label="来源解析格式" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" value={draft.format} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({
+                <select aria-label="来源解析格式" className="ob-field mt-1 disabled:opacity-60" value={draft.format} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({
                   ...current,
                   format: event.target.value as PromptSourceConfig["format"],
                   html: event.target.value === "html" ? current.html ?? { itemSelector: "", bodySelector: "" } : current.html,
@@ -186,17 +186,17 @@ export function PromptSourceManagerDialog({
                 </select>
               </label>
               <label className="text-sm sm:col-span-2">来源 URL
-                <input aria-label="来源 URL" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" placeholder="https://example.com/prompts.json 或 Image Prompts 标准 JSON" value={draft.url} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
+                <input aria-label="来源 URL" className="ob-field mt-1 disabled:opacity-60" placeholder="https://example.com/prompts.json 或 Image Prompts 标准 JSON" value={draft.url} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
               </label>
               <label className="text-sm sm:col-span-2">主页（可选）
-                <input aria-label="来源主页" className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 disabled:opacity-60" placeholder="https://github.com/..." value={draft.homepage ?? ""} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, homepage: event.target.value || undefined }))} />
+                <input aria-label="来源主页" className="ob-field mt-1 disabled:opacity-60" placeholder="https://github.com/..." value={draft.homepage ?? ""} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, homepage: event.target.value || undefined }))} />
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} />
                 启用来源
               </label>
               <label className="text-sm">自动刷新
-                <select aria-label="自动刷新周期" className="ml-2 rounded-sm border border-[var(--ob-line)] bg-transparent px-2 py-1" value={draft.refreshMinutes} onChange={(event) => setDraft((current) => ({ ...current, refreshMinutes: Number(event.target.value) }))}>
+                <select aria-label="自动刷新周期" className="ob-field ml-2 w-auto" value={draft.refreshMinutes} onChange={(event) => setDraft((current) => ({ ...current, refreshMinutes: Number(event.target.value) }))}>
                   <option value={0}>关闭</option>
                   <option value={5}>5 分钟</option>
                   <option value={15}>15 分钟</option>
@@ -214,7 +214,7 @@ export function PromptSourceManagerDialog({
                 <div className="grid gap-3 sm:grid-cols-2">
                   {JSON_FIELDS.map(([key, label, placeholder]) => (
                     <label key={key} className="text-xs text-[var(--ob-muted)]">{label}
-                      <input aria-label={label} className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm text-[var(--ob-ink)]" placeholder={placeholder} value={draft.mapping?.[key] ?? ""} onChange={(event) => updateMapping(key, event.target.value)} />
+                      <input aria-label={label} className="ob-field mt-1" placeholder={placeholder} value={draft.mapping?.[key] ?? ""} onChange={(event) => updateMapping(key, event.target.value)} />
                     </label>
                   ))}
                 </div>
@@ -227,7 +227,7 @@ export function PromptSourceManagerDialog({
                 <div className="grid gap-3 sm:grid-cols-2">
                   {HTML_FIELDS.map(([key, label, placeholder]) => (
                     <label key={key} className="text-xs text-[var(--ob-muted)]">{label}
-                      <input aria-label={label} className="mt-1 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm text-[var(--ob-ink)]" placeholder={placeholder} value={draft.html?.[key] ?? ""} onChange={(event) => updateHtml(key, event.target.value)} />
+                      <input aria-label={label} className="ob-field mt-1" placeholder={placeholder} value={draft.html?.[key] ?? ""} onChange={(event) => updateHtml(key, event.target.value)} />
                     </label>
                   ))}
                 </div>
@@ -246,7 +246,7 @@ export function PromptSourceManagerDialog({
                 <div className="mb-2 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    className="rounded-sm border border-[var(--ob-line)] px-2 py-1 text-xs hover:bg-[var(--ob-accent-soft)]"
+                    className="ob-btn px-2 py-1 text-xs"
                     onClick={() => setDraft((current) => ({
                       ...current,
                       script: "const data = helpers.parseJson(text);\nreturn Array.isArray(data)\n  ? data\n  : (data.items ?? data.prompts ?? []);",
@@ -256,7 +256,7 @@ export function PromptSourceManagerDialog({
                   </button>
                   <button
                     type="button"
-                    className="rounded-sm border border-[var(--ob-line)] px-2 py-1 text-xs hover:bg-[var(--ob-accent-soft)]"
+                    className="ob-btn px-2 py-1 text-xs"
                     onClick={() => setDraft((current) => ({
                       ...current,
                       script: "const textBody = await helpers.fetchText(url);\nconst data = helpers.parseJson(textBody);\nreturn (Array.isArray(data) ? data : (data.items ?? data.prompts ?? [])).map((item) => ({\n  id: item.id,\n  title: item.title ?? item.name,\n  body: item.prompt ?? item.body ?? item.content,\n  tags: item.tags,\n  coverUrl: item.coverUrl,\n}));",
@@ -267,7 +267,7 @@ export function PromptSourceManagerDialog({
                 </div>
                 <textarea
                   aria-label="转换脚本"
-                  className="min-h-48 w-full rounded-sm border border-[var(--ob-line)] bg-transparent px-3 py-2 font-mono text-xs text-[var(--ob-ink)]"
+                  className="ob-field min-h-48 font-mono text-xs"
                   spellCheck={false}
                   value={draft.script ?? ""}
                   onChange={(event) => setDraft((current) => ({ ...current, script: event.target.value }))}
@@ -293,9 +293,9 @@ export function PromptSourceManagerDialog({
           </div>
         </div>
 
-        <footer className="flex flex-wrap items-center gap-2 border-t border-[var(--ob-line)] px-4 py-3">
+        <footer className="ob-dialog-footer flex-wrap items-center gap-2 px-4 py-3">
           {persisted && !draftIsBuiltIn ? (
-            <button type="button" disabled={busy || working} className="grid h-9 w-9 place-items-center rounded-sm text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)] disabled:opacity-50" title="删除来源" onClick={() => {
+            <button type="button" disabled={busy || working} className="ob-btn-danger grid h-9 w-9 place-items-center disabled:opacity-50" title="删除来源" onClick={() => {
               setWorking(true);
               setError(null);
               void Promise.resolve(onRemove(draft)).then((removed) => {
@@ -309,7 +309,7 @@ export function PromptSourceManagerDialog({
               <Trash2 size={16} />
             </button>
           ) : null}
-          <button type="button" disabled={busy || working} className="ml-auto inline-flex items-center gap-1.5 rounded-sm border border-[var(--ob-line)] px-3 py-2 text-sm disabled:opacity-50" onClick={() => {
+          <button type="button" disabled={busy || working} className="ob-btn ml-auto gap-1.5 text-sm disabled:opacity-50" onClick={() => {
             try {
               const valid = validate();
               setError(null);
@@ -318,7 +318,7 @@ export function PromptSourceManagerDialog({
               setError(cause instanceof Error ? cause.message : String(cause));
             }
           }}><Eye size={15} /> 预览</button>
-          {persisted ? <button type="button" disabled={busy || working} className="inline-flex items-center gap-1.5 rounded-sm border border-[var(--ob-line)] px-3 py-2 text-sm disabled:opacity-50" onClick={() => {
+          {persisted ? <button type="button" disabled={busy || working} className="ob-btn gap-1.5 text-sm disabled:opacity-50" onClick={() => {
             try {
               const valid = validate();
               setError(null);
@@ -327,7 +327,7 @@ export function PromptSourceManagerDialog({
               setError(cause instanceof Error ? cause.message : String(cause));
             }
           }}><RefreshCw size={15} /> 刷新</button> : null}
-          <button type="button" disabled={busy || working} className="inline-flex items-center gap-1.5 rounded-sm bg-[var(--ob-accent)] px-3 py-2 text-sm text-white disabled:opacity-50" onClick={() => {
+          <button type="button" disabled={busy || working} className="ob-btn-primary gap-1.5 text-sm disabled:opacity-50" onClick={() => {
             try {
               const valid = validate();
               setError(null);
