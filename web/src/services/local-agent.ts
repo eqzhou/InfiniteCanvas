@@ -31,6 +31,8 @@ export type AgentStatus = {
   bridges?: string[];
   message?: string;
   tools?: string[];
+  codex?: { available?: boolean; sessionEndpoint?: string; eventsEndpoint?: string };
+  claude?: { available?: boolean; sessionEndpoint?: string; eventsEndpoint?: string; binary?: string };
 };
 
 export type CodexSession = {
@@ -425,4 +427,166 @@ export async function syncProjectWithAgent(
   const direction = decideProjectSync(local.updatedAt, remote.updatedAt);
   if (direction === "push") await pushProjectToAgent(local, connection, fetcher);
   return direction === "pull" ? { direction, project: remote } : { direction };
+}
+
+
+export type ClaudeSession = {
+  id: string;
+  claudeSessionId?: string;
+  profile?: string;
+  reused?: boolean;
+  running?: boolean;
+  runtimeClientId?: string;
+  available?: boolean;
+};
+
+export type ClaudeEvent = {
+  sequence?: number;
+  type: "notification" | "error" | "status";
+  method?: string;
+  params?: unknown;
+  data?: unknown;
+};
+
+export async function createClaudeSession(
+  connection: AgentConnection,
+  options: { profile?: string; fresh?: boolean; cwd?: string } = {},
+  fetcher: Fetcher = fetch,
+): Promise<ClaudeSession> {
+  const response = await agentFetch(connection, "api/claude/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      profile: options.profile ?? "claude-default",
+      fresh: options.fresh ?? false,
+      cwd: options.cwd,
+    }),
+  }, fetcher);
+  if (!response.ok) throw new Error(await response.text() || `Claude session failed: HTTP ${response.status}`);
+  return response.json() as Promise<ClaudeSession>;
+}
+
+export async function getClaudeSession(
+  connection: AgentConnection,
+  profile = "claude-default",
+  fetcher: Fetcher = fetch,
+): Promise<ClaudeSession | null> {
+  const response = await agentFetch(
+    connection,
+    `api/claude/session?profile=${encodeURIComponent(profile)}`,
+    { method: "GET" },
+    fetcher,
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(await response.text() || `Claude session lookup failed: HTTP ${response.status}`);
+  return response.json() as Promise<ClaudeSession>;
+}
+
+export async function sendClaudeMessage(
+  connection: AgentConnection,
+  sessionId: string,
+  prompt: string,
+  fetcher: Fetcher = fetch,
+  runtimeClientId?: string,
+): Promise<void> {
+  const response = await agentFetch(connection, "api/claude/message", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, prompt, runtimeClientId }),
+  }, fetcher);
+  if (!response.ok) throw new Error(await response.text() || `Claude message failed: HTTP ${response.status}`);
+}
+
+export async function interruptClaudeTurn(
+  connection: AgentConnection,
+  sessionId: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  const response = await agentFetch(connection, "api/claude/interrupt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  }, fetcher);
+  if (!response.ok) throw new Error(await response.text() || `Claude interrupt failed: HTTP ${response.status}`);
+}
+
+export async function closeClaudeSession(
+  connection: AgentConnection,
+  sessionId: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  const response = await agentFetch(connection, `api/claude/session/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  }, fetcher);
+  if (!response.ok && response.status !== 404) {
+    throw new Error(await response.text() || `Claude close failed: HTTP ${response.status}`);
+  }
+}
+
+export function subscribeClaudeEvents(
+  connection: AgentConnection,
+  sessionId: string,
+  handlers: {
+    onEvent: (event: ClaudeEvent) => void;
+    onError?: (error: Error, willRetry: boolean) => void;
+  },
+  fetcher: Fetcher = fetch,
+): () => void {
+  let stopped = false;
+  let afterSequence = 0;
+  let controller: AbortController | null = null;
+  let timer: number | undefined;
+  const { onEvent, onError } = handlers;
+
+  const pump = async () => {
+    if (stopped) return;
+    controller = new AbortController();
+    const baseUrl = connection.baseUrl.replace(/\/$/, "");
+    const query = new URLSearchParams({ sessionId });
+    if (afterSequence > 0) query.set("afterSequence", String(afterSequence));
+    try {
+      const headers: Record<string, string> = {};
+      if (connection.token) headers.Authorization = `Bearer ${connection.token}`;
+      const response = await fetcher(`${baseUrl}/api/claude/events?${query}`, {
+        headers,
+        credentials: "omit",
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`Claude events failed: HTTP ${response.status}`);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (!stopped) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const { events, remainder } = parseCodexSseRecords(buffer);
+        buffer = remainder;
+        for (const raw of events) {
+          const event = raw as unknown as ClaudeEvent;
+          if (typeof event.sequence === "number" && event.sequence > afterSequence) {
+            afterSequence = event.sequence;
+          }
+          onEvent(event);
+        }
+      }
+      if (!stopped) {
+        onError?.(new Error("claude stream closed"), true);
+        timer = window.setTimeout(() => void pump(), 800);
+      }
+    } catch (error) {
+      if (stopped) return;
+      onError?.(error instanceof Error ? error : new Error("claude stream error"), true);
+      timer = window.setTimeout(() => void pump(), 1200);
+    }
+  };
+
+  void pump();
+  return () => {
+    stopped = true;
+    controller?.abort();
+    if (timer) window.clearTimeout(timer);
+  };
 }

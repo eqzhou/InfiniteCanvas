@@ -22,6 +22,11 @@ const CodexPanel = lazy(async () => {
   return { default: module.CodexPanel };
 });
 
+const ClaudePanel = lazy(async () => {
+  const module = await import("@/components/agent/ClaudePanel");
+  return { default: module.ClaudePanel };
+});
+
 function initialAgentToken(): string {
   return readAgentToken();
 }
@@ -37,6 +42,7 @@ export function LocalAgentPanel() {
   const [error, setError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [generationTasks, setGenerationTasks] = useState(getGenerationActivities);
+  const [agentTab, setAgentTab] = useState<"codex" | "claude">("claude");
   const [baseUrl, setBaseUrl] = useState(() => resolveAgentBaseUrl(
     config.localAgentUrl,
     readAgentToken(),
@@ -257,8 +263,43 @@ export function LocalAgentPanel() {
               </ul>
             </section>
           ) : null}
-          <Suspense fallback={<div className="border-t border-[var(--ob-line)] pt-2 text-[var(--ob-muted)]">加载 Codex 面板…</div>}>
-            <CodexPanel connection={connection} />
+          <div className="mt-2 flex gap-1 border-t border-[var(--ob-line)] pt-2" role="tablist" aria-label="Agent 会话">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={agentTab === "claude"}
+              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                agentTab === "claude"
+                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
+                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+              }`}
+              onClick={() => setAgentTab("claude")}
+            >
+              Claude
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={agentTab === "codex"}
+              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                agentTab === "codex"
+                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"
+                  : "text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+              }`}
+              onClick={() => setAgentTab("codex")}
+            >
+              Codex
+            </button>
+            {status?.claude?.available === false ? (
+              <span className="ml-auto self-center text-[10px] text-[var(--ob-muted)]">未检测到 claude CLI</span>
+            ) : null}
+          </div>
+          <Suspense fallback={<div className="border-t border-[var(--ob-line)] pt-2 text-[var(--ob-muted)]">加载会话面板…</div>}>
+            {agentTab === "claude" ? (
+              <ClaudePanel connection={connection} />
+            ) : (
+              <CodexPanel connection={connection} />
+            )}
           </Suspense>
         </div>
       )}

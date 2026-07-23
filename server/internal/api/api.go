@@ -35,6 +35,7 @@ type Server struct {
 	mu             sync.Mutex
 	uploads        chan struct{}
 	codex          *codexManager
+	claude         *claudeManager
 	runtime        *runtimeHub
 	runtimeOrigins map[string]struct{}
 	store          store.Store
@@ -60,6 +61,12 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
+		r.Post("/claude/session", s.createClaudeSession)
+		r.Get("/claude/session", s.getClaudeSession)
+		r.Post("/claude/message", s.sendClaudeMessage)
+		r.Post("/claude/interrupt", s.interruptClaude)
+		r.Get("/claude/events", s.claudeEvents)
+		r.Delete("/claude/session/{id}", s.closeClaudeSession)
 		r.Post("/files", s.uploadFile)
 		r.Get("/files/{name}", s.getFile)
 		r.Get("/projects", s.listProjects)
@@ -88,6 +95,7 @@ func NewServer(dataDir string) *Server {
 		dataDir: dataDir,
 		uploads: make(chan struct{}, 2),
 		codex:   newCodexManager(),
+		claude:  newClaudeManager(),
 		runtime: newRuntimeHub(),
 		runtimeOrigins: map[string]struct{}{
 			"http://localhost:5173": {},
@@ -134,6 +142,12 @@ func MountServer(r chi.Router, s *Server) {
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
+		r.Post("/claude/session", s.createClaudeSession)
+		r.Get("/claude/session", s.getClaudeSession)
+		r.Post("/claude/message", s.sendClaudeMessage)
+		r.Post("/claude/interrupt", s.interruptClaude)
+		r.Get("/claude/events", s.claudeEvents)
+		r.Delete("/claude/session/{id}", s.closeClaudeSession)
 		r.Post("/files", s.uploadFile)
 		r.Get("/files/{name}", s.getFile)
 		r.Get("/projects", s.listProjects)
@@ -202,12 +216,17 @@ func (s *Server) version(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) agentStatus(w http.ResponseWriter, _ *http.Request) {
+	bridges := []string{"http-json", "mcp-stdio", "codex-app-server"}
+	if claudeAvailable() {
+		bridges = append(bridges, "claude-code")
+	}
 	writeJSON(w, map[string]any{
 		"connected": true,
 		"runtime":   map[string]any{"connected": s.runtime.connected()},
-		"bridges":   []string{"http-json", "mcp-stdio"},
-		"message":   "Local board tools and optional Codex app-server sessions are available.",
+		"bridges":   bridges,
+		"message":   "Local board tools, Codex, and optional Claude Code sessions are available.",
 		"codex":     map[string]any{"available": true, "sessionEndpoint": "/api/codex/session", "eventsEndpoint": "/api/codex/events"},
+		"claude":    map[string]any{"available": claudeAvailable(), "sessionEndpoint": "/api/claude/session", "eventsEndpoint": "/api/claude/events", "binary": claudeBinary()},
 		"tools": []string{
 			"board.get_state",
 			"board.get_selection",

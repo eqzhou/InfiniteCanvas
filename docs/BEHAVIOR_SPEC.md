@@ -73,6 +73,7 @@ implementation input.
 | 2026-07-19 | Client-scoped Agent operations | Start a turn in one tab, focus/close other tabs, and return tool results | The initiating client remains pinned for the turn; foreign results are ignored; disconnect falls back only to the most recently focused client on the same project | high |
 | 2026-07-19 | Shared Codex state | Send, stop, approve, switch, reload, and open a second tab while a turn/tool is running | Session, user messages, resolved approvals and running state replay across tabs; thread-mismatched events are ignored; tool completion does not unlock the turn | high |
 | 2026-07-23 | Public recheck | Re-read public README feature inventory, releases list, and progress TODO without source inspection | Confirmed latest public release remains `v0.9.0`; no new public release delta adopted; public TODO Claude Agent SDK adapter remains not-targeted | high |
+| 2026-07-23 | Claude conversation UI | Open Local Agent, Claude tab, start session, send prompt, stop turn | Local Claude Code CLI streams assistant deltas into the sidebar; optional MCP config is attached when openboard-mcp is installed | medium |
 | 2026-07-23 | Prompt center presentation | Open formal local `/prompts` with server storage | Dense library shell remains usable: collapsible sources, library/mine tabs, filters, insert/detail/copy, and existing remote/local counts preserved | high |
 
 ## Evidence
