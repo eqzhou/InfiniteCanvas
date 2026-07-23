@@ -15,3 +15,4 @@ server/data/
 .vscode/
 coverage/
 *.tsbuildinfo
+.claude/

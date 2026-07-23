@@ -41,7 +41,6 @@ export function HomePage() {
   const setActiveProject = useBoardStore((s) => s.setActiveProject);
   const setSelected = useBoardStore((s) => s.setSelected);
   const setViewport = useBoardStore((s) => s.setViewport);
-  const showAssistant = useBoardStore((s) => s.showAssistant);
   const createProject = useBoardStore((s) => s.createProject);
   const renameProject = useBoardStore((s) => s.renameProject);
   const deleteProjects = useBoardStore((s) => s.deleteProjects);
@@ -176,7 +175,7 @@ export function HomePage() {
       ) : null}
       <aside
         aria-label="项目侧栏"
-        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : showAssistant ? "md:hidden xl:relative xl:flex" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
+        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
         style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
         <div className="flex min-h-12 items-center gap-1 border-b border-[var(--ob-line)] px-2 py-2">

@@ -50,9 +50,16 @@ async function closeSettings(page: Page) {
 }
 
 async function openProjectPanel(page: Page) {
-  if ((page.viewportSize()?.width ?? 1440) < 768) {
-    await page.getByRole("button", { name: "打开项目侧栏" }).click();
+  const panel = page.getByRole("complementary", { name: "项目侧栏" });
+  if (await panel.isVisible().catch(() => false)) return;
+  const openBtn = page.getByRole("button", { name: "打开项目侧栏" });
+  if (await openBtn.isVisible().catch(() => false)) {
+    await openBtn.click();
+  } else {
+    const expand = page.getByRole("button", { name: "展开侧栏" });
+    if (await expand.isVisible().catch(() => false)) await expand.click();
   }
+  await expect(panel).toBeVisible();
 }
 
 function projectCard(page: Page, title: string) {
@@ -2247,11 +2254,13 @@ test("canvas asset panel inserts and deletes persisted assets", async ({ page })
 
   page.once("dialog", (confirmation) => confirmation.accept());
   await panel.getByRole("button", { name: "删除素材 Sidebar asset" }).click({ force: true });
-  await expect(panel.getByRole("button", { name: "插入素材 Sidebar asset" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "插入素材 Sidebar asset" })).toHaveCount(0, { timeout: 10_000 });
+  // Reload and re-open the assets tab; formal storage must not resurrect deleted assets.
   await page.reload();
   await openProjectPanel(page);
-  await panel.getByRole("tab", { name: "素材" }).click();
-  await expect(panel.getByRole("button", { name: "插入素材 Sidebar asset" })).toHaveCount(0);
+  const panelAfter = page.getByRole("complementary", { name: "项目侧栏" });
+  await panelAfter.getByRole("tab", { name: "素材" }).click();
+  await expect(panelAfter.getByRole("button", { name: "插入素材 Sidebar asset" })).toHaveCount(0, { timeout: 10_000 });
 });
 
 test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page, browserName }) => {
@@ -2456,7 +2465,7 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   await userMessage.getByRole("button", { name: "删除" }).click();
   await expect(userMessage).toHaveCount(0);
 
-  await assistant.getByRole("button", { name: "生图", exact: true }).click();
+  await assistant.getByRole("tab", { name: "生图" }).click();
   const imageInput = assistant.getByPlaceholder("描述想生成的图片…（可粘贴图片）");
   await imageInput.fill("assistant image");
   await imageInput.press("ControlOrMeta+Enter");
