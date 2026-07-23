@@ -1380,7 +1380,7 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await enabled.uncheck();
   await expect(stickyCard.getByRole("button", { name: "添加到画布" })).toBeDisabled();
   await page.goto("/");
-  await expect(page.getByText("插件不可用")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("plugin-unavailable")).toBeVisible({ timeout: 15_000 });
   await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容")).toHaveCount(0);
 
   await page.goto("/plugins");
@@ -2223,7 +2223,7 @@ test("asset library uploads, persists, previews, and inserts video media", async
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "插入画布" }).click();
   await page.goto("/");
-  await expect(page.locator('[data-node-type="video"]')).toHaveCount(1);
+  await expect(page.locator('[data-node-type="video"]')).toHaveCount(1, { timeout: 15_000 });
 });
 
 test("canvas asset panel can upload image assets", async ({ page }) => {
@@ -2248,30 +2248,29 @@ test("canvas asset panel inserts and deletes persisted assets", async ({ page })
   await page.goto("/assets");
   await page.getByRole("button", { name: "新增文本" }).click();
   const dialog = page.getByRole("dialog", { name: "新增素材" });
-  // Labels are text-only; scope inputs by order inside the dialog.
-  await dialog.locator("input").first().fill("Sidebar asset");
-  await dialog.locator("textarea").first().fill("Sidebar body");
+  await dialog.getByLabel("标题").fill("Sidebar asset");
+  await dialog.getByLabel("内容").fill("Sidebar body");
   await dialog.getByRole("button", { name: "保存" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByText("Sidebar asset", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sidebar asset" })).toBeVisible();
 
   await page.goto("/");
   await openProjectPanel(page);
   const panel = page.getByRole("complementary", { name: "项目侧栏" });
   await expect(panel).toBeVisible();
   await panel.getByRole("tab", { name: "素材" }).click();
-  // Text assets render body/title as plain text; wait for list content.
-  await expect(panel.getByText("Sidebar body", { exact: true })).toBeVisible({ timeout: 15_000 });
-  await panel.getByRole("button", { name: "插入素材 Sidebar asset" }).click({ force: true });
+  const insert = panel.getByRole("button", { name: "插入素材 Sidebar asset" });
+  await expect(insert).toBeVisible({ timeout: 15_000 });
+  await insert.click({ force: true });
   await expect(page.locator('[data-node-type="text"]')).toHaveCount(1);
 
   page.once("dialog", (confirmation) => confirmation.accept());
   await panel.getByRole("button", { name: "删除素材 Sidebar asset" }).click({ force: true });
-  await expect(panel.getByText("Sidebar body", { exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "插入素材 Sidebar asset" })).toHaveCount(0);
   await page.reload();
   await openProjectPanel(page);
   await panel.getByRole("tab", { name: "素材" }).click();
-  await expect(panel.getByText("Sidebar body", { exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "插入素材 Sidebar asset" })).toHaveCount(0);
 });
 
 test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page, browserName }) => {

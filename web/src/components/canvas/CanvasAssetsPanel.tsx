@@ -113,7 +113,10 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
               ) : asset.kind === "audio" && asset.coverUrl ? (
                 <div className="grid h-24 place-items-center px-2 text-xs text-[var(--ob-muted)]">音频</div>
               ) : (
-                <p className="line-clamp-4 p-2 text-xs leading-relaxed">{asset.content || asset.title}</p>
+                <div className="flex h-24 flex-col p-2">
+                  <div data-asset-title className="truncate text-[11px] font-medium text-[var(--ob-ink)]" title={asset.title}>{asset.title}</div>
+                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-[var(--ob-muted)]">{asset.content || "文本素材"}</p>
+                </div>
               )}
               <button
                 type="button"

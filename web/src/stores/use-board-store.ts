@@ -626,17 +626,19 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         title: asset.title,
         metadata: { content: asset.content ?? "", status: "success" },
       });
-      return;
+    } else {
+      get().addNode(asset.kind, position, {
+        title: asset.title,
+        metadata: {
+          content: asset.coverUrl,
+          storageKey: asset.storageKey,
+          mimeType: asset.mimeType,
+          status: "success",
+        },
+      });
     }
-    get().addNode(asset.kind, position, {
-      title: asset.title,
-      metadata: {
-        content: asset.coverUrl,
-        storageKey: asset.storageKey,
-        mimeType: asset.mimeType,
-        status: "success",
-      },
-    });
+    // Ensure formal/server storage has the node before navigations/reloads in E2E and real use.
+    await get().persistNow();
   },
 
   setShowMinimap: (v) => set({ showMinimap: v }),

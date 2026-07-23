@@ -94,6 +94,7 @@ export function PluginsPage() {
   const navigate = useNavigate();
   const config = useBoardStore((state) => state.config);
   const setConfig = useBoardStore((state) => state.setConfig);
+  const flushConfig = useBoardStore((state) => state.flushConfig);
   const active = useBoardStore((state) => state.getActive());
   const addNode = useBoardStore((state) => state.addNode);
   const installed = config.plugins ?? [];
@@ -286,6 +287,7 @@ export function PluginsPage() {
                   enabled,
                 ),
               });
+              void flushConfig();
             }}
             onAdd={() => addToCanvas(manifest)}
           />
@@ -306,6 +308,7 @@ export function PluginsPage() {
                   enabled,
                 ),
               });
+              void flushConfig();
             }}
             update={updates.get(manifest.id)}
             onUpdate={updates.has(manifest.id)
@@ -324,6 +327,7 @@ export function PluginsPage() {
                   true,
                 ),
               });
+              void flushConfig();
             }}
           />
         ))}

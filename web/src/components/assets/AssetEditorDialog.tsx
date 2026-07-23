@@ -81,8 +81,8 @@ export function AssetEditorDialog({
             <input id="asset-title" aria-label="标题" className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm">
-            来源
-            <input className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={source} onChange={(event) => setSource(event.target.value)} />
+            <span>来源</span>
+            <input aria-label="来源" className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={source} onChange={(event) => setSource(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm sm:col-span-2">
             标签
@@ -94,8 +94,8 @@ export function AssetEditorDialog({
           </label>
           {asset.kind === "text" ? (
             <label className="grid gap-1 text-sm sm:col-span-2">
-              内容
-              <textarea className="min-h-40 resize-y rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={content} onChange={(event) => setContent(event.target.value)} />
+              <span>内容</span>
+              <textarea aria-label="内容" className="min-h-40 resize-y rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={content} onChange={(event) => setContent(event.target.value)} />
             </label>
           ) : (
             <label className="grid gap-1 text-sm sm:col-span-2">

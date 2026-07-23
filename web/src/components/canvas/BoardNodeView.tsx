@@ -521,7 +521,7 @@ export function BoardNodeView({
             <div className="grid h-full place-items-center px-4 text-center text-xs text-[var(--ob-muted)]">
               <div>
                 <Puzzle className="mx-auto mb-2" size={22} />
-                <p>插件不可用</p>
+                <p data-testid="plugin-unavailable">插件不可用</p>
                 <p className="mt-1 break-all">{node.metadata.pluginId ?? "缺少插件 ID"}</p>
               </div>
             </div>
