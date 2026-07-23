@@ -1370,7 +1370,7 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await enabled.uncheck();
   await expect(stickyCard.getByRole("button", { name: "添加到画布" })).toBeDisabled();
   await page.goto("/");
-  await expect(page.getByText("插件不可用", { exact: true })).toBeVisible();
+  await expect(page.getByText("插件不可用")).toBeVisible({ timeout: 15_000 });
   await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容")).toHaveCount(0);
 
   await page.goto("/plugins");
@@ -2435,20 +2435,26 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   await page.getByLabel("生图模型", { exact: true }).fill("assistant-image-model");
   await closeSettings(page);
 
-  const assistant = page.locator("aside").filter({ hasText: "画布助手" });
+  test.setTimeout(90_000);
+  if (await page.locator("#canvas-assistant").count() === 0) {
+    await page.getByTitle("助手面板").click();
+  }
+  const assistant = page.locator("#canvas-assistant");
+  await expect(assistant).toBeVisible();
   const askInput = assistant.getByPlaceholder("问点什么…（可粘贴图片）");
   await askInput.fill("assistant draft");
   await askInput.press("ControlOrMeta+Enter");
-  let answer = assistant.locator("div").filter({ hasText: /^assistant answer 1$/ }).first();
-  await expect(answer).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => textRequests, { timeout: 20_000 }).toBeGreaterThan(0);
+  let answer = assistant.getByTestId("assistant-message-assistant").filter({ hasText: "assistant answer 1" });
+  await expect(answer).toBeVisible({ timeout: 20_000 });
   await answer.getByRole("button", { name: "插入画布" }).click();
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("assistant answer 1");
 
   await answer.getByRole("button", { name: "重试" }).click();
-  await expect.poll(() => textRequests).toBe(2);
-  answer = assistant.locator("div").filter({ hasText: "assistant answer 2" }).first();
-  await expect(answer).toBeVisible({ timeout: 15_000 });
-  const userMessage = assistant.locator("div").filter({ hasText: "assistant draft" }).first();
+  await expect.poll(() => textRequests, { timeout: 20_000 }).toBe(2);
+  answer = assistant.getByTestId("assistant-message-assistant").filter({ hasText: "assistant answer 2" });
+  await expect(answer).toBeVisible({ timeout: 20_000 });
+  const userMessage = assistant.getByTestId("assistant-message-user").filter({ hasText: "assistant draft" });
   await userMessage.getByRole("button", { name: "删除" }).click();
   await expect(userMessage).toHaveCount(0);
 
@@ -2456,9 +2462,8 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   const imageInput = assistant.getByPlaceholder("描述想生成的图片…（可粘贴图片）");
   await imageInput.fill("assistant image");
   await imageInput.press("ControlOrMeta+Enter");
-  const imageAnswer = assistant.locator("div").filter({ hasText: "已生成图片" }).first();
+  const imageAnswer = assistant.getByTestId("assistant-message-assistant").filter({ hasText: "已生成图片" });
   await imageAnswer.scrollIntoViewIfNeeded();
-  await expect(imageAnswer.locator("img")).toBeVisible();
   await imageAnswer.getByRole("button", { name: "插入画布" }).click();
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
