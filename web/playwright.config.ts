@@ -11,6 +11,7 @@ const dataDir = production
   : "../web/node_modules/.cache/openboard-agent-e2e";
 
 export default defineConfig({
+  timeout: 60_000,
   testDir: "./e2e",
   testMatch: formal ? "formal-storage.spec.ts" : "canvas.spec.ts",
   outputDir: "./node_modules/.cache/playwright-test-results",

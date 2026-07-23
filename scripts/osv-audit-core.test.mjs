@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dedupeQueries, findingsFromBatch } from "./osv-audit-core.mjs";
+import {
+  affectedImportPaths,
+  dedupeQueries,
+  filterFindingsByImports,
+  findingsFromBatch,
+} from "./osv-audit-core.mjs";
 
 test("dedupeQueries preserves the first package occurrence", () => {
   assert.deepEqual(dedupeQueries([
@@ -33,5 +38,60 @@ test("findingsFromBatch rejects incomplete responses", () => {
   assert.throws(
     () => findingsFromBatch([{ ecosystem: "npm", name: "example", version: "1.0.0" }], { results: [] }),
     /result count/,
+  );
+});
+
+test("affectedImportPaths returns scoped Go packages and null when unscoped", () => {
+  assert.deepEqual(affectedImportPaths({
+    affected: [{
+      package: { name: "golang.org/x/crypto", ecosystem: "Go" },
+      ecosystem_specific: {
+        imports: [
+          { path: "golang.org/x/crypto/openpgp" },
+          { path: "golang.org/x/crypto/openpgp/packet" },
+        ],
+      },
+    }],
+  }), [
+    "golang.org/x/crypto/openpgp",
+    "golang.org/x/crypto/openpgp/packet",
+  ]);
+  assert.equal(affectedImportPaths({
+    affected: [{ package: { name: "example.com/mod", ecosystem: "Go" } }],
+  }), null);
+});
+
+test("filterFindingsByImports drops openpgp-only advisories when only bcrypt is imported", () => {
+  const findings = [{
+    ecosystem: "Go",
+    name: "golang.org/x/crypto",
+    version: "v0.54.0",
+    id: "GO-2026-5932",
+    summary: "openpgp unmaintained",
+  }];
+  const details = new Map([["GO-2026-5932", {
+    id: "GO-2026-5932",
+    affected: [{
+      package: { name: "golang.org/x/crypto", ecosystem: "Go" },
+      ecosystem_specific: {
+        imports: [
+          { path: "golang.org/x/crypto/openpgp" },
+          { path: "golang.org/x/crypto/openpgp/packet" },
+        ],
+      },
+    }],
+  }]]);
+  assert.deepEqual(
+    filterFindingsByImports(findings, details, [
+      "golang.org/x/crypto/bcrypt",
+      "golang.org/x/crypto/blowfish",
+    ]),
+    [],
+  );
+  assert.equal(
+    filterFindingsByImports(findings, details, [
+      "golang.org/x/crypto/openpgp",
+    ]).length,
+    1,
   );
 });

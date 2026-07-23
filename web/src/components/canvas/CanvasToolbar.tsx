@@ -45,7 +45,7 @@ export function CanvasToolbar({
       role="toolbar"
       aria-label="画布工具栏"
       className={cn(
-        "ob-toolbar-scroll flex min-h-14 w-full min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel)] py-2 pr-3",
+        "ob-toolbar-scroll z-30 flex min-h-12 w-full min-w-0 max-w-full flex-nowrap items-center gap-1 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] py-1.5 pr-2 shadow-[var(--ob-shadow)] backdrop-blur-md",
         reservePanelToggle ? "pl-14" : "pl-14 sm:pl-3",
       )}
     >
@@ -64,7 +64,7 @@ export function CanvasToolbar({
       <Tool label="音频" onClick={() => onAdd("audio")}>
         <Music2 size={16} />
       </Tool>
-      <label aria-label="导入图片" title="导入图片" className="inline-flex shrink-0 cursor-pointer items-center rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
+      <label aria-label="导入图片" title="导入图片" className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]">
         <Upload size={16} />
         <span className="sr-only">导入图片</span>
         <input
@@ -82,7 +82,7 @@ export function CanvasToolbar({
         />
       </label>
       {onImportVideos ? (
-        <label aria-label="导入视频" title="导入视频" className="inline-flex shrink-0 cursor-pointer items-center rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
+        <label aria-label="导入视频" title="导入视频" className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]">
           <Film size={16} />
           <span className="sr-only">导入视频</span>
           <input
@@ -101,7 +101,7 @@ export function CanvasToolbar({
         </label>
       ) : null}
       {onImportAudios ? (
-        <label aria-label="导入音频" title="导入音频" className="inline-flex shrink-0 cursor-pointer items-center rounded-md border border-[var(--ob-line)] px-2 py-1.5 text-sm hover:bg-[var(--ob-accent-soft)]">
+        <label aria-label="导入音频" title="导入音频" className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]">
           <Music2 size={16} />
           <span className="sr-only">导入音频</span>
           <input
@@ -173,10 +173,10 @@ function Tool({
       title={label}
       aria-label={label}
       onClick={onClick}
-      className={`inline-flex min-h-9 shrink-0 items-center gap-1 rounded-md border px-2 text-sm ${
+      className={`inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border px-2 text-sm font-medium transition-colors ${
         active
-          ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]"
-          : "border-[var(--ob-line)] hover:bg-[var(--ob-accent-soft)]"
+          ? "border-transparent bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)]"
+          : "border-[var(--ob-line)] bg-[var(--ob-panel)] text-[var(--ob-ink)] hover:border-transparent hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)]"
       }`}
     >
       {children}

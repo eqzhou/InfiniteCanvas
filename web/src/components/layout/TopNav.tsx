@@ -12,6 +12,8 @@ import {
   Moon,
   Puzzle,
   Settings,
+  LogOut,
+  UserRound,
   Sun,
   Sparkles,
   WandSparkles,
@@ -19,6 +21,7 @@ import {
 import { cn } from "@/lib/cn";
 import { exportProjectBundle } from "@/lib/project-bundle";
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
+import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 export function TopNav({
@@ -38,6 +41,7 @@ export function TopNav({
   const activeProject = useBoardStore((s) =>
     s.projects.find((project) => project.id === s.activeProjectId) ?? null);
   const [compactMenuOpen, setCompactMenuOpen] = useState(false);
+  const auth = useOptionalAuth();
   useEscapeDismiss(compactMenuOpen, () => setCompactMenuOpen(false), 40);
 
   const toggleTheme = () => {
@@ -225,10 +229,48 @@ export function TopNav({
                 <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
                   <VersionReleaseModal menuItem onClose={() => setCompactMenuOpen(false)} />
                 </div>
+                {auth?.user ? (
+                  <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
+                    <div className="px-3 py-1.5 text-xs text-[var(--ob-muted)]">
+                      <div className="truncate font-medium text-[var(--ob-ink)]" title={auth.user.email}>
+                        {auth.user.displayName || auth.user.email}
+                      </div>
+                      {auth.usageLabel ? (
+                        <div className="mt-0.5 truncate" title={auth.usageLabel}>{auth.usageLabel}</div>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
+                      onClick={() => {
+                        setCompactMenuOpen(false);
+                        void auth.logout();
+                      }}
+                    >
+                      <LogOut size={16} />
+                      退出登录
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </>
           ) : null}
         </div>
+        {auth?.user ? (
+          <div className="hidden items-center gap-1.5 lg:flex">
+            <span className="ob-chip max-w-[10rem] truncate" title={auth.user.email}>
+              <UserRound size={12} className="mr-1 inline" />
+              {auth.user.displayName || auth.user.email}
+            </span>
+            {auth.usageLabel ? (
+              <span className="ob-chip max-w-[11rem] truncate" title={auth.usageLabel}>{auth.usageLabel}</span>
+            ) : null}
+            <button type="button" className="ob-icon-btn" title="退出登录" onClick={() => void auth.logout()}>
+              <LogOut size={16} />
+            </button>
+          </div>
+        ) : null}
         <button
           type="button"
           className="ob-icon-btn"

@@ -35,6 +35,7 @@ type Server struct {
 	mu             sync.Mutex
 	uploads        chan struct{}
 	codex          *codexManager
+	claude         *claudeManager
 	runtime        *runtimeHub
 	runtimeOrigins map[string]struct{}
 	store          store.Store
@@ -60,6 +61,12 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
+		r.Post("/claude/session", s.createClaudeSession)
+		r.Get("/claude/session", s.getClaudeSession)
+		r.Post("/claude/message", s.sendClaudeMessage)
+		r.Post("/claude/interrupt", s.interruptClaude)
+		r.Get("/claude/events", s.claudeEvents)
+		r.Delete("/claude/session/{id}", s.closeClaudeSession)
 		r.Post("/files", s.uploadFile)
 		r.Get("/files/{name}", s.getFile)
 		r.Get("/projects", s.listProjects)
@@ -88,6 +95,7 @@ func NewServer(dataDir string) *Server {
 		dataDir: dataDir,
 		uploads: make(chan struct{}, 2),
 		codex:   newCodexManager(),
+		claude:  newClaudeManager(),
 		runtime: newRuntimeHub(),
 		runtimeOrigins: map[string]struct{}{
 			"http://localhost:5173": {},
@@ -111,8 +119,15 @@ func NewServerWithStore(dataDir string, backend store.Store) *Server {
 
 func MountServer(r chi.Router, s *Server) {
 	r.Route("/api", func(r chi.Router) {
+		r.Use(s.withSession)
+		r.Use(s.requireUserWhenNeeded)
 		r.Get("/health", s.health)
 		r.Get("/version", s.version)
+		r.Post("/auth/register", s.register)
+		r.Post("/auth/login", s.login)
+		r.Post("/auth/logout", s.logout)
+		r.Get("/auth/me", s.me)
+		r.Get("/auth/usage", s.usage)
 		r.Get("/agent/status", s.agentStatus)
 		r.Post("/agent/execute", s.executeAgentTool)
 		r.Post("/runtime/ticket", s.runtimeTicket)
@@ -127,6 +142,12 @@ func MountServer(r chi.Router, s *Server) {
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
+		r.Post("/claude/session", s.createClaudeSession)
+		r.Get("/claude/session", s.getClaudeSession)
+		r.Post("/claude/message", s.sendClaudeMessage)
+		r.Post("/claude/interrupt", s.interruptClaude)
+		r.Get("/claude/events", s.claudeEvents)
+		r.Delete("/claude/session/{id}", s.closeClaudeSession)
 		r.Post("/files", s.uploadFile)
 		r.Get("/files/{name}", s.getFile)
 		r.Get("/projects", s.listProjects)
@@ -195,12 +216,17 @@ func (s *Server) version(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) agentStatus(w http.ResponseWriter, _ *http.Request) {
+	bridges := []string{"http-json", "mcp-stdio", "codex-app-server"}
+	if claudeAvailable() {
+		bridges = append(bridges, "claude-code")
+	}
 	writeJSON(w, map[string]any{
 		"connected": true,
 		"runtime":   map[string]any{"connected": s.runtime.connected()},
-		"bridges":   []string{"http-json", "mcp-stdio"},
-		"message":   "Local board tools and optional Codex app-server sessions are available.",
+		"bridges":   bridges,
+		"message":   "Local board tools, Codex, and optional Claude Code sessions are available.",
 		"codex":     map[string]any{"available": true, "sessionEndpoint": "/api/codex/session", "eventsEndpoint": "/api/codex/events"},
+		"claude":    map[string]any{"available": claudeAvailable(), "sessionEndpoint": "/api/claude/session", "eventsEndpoint": "/api/claude/events", "binary": claudeBinary()},
 		"tools": []string{
 			"board.get_state",
 			"board.get_selection",
@@ -315,7 +341,7 @@ func (s *Server) projectsDir() string {
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
-		items, err := s.store.ListProjects(r.Context())
+		items, err := s.store.ListProjects(r.Context(), tenantIDFrom(r))
 		if err != nil {
 			http.Error(w, "failed to list projects", http.StatusInternalServerError)
 			return
@@ -392,7 +418,7 @@ func (s *Server) putProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		if err := s.store.PutProject(r.Context(), id, body); err != nil {
+		if err := s.store.PutProject(r.Context(), tenantIDFrom(r), id, body); err != nil {
 			http.Error(w, "failed to store project", http.StatusInternalServerError)
 			return
 		}
@@ -435,7 +461,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		b, err := s.store.GetProject(r.Context(), id)
+		b, err := s.store.GetProject(r.Context(), tenantIDFrom(r), id)
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -473,7 +499,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		if err := s.store.DeleteProject(r.Context(), id); err != nil {
+		if err := s.store.DeleteProject(r.Context(), tenantIDFrom(r), id); err != nil {
 			http.Error(w, "failed to delete project", http.StatusInternalServerError)
 			return
 		}

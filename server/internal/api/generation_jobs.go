@@ -47,7 +47,7 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid generation kind", http.StatusBadRequest)
 		return
 	}
-	result, err := s.store.ListGenerationJobs(r.Context(), store.GenerationJobQuery{
+	result, err := s.store.ListGenerationJobs(r.Context(), tenantIDFrom(r), store.GenerationJobQuery{
 		ProjectID: projectID, Kind: kind, Page: page, PageSize: pageSize,
 	})
 	if err != nil {
@@ -67,7 +67,15 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.store.GetGenerationJob(r.Context(), job.ID); err == nil {
+	tenantID := tenantIDFrom(r)
+	if err := s.store.CheckGenerationQuota(r.Context(), tenantID); errors.Is(err, store.ErrQuotaExceeded) {
+		http.Error(w, "generation quota exceeded", http.StatusTooManyRequests)
+		return
+	} else if err != nil {
+		http.Error(w, "failed to check generation quota", http.StatusInternalServerError)
+		return
+	}
+	if _, err := s.store.GetGenerationJob(r.Context(), tenantID, job.ID); err == nil {
 		http.Error(w, "generation job already exists", http.StatusConflict)
 		return
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -76,10 +84,12 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job.CreatedAt, job.UpdatedAt = now, now
-	if err := s.store.PutGenerationJob(r.Context(), job); err != nil {
+	if err := s.store.PutGenerationJob(r.Context(), tenantID, job); err != nil {
 		http.Error(w, "failed to store generation job", http.StatusInternalServerError)
 		return
 	}
+	meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind})
+	_ = s.store.RecordUsage(r.Context(), tenantID, userIDFrom(r), "generation", 1, meta)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, job)
@@ -110,7 +120,7 @@ func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		ids[job.ID] = struct{}{}
 	}
-	if err := s.store.ReplaceGenerationJobs(r.Context(), jobs); err != nil {
+	if err := s.store.ReplaceGenerationJobs(r.Context(), tenantIDFrom(r), jobs); err != nil {
 		http.Error(w, "failed to replace generation history", http.StatusInternalServerError)
 		return
 	}
@@ -127,7 +137,7 @@ func (s *Server) getGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid generation job id", http.StatusBadRequest)
 		return
 	}
-	job, err := s.store.GetGenerationJob(r.Context(), id)
+	job, err := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), id)
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -150,7 +160,7 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid generation job", http.StatusBadRequest)
 		return
 	}
-	current, err := s.store.GetGenerationJob(r.Context(), id)
+	current, err := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), id)
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -161,7 +171,7 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 	}
 	job.CreatedAt = current.CreatedAt
 	job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.store.PutGenerationJob(r.Context(), job); err != nil {
+	if err := s.store.PutGenerationJob(r.Context(), tenantIDFrom(r), job); err != nil {
 		http.Error(w, "failed to update generation job", http.StatusInternalServerError)
 		return
 	}
@@ -178,7 +188,7 @@ func (s *Server) deleteGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid generation job id", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.DeleteGenerationJob(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	if err := s.store.DeleteGenerationJob(r.Context(), tenantIDFrom(r), id); errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	} else if err != nil {

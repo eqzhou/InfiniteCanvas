@@ -2,7 +2,11 @@ import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
 import { resolve } from "node:path";
-import { dedupeQueries, findingsFromBatch } from "./osv-audit-core.mjs";
+import {
+  dedupeQueries,
+  findingsFromBatch,
+  filterFindingsByImports,
+} from "./osv-audit-core.mjs";
 
 const exec = promisify(execFile);
 const root = resolve(new URL("..", import.meta.url).pathname);
@@ -46,6 +50,23 @@ async function collectGoModules() {
   });
 }
 
+async function collectGoImports() {
+  const { stdout } = await exec(
+    "go",
+    ["list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "./..."],
+    {
+      cwd: resolve(root, "server"),
+      env: { ...process.env, GOSUMDB: "sum.golang.org", GOTOOLCHAIN: "auto" },
+      maxBuffer: 8 * 1024 * 1024,
+    },
+  );
+  return stdout
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 async function boundedJSON(response, maxBytes) {
   const contentType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") throw new Error("OSV response is not JSON");
@@ -74,6 +95,20 @@ async function boundedJSON(response, maxBytes) {
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 
+async function fetchVulnDetails(ids) {
+  const unique = [...new Set(ids)];
+  const details = new Map();
+  await Promise.all(unique.map(async (id) => {
+    const response = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(id)}`, {
+      redirect: "error",
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error(`OSV vuln lookup failed for ${id}: HTTP ${response.status}`);
+    details.set(id, await boundedJSON(response, 2 * 1024 * 1024));
+  }));
+  return details;
+}
+
 const queries = dedupeQueries([
   ...await collectNodePackages(resolve(root, "web", "node_modules")),
   ...await collectGoModules(),
@@ -93,7 +128,22 @@ const response = await fetch("https://api.osv.dev/v1/querybatch", {
   signal: AbortSignal.timeout(30_000),
 });
 if (!response.ok) throw new Error(`OSV audit failed: HTTP ${response.status}`);
-const findings = findingsFromBatch(queries, await boundedJSON(response, 16 * 1024 * 1024));
+const rawFindings = findingsFromBatch(queries, await boundedJSON(response, 16 * 1024 * 1024));
+
+let findings = rawFindings;
+if (rawFindings.length) {
+  const details = await fetchVulnDetails(rawFindings.map((item) => item.id));
+  const installedImports = await collectGoImports();
+  findings = filterFindingsByImports(rawFindings, details, installedImports);
+  findings = findings.map((item) => {
+    const detail = details.get(item.id);
+    if (detail && !item.summary && typeof detail.summary === "string") {
+      return { ...item, summary: detail.summary };
+    }
+    return item;
+  });
+}
+
 if (findings.length) {
   console.error(`OSV audit found ${findings.length} active vulnerability record(s):`);
   for (const item of findings) {
@@ -101,5 +151,7 @@ if (findings.length) {
   }
   process.exitCode = 1;
 } else {
-  console.log(`OSV audit passed for ${queries.length} installed npm and Go package versions.`);
+  const ignored = rawFindings.length - findings.length;
+  const note = ignored > 0 ? ` (ignored ${ignored} module-level advisory(ies) outside installed import paths)` : "";
+  console.log(`OSV audit passed for ${queries.length} installed npm and Go package versions.${note}`);
 }

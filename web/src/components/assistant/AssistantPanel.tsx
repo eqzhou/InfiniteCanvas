@@ -299,7 +299,7 @@ export function AssistantPanel() {
     <aside
       id="canvas-assistant"
       aria-label="画布助手"
-      className="absolute inset-y-0 right-0 z-50 flex h-full w-full shrink-0 flex-col border-l border-[var(--ob-line)] bg-[var(--ob-panel)] shadow-[var(--ob-shadow)] sm:w-[360px] xl:static xl:w-[340px] xl:shadow-none"
+      className="absolute inset-y-0 right-0 z-50 flex h-full w-full shrink-0 flex-col border-l border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md sm:w-[360px] xl:static xl:w-[340px] xl:shadow-none"
     >
       <div className="flex items-center gap-2 border-b border-[var(--ob-line)] px-3 py-2">
         <strong className="text-sm">画布助手</strong>
@@ -438,6 +438,7 @@ export function AssistantPanel() {
         {session.messages.map((m) => (
           <div
             key={m.id}
+            data-testid={`assistant-message-${m.role}`}
             className={`rounded-lg border border-[var(--ob-line)] p-2 text-sm ${
               m.role === "user" ? "bg-[var(--ob-accent-soft)]" : "bg-transparent"
             }`}
@@ -504,17 +505,17 @@ export function AssistantPanel() {
         ) : (
           <p className="mb-2 text-xs text-[var(--ob-muted)]">选中节点可作为引用</p>
         )}
-        <div className="mb-2 flex gap-2 text-xs">
+        <div className="mb-2 flex gap-1.5 text-xs font-medium">
           <button
             type="button"
-            className={`rounded px-2 py-1 ${mode === "ask" ? "bg-[var(--ob-accent-soft)]" : ""}`}
+            className={`rounded-lg px-3 py-1.5 transition-colors ${mode === "ask" ? "bg-[var(--ob-accent)] font-semibold text-white" : "bg-[var(--ob-canvas)] text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"}`}
             onClick={() => setMode("ask")}
           >
             问答
           </button>
           <button
             type="button"
-            className={`rounded px-2 py-1 ${mode === "image" ? "bg-[var(--ob-accent-soft)]" : ""}`}
+            className={`rounded-lg px-3 py-1.5 transition-colors ${mode === "image" ? "bg-[var(--ob-accent)] font-semibold text-white" : "bg-[var(--ob-canvas)] text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"}`}
             onClick={() => setMode("image")}
           >
             生图
@@ -558,7 +559,7 @@ export function AssistantPanel() {
         ) : null}
         <div className="flex gap-2">
           <textarea
-            className="min-h-[72px] flex-1 resize-none rounded-md border border-[var(--ob-line)] bg-transparent p-2 text-sm"
+            className="ob-field min-h-[72px] flex-1 resize-none text-sm"
             placeholder={mode === "ask" ? "问点什么…（可粘贴图片）" : "描述想生成的图片…（可粘贴图片）"}
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -598,7 +599,7 @@ export function AssistantPanel() {
           />
           <button
             type="button"
-            className="self-end rounded-md bg-[var(--ob-accent)] p-2 text-white disabled:opacity-50"
+            className="ob-btn-primary self-end rounded-xl p-3 disabled:opacity-50"
             disabled={busy}
             onClick={() => void send()}
           >

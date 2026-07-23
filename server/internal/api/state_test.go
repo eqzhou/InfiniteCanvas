@@ -25,36 +25,36 @@ func newMemoryStore() *memoryStore {
 
 func (*memoryStore) Close()                     {}
 func (*memoryStore) Ping(context.Context) error { return nil }
-func (m *memoryStore) ListProjects(context.Context) ([]store.ProjectSummary, error) {
+func (m *memoryStore) ListProjects(_ context.Context, _ string) ([]store.ProjectSummary, error) {
 	out := make([]store.ProjectSummary, 0, len(m.projects))
 	for id := range m.projects {
 		out = append(out, store.ProjectSummary{ID: id})
 	}
 	return out, nil
 }
-func (m *memoryStore) GetProject(_ context.Context, id string) ([]byte, error) {
+func (m *memoryStore) GetProject(_ context.Context, _ string, id string) ([]byte, error) {
 	value, ok := m.projects[id]
 	if !ok {
 		return nil, store.ErrNotFound
 	}
 	return append([]byte(nil), value...), nil
 }
-func (m *memoryStore) PutProject(_ context.Context, id string, value []byte) error {
+func (m *memoryStore) PutProject(_ context.Context, _ string, id string, value []byte) error {
 	m.projects[id] = append([]byte(nil), value...)
 	return nil
 }
-func (m *memoryStore) DeleteProject(_ context.Context, id string) error {
+func (m *memoryStore) DeleteProject(_ context.Context, _ string, id string) error {
 	delete(m.projects, id)
 	return nil
 }
-func (m *memoryStore) GetState(_ context.Context, key string) ([]byte, error) {
+func (m *memoryStore) GetState(_ context.Context, _ string, key string) ([]byte, error) {
 	value, ok := m.state[key]
 	if !ok {
 		return nil, store.ErrNotFound
 	}
 	return append([]byte(nil), value...), nil
 }
-func (m *memoryStore) PutState(_ context.Context, key string, value []byte) error {
+func (m *memoryStore) PutState(_ context.Context, _ string, key string, value []byte) error {
 	if !json.Valid(value) {
 		return errors.New("invalid json")
 	}
@@ -62,7 +62,7 @@ func (m *memoryStore) PutState(_ context.Context, key string, value []byte) erro
 	return nil
 }
 
-func (m *memoryStore) ListGenerationJobs(_ context.Context, query store.GenerationJobQuery) (store.GenerationJobPage, error) {
+func (m *memoryStore) ListGenerationJobs(_ context.Context, _ string, query store.GenerationJobQuery) (store.GenerationJobPage, error) {
 	items := make([]store.GenerationJob, 0, len(m.jobs))
 	for _, job := range m.jobs {
 		if query.ProjectID != "" && job.ProjectID != query.ProjectID {
@@ -76,7 +76,7 @@ func (m *memoryStore) ListGenerationJobs(_ context.Context, query store.Generati
 	return store.PaginateGenerationJobs(items, query.Page, query.PageSize), nil
 }
 
-func (m *memoryStore) GetGenerationJob(_ context.Context, id string) (store.GenerationJob, error) {
+func (m *memoryStore) GetGenerationJob(_ context.Context, _ string, id string) (store.GenerationJob, error) {
 	job, ok := m.jobs[id]
 	if !ok {
 		return store.GenerationJob{}, store.ErrNotFound
@@ -84,17 +84,17 @@ func (m *memoryStore) GetGenerationJob(_ context.Context, id string) (store.Gene
 	return job, nil
 }
 
-func (m *memoryStore) PutGenerationJob(_ context.Context, job store.GenerationJob) error {
+func (m *memoryStore) PutGenerationJob(_ context.Context, _ string, job store.GenerationJob) error {
 	m.jobs[job.ID] = job
 	return nil
 }
 
-func (m *memoryStore) DeleteGenerationJob(_ context.Context, id string) error {
+func (m *memoryStore) DeleteGenerationJob(_ context.Context, _ string, id string) error {
 	delete(m.jobs, id)
 	return nil
 }
 
-func (m *memoryStore) ReplaceGenerationJobs(_ context.Context, jobs []store.GenerationJob) error {
+func (m *memoryStore) ReplaceGenerationJobs(_ context.Context, _ string, jobs []store.GenerationJob) error {
 	next := make(map[string]store.GenerationJob, len(jobs))
 	for _, job := range jobs {
 		next[job.ID] = job
@@ -102,6 +102,29 @@ func (m *memoryStore) ReplaceGenerationJobs(_ context.Context, jobs []store.Gene
 	m.jobs = next
 	return nil
 }
+
+func (*memoryStore) CountUsers(context.Context) (int, error) { return 0, nil }
+func (*memoryStore) RegisterUser(context.Context, store.RegisterInput) (store.AuthUser, string, error) {
+	return store.AuthUser{}, "", store.ErrUnauthorized
+}
+func (*memoryStore) LoginUser(context.Context, string, string) (store.AuthUser, string, error) {
+	return store.AuthUser{}, "", store.ErrInvalidCredentials
+}
+func (*memoryStore) LogoutSession(context.Context, string) error { return nil }
+func (*memoryStore) LookupSession(context.Context, string) (store.AuthUser, error) {
+	return store.AuthUser{}, store.ErrUnauthorized
+}
+func (*memoryStore) GetTenant(context.Context, string) (store.Tenant, error) {
+	return store.Tenant{ID: store.DefaultTenantID, Name: "Local", Plan: "free", StorageQuotaBytes: 1 << 30, GenerationQuotaMonthly: 1000}, nil
+}
+func (*memoryStore) RecordUsage(context.Context, string, string, string, int, json.RawMessage) error {
+	return nil
+}
+func (*memoryStore) GetUsage(context.Context, string) (store.UsageSummary, error) {
+	return store.UsageSummary{Plan: "free", StorageQuotaBytes: 1 << 30, GenerationQuotaMonthly: 1000}, nil
+}
+func (*memoryStore) CheckGenerationQuota(context.Context, string) error { return nil }
+func (*memoryStore) CheckStorageQuota(context.Context, string, int64) error { return nil }
 
 func persistentHandler(t *testing.T) http.Handler {
 	t.Helper()

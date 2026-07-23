@@ -183,7 +183,11 @@ implementation evidence.
 ## Product boundary
 
 - [verified] Personal local single-user product with loopback binding and token-protected formal runtime
-- [not targeted] Hosted registration, tenant membership, billing, and multi-user authorization
-- [not targeted] Browser-hosted Claude conversation UI; standard MCP setup is documented
+- [verified] Local multi-tenant accounts with email login, tenant-scoped projects/state/jobs/blobs, session header isolation, and usage quotas (no payment processor)
+- [not targeted] Hosted SaaS registration marketplace, external payment/billing providers, and org-wide enterprise SSO
+- [verified] Browser-hosted Claude conversation UI via local Claude Code CLI stream-json bridge (Local Agent panel tab), optional OpenBoard MCP injection, stop/new-session controls
+- [verified] Standard Claude MCP setup docs remain available for external Claude clients
+- [not targeted] Upstream public TODO item to replace the Claude Code CLI adapter with a Claude Agent SDK adapter (docs-only signal as of 2026-07-23; not adopted as a parity requirement)
 - [external] Real-provider paid smoke depends on user-supplied credentials and is never a CI fixture
 - [external] Commercial clean-room, trademark/trade-dress, patent, contributor-rights, and market-specific legal sign-off
+- [verified] Public license recheck on 2026-07-23: reference remains AGPL-3.0; OpenBoard continues as an independent clean-room product identity under this repository's own license and docs/CLEANROOM.md process

@@ -64,6 +64,7 @@ const sharedEnv = {
   OPENBOARD_DATA: dataDir,
   OPENBOARD_API_TARGET: process.env.OPENBOARD_API_TARGET || "http://127.0.0.1:8790",
   OPENBOARD_WEB_OUT_DIR: "dist-local",
+  OPENBOARD_AUTH_MODE: process.env.OPENBOARD_AUTH_MODE || fileEnv.OPENBOARD_AUTH_MODE || "optional",
   FORCE_COLOR: "0",
 };
 

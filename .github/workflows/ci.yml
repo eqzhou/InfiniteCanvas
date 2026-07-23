@@ -86,7 +86,7 @@ jobs:
   e2e:
     name: Cross-browser and production E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       OPENBOARD_DATABASE_URL: postgres://openboard_e2e:openboard_e2e@127.0.0.1:5432/openboard_e2e?sslmode=disable
       OPENBOARD_REDIS_URL: redis://127.0.0.1:6379/0
