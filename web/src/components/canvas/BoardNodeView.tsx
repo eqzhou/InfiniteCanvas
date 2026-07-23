@@ -155,7 +155,7 @@ export function BoardNodeView({
             }}
           />
         ) : (
-          <span className="block max-w-full truncate" title={node.title}>{node.title}</span>
+          <span className="block max-w-full truncate">{node.title}</span>
         )}
       </div>
       <div data-node-header className="flex items-center gap-2 border-b border-[var(--ob-line)] px-2 py-1.5 text-xs">

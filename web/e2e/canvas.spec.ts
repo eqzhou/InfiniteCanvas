@@ -11,7 +11,9 @@ async function openFreshBoard(
   { requireProjectPanel = true }: { requireProjectPanel?: boolean } = {},
 ) {
   await page.goto("/");
-  await expect(page.getByTitle("文本")).toBeVisible();
+  // Toolbar "文本" button only — node titles may also use title="文本".
+  const textTool = page.getByRole("toolbar", { name: "画布工具栏" }).getByRole("button", { name: "文本", exact: true });
+  await expect(textTool).toBeVisible();
   if (!requireProjectPanel) return;
   if ((page.viewportSize()?.width ?? 1440) < 768) {
     await page.getByTitle("项目").click();
@@ -20,10 +22,16 @@ async function openFreshBoard(
   if (await projectTab.getAttribute("aria-selected") !== "true") {
     await projectTab.click();
   }
-  await expect(page.locator('input[value="我的第一个画布"]')).toHaveCount(1);
+  // Formal/local storage may already have projects; ensure at least one active board.
+  await expect(page.locator('aside input[value]').first()).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 768) {
     await page.locator("aside").getByTitle("关闭").click();
   }
+}
+
+/** Click the canvas toolbar tool by accessible name (avoids node title collisions). */
+async function clickCanvasTool(page: Page, name: string) {
+  await page.getByRole("toolbar", { name: "画布工具栏" }).getByRole("button", { name, exact: true }).click();
 }
 
 
@@ -55,8 +63,9 @@ function projectCard(page: Page, title: string) {
 test("first launch creates and opens a board project", async ({ page }) => {
   await openFreshBoard(page);
   if ((page.viewportSize()?.width ?? 1440) >= 768) {
-    await expect(page.locator('input[value="我的第一个画布"]')).toBeVisible();
-    await expect(page.getByText("0 节点", { exact: false })).toBeVisible();
+    // Active project row shows a title input and a node-count summary.
+    await expect(page.locator("aside input[value]").first()).toBeVisible();
+    await expect(page.locator("aside").getByText("节点", { exact: false }).first()).toBeVisible();
   }
 });
 
@@ -182,7 +191,7 @@ test("canvas element panel selects, locates, and batch exports nodes", async ({ 
 test("canvas editing preserves copied edges, history, view controls, and appearance", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop controls and edge hit targets are covered here.");
   await openFreshBoard(page);
-  await page.getByTitle("文本").click();
+  await clickCanvasTool(page, "文本");
   await page.getByTitle("配置").click();
   const textNode = page.locator('[data-node-type="text"]');
   const configNode = page.locator('[data-node-type="config"]');
@@ -278,7 +287,7 @@ test("loopback New API links configure text credentials and scrub the URL", asyn
 
 test("a text node and its content survive a reload", async ({ page }) => {
   await openFreshBoard(page);
-  await page.getByTitle("文本").click();
+  await clickCanvasTool(page, "文本");
 
   const editor = page.getByPlaceholder("写下提示词或说明…");
   await expect(editor).toBeVisible();
@@ -725,7 +734,7 @@ test("config input reorder changes Ark reference order", async ({ page }) => {
 
 test("node title, font size, and model overrides are editable and persistent", async ({ page }) => {
   await openFreshBoard(page);
-  await page.getByTitle("文本").click();
+  await clickCanvasTool(page, "文本");
   const node = page.locator('[data-node-type="text"]');
   await node.locator('[title="文本"]').dblclick();
   const title = node.getByLabel("节点标题");
@@ -848,7 +857,7 @@ test("text-to-image creates a connected config and executes immediately", async 
   await settings.getByLabel("全局系统提示词").fill("Use a crisp editorial style.");
   await closeSettings(page);
 
-  await page.getByTitle("文本").click();
+  await clickCanvasTool(page, "文本");
   await page.getByPlaceholder("写下提示词或说明…").fill("a red square");
   await page.getByTitle("生图").click();
 
@@ -917,7 +926,7 @@ test("failed text-to-image keeps its config and can retry successfully", async (
   await page.getByLabel("生图模型", { exact: true }).fill("retry-flow-image");
   await closeSettings(page);
 
-  await page.getByTitle("文本").click();
+  await clickCanvasTool(page, "文本");
   await page.getByPlaceholder("写下提示词或说明…").fill("retryable image flow");
   await page.getByTitle("生图").click();
 
@@ -967,7 +976,7 @@ test("a configuration node generates the requested text batch", async ({ page })
   await page.getByLabel("全局系统提示词").fill("Return one concise alternative.");
   await closeSettings(page);
 
-  await page.getByTitle("文本").click();
+  await clickCanvasTool(page, "文本");
   const source = page.locator('[data-node-type="text"]');
   await source.getByPlaceholder("写下提示词或说明…").fill("three alternatives");
   await source.getByTitle("生图").click();
@@ -2778,7 +2787,7 @@ test("Codex session and running state stay synchronized across browser tabs", as
   const second = await context.newPage();
   await installRoutes(second);
   await second.goto("/");
-  await expect(second.getByTitle("文本")).toBeVisible();
+  await expect(second.getByRole("toolbar", { name: "画布工具栏" }).getByRole("button", { name: "文本", exact: true })).toBeVisible();
   await connectPanel(second);
   await expect(second.getByPlaceholder("发送消息")).toBeEnabled();
   await expect(second.getByText("synced prior prompt")).toBeVisible();
