@@ -438,8 +438,8 @@ export function AssistantPanel() {
         {session.messages.map((m) => (
           <div
             key={m.id}
-            className={`rounded-xl border border-[var(--ob-line)] p-3 text-sm ${
-              m.role === "user" ? "border-[color-mix(in_srgb,var(--ob-accent)_30%,var(--ob-line))] bg-[var(--ob-accent-soft)] font-medium" : "bg-[var(--ob-canvas)]"
+            className={`rounded-lg border border-[var(--ob-line)] p-2 text-sm ${
+              m.role === "user" ? "bg-[var(--ob-accent-soft)]" : "bg-transparent"
             }`}
           >
             <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--ob-muted)]">

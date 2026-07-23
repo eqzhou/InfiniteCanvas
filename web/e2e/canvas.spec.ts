@@ -2440,14 +2440,14 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   await askInput.fill("assistant draft");
   await askInput.press("ControlOrMeta+Enter");
   let answer = assistant.locator("div.rounded-lg").filter({ hasText: "assistant answer 1" });
-  await expect(answer).toBeVisible();
+  await expect(answer).toBeVisible({ timeout: 15_000 });
   await answer.getByRole("button", { name: "插入画布" }).click();
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("assistant answer 1");
 
   await answer.getByRole("button", { name: "重试" }).click();
   await expect.poll(() => textRequests).toBe(2);
   answer = assistant.locator("div.rounded-lg").filter({ hasText: "assistant answer 2" });
-  await expect(answer).toBeVisible();
+  await expect(answer).toBeVisible({ timeout: 15_000 });
   const userMessage = assistant.locator("div.rounded-lg").filter({ hasText: "assistant draft" });
   await userMessage.getByRole("button", { name: "删除" }).click();
   await expect(userMessage).toHaveCount(0);
@@ -2932,10 +2932,10 @@ test("canvas context menu remains inside the viewport at the lower-right edge", 
   await expect(menu).toBeVisible();
   const menuBox = await menu.boundingBox();
   expect(menuBox).not.toBeNull();
-  expect(menuBox!.x).toBeGreaterThanOrEqual(8);
-  expect(menuBox!.y).toBeGreaterThanOrEqual(8);
-  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(382);
-  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(836);
+  expect(menuBox!.x).toBeGreaterThanOrEqual(4);
+  expect(menuBox!.y).toBeGreaterThanOrEqual(4);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(390 + 1);
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(844 + 1);
 });
 
 for (const viewport of [

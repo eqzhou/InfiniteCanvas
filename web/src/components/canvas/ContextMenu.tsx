@@ -92,11 +92,16 @@ export function ContextMenu({
   if (state.nodeId && canGroup) items.unshift({ label: "组合", action: onGroup, icon: FolderPlus });
   if (state.nodeId && canUngroup) items.unshift({ label: "取消组合", action: onUngroup, icon: FolderMinus });
 
-  const menuWidth = 208;
+  const menuWidth = 176; // w-44
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const left = Math.max(8, Math.min(state.screen.x, viewportWidth - menuWidth - 8));
-  const opensUpward = state.screen.y > viewportHeight / 2;
+  // Prefer opening upward near the bottom edge so the full menu stays in-bounds.
+  const opensUpward = state.screen.y > viewportHeight * 0.55;
+  const top = opensUpward
+    ? Math.min(state.screen.y, viewportHeight - 8)
+    : Math.max(8, Math.min(state.screen.y, viewportHeight - 8));
+  const maxHeight = Math.max(120, opensUpward ? top - 8 : viewportHeight - top - 8);
 
   return (
     <>
@@ -104,11 +109,11 @@ export function ContextMenu({
       <div
         role="menu"
         aria-label={state.nodeId ? "节点菜单" : "画布菜单"}
-        className="ob-surface-glass fixed z-[80] w-56 overflow-y-auto p-1.5"
+        className="fixed z-[80] w-44 overflow-y-auto rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow-lg)]"
         style={{
           left,
-          top: Math.max(8, Math.min(state.screen.y, viewportHeight - 8)),
-          maxHeight: Math.max(120, viewportHeight - 16),
+          top,
+          maxHeight,
           transform: opensUpward ? "translateY(-100%)" : undefined,
         }}
         onPointerDown={(event) => event.stopPropagation()}
