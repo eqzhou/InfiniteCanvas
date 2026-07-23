@@ -73,7 +73,7 @@ func (s *Server) executeAgentTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.ExecuteTool(request.Tool, request.Arguments)
+	data, err := s.executeTool(r.Context(), tenantIDFrom(r), request.Tool, request.Arguments)
 	if err != nil {
 		var typed *toolError
 		if errors.As(err, &typed) {
@@ -86,11 +86,20 @@ func (s *Server) executeAgentTool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "data": data})
 }
 
+// ExecuteTool implements the MCP tool executor interface and runs tools under the
+// default local tenant. HTTP callers should use executeTool with the request tenant.
 func (s *Server) ExecuteTool(tool string, arguments json.RawMessage) (any, error) {
+	return s.executeTool(context.Background(), store.DefaultTenantID, tool, arguments)
+}
+
+func (s *Server) executeTool(ctx context.Context, tenantID string, tool string, arguments json.RawMessage) (any, error) {
+	if tenantID == "" {
+		tenantID = store.DefaultTenantID
+	}
 	if isBrowserRuntimeTool(tool) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		result, err := s.runtime.command(ctx, tool, arguments)
+		result, err := s.runtime.command(toolCtx, tool, arguments)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +116,7 @@ func (s *Server) ExecuteTool(tool string, arguments json.RawMessage) (any, error
 		return nil, err
 	}
 	defer release()
-	return s.runAgentTool(tool, arguments)
+	return s.runAgentTool(ctx, tenantID, tool, arguments)
 }
 
 func isBrowserRuntimeTool(tool string) bool {
@@ -123,14 +132,14 @@ func isBrowserRuntimeTool(tool string) bool {
 	}
 }
 
-func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
+func (s *Server) runAgentTool(ctx context.Context, tenantID string, tool string, raw json.RawMessage) (any, error) {
 	switch tool {
 	case "board.list_nodes":
 		var args projectArguments
 		if err := decodeToolArguments(raw, &args); err != nil {
 			return nil, err
 		}
-		project, err := s.loadProjectDocument(args.ProjectID)
+		project, err := s.loadProjectDocument(ctx, tenantID, args.ProjectID)
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +149,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 		if err := decodeToolArguments(raw, &args); err != nil {
 			return nil, err
 		}
-		return s.loadProjectDocument(args.ProjectID)
+		return s.loadProjectDocument(ctx, tenantID, args.ProjectID)
 	case "board.add_node":
 		var args addNodeArguments
 		if err := decodeToolArguments(raw, &args); err != nil {
@@ -149,7 +158,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 		if err := validateNode(args.Node); err != nil {
 			return nil, badToolRequest(err.Error())
 		}
-		project, err := s.loadProjectDocument(args.ProjectID)
+		project, err := s.loadProjectDocument(ctx, tenantID, args.ProjectID)
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +168,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 			return nil, badToolRequest("node id already exists")
 		}
 		project["nodes"] = append(nodes, args.Node)
-		if err := s.saveProjectDocument(args.ProjectID, project); err != nil {
+		if err := s.saveProjectDocument(ctx, tenantID, args.ProjectID, project); err != nil {
 			return nil, err
 		}
 		return args.Node, nil
@@ -171,7 +180,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 		if !validProjectID(args.ID) || args.Patch == nil {
 			return nil, badToolRequest("invalid node id or patch")
 		}
-		project, err := s.loadProjectDocument(args.ProjectID)
+		project, err := s.loadProjectDocument(ctx, tenantID, args.ProjectID)
 		if err != nil {
 			return nil, err
 		}
@@ -190,7 +199,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 		nextNodes := append([]map[string]any(nil), nodes...)
 		nextNodes[index] = updated
 		project["nodes"] = nextNodes
-		if err := s.saveProjectDocument(args.ProjectID, project); err != nil {
+		if err := s.saveProjectDocument(ctx, tenantID, args.ProjectID, project); err != nil {
 			return nil, err
 		}
 		return updated, nil
@@ -209,7 +218,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 			}
 			deleted[id] = struct{}{}
 		}
-		project, err := s.loadProjectDocument(args.ProjectID)
+		project, err := s.loadProjectDocument(ctx, tenantID, args.ProjectID)
 		if err != nil {
 			return nil, err
 		}
@@ -217,7 +226,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 		remaining = pruneDeletedNodeReferences(remaining, deleted)
 		project["nodes"] = remaining
 		project["edges"] = deleteConnectedEdges(projectEdges(project), deleted)
-		if err := s.saveProjectDocument(args.ProjectID, project); err != nil {
+		if err := s.saveProjectDocument(ctx, tenantID, args.ProjectID, project); err != nil {
 			return nil, err
 		}
 		return map[string]any{"deleted": args.IDs}, nil
@@ -229,7 +238,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 		if !validProjectID(args.ID) || !validProjectID(args.From) || !validProjectID(args.To) || args.From == args.To {
 			return nil, badToolRequest("invalid edge endpoints or id")
 		}
-		project, err := s.loadProjectDocument(args.ProjectID)
+		project, err := s.loadProjectDocument(ctx, tenantID, args.ProjectID)
 		if err != nil {
 			return nil, err
 		}
@@ -248,7 +257,7 @@ func (s *Server) runAgentTool(tool string, raw json.RawMessage) (any, error) {
 		}
 		edge := map[string]any{"id": args.ID, "from": args.From, "to": args.To}
 		project["edges"] = append(edges, edge)
-		if err := s.saveProjectDocument(args.ProjectID, project); err != nil {
+		if err := s.saveProjectDocument(ctx, tenantID, args.ProjectID, project); err != nil {
 			return nil, err
 		}
 		return edge, nil
@@ -266,14 +275,17 @@ func decodeToolArguments(raw json.RawMessage, destination any) error {
 	return nil
 }
 
-func (s *Server) loadProjectDocument(id string) (map[string]any, error) {
+func (s *Server) loadProjectDocument(ctx context.Context, tenantID, id string) (map[string]any, error) {
 	if !validProjectID(id) {
 		return nil, badToolRequest("invalid project id")
+	}
+	if tenantID == "" {
+		tenantID = store.DefaultTenantID
 	}
 	var body []byte
 	var err error
 	if s.store != nil {
-		body, err = s.store.GetProject(context.Background(), store.DefaultTenantID, id)
+		body, err = s.store.GetProject(ctx, tenantID, id)
 	} else {
 		body, err = os.ReadFile(filepath.Join(s.projectsDir(), id+".json"))
 	}
@@ -290,7 +302,7 @@ func (s *Server) loadProjectDocument(id string) (map[string]any, error) {
 	return project, nil
 }
 
-func (s *Server) saveProjectDocument(id string, project map[string]any) error {
+func (s *Server) saveProjectDocument(ctx context.Context, tenantID, id string, project map[string]any) error {
 	project["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := validateProjectDocument(project); err != nil {
 		return badToolRequest(err.Error())
@@ -303,7 +315,10 @@ func (s *Server) saveProjectDocument(id string, project map[string]any) error {
 		return badToolRequest("project exceeds the persisted size limit")
 	}
 	if s.store != nil {
-		return s.store.PutProject(context.Background(), store.DefaultTenantID, id, body)
+		if tenantID == "" {
+			tenantID = store.DefaultTenantID
+		}
+		return s.store.PutProject(ctx, tenantID, id, body)
 	}
 	return atomicWriteFile(filepath.Join(s.projectsDir(), id+".json"), body, 0o600)
 }
