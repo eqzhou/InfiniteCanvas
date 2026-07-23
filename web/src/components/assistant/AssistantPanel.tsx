@@ -438,6 +438,7 @@ export function AssistantPanel() {
         {session.messages.map((m) => (
           <div
             key={m.id}
+            data-testid={`assistant-message-${m.role}`}
             className={`rounded-lg border border-[var(--ob-line)] p-2 text-sm ${
               m.role === "user" ? "bg-[var(--ob-accent-soft)]" : "bg-transparent"
             }`}
