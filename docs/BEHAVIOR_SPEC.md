@@ -12,9 +12,12 @@ described by public documentation and recorded black-box behavior available on
 2026-07-16. The public `v0.9.0` release delta published on 2026-07-17 was
 adopted on 2026-07-18 as an additive interface target. Four public Unreleased
 behaviors at commits `d4130bbb79`, `bdca6b0a5c`, `062e4569aa`, and
-`5e1fd7a825` were adopted on 2026-07-19. Unlisted later upstream changes remain
-out of scope. The implementation team did not use upstream
-source, CSS, plugins, fixtures, screenshots, or assets as implementation input.
+`5e1fd7a825` were adopted on 2026-07-19. A public recheck on 2026-07-23
+confirmed the latest public release is still `v0.9.0` and the public TODO only
+lists a Claude Agent SDK adapter follow-up (not yet adopted as a parity target).
+Unlisted later upstream changes remain out of scope. The implementation team
+did not use upstream source, CSS, plugins, fixtures, screenshots, or assets as
+implementation input.
 
 | Date | Surface | Public/observed input | Required observable result | Confidence |
 |---|---|---|---|---|
@@ -69,6 +72,8 @@ source, CSS, plugins, fixtures, screenshots, or assets as implementation input.
 | 2026-07-19 | Unified generation status | Query generation progress from canvas nodes or image/video workbench tasks, including after reload | `generation_get_status` returns normalized queued/running/succeeded/failed/cancelled state for bounded `nodeIds` or an owned `taskId`; interrupted owned workbench jobs become retryable failures | high |
 | 2026-07-19 | Client-scoped Agent operations | Start a turn in one tab, focus/close other tabs, and return tool results | The initiating client remains pinned for the turn; foreign results are ignored; disconnect falls back only to the most recently focused client on the same project | high |
 | 2026-07-19 | Shared Codex state | Send, stop, approve, switch, reload, and open a second tab while a turn/tool is running | Session, user messages, resolved approvals and running state replay across tabs; thread-mismatched events are ignored; tool completion does not unlock the turn | high |
+| 2026-07-23 | Public recheck | Re-read public README feature inventory, releases list, and progress TODO without source inspection | Confirmed latest public release remains `v0.9.0`; no new public release delta adopted; public TODO Claude Agent SDK adapter remains not-targeted | high |
+| 2026-07-23 | Prompt center presentation | Open formal local `/prompts` with server storage | Dense library shell remains usable: collapsible sources, library/mine tabs, filters, insert/detail/copy, and existing remote/local counts preserved | high |
 
 ## Evidence
 
@@ -93,6 +98,9 @@ source, CSS, plugins, fixtures, screenshots, or assets as implementation input.
 | https://github.com/basketikun/infinite-canvas/blob/v0.8.2/docs/content/docs/progress/todo.mdx | 2026-07-18 | Publicly declared remaining reference-project work; blob `36ce0801b904de38c7b0a75344f2ee8f11b85c17` |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.8.2 | 2026-07-17 | Frozen release identifier and public release notes; URL availability verified without reading source files |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.9.0 | 2026-07-18 | Public release metadata used to define the additive interface delta; no release source, styles, screenshots, plugins, or assets were used |
+| https://github.com/basketikun/infinite-canvas/releases | 2026-07-23 | Public release list recheck; latest tag remains `v0.9.0` |
+| https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/overview/features.mdx | 2026-07-23 | Public feature inventory recheck (docs only; no source trees) |
+| https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/progress/todo.mdx | 2026-07-23 | Public remaining-work recheck; Claude Agent SDK adapter noted as not-targeted |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-19 | Public Unreleased behavior names for prompt sources, generation status, tab ownership, and Codex synchronization |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/docs/content/docs/progress/pending-test.mdx | 2026-07-19 | Public black-box acceptance descriptions and exact `generation_get_status` interoperability name |
 | https://api.github.com/repos/basketikun/infinite-canvas/commits | 2026-07-19 | Public commit hashes/messages and changed-file names only; implementation patches were not read |
@@ -105,10 +113,11 @@ source, CSS, plugins, fixtures, screenshots, or assets as implementation input.
 
 | Repository | Detected license | SPDX | Branch | Verified |
 |---|---|---|---|---|
-| https://github.com/basketikun/infinite-canvas | GNU Affero General Public License v3.0 | AGPL-3.0 | `main` | 2026-07-16 |
+| https://github.com/basketikun/infinite-canvas | GNU Affero General Public License v3.0 | AGPL-3.0 | `main` | 2026-07-23 |
 
-The record was checked through the repository's public GitHub metadata API on
-2026-07-16. This implementation does not copy, modify, translate, or link to
+The record was first checked through the repository's public GitHub metadata API
+on 2026-07-16 and reconfirmed via the public repository license label on
+2026-07-23. This implementation does not copy, modify, translate, or link to
 the reference source; it targets independently recorded behavior and uses a
 different name, architecture, UI system, assets, and identifiers. A qualified
 lawyer must still assess derivative-work, trade-dress, trademark, patent, and
