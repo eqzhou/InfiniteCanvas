@@ -289,7 +289,7 @@ test("a text node and its content survive a reload", async ({ page }) => {
   await openFreshBoard(page);
   await clickCanvasTool(page, "文本");
 
-  const editor = page.getByPlaceholder("写下提示词或说明…");
+  const editor = page.locator('[data-node-type="text"]').getByPlaceholder("写下提示词或说明…");
   await expect(editor).toBeVisible();
   await editor.fill("persisted from Playwright");
   if ((page.viewportSize()?.width ?? 1440) >= 768) {
@@ -735,12 +735,12 @@ test("config input reorder changes Ark reference order", async ({ page }) => {
 test("node title, font size, and model overrides are editable and persistent", async ({ page }) => {
   await openFreshBoard(page);
   await clickCanvasTool(page, "文本");
-  const node = page.locator('[data-node-type="text"]');
-  await node.locator('[title="文本"]').dblclick();
+  const node = page.locator('[data-node-type="text"]').first();
+  await node.locator("[data-node-title]").dblclick();
   const title = node.getByLabel("节点标题");
   await title.fill("本地创作节点");
   await title.press("Enter");
-  await expect(node.getByTitle("本地创作节点")).toBeVisible();
+  await expect(node.locator("[data-node-title]")).toHaveText("本地创作节点");
 
   const model = node.getByLabel("文本节点模型");
   await model.fill("local-text-model");
@@ -778,13 +778,14 @@ test("node title, font size, and model overrides are editable and persistent", a
   )).toBe(true);
 
   await page.reload();
-  await expect(page.locator('[data-node-type="text"]').getByTitle("本地创作节点")).toBeVisible();
+  await expect(page.locator('[data-node-type="text"]').locator("[data-node-title]")).toHaveText("本地创作节点");
+  await page.locator('[data-node-type="text"]').first().locator("[data-node-header]").click();
   await expect(page.getByLabel("文本节点模型")).toHaveValue("local-text-model");
 });
 
 test("node titles appear only while hovered, selected, or edited", async ({ page }) => {
   await openFreshBoard(page);
-  await page.getByTitle("文本", { exact: true }).click();
+  await clickCanvasTool(page, "文本");
   const node = page.locator('[data-node-type="text"]');
   const title = node.locator("[data-node-title]");
   await expect(title).toHaveCSS("opacity", "1");
@@ -2053,9 +2054,9 @@ test("canvas prompt panel groups library entries by source and inserts them", as
   await expect(library.getByText("local", { exact: true })).toBeVisible();
   await expect(library.getByText("侧栏夜景", { exact: true })).toBeVisible();
   await library.getByRole("button", { name: "插入提示词 侧栏夜景" }).click();
-  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("neon alley with rain reflections");
+  await expect(page.getByPlaceholder("写下提示词或说明…").first()).toHaveValue("neon alley with rain reflections");
   // Inserted text node keeps the prompt title on the node header.
-  await expect(page.locator('[data-node-type="text"]').getByTitle("侧栏夜景")).toBeVisible();
+  await expect(page.locator('[data-node-type="text"]').locator("[data-node-title]")).toHaveText("侧栏夜景");
   await page.reload();
   await openProjectPanel(page);
   await expect(panel.getByRole("tab", { name: "提示词", selected: true })).toBeVisible();
@@ -2247,22 +2248,30 @@ test("canvas asset panel inserts and deletes persisted assets", async ({ page })
   await page.goto("/assets");
   await page.getByRole("button", { name: "新增文本" }).click();
   const dialog = page.getByRole("dialog", { name: "新增素材" });
-  await dialog.getByLabel("标题").fill("Sidebar asset");
-  await dialog.getByLabel("内容").fill("Sidebar body");
+  // Labels are text-only; scope inputs by order inside the dialog.
+  await dialog.locator("input").first().fill("Sidebar asset");
+  await dialog.locator("textarea").first().fill("Sidebar body");
   await dialog.getByRole("button", { name: "保存" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("Sidebar asset", { exact: true })).toBeVisible();
 
   await page.goto("/");
+  await openProjectPanel(page);
   const panel = page.getByRole("complementary", { name: "项目侧栏" });
+  await expect(panel).toBeVisible();
   await panel.getByRole("tab", { name: "素材" }).click();
-  await panel.getByRole("button", { name: "插入素材 Sidebar asset" }).click();
+  // Text assets render body/title as plain text; wait for list content.
+  await expect(panel.getByText("Sidebar body", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await panel.getByRole("button", { name: "插入素材 Sidebar asset" }).click({ force: true });
   await expect(page.locator('[data-node-type="text"]')).toHaveCount(1);
 
   page.once("dialog", (confirmation) => confirmation.accept());
-  await panel.getByRole("button", { name: "删除素材 Sidebar asset" }).click();
-  await expect(panel.getByText("Sidebar asset", { exact: true })).toHaveCount(0);
+  await panel.getByRole("button", { name: "删除素材 Sidebar asset" }).click({ force: true });
+  await expect(panel.getByText("Sidebar body", { exact: true })).toHaveCount(0);
   await page.reload();
-  await expect(panel.getByRole("tab", { name: "素材", selected: true })).toBeVisible();
-  await expect(panel.getByText("Sidebar asset", { exact: true })).toHaveCount(0);
+  await openProjectPanel(page);
+  await panel.getByRole("tab", { name: "素材" }).click();
+  await expect(panel.getByText("Sidebar body", { exact: true })).toHaveCount(0);
 });
 
 test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page, browserName }) => {
@@ -2457,7 +2466,7 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   let answer = assistant.getByTestId("assistant-message-assistant").filter({ hasText: "assistant answer 1" });
   await expect(answer).toBeVisible({ timeout: 20_000 });
   await answer.getByRole("button", { name: "插入画布" }).click();
-  await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("assistant answer 1");
+  await expect(page.locator('[data-node-type="text"]').getByPlaceholder("写下提示词或说明…").first()).toHaveValue("assistant answer 1");
 
   await answer.getByRole("button", { name: "重试" }).click();
   await expect.poll(() => textRequests, { timeout: 20_000 }).toBe(2);

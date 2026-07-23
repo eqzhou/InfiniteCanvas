@@ -77,8 +77,8 @@ export function AssetEditorDialog({
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm">
-            标题
-            <input className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={title} onChange={(event) => setTitle(event.target.value)} />
+            <span>标题</span>
+            <input id="asset-title" aria-label="标题" className="rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5" value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm">
             来源
