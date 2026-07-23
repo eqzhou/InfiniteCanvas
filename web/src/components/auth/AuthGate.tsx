@@ -12,6 +12,7 @@ import {
   AuthHttpError,
   clearSessionToken,
   formatUsageChip,
+  getSessionToken,
   logout as logoutSession,
   me,
   usage,
@@ -83,13 +84,22 @@ export function AuthGate({ children, onReady }: AuthGateProps) {
         await finishReady();
       } catch (error) {
         if (cancelled) return;
+        // 401 without a stored session means optional/open mode (no login yet).
+        // Only require the login wall when a session token exists but is invalid/expired.
         if (error instanceof AuthHttpError && error.status === 401) {
+          const hadSession = Boolean(getSessionToken());
           setUser(null);
           setUsageSnapshot(null);
-          setStatus("login_required");
+          if (hadSession) {
+            clearSessionToken();
+            setStatus("login_required");
+            return;
+          }
+          setStatus("open");
+          await finishReady();
           return;
         }
-        // 404 (auth off) or network error → open / backward-compatible mode
+        // 404 (auth off) / network error → open / backward-compatible mode
         setUser(null);
         setUsageSnapshot(null);
         setStatus("open");
