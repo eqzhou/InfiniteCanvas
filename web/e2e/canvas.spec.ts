@@ -44,8 +44,9 @@ async function openCodexPanel(page: Page) {
 }
 
 async function closeSettings(page: Page) {
-  await page.getByRole("button", { name: "关闭" }).click();
-  await expect(page.getByRole("heading", { name: "设置" })).toHaveCount(0);
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 }
 
 async function openProjectPanel(page: Page) {
@@ -1848,7 +1849,7 @@ test("local image upscale creates a lineage-tracked derived node", async ({ page
 test("prompt details can insert their content into the active canvas", async ({ page }) => {
   await openFreshBoard(page);
   await page.goto("/prompts");
-  await page.getByRole("button", { name: "恢复内置" }).click();
+  await page.getByRole("button", { name: "恢复内置", exact: true }).click();
   const promptCard = page.locator("article").filter({ hasText: "产品棚拍" });
   const detailButton = promptCard.getByRole("button", { name: "详情" });
   await expect(detailButton).toBeVisible();
@@ -1912,7 +1913,7 @@ test("local prompts support create, reload, edit, direct canvas use, and delete"
 
   let card = page.locator("article").filter({ hasText: "本地商品主图" });
   await expect(card).toContainText("Clean product hero image");
-  await page.getByRole("button", { name: "恢复内置" }).click();
+  await page.getByRole("button", { name: "恢复内置", exact: true }).click();
   await expect(card).toBeVisible();
   await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
   await page.reload();
@@ -2812,7 +2813,7 @@ test("mobile asset and prompt pages keep primary actions usable", async ({ page 
 
   await page.goto("/prompts");
   await expect(page.getByRole("heading", { name: "提示词库" })).toBeVisible();
-  await page.getByRole("button", { name: "恢复内置" }).click();
+  await page.getByRole("button", { name: "恢复内置", exact: true }).click();
   await expect(page.locator("article").first().getByRole("button", { name: "详情" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
