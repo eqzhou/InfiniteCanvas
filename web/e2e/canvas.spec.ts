@@ -2481,9 +2481,12 @@ test("assistant generates, retries, inserts, deletes, and reloads text and image
   await expect(assistant.getByText("assistant answer 2", { exact: true })).toBeVisible();
   await expect(assistant.getByText("已生成图片", { exact: true })).toBeVisible();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
-  await assistant.locator("div").filter({ hasText: "已生成图片" }).first()
-    .getByRole("button", { name: "删除" }).click();
-  await expect(assistant.getByText("已生成图片", { exact: true })).toHaveCount(0);
+  await assistant
+    .getByTestId("assistant-message-assistant")
+    .filter({ hasText: "已生成图片" })
+    .getByRole("button", { name: "删除" })
+    .click();
+  await expect(assistant.getByTestId("assistant-message-assistant").filter({ hasText: "已生成图片" })).toHaveCount(0);
 });
 
 test("local Agent connects to the real Go service with a session token", async ({ page }) => {
