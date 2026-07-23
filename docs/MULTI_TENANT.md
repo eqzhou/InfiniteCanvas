@@ -26,3 +26,10 @@ The first registered user becomes **owner of tenant `local`**, claiming existing
 
 ## Copyright
 Independent OpenBoard feature; not derived from upstream AGPL source.
+
+## API notes
+- `GET /api/auth/me` and `GET /api/auth/usage` enforce their own session checks.
+- In `required` mode, anonymous `usage` requests return 401.
+- Blobs live under `data/blobs/<tenantId>/…`. Reads for tenant `local` also fall back to the pre-migration flat `data/blobs/` layout.
+- Claude permission mode defaults to `acceptEdits`; override with `OPENBOARD_CLAUDE_PERMISSION_MODE`.
+- Claude SSE subscriber channels close via `sync.Once` so disconnect + session end cannot double-close.

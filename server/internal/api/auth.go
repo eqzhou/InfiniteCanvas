@@ -73,7 +73,10 @@ func (s *Server) withSession(next http.Handler) http.Handler {
 func (s *Server) requireUserWhenNeeded(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if path == "/api/health" || path == "/api/version" || strings.HasPrefix(path, "/api/auth/") {
+		// Public process endpoints and auth entrypoints. me/usage enforce their own session rules.
+		if path == "/api/health" || path == "/api/version" ||
+			path == "/api/auth/register" || path == "/api/auth/login" || path == "/api/auth/logout" ||
+			path == "/api/auth/me" || path == "/api/auth/usage" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -185,6 +188,19 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		http.Error(w, "auth unavailable", http.StatusServiceUnavailable)
 		return
+	}
+	if authMode() == "off" {
+		http.Error(w, "auth disabled", http.StatusNotFound)
+		return
+	}
+	// /api/auth/* is exempt from requireUserWhenNeeded; enforce session here so
+	// required mode (and optional with an invalid token) cannot read tenant usage anonymously.
+	if _, ok := authUserFrom(r.Context()); !ok {
+		if authMode() == "required" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// optional without session: report default local workspace usage only
 	}
 	summary, err := s.store.GetUsage(r.Context(), tenantIDFrom(r))
 	if err != nil {

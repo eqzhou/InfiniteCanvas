@@ -160,11 +160,23 @@ func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid blob key", http.StatusBadRequest)
 		return
 	}
-	dir := filepath.Join(s.dataDir, "blobs", tenantIDFrom(r))
+	tenantID := tenantIDFrom(r)
+	dir := filepath.Join(s.dataDir, "blobs", tenantID)
+	// Pre-multi-tenant installs stored blobs flat under dataDir/blobs. For the
+	// default local tenant only, fall back so existing media remains readable.
+	filePath := filepath.Join(dir, name)
+	metaPath := filepath.Join(dir, name+".json")
+	if _, err := os.Stat(filePath); err != nil && tenantID == store.DefaultTenantID {
+		legacy := filepath.Join(s.dataDir, "blobs", name)
+		if _, legacyErr := os.Stat(legacy); legacyErr == nil {
+			filePath = legacy
+			metaPath = filepath.Join(s.dataDir, "blobs", name+".json")
+		}
+	}
 	meta := struct {
 		ContentType string `json:"contentType"`
 	}{}
-	if value, err := os.ReadFile(filepath.Join(dir, name+".json")); err == nil {
+	if value, err := os.ReadFile(metaPath); err == nil {
 		_ = json.Unmarshal(value, &meta)
 	}
 	if meta.ContentType != "" {
@@ -174,7 +186,7 @@ func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
 	if meta.ContentType == "application/octet-stream" {
 		w.Header().Set("Content-Disposition", "attachment")
 	}
-	http.ServeFile(w, r, filepath.Join(dir, name))
+	http.ServeFile(w, r, filePath)
 }
 
 func allowedBlobMediaType(value string) bool {

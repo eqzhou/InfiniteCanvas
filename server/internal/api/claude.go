@@ -32,6 +32,15 @@ type claudeManager struct {
 	profiles map[string]string
 }
 
+type claudeSub struct {
+	ch   chan claudeEvent
+	once sync.Once
+}
+
+func (sub *claudeSub) close() {
+	sub.once.Do(func() { close(sub.ch) })
+}
+
 type claudeSession struct {
 	id              string
 	profile         string
@@ -41,7 +50,7 @@ type claudeSession struct {
 	cmd             *exec.Cmd
 	cancel          context.CancelFunc
 	mu              sync.Mutex
-	subs            map[chan claudeEvent]struct{}
+	subs            map[*claudeSub]struct{}
 	history         []claudeEvent
 	closed          bool
 	eventSequence   uint64
@@ -87,6 +96,19 @@ func claudeAvailable() bool {
 	return claudeBinary() != ""
 }
 
+// claudePermissionMode controls Claude Code tool approval behavior for headless turns.
+// Default remains acceptEdits for personal local use; set OPENBOARD_CLAUDE_PERMISSION_MODE
+// to "default" or "plan" for stricter approval (may block tools until interactive approval).
+func claudePermissionMode() string {
+	mode := strings.TrimSpace(os.Getenv("OPENBOARD_CLAUDE_PERMISSION_MODE"))
+	switch mode {
+	case "default", "plan", "acceptEdits", "bypassPermissions":
+		return mode
+	default:
+		return "acceptEdits"
+	}
+}
+
 func (s *Server) createClaudeSession(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxClaudeBody)
 	var req struct {
@@ -128,7 +150,7 @@ func (s *Server) createClaudeSession(w http.ResponseWriter, r *http.Request) {
 		id:      randomID("claude"),
 		profile: profile,
 		cwd:     cwd,
-		subs:    make(map[chan claudeEvent]struct{}),
+		subs:    make(map[*claudeSub]struct{}),
 	}
 	s.claude.mu.Lock()
 	if prevID, ok := s.claude.profiles[profile]; ok {
@@ -323,32 +345,38 @@ func (session *claudeSession) publish(event claudeEvent) {
 	if len(session.history) > claudeHistoryLimit {
 		session.history = session.history[len(session.history)-claudeHistoryLimit:]
 	}
-	for ch := range session.subs {
+	for sub := range session.subs {
 		select {
-		case ch <- event:
+		case sub.ch <- event:
 		default:
 		}
 	}
 }
 
 func (session *claudeSession) subscribeAfter(after uint64) (<-chan claudeEvent, func()) {
-	ch := make(chan claudeEvent, claudeSubscriberBuffer)
+	sub := &claudeSub{ch: make(chan claudeEvent, claudeSubscriberBuffer)}
 	session.mu.Lock()
-	session.subs[ch] = struct{}{}
+	if session.closed {
+		session.mu.Unlock()
+		sub.close()
+		return sub.ch, func() {}
+	}
+	session.subs[sub] = struct{}{}
 	for _, event := range session.history {
 		if event.Sequence > after {
 			select {
-			case ch <- event:
+			case sub.ch <- event:
 			default:
 			}
 		}
 	}
 	session.mu.Unlock()
-	return ch, func() {
+	return sub.ch, func() {
 		session.mu.Lock()
-		delete(session.subs, ch)
+		delete(session.subs, sub)
 		session.mu.Unlock()
-		close(ch)
+		// Safe if session.close() already closed or races with it.
+		sub.close()
 	}
 }
 
@@ -419,8 +447,8 @@ func (session *claudeSession) close() {
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}
-	for ch := range subs {
-		close(ch)
+	for sub := range subs {
+		sub.close()
 	}
 }
 
@@ -450,12 +478,13 @@ func (session *claudeSession) runTurn(prompt string) {
 	cwd := session.cwd
 	session.mu.Unlock()
 
+	permMode := claudePermissionMode()
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
-		"--permission-mode", "acceptEdits",
+		"--permission-mode", permMode,
 	}
 	if mcpConfig := buildOpenBoardMCPConfig(session.id); mcpConfig != "" {
 		args = append(args, "--mcp-config", mcpConfig)
