@@ -507,6 +507,7 @@ export function AssistantPanel() {
           <button
             type="button"
             role="tab"
+            aria-label="问答"
             aria-selected={mode === "ask"}
             className={`ob-tab rounded-lg text-xs ${mode === "ask" ? "bg-[var(--ob-accent)] !text-white !border-transparent" : "bg-[var(--ob-canvas)]"}`}
             onClick={() => setMode("ask")}
@@ -516,6 +517,7 @@ export function AssistantPanel() {
           <button
             type="button"
             role="tab"
+            aria-label="生图"
             aria-selected={mode === "image"}
             className={`ob-tab rounded-lg text-xs ${mode === "image" ? "bg-[var(--ob-accent)] !text-white !border-transparent" : "bg-[var(--ob-canvas)]"}`}
             onClick={() => setMode("image")}

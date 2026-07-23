@@ -16,7 +16,7 @@ async function openFreshBoard(
   await expect(textTool).toBeVisible();
   if (!requireProjectPanel) return;
   if ((page.viewportSize()?.width ?? 1440) < 768) {
-    await page.getByTitle("项目").click();
+    await page.getByRole("button", { name: "打开项目侧栏" }).click();
   }
   const projectTab = page.getByRole("tab", { name: "项目" });
   if (await projectTab.getAttribute("aria-selected") !== "true") {
@@ -51,7 +51,7 @@ async function closeSettings(page: Page) {
 
 async function openProjectPanel(page: Page) {
   if ((page.viewportSize()?.width ?? 1440) < 768) {
-    await page.getByTitle("项目").click();
+    await page.getByRole("button", { name: "打开项目侧栏" }).click();
   }
 }
 
@@ -1851,6 +1851,7 @@ test("prompt details can insert their content into the active canvas", async ({ 
   await page.goto("/prompts");
   await page.getByRole("button", { name: "恢复内置", exact: true }).click();
   const promptCard = page.locator("article").filter({ hasText: "产品棚拍" });
+  await expect(promptCard).toBeVisible({ timeout: 15_000 });
   const detailButton = promptCard.getByRole("button", { name: "详情" });
   await expect(detailButton).toBeVisible();
   await detailButton.focus();
@@ -2815,7 +2816,8 @@ test("mobile asset and prompt pages keep primary actions usable", async ({ page 
   await expect(page.getByRole("heading", { name: "提示词库" })).toBeVisible();
   // Prefer the toolbar action (not the empty-state "加载内置示例").
   await page.getByRole("button", { name: "恢复内置", exact: true }).click();
-  await expect(page.getByRole("button", { name: "详情" }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "详情" }).first()).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 

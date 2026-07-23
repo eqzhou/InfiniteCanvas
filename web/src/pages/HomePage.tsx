@@ -154,7 +154,8 @@ export function HomePage() {
       <button
         type="button"
         className={`absolute left-2 top-2 z-[60] h-10 w-10 place-items-center rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] ${projectsOpen ? "hidden" : panelCollapsed ? "grid" : "grid md:hidden"}`}
-        title={panelCollapsed ? "展开侧栏" : "项目"}
+        title={panelCollapsed ? "展开侧栏" : "打开项目侧栏"}
+        aria-label={panelCollapsed ? "展开侧栏" : "打开项目侧栏"}
         onClick={() => {
           if (window.innerWidth >= 768) {
             updatePanelConfig({ canvasPanelCollapsed: false });

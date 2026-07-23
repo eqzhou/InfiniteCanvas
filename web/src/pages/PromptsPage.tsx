@@ -442,6 +442,9 @@ export function PromptsPage() {
   const restoreBuiltinPrompts = () => {
     setBusy(true);
     setActiveTab("library");
+    setSource("all");
+    setTag("all");
+    setQ("");
     const current = useBoardStore.getState().prompts.filter((prompt) => prompt.source !== "builtin");
     setPrompts([
       ...BUILTIN.map((prompt) => ({ ...prompt, tags: [...prompt.tags] })),
@@ -835,9 +838,11 @@ export function PromptsPage() {
                         <button
                           type="button"
                           className="ob-btn ob-btn-sm rounded-lg h-7"
+                          aria-label="详情"
+                          title="详情"
                           onClick={() => setSelectedPrompt(p)}
                         >
-                          <Eye size={13} />
+                          <Eye size={13} aria-hidden />
                         </button>
                         <button
                           type="button"

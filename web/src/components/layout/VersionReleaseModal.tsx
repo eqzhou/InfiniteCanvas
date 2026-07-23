@@ -91,7 +91,7 @@ export function VersionReleaseModal({
                 className="ob-btn-ghost ml-auto px-2 py-1 text-sm text-[var(--ob-muted)]"
                 onClick={close}
               >
-                关闭
+                关闭版本说明
               </button>
             </header>
             <div className="grid grid-cols-2 gap-3 border-b border-[var(--ob-line)] p-4">

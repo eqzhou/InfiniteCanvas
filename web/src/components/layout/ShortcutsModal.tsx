@@ -43,7 +43,7 @@ export function ShortcutsModal() {
             className="ob-btn-ghost rounded-lg px-2.5 py-1.5 text-sm"
             onClick={() => setShowShortcuts(false)}
           >
-            关闭
+            关闭快捷键
           </button>
         </div>
         <table className="w-full text-sm">
