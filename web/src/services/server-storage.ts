@@ -1,15 +1,9 @@
+import { authFetch } from "@/services/auth-session";
 import type { AppConfig, AssetItem, BoardProject, PromptItem } from "@/types/board";
 import { parseBoardProject } from "@/lib/board-document";
 
-const API = "/api";
-
 async function request(path: string, init?: RequestInit): Promise<Response> {
-  const response = await fetch(`${API}/${path.replace(/^\/+/, "")}`, {
-    ...init,
-    credentials: "same-origin",
-    redirect: "error",
-  });
-  return response;
+  return authFetch(path, init);
 }
 
 async function readJSON<T>(response: Response): Promise<T> {

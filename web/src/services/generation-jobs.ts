@@ -7,6 +7,7 @@ import type {
 } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
 import { validateJsonObject } from "@/lib/bounded-json";
+import { authFetch } from "@/services/auth-session";
 
 const SERVER_STORAGE = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
 const jobStore = createStore("openboard-generation-jobs", "jobs");
@@ -80,12 +81,7 @@ export function validateGenerationJob(job: GenerationJob): GenerationJob {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/${path.replace(/^\/+/, "")}`, {
-    ...init,
-    credentials: "same-origin",
-    redirect: "error",
-    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
-  });
+  const response = await authFetch(path, init);
   if (!response.ok) throw new Error(`Generation history failed: HTTP ${response.status}`);
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

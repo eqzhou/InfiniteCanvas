@@ -111,8 +111,15 @@ func NewServerWithStore(dataDir string, backend store.Store) *Server {
 
 func MountServer(r chi.Router, s *Server) {
 	r.Route("/api", func(r chi.Router) {
+		r.Use(s.withSession)
+		r.Use(s.requireUserWhenNeeded)
 		r.Get("/health", s.health)
 		r.Get("/version", s.version)
+		r.Post("/auth/register", s.register)
+		r.Post("/auth/login", s.login)
+		r.Post("/auth/logout", s.logout)
+		r.Get("/auth/me", s.me)
+		r.Get("/auth/usage", s.usage)
 		r.Get("/agent/status", s.agentStatus)
 		r.Post("/agent/execute", s.executeAgentTool)
 		r.Post("/runtime/ticket", s.runtimeTicket)
@@ -315,7 +322,7 @@ func (s *Server) projectsDir() string {
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
-		items, err := s.store.ListProjects(r.Context())
+		items, err := s.store.ListProjects(r.Context(), tenantIDFrom(r))
 		if err != nil {
 			http.Error(w, "failed to list projects", http.StatusInternalServerError)
 			return
@@ -392,7 +399,7 @@ func (s *Server) putProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		if err := s.store.PutProject(r.Context(), id, body); err != nil {
+		if err := s.store.PutProject(r.Context(), tenantIDFrom(r), id, body); err != nil {
 			http.Error(w, "failed to store project", http.StatusInternalServerError)
 			return
 		}
@@ -435,7 +442,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		b, err := s.store.GetProject(r.Context(), id)
+		b, err := s.store.GetProject(r.Context(), tenantIDFrom(r), id)
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -473,7 +480,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		if err := s.store.DeleteProject(r.Context(), id); err != nil {
+		if err := s.store.DeleteProject(r.Context(), tenantIDFrom(r), id); err != nil {
 			http.Error(w, "failed to delete project", http.StatusInternalServerError)
 			return
 		}

@@ -273,7 +273,7 @@ func (s *Server) loadProjectDocument(id string) (map[string]any, error) {
 	var body []byte
 	var err error
 	if s.store != nil {
-		body, err = s.store.GetProject(context.Background(), id)
+		body, err = s.store.GetProject(context.Background(), store.DefaultTenantID, id)
 	} else {
 		body, err = os.ReadFile(filepath.Join(s.projectsDir(), id+".json"))
 	}
@@ -303,7 +303,7 @@ func (s *Server) saveProjectDocument(id string, project map[string]any) error {
 		return badToolRequest("project exceeds the persisted size limit")
 	}
 	if s.store != nil {
-		return s.store.PutProject(context.Background(), id, body)
+		return s.store.PutProject(context.Background(), store.DefaultTenantID, id, body)
 	}
 	return atomicWriteFile(filepath.Join(s.projectsDir(), id+".json"), body, 0o600)
 }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useBoardStore } from "@/stores/use-board-store";
 import { TopNav } from "@/components/layout/TopNav";
@@ -16,6 +16,7 @@ import { VideoWorkbenchPage } from "@/pages/VideoWorkbenchPage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
 import { initAnalytics } from "@/lib/analytics";
 import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
+import { AuthGate } from "@/components/auth/AuthGate";
 
 export function App() {
   const hydrate = useBoardStore((s) => s.hydrate);
@@ -36,31 +37,30 @@ export function App() {
     }
   }, [urlCredentials]);
 
-  useEffect(() => {
-    void hydrate().then(() => {
-      const { apiKey, baseUrl, provider } = urlCredentials.credentials;
-      if (apiKey === undefined && baseUrl === undefined) return;
+  const onAuthReady = useCallback(async () => {
+    await hydrate();
+    const { apiKey, baseUrl, provider } = urlCredentials.credentials;
+    if (apiKey === undefined && baseUrl === undefined) return;
 
-      const { config, setConfig } = useBoardStore.getState();
-      const channel =
-        config.channels.find((c) => c.id === config.activeChannelId) ??
-        config.channels[0];
-      if (!channel) return;
+    const { config, setConfig } = useBoardStore.getState();
+    const channel =
+      config.channels.find((c) => c.id === config.activeChannelId) ??
+      config.channels[0];
+    if (!channel) return;
 
-      try {
-        setConfig({
-          ...config,
-          channels: config.channels.map((c) =>
-            c.id === channel.id
-              ? applyChannelUrlCredentials(c, { apiKey, baseUrl, provider })
-              : c,
-          ),
-        });
-      } catch (cause) {
-        setUrlCredentialError(cause instanceof Error ? cause.message : String(cause));
-      }
-      setSettingsOpen(true);
-    });
+    try {
+      setConfig({
+        ...config,
+        channels: config.channels.map((c) =>
+          c.id === channel.id
+            ? applyChannelUrlCredentials(c, { apiKey, baseUrl, provider })
+            : c,
+        ),
+      });
+    } catch (cause) {
+      setUrlCredentialError(cause instanceof Error ? cause.message : String(cause));
+    }
+    setSettingsOpen(true);
   }, [hydrate, urlCredentials]);
 
   useEffect(() => {
@@ -102,39 +102,41 @@ export function App() {
   }, [theme]);
 
   return (
-    <div className="flex h-full flex-col">
-      <TopNav onOpenSettings={() => setSettingsOpen(true)} />
-      {urlCredentialError ? (
-        <div role="alert" className="flex items-center gap-2 border-b border-[var(--ob-danger)] bg-[var(--ob-panel)] px-4 py-2 text-sm text-[var(--ob-danger)]">
-          <span className="min-w-0 flex-1 truncate">连接参数无效：{urlCredentialError}</span>
-          <button type="button" className="shrink-0" onClick={() => setUrlCredentialError(null)}>
-            关闭
-          </button>
-        </div>
-      ) : null}
-      {promptSourceError ? (
-        <div role="alert" className="flex items-center gap-2 border-b border-[var(--ob-warning)] bg-[var(--ob-panel)] px-4 py-2 text-sm text-[var(--ob-warning)]">
-          <span className="min-w-0 flex-1 truncate">提示词来源自动刷新失败：{promptSourceError}</span>
-          <button type="button" className="shrink-0" onClick={() => setPromptSourceError(null)}>关闭</button>
-        </div>
-      ) : null}
-      <main className="min-h-0 flex-1">
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/assets" element={<AssetsPage />} />
-          <Route path="/prompts" element={<PromptsPage />} />
-          <Route path="/plugins" element={<PluginsPage />} />
-          <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
-          <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </main>
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <ShortcutsModal />
-      <LocalAgentPanel />
-      <BrowserRuntime />
-      <PromptSourceScheduler />
-      <AnalyticsTracker />
-    </div>
+    <AuthGate onReady={onAuthReady}>
+      <div className="flex h-full flex-col">
+        <TopNav onOpenSettings={() => setSettingsOpen(true)} />
+        {urlCredentialError ? (
+          <div role="alert" className="flex items-center gap-2 border-b border-[var(--ob-danger)] bg-[var(--ob-panel)] px-4 py-2 text-sm text-[var(--ob-danger)]">
+            <span className="min-w-0 flex-1 truncate">连接参数无效：{urlCredentialError}</span>
+            <button type="button" className="shrink-0" onClick={() => setUrlCredentialError(null)}>
+              关闭
+            </button>
+          </div>
+        ) : null}
+        {promptSourceError ? (
+          <div role="alert" className="flex items-center gap-2 border-b border-[var(--ob-warning)] bg-[var(--ob-panel)] px-4 py-2 text-sm text-[var(--ob-warning)]">
+            <span className="min-w-0 flex-1 truncate">提示词来源自动刷新失败：{promptSourceError}</span>
+            <button type="button" className="shrink-0" onClick={() => setPromptSourceError(null)}>关闭</button>
+          </div>
+        ) : null}
+        <main className="min-h-0 flex-1">
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/assets" element={<AssetsPage />} />
+            <Route path="/prompts" element={<PromptsPage />} />
+            <Route path="/plugins" element={<PluginsPage />} />
+            <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
+            <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
+        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <ShortcutsModal />
+        <LocalAgentPanel />
+        <BrowserRuntime />
+        <PromptSourceScheduler />
+        <AnalyticsTracker />
+      </div>
+    </AuthGate>
   );
 }

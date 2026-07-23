@@ -54,7 +54,7 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.RawStdEncoding.EncodeToString(s.secrets.Seal(nil, nonce, plain, nil)),
 	})
-	if err := s.store.PutState(r.Context(), secretStateKey, envelope); err != nil {
+	if err := s.store.PutState(r.Context(), tenantIDFrom(r), secretStateKey, envelope); err != nil {
 		http.Error(w, "failed to store secrets", 500)
 		return
 	}
@@ -66,7 +66,7 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	value, err := s.store.GetState(r.Context(), secretStateKey)
+	value, err := s.store.GetState(r.Context(), tenantIDFrom(r), secretStateKey)
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
