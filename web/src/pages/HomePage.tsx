@@ -187,7 +187,8 @@ export function HomePage() {
           <button
             type="button"
             className="ob-icon-btn h-8 w-8 shrink-0 md:hidden"
-            title="关闭"
+            aria-label="关闭项目侧栏"
+            title="关闭项目侧栏"
             onClick={() => setProjectsOpen(false)}
           >
             <X size={16} />

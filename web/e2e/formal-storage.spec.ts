@@ -15,7 +15,7 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   const encryptionNotice = page.getByText("API Key 经本地服务加密后存入 PostgreSQL，数据库中不保存明文。", { exact: false });
   await encryptionNotice.scrollIntoViewIfNeeded();
   await expect(encryptionNotice).toBeVisible();
-  await page.getByRole("dialog", { name: "设置" }).getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("dialog", { name: "设置" }).getByRole("button", { name: "关闭设置" }).click();
 
   await page.getByRole("toolbar", { name: "画布工具栏" }).getByRole("button", { name: "文本", exact: true }).click();
   const editor = page.getByPlaceholder("写下提示词或说明…");

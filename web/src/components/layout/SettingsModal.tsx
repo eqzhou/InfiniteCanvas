@@ -105,8 +105,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
           <button
             type="button"
-            aria-label="关闭"
-            title="关闭"
+            aria-label="关闭设置"
+            title="关闭设置"
             className="ob-icon-btn ml-auto"
             disabled={closing}
             onClick={requestClose}

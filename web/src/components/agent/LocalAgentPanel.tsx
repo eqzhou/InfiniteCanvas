@@ -154,7 +154,8 @@ export function LocalAgentPanel() {
         <button
           type="button"
           className="ob-btn-ghost p-1"
-          title="关闭"
+          aria-label="关闭本地 Agent"
+          title="关闭本地 Agent"
           onClick={() => setShow(false)}
         >
           <Unplug size={14} />

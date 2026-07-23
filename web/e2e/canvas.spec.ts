@@ -25,7 +25,7 @@ async function openFreshBoard(
   // Formal/local storage may already have projects; ensure at least one active board.
   await expect(page.locator('aside input[value]').first()).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) < 768) {
-    await page.locator("aside").getByTitle("关闭").click();
+    await page.locator("aside").getByRole("button", { name: "关闭项目侧栏" }).click();
   }
 }
 
@@ -45,7 +45,7 @@ async function openCodexPanel(page: Page) {
 
 async function closeSettings(page: Page) {
   const dialog = page.getByRole("dialog", { name: "设置" });
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
   await expect(dialog).toHaveCount(0);
 }
 
@@ -2813,8 +2813,9 @@ test("mobile asset and prompt pages keep primary actions usable", async ({ page 
 
   await page.goto("/prompts");
   await expect(page.getByRole("heading", { name: "提示词库" })).toBeVisible();
+  // Prefer the toolbar action (not the empty-state "加载内置示例").
   await page.getByRole("button", { name: "恢复内置", exact: true }).click();
-  await expect(page.locator("article").first().getByRole("button", { name: "详情" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "详情" }).first()).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 

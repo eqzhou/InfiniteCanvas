@@ -928,7 +928,7 @@ export function PromptsPage() {
                       </button>
                     ) : null}
                     <button type="button" className="ob-btn rounded-xl px-5 py-2.5 font-bold transition-transform hover:-translate-y-0.5" onClick={restoreBuiltinPrompts}>
-                      恢复内置示例
+                      加载内置示例
                     </button>
                   </>
                 ) : (
