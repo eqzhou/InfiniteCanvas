@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-18T04:13:31.458Z",
+  "generatedAt": "2026-07-23T06:32:52.048Z",
   "packages": [
     {
       "name": "@babel/code-frame",
@@ -519,14 +519,6 @@
       "license": "MIT",
       "noticeFile": "LICENSE",
       "repository": "jshttp/cookie",
-      "homepage": "UNKNOWN"
-    },
-    {
-      "name": "csstype",
-      "version": "3.2.3",
-      "license": "MIT",
-      "noticeFile": "LICENSE",
-      "repository": "https://github.com/frenic/csstype",
       "homepage": "UNKNOWN"
     },
     {

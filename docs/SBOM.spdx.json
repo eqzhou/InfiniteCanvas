@@ -5,7 +5,7 @@
   "name": "OpenBoard web dependency inventory",
   "documentNamespace": "https://openboard.local/spdx/openboard-web-0.1.0",
   "creationInfo": {
-    "created": "2026-07-18T04:13:31.457Z",
+    "created": "2026-07-23T06:32:52.047Z",
     "creators": [
       "Tool: OpenBoard audit-licenses.mjs"
     ]
@@ -463,13 +463,6 @@
       "SPDXID": "SPDXRef-cookie-1.1.1",
       "name": "cookie",
       "versionInfo": "1.1.1",
-      "licenseConcluded": "MIT",
-      "downloadLocation": "NOASSERTION"
-    },
-    {
-      "SPDXID": "SPDXRef-csstype-3.2.3",
-      "name": "csstype",
-      "versionInfo": "3.2.3",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },
