@@ -232,11 +232,10 @@ export function AssetsPage() {
                     alert("请先打开一个画布项目");
                     return;
                   }
+                  // insertAsset already awaits persistNow; avoid alert() which freezes automation.
                   void insertAsset(a.id, {
                     x: 80 + Math.random() * 120,
                     y: 80 + Math.random() * 120,
-                  }).then(() => {
-                    alert("已插入当前画布");
                   }).catch((cause) => {
                     alert(cause instanceof Error ? cause.message : String(cause));
                   });

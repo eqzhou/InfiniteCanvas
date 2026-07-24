@@ -64,6 +64,22 @@ export function ImageToolsDialog({
     }
   }, [providerId, providers]);
 
+  // Always keep a valid guide selected in split mode so delete/reset actions work
+  // after drag (pointer capture can swallow click) or when adding lines.
+  useEffect(() => {
+    if (mode !== "split") {
+      setSelectedGuide(null);
+      return;
+    }
+    setSelectedGuide((current) => {
+      if (current?.axis === "vertical" && current.index < vertical.length) return current;
+      if (current?.axis === "horizontal" && current.index < horizontal.length) return current;
+      if (vertical.length) return { axis: "vertical", index: Math.max(0, vertical.length - 1) };
+      if (horizontal.length) return { axis: "horizontal", index: Math.max(0, horizontal.length - 1) };
+      return null;
+    });
+  }, [mode, vertical.length, horizontal.length]);
+
   if (!open) return null;
   const title =
     mode === "mask" ? "遮罩编辑" : mode === "upscale" ? "图像放大" : "网格切分";
@@ -101,7 +117,7 @@ export function ImageToolsDialog({
       <div className="ob-dialog max-w-md p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="font-semibold">{title}</h3>
-          <button type="button" onClick={cancel}>
+          <button type="button" aria-label="关闭图像工具" title="关闭图像工具" onClick={cancel}>
             关闭
           </button>
         </div>
@@ -129,9 +145,12 @@ export function ImageToolsDialog({
                     className="absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:bg-[var(--ob-select)]"
                     style={{ left: `${value * 100}%` }}
                     onPointerDown={(event) => {
+                      event.preventDefault();
                       event.currentTarget.setPointerCapture(event.pointerId);
                       setSelectedGuide({ axis: "vertical", index });
                     }}
+                    onMouseDown={() => setSelectedGuide({ axis: "vertical", index })}
+                    onClick={() => setSelectedGuide({ axis: "vertical", index })}
                     onPointerMove={(event) => {
                       if (!event.currentTarget.hasPointerCapture(event.pointerId) || !previewRef.current) return;
                       const rect = previewRef.current.getBoundingClientRect();
@@ -148,9 +167,12 @@ export function ImageToolsDialog({
                     className="absolute inset-x-0 z-10 h-3 -translate-y-1/2 cursor-row-resize bg-transparent after:absolute after:inset-x-0 after:top-1/2 after:h-0.5 after:bg-[var(--ob-select)]"
                     style={{ top: `${value * 100}%` }}
                     onPointerDown={(event) => {
+                      event.preventDefault();
                       event.currentTarget.setPointerCapture(event.pointerId);
                       setSelectedGuide({ axis: "horizontal", index });
                     }}
+                    onMouseDown={() => setSelectedGuide({ axis: "horizontal", index })}
+                    onClick={() => setSelectedGuide({ axis: "horizontal", index })}
                     onPointerMove={(event) => {
                       if (!event.currentTarget.hasPointerCapture(event.pointerId) || !previewRef.current) return;
                       const rect = previewRef.current.getBoundingClientRect();
@@ -228,10 +250,28 @@ export function ImageToolsDialog({
 
         {mode === "split" ? (
           <div className="flex flex-wrap gap-2 text-sm">
-            <button type="button" className="ob-btn px-2 py-1" onClick={() => setVertical((current) => [...current, 0.5])}>
+            <button
+              type="button"
+              className="ob-btn px-2 py-1"
+              onClick={() => {
+                setVertical((current) => {
+                  setSelectedGuide({ axis: "vertical", index: current.length });
+                  return [...current, 0.5];
+                });
+              }}
+            >
               新增纵线
             </button>
-            <button type="button" className="ob-btn px-2 py-1" onClick={() => setHorizontal((current) => [...current, 0.5])}>
+            <button
+              type="button"
+              className="ob-btn px-2 py-1"
+              onClick={() => {
+                setHorizontal((current) => {
+                  setSelectedGuide({ axis: "horizontal", index: current.length });
+                  return [...current, 0.5];
+                });
+              }}
+            >
               新增横线
             </button>
             <button

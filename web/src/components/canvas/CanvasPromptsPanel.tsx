@@ -43,23 +43,25 @@ export function filterCanvasPrompts(
 
 export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
   const prompts = useBoardStore((state) => state.prompts);
-  const addNode = useBoardStore((state) => state.addNode);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterCanvasPrompts(prompts, query), [prompts, query]);
   const groups = useMemo(() => groupPromptsBySource(filtered), [filtered]);
 
   const insertPrompt = (prompt: PromptItem) => {
-    const active = useBoardStore.getState().getActive();
+    const state = useBoardStore.getState();
+    const active = state.getActive();
     if (!active) return;
     // Keep the prompt title on the created text node.
-    addNode("text", {
+    state.addNode("text", {
       x: (window.innerWidth / 2 - active.viewport.x) / active.viewport.k - 140,
       y: (window.innerHeight / 2 - active.viewport.y) / active.viewport.k - 90,
     }, {
       title: prompt.title,
       metadata: { content: prompt.body, status: "idle" },
     });
+    // Formal storage: flush so reloads / E2E see the node immediately.
+    void state.persistNow();
   };
 
   if (!prompts.length) {

@@ -287,7 +287,7 @@ export function PluginsPage() {
                   enabled,
                 ),
               });
-              void flushConfig();
+              void flushConfig().catch(() => undefined);
             }}
             onAdd={() => addToCanvas(manifest)}
           />
@@ -308,7 +308,7 @@ export function PluginsPage() {
                   enabled,
                 ),
               });
-              void flushConfig();
+              void flushConfig().catch(() => undefined);
             }}
             update={updates.get(manifest.id)}
             onUpdate={updates.has(manifest.id)
