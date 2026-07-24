@@ -55,7 +55,7 @@ export function MiniMap({
     <button
       type="button"
       aria-label="画布小地图"
-      className={className ?? "absolute bottom-3 right-3 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:bottom-4 sm:right-4 sm:rounded-lg"}
+      className={className ?? "ob-chrome absolute bottom-3 right-3 overflow-hidden sm:bottom-4 sm:right-4"}
       style={{ width: mw, height: mh }}
       onClick={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -81,7 +81,7 @@ export function MiniMap({
             fill={n.type === "group" ? "none" : "var(--ob-accent)"}
             stroke={n.type === "group" ? "var(--ob-accent)" : "none"}
             strokeDasharray={n.type === "group" ? "3 2" : undefined}
-            opacity={n.type === "group" ? 0.8 : 0.55}
+            opacity={n.type === "group" ? 0.85 : 0.62}
             rx={1}
           />
         ))}

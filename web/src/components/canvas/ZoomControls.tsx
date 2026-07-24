@@ -14,7 +14,7 @@ export function ZoomControls({
     <div
       role="group"
       aria-label="缩放控制"
-      className="absolute bottom-3 left-3 z-30 flex items-center gap-1.5 rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-2 py-1.5 shadow-[var(--ob-shadow)] backdrop-blur-md sm:bottom-4 sm:left-4 sm:gap-2 sm:px-2.5 sm:py-1.5"
+      className="ob-chrome absolute bottom-3 left-3 z-30 flex items-center gap-1.5 px-2 py-1.5 sm:bottom-4 sm:left-4 sm:gap-2 sm:px-2.5 sm:py-1.5"
     >
       <button
         type="button"
@@ -26,7 +26,7 @@ export function ZoomControls({
       </button>
       <input
         aria-label="缩放比例"
-        className="hidden w-28 sm:block"
+        className="hidden w-28 accent-[var(--ob-accent)] sm:block"
         type="range"
         min={15}
         max={300}

@@ -92,10 +92,10 @@ export function ContextMenu({
   if (state.nodeId && canGroup) items.unshift({ label: "组合", action: onGroup, icon: FolderPlus });
   if (state.nodeId && canUngroup) items.unshift({ label: "取消组合", action: onUngroup, icon: FolderMinus });
 
-  const menuWidth = 176; // w-44
+  const menuWidth = 176; // keep in sync with w-44
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
-  const left = Math.max(8, Math.min(state.screen.x, viewportWidth - menuWidth - 8));
+  const left = Math.max(4, Math.min(state.screen.x, viewportWidth - menuWidth - 4));
   // Prefer opening upward near the bottom edge so the full menu stays in-bounds.
   const opensUpward = state.screen.y > viewportHeight * 0.55;
   const top = opensUpward
@@ -109,7 +109,7 @@ export function ContextMenu({
       <div
         role="menu"
         aria-label={state.nodeId ? "节点菜单" : "画布菜单"}
-        className="ob-surface fixed z-[80] w-44 overflow-y-auto p-1 shadow-[var(--ob-shadow-lg)]"
+        className="ob-menu fixed z-[80] w-44 overflow-y-auto"
         style={{
           left,
           top,
@@ -125,7 +125,7 @@ export function ContextMenu({
               key={item.label}
               type="button"
               role="menuitem"
-              className="ob-btn-ghost w-full justify-start gap-2 px-3 py-2"
+              className="ob-menu-item"
               disabled={item.disabled}
               onClick={() => {
                 onClose();

@@ -85,18 +85,19 @@ export function BoardNodeView({
       data-node-id={node.id}
       data-node-type={node.type}
       data-plugin-id={node.type === "plugin" ? node.metadata.pluginId : undefined}
+      data-selected={selected ? "true" : "false"}
       className={cn(
-        "group/node absolute flex flex-col overflow-visible rounded-lg border shadow-[var(--ob-shadow)]",
+        "ob-node-shell group/node absolute flex flex-col overflow-visible border",
         node.type === "group"
           ? groupHighlighted
             ? "border-solid border-[var(--ob-accent)] bg-[color-mix(in_srgb,var(--ob-accent)_18%,transparent)] ring-2 ring-[color-mix(in_srgb,var(--ob-accent)_35%,transparent)]"
             : "border-dashed bg-[color-mix(in_srgb,var(--ob-accent)_8%,transparent)]"
           : "bg-[var(--ob-node)]",
         selected
-          ? "border-[var(--ob-select)] ring-2 ring-[color-mix(in_srgb,var(--ob-select)_35%,transparent)]"
+          ? "border-[var(--ob-select)]"
           : related
             ? "border-[var(--ob-accent)]"
-            : "border-[var(--ob-line)]",
+            : "border-[var(--ob-node-border)]",
       )}
       style={{
         left: node.position.x,
@@ -159,7 +160,7 @@ export function BoardNodeView({
           <span className="block max-w-full truncate" title={node.title}>{node.title}</span>
         )}
       </div>
-      <div data-node-header className="flex items-center gap-2 border-b border-[var(--ob-line)] px-2 py-1.5 text-xs">
+      <div data-node-header className="flex items-center gap-2 border-b border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] px-2 py-1.5 text-xs">
         <Icon size={14} className="text-[var(--ob-accent)]" />
         <span className="ml-auto text-[var(--ob-muted)]">
           {node.metadata.isBatchRoot ? "batch" : node.type}
@@ -591,7 +592,7 @@ export function BoardNodeView({
         <>
           <button
             type="button"
-            className="absolute top-1/2 -left-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)]"
+            className="ob-port absolute top-1/2 -left-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)] shadow-sm"
             title="输入端口"
             onPointerDown={(e) => {
               e.stopPropagation();
@@ -601,7 +602,7 @@ export function BoardNodeView({
           />
           <button
             type="button"
-            className="absolute top-1/2 -right-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)]"
+            className="ob-port absolute top-1/2 -right-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)] shadow-sm"
             title="输出端口 / 拖出连线"
             onPointerDown={(e) => {
               e.stopPropagation();

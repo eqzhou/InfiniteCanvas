@@ -37,7 +37,7 @@ export function AuthPanel({ onSuccess }: AuthPanelProps) {
 
   return (
     <div className="flex min-h-full items-center justify-center p-4">
-      <div className="ob-surface-glass w-full max-w-md p-6 sm:p-8">
+      <div className="ob-surface-glass w-full max-w-md p-6 shadow-[var(--ob-elev-2)] sm:p-8">
         <div className="mb-6 text-center">
           <span className="mx-auto mb-3 inline-grid h-11 w-11 place-items-center rounded-xl bg-[var(--ob-accent)] text-base font-bold text-white shadow-sm">
             OB

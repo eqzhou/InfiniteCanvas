@@ -153,7 +153,7 @@ export function HomePage() {
     >
       <button
         type="button"
-        className={`absolute left-2 top-2 z-[60] h-10 w-10 place-items-center rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] ${projectsOpen ? "hidden" : panelCollapsed ? "grid" : "grid md:hidden"}`}
+        className={`ob-chrome absolute left-2 top-2 z-[60] grid h-10 w-10 place-items-center transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] ${projectsOpen ? "!hidden" : panelCollapsed ? "" : "md:hidden"}`}
         title={panelCollapsed ? "展开侧栏" : "打开项目侧栏"}
         aria-label={panelCollapsed ? "展开侧栏" : "打开项目侧栏"}
         onClick={() => {
@@ -176,7 +176,7 @@ export function HomePage() {
       ) : null}
       <aside
         aria-label="项目侧栏"
-        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
+        className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-elev-1)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
         style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
         <div className="flex min-h-12 items-center gap-1 border-b border-[var(--ob-line)] px-2 py-2">

@@ -45,7 +45,7 @@ export function CanvasToolbar({
       role="toolbar"
       aria-label="画布工具栏"
       className={cn(
-        "ob-toolbar-scroll z-30 flex min-h-12 w-full min-w-0 max-w-full flex-nowrap items-center gap-1 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] py-1.5 pr-2 shadow-[var(--ob-shadow)] backdrop-blur-md",
+        "ob-toolbar-scroll z-30 flex min-h-12 w-full min-w-0 max-w-full flex-nowrap items-center gap-1 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] py-1.5 pr-2 shadow-[var(--ob-elev-1)] backdrop-blur-md",
         reservePanelToggle ? "pl-14" : "pl-14 sm:pl-3",
       )}
     >
@@ -119,7 +119,7 @@ export function CanvasToolbar({
           />
         </label>
       ) : null}
-      <div className="mx-1 h-5 w-px shrink-0 bg-[var(--ob-line)]" />
+      <div className="mx-1.5 h-5 w-px shrink-0 bg-[color-mix(in_srgb,var(--ob-line)_80%,var(--ob-ink)_10%)]" />
       <Tool label="撤销" onClick={undo} compact>
         <Undo2 size={16} />
       </Tool>
@@ -175,8 +175,8 @@ function Tool({
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        "ob-btn h-9 shrink-0 gap-1 px-2",
-        active && "border-transparent bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)]"
+        "ob-btn h-9 shrink-0 gap-1 px-2.5",
+        active && "border-transparent bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)] shadow-sm",
       )}
     >
       {children}

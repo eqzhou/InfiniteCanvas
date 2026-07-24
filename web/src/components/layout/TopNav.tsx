@@ -73,9 +73,9 @@ export function TopNav({
   ];
 
   return (
-    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-2 shadow-[var(--ob-shadow)] backdrop-blur-md sm:gap-2 sm:px-3 lg:gap-3 lg:px-4">
+    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-2 shadow-[var(--ob-elev-1)] backdrop-blur-md sm:gap-2 sm:px-3 lg:gap-3 lg:px-4">
       <div className="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
-        <span className="inline-grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent)] text-sm font-bold text-white shadow-sm">
+        <span className="inline-grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent)] text-sm font-bold tracking-tight text-white shadow-[0_2px_8px_color-mix(in_srgb,var(--ob-accent)_40%,transparent)]">
           OB
         </span>
         <span className="hidden text-[var(--ob-ink)] lg:inline">OpenBoard</span>
@@ -92,7 +92,7 @@ export function TopNav({
               className={cn(
                 "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors duration-150 lg:px-3.5",
                 active
-                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)] shadow-sm"
+                  ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)] shadow-sm ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_18%,transparent)]"
                   : "text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]",
               )}
             >
