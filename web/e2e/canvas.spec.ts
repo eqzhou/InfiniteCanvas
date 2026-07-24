@@ -1364,6 +1364,7 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await page.goto("/plugins");
   const enabled = page.getByLabel("便签 已启用");
   await enabled.uncheck();
+  await expect(page.getByLabel("便签 已启用")).toBeEnabled({ timeout: 15_000 });
   await expect(stickyCard.getByRole("button", { name: "添加到画布" })).toBeDisabled();
   await page.goto("/");
   await expect(page.getByTestId("plugin-unavailable")).toBeVisible({ timeout: 15_000 });
@@ -1372,6 +1373,9 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await page.goto("/plugins");
   await expect(page.getByLabel("便签 已启用")).not.toBeChecked();
   await page.getByLabel("便签 已启用").check();
+  // Product sets busy while flushConfig runs; wait until the switch is interactive again.
+  await expect(page.getByLabel("便签 已启用")).toBeEnabled({ timeout: 15_000 });
+  await expect(page.getByLabel("便签 已启用")).toBeChecked();
   await page.goto("/");
   await expect(page.getByTestId("plugin-unavailable")).toHaveCount(0, { timeout: 15_000 });
   await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"))
@@ -2210,7 +2214,8 @@ test("asset library uploads, persists, previews, and inserts video media", async
   card = page.locator("article").filter({ hasText: "campaign-loop.mp4" });
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "插入画布" }).click();
-  await page.goto("/");
+  // Product navigates to the canvas after insertAsset + persistNow complete.
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('[data-node-type="video"]')).toHaveCount(1, { timeout: 15_000 });
 });
 

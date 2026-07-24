@@ -24,6 +24,7 @@ function PluginCard({
   onUpdate,
   enabled,
   onEnabledChange,
+  disabled = false,
 }: {
   manifest: PluginManifest;
   builtin: boolean;
@@ -33,6 +34,7 @@ function PluginCard({
   onUpdate?: () => void;
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <article className="ob-card flex min-h-48 flex-col p-5">
@@ -52,6 +54,7 @@ function PluginCard({
             role="switch"
             aria-label={`${manifest.name} 已启用`}
             checked={enabled}
+            disabled={disabled}
             onChange={(event) => onEnabledChange(event.target.checked)}
           />
           {enabled ? "已启用" : "已停用"}
@@ -277,18 +280,24 @@ export function PluginsPage() {
             manifest={manifest}
             builtin
             enabled={!disabledPluginIds.includes(manifest.id)}
+            disabled={busy}
             onEnabledChange={(enabled) => {
+              setBusy(true);
               void (async () => {
-                const current = useBoardStore.getState().config;
-                setConfig({
-                  ...current,
-                  disabledPluginIds: setPluginEnabled(
-                    current.disabledPluginIds ?? [],
-                    manifest.id,
-                    enabled,
-                  ),
-                });
-                await flushConfig();
+                try {
+                  const current = useBoardStore.getState().config;
+                  setConfig({
+                    ...current,
+                    disabledPluginIds: setPluginEnabled(
+                      current.disabledPluginIds ?? [],
+                      manifest.id,
+                      enabled,
+                    ),
+                  });
+                  await flushConfig();
+                } finally {
+                  setBusy(false);
+                }
               })().catch(() => undefined);
             }}
             onAdd={() => addToCanvas(manifest)}
@@ -300,18 +309,24 @@ export function PluginsPage() {
             manifest={manifest}
             builtin={false}
             enabled={!disabledPluginIds.includes(manifest.id)}
+            disabled={busy}
             onEnabledChange={(enabled) => {
+              setBusy(true);
               void (async () => {
-                const current = useBoardStore.getState().config;
-                setConfig({
-                  ...current,
-                  disabledPluginIds: setPluginEnabled(
-                    current.disabledPluginIds ?? [],
-                    manifest.id,
-                    enabled,
-                  ),
-                });
-                await flushConfig();
+                try {
+                  const current = useBoardStore.getState().config;
+                  setConfig({
+                    ...current,
+                    disabledPluginIds: setPluginEnabled(
+                      current.disabledPluginIds ?? [],
+                      manifest.id,
+                      enabled,
+                    ),
+                  });
+                  await flushConfig();
+                } finally {
+                  setBusy(false);
+                }
               })().catch(() => undefined);
             }}
             update={updates.get(manifest.id)}
