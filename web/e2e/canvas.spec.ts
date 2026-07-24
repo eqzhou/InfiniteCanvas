@@ -155,10 +155,13 @@ test("desktop project panel resizes, collapses, and persists its width", async (
   expect(expandBox!.x + expandBox!.width).toBeLessThanOrEqual(firstToolBox!.x);
   await expandPanel.click();
   await expect(panel).toBeVisible();
+  await expect(page.getByTitle("收起侧栏")).toBeVisible();
   expect((await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
+  // Allow formal storage flush of canvasPanelCollapsed=false + width.
+  await page.waitForTimeout(300);
 
   await page.reload();
-  await expect(panel).toBeVisible();
+  await expect(panel).toBeVisible({ timeout: 10_000 });
   expect((await panel.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
 });
 

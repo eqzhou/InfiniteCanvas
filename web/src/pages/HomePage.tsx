@@ -79,11 +79,12 @@ export function HomePage() {
   const updatePanelConfig = (patch: Partial<Pick<typeof config, "canvasPanelWidth" | "canvasPanelCollapsed" | "canvasPanelTab">>) => {
     const latest = useBoardStore.getState().config;
     setConfig({ ...latest, ...patch });
+    // Collapse/expand/width must hit formal storage before reload (LatestWrite is async).
+    void flushConfig();
   };
 
   const changePanelTab = (tab: "projects" | "elements" | "assets" | "prompts") => {
     updatePanelConfig({ canvasPanelTab: tab });
-    void flushConfig();
   };
 
   const focusNode = (node: BoardNode) => {
