@@ -3,7 +3,7 @@
 This inventory freezes the engineering core to the publicly documented and
 black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
 explicit public interface delta listed for `v0.9.0` and the four public
-Unreleased behaviors recorded on 2026-07-19. It does not
+Unreleased behaviors recorded on 2026-07-19 (public CHANGELOG names rechecked 2026-07-24; still no newer release tag than v0.9.0). It does not
 claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
 an independent implementation with its own architecture, data model, UI,
 plugins, SDK, fixtures, and assets.
@@ -91,11 +91,25 @@ implementation evidence.
 - [verified] 242 Bun unit/integration tests; 84.26% line and 86.20% function coverage
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
-- [verified] 64/64 desktop Chromium tests against the production Vite build and isolated Go data directory
+- [verified] 71/71 desktop Chromium tests against the production Vite build and isolated Go data directory (local run 2026-07-24)
 - [verified] 52 passed and 12 intentional desktop-only skips in production mobile Chromium
 - [verified] Formal PostgreSQL/Redis/media E2E with a unique temporary database, Redis DB 14, and zero residue after cleanup
 - [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
 - [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
+
+
+### Public CHANGELOG Unreleased recheck (2026-07-24)
+
+Public CHANGELOG still lists only these Unreleased names (no new release tag after v0.9.0):
+
+| Public Unreleased name | Local status |
+|---|---|
+| Banana Prompt Quicker source | [verified] community preset `banana-prompt-quicker` → yukkcat/image-prompts dist JSON |
+| Custom standard JSON sources | [verified] declarative JSON/HTML/Markdown + optional local transform scripts |
+| My prompts (local manage / public save / canvas use) | [verified] PromptsPage mine tab + saveToMine + canvas insert |
+| Unified Agent generation task status query | [verified] `generation_get_status` MCP/runtime |
+
+Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent SDK Adapter; remains **not targeted**.
 
 ## Data and canvas
 
@@ -190,4 +204,4 @@ implementation evidence.
 - [not targeted] Upstream public TODO item to replace the Claude Code CLI adapter with a Claude Agent SDK adapter (docs-only signal as of 2026-07-23; not adopted as a parity requirement)
 - [external] Real-provider paid smoke depends on user-supplied credentials and is never a CI fixture
 - [external] Commercial clean-room, trademark/trade-dress, patent, contributor-rights, and market-specific legal sign-off
-- [verified] Public license recheck on 2026-07-23: reference remains AGPL-3.0; OpenBoard continues as an independent clean-room product identity under this repository's own license and docs/CLEANROOM.md process
+- [verified] Public license recheck on 2026-07-24: reference remains AGPL-3.0; OpenBoard continues as an independent clean-room product identity under this repository's own license and docs/CLEANROOM.md process

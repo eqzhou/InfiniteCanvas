@@ -73,6 +73,7 @@ implementation input.
 | 2026-07-19 | Client-scoped Agent operations | Start a turn in one tab, focus/close other tabs, and return tool results | The initiating client remains pinned for the turn; foreign results are ignored; disconnect falls back only to the most recently focused client on the same project | high |
 | 2026-07-19 | Shared Codex state | Send, stop, approve, switch, reload, and open a second tab while a turn/tool is running | Session, user messages, resolved approvals and running state replay across tabs; thread-mismatched events are ignored; tool completion does not unlock the turn | high |
 | 2026-07-23 | Public recheck | Re-read public README feature inventory, releases list, and progress TODO without source inspection | Confirmed latest public release remains `v0.9.0`; no new public release delta adopted; public TODO Claude Agent SDK adapter remains not-targeted | high |
+| 2026-07-24 | Public recheck | Re-read CHANGELOG Unreleased names, features.mdx, releases API, and progress TODO without source inspection | Latest public tag still `v0.9.0` (2026-07-17); CHANGELOG Unreleased names Banana Prompt Quicker / custom standard JSON / My prompts / unified Agent generation status already covered by verified local behaviors; public TODO remains Claude Agent SDK adapter (not-targeted) | high |
 | 2026-07-23 | Claude conversation UI | Open Local Agent, Claude tab, start session, send prompt, stop turn | Local Claude Code CLI streams assistant deltas into the sidebar; optional MCP config is attached when openboard-mcp is installed | medium |
 | 2026-07-23 | Prompt center presentation | Open formal local `/prompts` with server storage | Dense library shell remains usable: collapsible sources, library/mine tabs, filters, insert/detail/copy, and existing remote/local counts preserved | high |
 
@@ -102,7 +103,7 @@ implementation input.
 | https://github.com/basketikun/infinite-canvas/releases | 2026-07-23 | Public release list recheck; latest tag remains `v0.9.0` |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/overview/features.mdx | 2026-07-23 | Public feature inventory recheck (docs only; no source trees) |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/progress/todo.mdx | 2026-07-23 | Public remaining-work recheck; Claude Agent SDK adapter noted as not-targeted |
-| https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-19 | Public Unreleased behavior names for prompt sources, generation status, tab ownership, and Codex synchronization |
+| https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-24 | Public Unreleased behavior names for prompt sources, generation status, tab ownership, and Codex synchronization |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/docs/content/docs/progress/pending-test.mdx | 2026-07-19 | Public black-box acceptance descriptions and exact `generation_get_status` interoperability name |
 | https://api.github.com/repos/basketikun/infinite-canvas/commits | 2026-07-19 | Public commit hashes/messages and changed-file names only; implementation patches were not read |
 | https://spec.modelcontextprotocol.io/ | 2026-07-16 | MCP transport and tool lifecycle interoperability |
