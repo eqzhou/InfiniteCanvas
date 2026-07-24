@@ -19,7 +19,7 @@ describe("canvas prompt panel grouping", () => {
       sample("d"),
       sample("e", "Community"),
     ]);
-    expect(groups.map((group) => group.source)).toEqual(["local", "Community", "未分组"]);
+    expect(groups.map((group) => group.source)).toEqual(["我的", "Community", "未分组"]);
     expect(groups[0]?.items.map((item) => item.id)).toEqual(["a", "c"]);
     expect(groups[1]?.items.map((item) => item.id)).toEqual(["b", "e"]);
     expect(groups[2]?.items.map((item) => item.id)).toEqual(["d"]);

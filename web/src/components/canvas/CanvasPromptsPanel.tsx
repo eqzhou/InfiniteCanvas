@@ -5,8 +5,11 @@ import { useBoardStore } from "@/stores/use-board-store";
 
 function sourceLabel(prompt: PromptItem): string {
   const source = prompt.source?.trim();
+  // Prefer readable Chinese labels for built-in local/personal sources.
+  if (source === "local" || source === "personal") return "我的";
   if (source) return source;
   const sourceId = prompt.sourceId?.trim();
+  if (sourceId === "local" || sourceId === "personal") return "我的";
   if (sourceId) return sourceId;
   return "未分组";
 }

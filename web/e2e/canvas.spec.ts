@@ -2047,7 +2047,7 @@ test("canvas prompt panel groups library entries by source and inserts them", as
   await panel.getByRole("tab", { name: "提示词" }).click();
   await panel.getByLabel("搜索画布提示词库").fill("侧栏夜景");
   const library = panel.getByRole("list", { name: "侧栏提示词库" });
-  await expect(library.getByText("local", { exact: true })).toBeVisible();
+  await expect(library.getByText("我的", { exact: true })).toBeVisible();
   await expect(library.getByText("侧栏夜景", { exact: true })).toBeVisible();
   await library.getByRole("button", { name: "插入提示词 侧栏夜景" }).click();
   await expect(page.getByPlaceholder("写下提示词或说明…").first()).toHaveValue("neon alley with rain reflections");

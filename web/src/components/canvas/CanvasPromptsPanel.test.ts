@@ -24,10 +24,10 @@ const items: PromptItem[] = [
 ];
 
 describe("canvas prompt library helpers", () => {
-  test("groups prompts by source", () => {
+  test("groups prompts by source with readable local label", () => {
     expect(groupCanvasPromptsBySource(items).map((group) => group.source)).toEqual([
       "Banana Prompt Quicker",
-      "local",
+      "我的",
     ]);
   });
 
