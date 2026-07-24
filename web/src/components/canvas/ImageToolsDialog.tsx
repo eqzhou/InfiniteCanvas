@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { BoardNode } from "@/types/board";
 import type { ImageTransformContext } from "@/services/image-transform/types";
@@ -114,15 +115,30 @@ export function ImageToolsDialog({
 
   return createPortal(
     <div className="ob-overlay-canvas p-4">
-      <div className="ob-dialog max-w-md p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold">{title}</h3>
-          <button type="button" aria-label="关闭图像工具" title="关闭图像工具" onClick={cancel}>
-            关闭
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="image-tools-title"
+        className="ob-dialog max-w-md p-0"
+      >
+        <header className="ob-dialog-header px-4 py-3">
+          <div className="min-w-0">
+            <p className="ob-page-kicker">Image</p>
+            <h2 id="image-tools-title" className="text-base font-semibold tracking-tight">{title}</h2>
+          </div>
+          <button
+            type="button"
+            className="ob-icon-btn ml-auto"
+            aria-label="关闭图像工具"
+            title="关闭图像工具"
+            onClick={cancel}
+          >
+            <X size={16} />
           </button>
-        </div>
+        </header>
+        <div className="ob-dialog-body space-y-3">
         {node.metadata.content ? (
-          <div ref={previewRef} className="relative mb-3 overflow-hidden rounded-lg bg-[var(--ob-canvas)] p-2">
+          <div ref={previewRef} className="relative overflow-hidden rounded-xl bg-[var(--ob-canvas)] p-2 shadow-[var(--ob-elev-1)]">
             <img src={node.metadata.content} alt="" className="mx-auto max-h-48 object-contain" />
             {mode === "mask" ? (
               <div
@@ -305,15 +321,19 @@ export function ImageToolsDialog({
             <div className="h-full bg-[var(--ob-accent)] transition-[width]" style={{ width: `${progress * 100}%` }} />
           </div>
         ) : null}
-        {error ? <p className="mt-2 text-sm text-red-500">{error}</p> : null}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" className="ob-btn px-3 py-1.5" onClick={cancel}>
+        {error ? (
+          <p className="rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-2 text-sm text-[var(--ob-danger)]">
+            {error}
+          </p>
+        ) : null}
+        </div>
+        <div className="ob-dialog-footer">
+          <button type="button" className="ob-btn" onClick={cancel}>
             取消
           </button>
           <button
             type="button"
-            className="ob-btn-primary px-3 py-1.5"
+            className="ob-btn-primary"
             disabled={running || ((mode === "mask" || mode === "upscale") && !selectedProvider) ||
               (mode === "mask" && selectedProvider?.kind === "cloud" && !prompt.trim())}
             onClick={() => void execute()}

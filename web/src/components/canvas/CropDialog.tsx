@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { BoardNode } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
@@ -51,43 +52,49 @@ export function CropDialog({ node, open, onClose, onConfirm }: Props) {
 
   return createPortal(
     <div className="ob-overlay-canvas p-4">
-      <div className="ob-dialog max-w-lg p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold">裁剪图片</h3>
-          <button type="button" onClick={onClose}>
-            关闭
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="crop-dialog-title"
+        className="ob-dialog max-w-lg p-0"
+      >
+        <header className="ob-dialog-header px-4 py-3">
+          <div className="min-w-0">
+            <p className="ob-page-kicker">Edit</p>
+            <h2 id="crop-dialog-title" className="text-base font-semibold tracking-tight">裁剪图片</h2>
+          </div>
+          <button type="button" className="ob-icon-btn ml-auto" aria-label="关闭裁剪" title="关闭" onClick={onClose}>
+            <X size={16} />
           </button>
-        </div>
-        <div className="mb-3 grid place-items-center rounded-lg bg-[var(--ob-canvas)] p-3">
-          <div className="relative overflow-hidden" style={previewStyle}>
-            <div
-              className="absolute border-2 border-[var(--ob-select)] bg-[color-mix(in_srgb,var(--ob-select)_20%,transparent)]"
-              style={{
-                left: x * scale,
-                top: y * scale,
-                width: w * scale,
-                height: h * scale,
-              }}
-            />
+        </header>
+        <div className="ob-dialog-body space-y-3">
+          <div className="grid place-items-center rounded-xl bg-[var(--ob-canvas)] p-3 shadow-[var(--ob-elev-1)]">
+            <div className="relative overflow-hidden" style={previewStyle}>
+              <div
+                className="absolute border-2 border-[var(--ob-select)] bg-[color-mix(in_srgb,var(--ob-select)_20%,transparent)]"
+                style={{
+                  left: x * scale,
+                  top: y * scale,
+                  width: w * scale,
+                  height: h * scale,
+                }}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <Num label="X" value={x} max={natural.w} onChange={setX} />
+            <Num label="Y" value={y} max={natural.h} onChange={setY} />
+            <Num label="宽" value={w} max={natural.w} onChange={setW} />
+            <Num label="高" value={h} max={natural.h} onChange={setH} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <Num label="X" value={x} max={natural.w} onChange={setX} />
-          <Num label="Y" value={y} max={natural.h} onChange={setY} />
-          <Num label="宽" value={w} max={natural.w} onChange={setW} />
-          <Num label="高" value={h} max={natural.h} onChange={setH} />
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            className="ob-btn px-3 py-1.5"
-            onClick={onClose}
-          >
+        <div className="ob-dialog-footer">
+          <button type="button" className="ob-btn" onClick={onClose}>
             取消
           </button>
           <button
             type="button"
-            className="ob-btn-primary px-3 py-1.5"
+            className="ob-btn-primary"
             onClick={() =>
               onConfirm({
                 x: Math.max(0, x),

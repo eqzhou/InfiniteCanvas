@@ -218,20 +218,25 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   return (
     <div
-      className="ob-composer absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 p-2"
+      className="ob-composer node-prompt absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 p-2"
       onPointerDown={(e) => e.stopPropagation()}
+      role="group"
+      aria-label="节点提示词"
     >
-      <PromptChipInput
-        placeholder={placeholder}
-        value={text}
-        references={references}
-        onChange={setText}
-        onSubmit={() => void send()}
-      />
+      <div className="min-w-0 flex-1">
+        <PromptChipInput
+          placeholder={placeholder}
+          value={text}
+          references={references}
+          onChange={setText}
+          onSubmit={() => void send()}
+        />
+      </div>
       <button
         type="button"
         className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
         aria-busy={busy}
+        aria-label={busy ? "生成中" : "发送提示词"}
         disabled={busy || !text.trim()}
         onClick={() => void send()}
         title="发送 (Ctrl/Cmd+Enter)"

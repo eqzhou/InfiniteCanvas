@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { X } from "lucide-react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { Point } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
@@ -37,30 +38,42 @@ export function AssetPickerModal({
   const pos = at ?? { x: 120, y: 120 };
 
   return (
-    <div className="ob-overlay z-[90] p-4 bg-black/40">
-      <div className="ob-dialog flex-col max-h-[80vh] w-full max-w-2xl">
-        <div className="flex items-center gap-2 border-b border-[var(--ob-line)] px-4 py-3">
-          <strong>从素材插入</strong>
-          <input
-            className="ob-field ml-auto px-2 py-1 text-sm max-w-48"
-            placeholder="搜索…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <select
-            className="ob-field px-2 py-1 text-sm"
-            value={kind}
-            onChange={(e) => setKind(e.target.value as typeof kind)}
-          >
-            <option value="all">全部</option>
-            <option value="text">文本</option>
-            <option value="image">图片</option>
-          </select>
-          <button type="button" className="text-sm text-[var(--ob-muted)]" onClick={onClose}>
-            关闭
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto p-3">
+    <div className="ob-overlay z-[90] p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="asset-picker-title"
+        className="ob-dialog flex max-h-[min(80vh,40rem)] w-full max-w-2xl flex-col p-0"
+      >
+        <header className="ob-dialog-header flex-wrap gap-2 px-4 py-3">
+          <div className="min-w-0">
+            <p className="ob-page-kicker">Assets</p>
+            <h2 id="asset-picker-title" className="text-base font-semibold tracking-tight">从素材插入</h2>
+          </div>
+          <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+            <input
+              className="ob-field max-w-full px-2.5 py-1.5 text-sm sm:max-w-48"
+              placeholder="搜索…"
+              aria-label="搜索素材"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            <select
+              className="ob-field w-auto cursor-pointer px-2.5 py-1.5 text-sm"
+              value={kind}
+              aria-label="素材类型"
+              onChange={(e) => setKind(e.target.value as typeof kind)}
+            >
+              <option value="all">全部</option>
+              <option value="text">文本</option>
+              <option value="image">图片</option>
+            </select>
+            <button type="button" className="ob-icon-btn" aria-label="关闭素材选择" title="关闭" onClick={onClose}>
+              <X size={16} />
+            </button>
+          </div>
+        </header>
+        <div className="ob-dialog-body min-h-0 flex-1 overflow-auto !pt-3">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {filtered.map((a) => (
               <button
@@ -76,7 +89,7 @@ export function AssetPickerModal({
                   <img
                     src={a.coverUrl}
                     alt=""
-                    className="mb-2 h-24 w-full rounded object-cover"
+                    className="mb-2 h-24 w-full rounded-lg object-cover"
                   />
                 ) : null}
                 <div className="truncate text-sm font-medium">{a.title}</div>
@@ -87,7 +100,10 @@ export function AssetPickerModal({
             ))}
           </div>
           {!filtered.length ? (
-            <p className="p-8 text-center text-sm text-[var(--ob-muted)]">暂无素材</p>
+            <div className="ob-empty border-0 bg-transparent py-10">
+              <p className="ob-empty-title">暂无素材</p>
+              <p className="ob-empty-desc">换个关键词，或先到素材页添加可插入的原料。</p>
+            </div>
           ) : null}
         </div>
       </div>

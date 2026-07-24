@@ -29,7 +29,7 @@ export function ImagePreviewDialog({
       aria-modal="true"
       aria-label="图片预览"
       tabIndex={-1}
-      className="ob-overlay bg-black/80 p-4"
+      className="ob-overlay bg-black/80 p-3 sm:p-6"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -38,7 +38,7 @@ export function ImagePreviewDialog({
       <button
         type="button"
         title="关闭预览"
-        className="absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-md bg-black/60 text-white hover:bg-black/80"
+        className="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-xl bg-black/55 text-white shadow-lg backdrop-blur-sm hover:bg-black/75 sm:right-5 sm:top-5"
         onClick={onClose}
       >
         <X size={20} />

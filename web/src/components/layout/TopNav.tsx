@@ -73,7 +73,7 @@ export function TopNav({
   ];
 
   return (
-    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-2 shadow-[var(--ob-elev-1)] backdrop-blur-md sm:gap-2 sm:px-3 lg:gap-3 lg:px-4">
+    <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-1.5 shadow-[var(--ob-elev-1)] backdrop-blur-md sm:gap-2 sm:px-3 lg:gap-3 lg:px-4">
       <div className="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
         <span className="inline-grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent)] text-sm font-bold tracking-tight text-white shadow-[0_2px_8px_color-mix(in_srgb,var(--ob-accent)_40%,transparent)]">
           OB
@@ -97,7 +97,7 @@ export function TopNav({
               )}
             >
               <Icon size={16} />
-              <span className="hidden xl:inline">{l.label}</span>
+              <span className="hidden lg:inline">{l.label}</span>
             </Link>
           );
         })}

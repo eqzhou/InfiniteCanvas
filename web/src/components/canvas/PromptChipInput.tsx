@@ -22,7 +22,7 @@ function createReferenceChip(reference: PromptReference): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.dataset.promptReference = reference.nodeId;
   chip.dataset.refLabel = reference.label;
-  chip.className = "mx-0.5 inline-flex h-7 max-w-32 select-none items-center gap-1 rounded border border-[var(--ob-accent)] bg-[var(--ob-accent-soft)] px-1 align-middle text-[11px] text-[var(--ob-text)]";
+  chip.className = "mx-0.5 inline-flex h-7 max-w-32 select-none items-center gap-1 rounded border border-[var(--ob-accent)] bg-[var(--ob-accent-soft)] px-1 align-middle text-[11px] text-[var(--ob-ink)]";
   chip.title = `${reference.label} · ${reference.title}`;
 
   if (reference.kind === "image" && reference.content) {
