@@ -62,7 +62,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
       <div className="flex flex-wrap gap-1.5 px-0.5">
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1 text-xs disabled:opacity-50"
+          className="ob-btn ob-btn-sm"
           disabled={busy}
           onClick={() => imageInputRef.current?.click()}
         >
@@ -70,7 +70,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
         </button>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md border border-[var(--ob-line)] px-2 py-1 text-xs disabled:opacity-50"
+          className="ob-btn ob-btn-sm"
           disabled={busy}
           onClick={() => videoInputRef.current?.click()}
         >
@@ -103,14 +103,17 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
       </div>
       {error ? <p className="px-0.5 text-xs text-[var(--ob-danger)]">{error}</p> : null}
       {!assets.length ? (
-        <div className="grid place-items-center gap-2 p-6 text-center text-sm text-[var(--ob-muted)]">
-          <Boxes size={22} />
-          <span>暂无素材。可上传图片/视频，或从素材页添加。</span>
+        <div className="ob-empty m-1 border-0 bg-transparent px-2 py-6">
+          <span className="ob-empty-icon" aria-hidden>
+            <Boxes size={16} />
+          </span>
+          <p className="ob-empty-title">暂无素材</p>
+          <p className="ob-empty-desc">可上传图片/视频，或从素材页添加后在此插入画布。</p>
         </div>
       ) : (
         <ul role="list" aria-label="侧栏素材" className="grid grid-cols-2 gap-2">
           {assets.map((asset) => (
-            <li key={asset.id} className="group relative min-h-24 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[var(--ob-canvas)]">
+            <li key={asset.id} className="group relative min-h-24 overflow-hidden rounded-xl border border-[var(--ob-line)] bg-[var(--ob-canvas)] shadow-[var(--ob-elev-1)]">
               {asset.kind === "image" && asset.coverUrl ? (
                 <img src={asset.coverUrl} alt={asset.title} className="h-24 w-full object-cover" />
               ) : asset.kind === "video" && asset.coverUrl ? (
@@ -144,7 +147,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
                 type="button"
                 aria-label={`删除素材 ${asset.title}`}
                 title="删除素材"
-                className="absolute right-1 top-1 z-10 grid h-7 w-7 place-items-center rounded-sm bg-[var(--ob-panel)] text-[var(--ob-danger)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus:opacity-100"
+                className="absolute right-1 top-1 z-10 grid h-7 w-7 place-items-center rounded-md bg-[var(--ob-panel)] text-[var(--ob-danger)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus:opacity-100"
                 onClick={() => {
                   if (!confirm(`删除素材“${asset.title}”？`)) return;
                   void deleteSidebarAsset(asset.id).catch((cause) =>

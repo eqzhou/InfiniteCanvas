@@ -75,7 +75,7 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
       <div className="px-1">
         <input
           aria-label="搜索画布提示词库"
-          className="w-full rounded-md border border-[var(--ob-line)] bg-transparent px-2 py-1.5 text-sm"
+          className="ob-field"
           placeholder="跨来源搜索标题/内容/标签…"
           value={query}
           onChange={(event) => setQuery(event.target.value)}

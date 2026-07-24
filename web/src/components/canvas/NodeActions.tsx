@@ -838,7 +838,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
 return (
     <>
       <div
-        className="absolute bottom-full left-0 z-30 mb-8 flex max-w-[min(520px,70vw)] flex-wrap items-center gap-0.5 rounded-sm bg-[var(--ob-panel)] p-1 outline outline-1 outline-[var(--ob-line)]"
+        className="ob-chrome absolute bottom-full left-0 z-30 mb-8 flex max-w-[min(520px,70vw)] flex-wrap items-center gap-0.5 p-1"
         onPointerDown={(e) => e.stopPropagation()}
       >
         {node.type === "text" ? (
@@ -1122,7 +1122,8 @@ function IconBtn({
     <button
       type="button"
       title={title}
-      className="rounded-sm p-1.5 text-[var(--ob-ink)] hover:bg-[var(--ob-accent-soft)]"
+      aria-label={title}
+      className="ob-icon-btn h-8 w-8 rounded-md"
       onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}
     >
