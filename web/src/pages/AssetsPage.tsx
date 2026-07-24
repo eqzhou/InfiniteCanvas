@@ -127,13 +127,20 @@ export function AssetsPage() {
   };
 
   return (
-    <div className="mx-auto h-full max-w-6xl overflow-auto p-4 sm:p-6">
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-semibold">我的素材</h1>
+    <div className="ob-page">
+      <header className="ob-page-header">
+        <div className="min-w-0">
+          <p className="ob-page-kicker">Library</p>
+          <h1 className="ob-page-title">我的素材</h1>
+          <p className="ob-page-desc">沉淀可复用的文本、图片、视频与音频原料，随时插入画布。</p>
+        </div>
+      </header>
+
+      <div className="ob-toolbar-strip">
         <input
-          className="ob-field w-full sm:ml-auto sm:w-64"
+          className="ob-field w-full sm:max-w-xs sm:flex-1"
           aria-label="搜索素材"
-          placeholder="搜索…"
+          placeholder="搜索标题、标签、备注…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -141,55 +148,58 @@ export function AssetsPage() {
           className="ob-field w-auto cursor-pointer"
           value={kind}
           onChange={(e) => setKind(e.target.value as typeof kind)}
+          aria-label="素材类型"
         >
-          <option value="all">全部</option>
+          <option value="all">全部类型</option>
           <option value="text">文本</option>
           <option value="image">图片</option>
           <option value="video">视频</option>
           <option value="audio">音频</option>
         </select>
-        <button type="button" className="ob-btn" onClick={addText}>
-          新增文本
-        </button>
-        <label className="ob-btn cursor-pointer">
-          上传图片
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void addMedia(f, "image");
-              e.currentTarget.value = "";
-            }}
-          />
-        </label>
-        <label className="ob-btn cursor-pointer">
-          上传视频
-          <input
-            type="file"
-            accept="video/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void addMedia(file, "video");
-              e.currentTarget.value = "";
-            }}
-          />
-        </label>
-        <label className="ob-btn cursor-pointer">
-          上传音频
-          <input
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void addMedia(file, "audio");
-              e.currentTarget.value = "";
-            }}
-          />
-        </label>
+        <div className="ob-page-actions !ml-0 sm:ml-auto">
+          <button type="button" className="ob-btn" onClick={addText}>
+            新增文本
+          </button>
+          <label className="ob-btn cursor-pointer">
+            上传图片
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void addMedia(f, "image");
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+          <label className="ob-btn cursor-pointer">
+            上传视频
+            <input
+              type="file"
+              accept="video/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void addMedia(file, "video");
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+          <label className="ob-btn cursor-pointer">
+            上传音频
+            <input
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void addMedia(file, "audio");
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -217,7 +227,12 @@ export function AssetsPage() {
               </div>
             ) : null}
             <div className="flex-1">
-              <h3 className="font-semibold text-[var(--ob-ink)]">{a.title}</h3>
+              <div className="flex items-start gap-2">
+                <h3 className="min-w-0 flex-1 font-semibold text-[var(--ob-ink)]">{a.title}</h3>
+                <span className="ob-chip shrink-0">
+                  {a.kind === "text" ? "文本" : a.kind === "image" ? "图片" : a.kind === "video" ? "视频" : "音频"}
+                </span>
+              </div>
               {a.source ? <p className="mt-0.5 truncate text-xs text-[var(--ob-muted)]">{a.source}</p> : null}
               <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-[var(--ob-muted)]">
                 {a.kind === "text" ? a.content : a.mimeType}
@@ -308,6 +323,9 @@ export function AssetsPage() {
       </div>
       {!filtered.length ? (
         <div className="ob-empty mt-8">
+          <span className="ob-empty-icon" aria-hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+          </span>
           <p className="ob-empty-title">暂无素材</p>
           <p className="ob-empty-desc">上传图片/视频，或新增文本素材，沉淀可复用的创作原料。</p>
         </div>

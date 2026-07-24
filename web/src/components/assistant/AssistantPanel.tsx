@@ -433,50 +433,61 @@ export function AssistantPanel() {
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+        {!session.messages.length ? (
+          <div className="ob-empty border-0 bg-transparent px-2 py-8">
+            <span className="ob-empty-icon" aria-hidden>
+              <Send size={16} />
+            </span>
+            <p className="ob-empty-title">开始对话</p>
+            <p className="ob-empty-desc">选中画布节点可作为引用，支持问答或直接生图。</p>
+          </div>
+        ) : null}
         {session.messages.map((m) => (
           <div
             key={m.id}
             data-testid={`assistant-message-${m.role}`}
-            className={`rounded-lg border border-[var(--ob-line)] p-2 text-sm ${
-              m.role === "user" ? "bg-[var(--ob-accent-soft)]" : "bg-transparent"
-            }`}
+            className="ob-msg"
+            data-role={m.role}
           >
-            <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--ob-muted)]">
-              {m.role} · {m.mode}
+            <div className="ob-msg-meta">
+              <span>{m.role === "user" ? "你" : "助手"}</span>
+              <span aria-hidden>·</span>
+              <span>{m.mode === "image" ? "生图" : "问答"}</span>
             </div>
-            <div className="whitespace-pre-wrap">{m.isLoading ? "思考中…" : m.text}</div>
+            <div className="whitespace-pre-wrap text-[var(--ob-ink)]">
+              {m.isLoading ? "思考中…" : m.text}
+            </div>
             {m.images?.map((img) => (
               <img
                 key={img.id}
                 src={img.url}
                 alt=""
-                className="mt-2 min-h-16 min-w-16 max-h-40 max-w-full rounded object-contain"
+                className="mt-2 min-h-16 min-w-16 max-h-40 max-w-full rounded-lg object-contain shadow-[var(--ob-elev-1)]"
               />
             ))}
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div className="ob-msg-actions">
               {!m.isLoading && (m.role === "assistant" || m.images?.length) ? (
                 <button
                   type="button"
-                  className="text-xs text-[var(--ob-accent)]"
+                  className="ob-msg-action"
                   onClick={() => insertMessage(m)}
                 >
                   插入画布
                 </button>
               ) : null}
               {m.role === "assistant" && !m.isLoading ? (
-                <>
-                  <button
-                    type="button"
-                    className="text-xs text-[var(--ob-muted)]"
-                    onClick={() => void retryMessage(m)}
-                  >
-                    重试
-                  </button>
-                </>
+                <button
+                  type="button"
+                  className="ob-msg-action"
+                  onClick={() => void retryMessage(m)}
+                >
+                  重试
+                </button>
               ) : null}
               <button
                 type="button"
-                className="text-xs text-[var(--ob-danger)]"
+                className="ob-msg-action"
+                data-tone="danger"
                 onClick={() =>
                   patchSession(session.messages.filter((x) => x.id !== m.id))
                 }
@@ -496,20 +507,29 @@ export function AssistantPanel() {
                 key={r.nodeId}
                 className="ob-chip"
               >
-                {r.kind}:{r.label}
+                {({
+                  text: "文本",
+                  image: "图片",
+                  config: "配置",
+                  video: "视频",
+                  audio: "音频",
+                  group: "分组",
+                  plugin: "插件",
+                } as Record<string, string>)[r.kind] ?? r.kind}
+                · {r.label}
               </span>
             ))}
           </div>
         ) : (
           <p className="mb-2 text-xs text-[var(--ob-muted)]">选中节点可作为引用</p>
         )}
-        <div className="mb-2 flex gap-1.5" role="tablist">
+        <div className="ob-segment mb-2" role="tablist" aria-label="助手模式">
           <button
             type="button"
             role="tab"
             aria-label="问答"
             aria-selected={mode === "ask"}
-            className={`ob-tab rounded-lg text-xs ${mode === "ask" ? "bg-[var(--ob-accent)] !text-white !border-transparent" : "bg-[var(--ob-canvas)]"}`}
+            className="ob-segment-item"
             onClick={() => setMode("ask")}
           >
             问答
@@ -519,7 +539,7 @@ export function AssistantPanel() {
             role="tab"
             aria-label="生图"
             aria-selected={mode === "image"}
-            className={`ob-tab rounded-lg text-xs ${mode === "image" ? "bg-[var(--ob-accent)] !text-white !border-transparent" : "bg-[var(--ob-canvas)]"}`}
+            className="ob-segment-item"
             onClick={() => setMode("image")}
           >
             生图
@@ -561,9 +581,9 @@ export function AssistantPanel() {
             </button>
           </div>
         ) : null}
-        <div className="flex gap-2">
+        <div className="ob-composer flex gap-2 p-2">
           <textarea
-            className="ob-field min-h-[72px] flex-1 resize-none text-sm"
+            className="min-h-[72px] flex-1 resize-none border-0 bg-transparent p-1.5 text-sm text-[var(--ob-ink)] outline-none placeholder:text-[var(--ob-muted)]"
             placeholder={mode === "ask" ? "问点什么…（可粘贴图片）" : "描述想生成的图片…（可粘贴图片）"}
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -604,7 +624,9 @@ export function AssistantPanel() {
           <button
             type="button"
             className="ob-btn-primary self-end rounded-xl p-3 disabled:opacity-50"
-            disabled={busy}
+            disabled={busy || !text.trim()}
+            aria-label="发送"
+            title="发送"
             onClick={() => void send()}
           >
             <Send size={16} />

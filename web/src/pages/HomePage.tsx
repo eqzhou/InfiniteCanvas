@@ -143,7 +143,12 @@ export function HomePage() {
   );
 
   if (!ready) {
-    return <div className="grid h-full place-items-center">加载本地数据…</div>;
+    return (
+      <div className="ob-loading" role="status" aria-live="polite">
+        <span className="ob-loading-dot" aria-hidden />
+        <span>加载本地数据…</span>
+      </div>
+    );
   }
 
   return (
@@ -411,6 +416,9 @@ export function HomePage() {
           ))}
           {!sorted.length ? (
             <div className="ob-empty m-2">
+              <span className="ob-empty-icon" aria-hidden>
+                <FolderPlus size={16} />
+              </span>
               <p className="ob-empty-title">还没有项目</p>
               <p className="ob-empty-desc">点击右上角「新建」创建第一个画布，开始编排节点与生成。</p>
             </div>
@@ -459,7 +467,13 @@ export function HomePage() {
                 })}
               </ul>
             ) : (
-              <p className="p-3 text-sm text-[var(--ob-muted)]">当前画布没有元素</p>
+              <div className="ob-empty m-1 border-0 bg-transparent px-2 py-6">
+                <span className="ob-empty-icon" aria-hidden>
+                  <LocateFixed size={16} />
+                </span>
+                <p className="ob-empty-title">当前画布没有元素</p>
+                <p className="ob-empty-desc">用顶部工具栏添加文本、图片或媒体节点。</p>
+              </div>
             )
           ) : null}
           {panelTab === "assets" ? <CanvasAssetsPanel /> : null}

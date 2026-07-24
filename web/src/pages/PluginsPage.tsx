@@ -48,14 +48,16 @@ function PluginCard({
             {builtin ? "内置" : "已安装"} · {manifest.id} · v{manifest.version}
           </p>
         </div>
-        <label className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-[var(--ob-muted)]">
-          <input
-            type="checkbox"
+        <label className="ml-auto flex shrink-0 items-center gap-2 text-xs text-[var(--ob-muted)]">
+          <button
+            type="button"
             role="switch"
+            aria-checked={enabled}
             aria-label={`${manifest.name} 已启用`}
-            checked={enabled}
             disabled={disabled}
-            onChange={(event) => onEnabledChange(event.target.checked)}
+            className="ob-switch"
+            data-checked={enabled ? "true" : "false"}
+            onClick={() => onEnabledChange(!enabled)}
           />
           {enabled ? "已启用" : "已停用"}
         </label>
@@ -215,15 +217,16 @@ export function PluginsPage() {
 
   return (
     <>
-      <div className="mx-auto h-full max-w-6xl overflow-auto p-4 sm:p-6">
-      <div className="mb-5 flex items-center gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">插件</h1>
-          <p className="mt-1 text-sm text-[var(--ob-muted)]">插件运行在不同源浏览器沙箱中；远程插件仍属于可执行第三方代码。</p>
+      <div className="ob-page">
+      <header className="ob-page-header">
+        <div className="min-w-0">
+          <p className="ob-page-kicker">Extensions</p>
+          <h1 className="ob-page-title">插件</h1>
+          <p className="ob-page-desc">插件运行在不同源浏览器沙箱中；远程插件仍属于可执行第三方代码。</p>
         </div>
-      </div>
+      </header>
 
-      <section className="mb-6 border-y border-[var(--ob-line)] py-4">
+      <section className="ob-card mb-6 p-4 sm:p-5">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row">
           <label className="min-w-0 flex-1">
             <span className="sr-only">OpenBoard 插件注册表 URL</span>
