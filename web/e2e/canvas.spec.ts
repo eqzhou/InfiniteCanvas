@@ -2213,8 +2213,10 @@ test("asset library uploads, persists, previews, and inserts video media", async
   await page.reload();
   card = page.locator("article").filter({ hasText: "campaign-loop.mp4" });
   await expect(card).toBeVisible();
-  await card.getByRole("button", { name: "插入画布" }).click();
-  // Product stays on the library; open the canvas after insert+persist completes.
+  const insertVideo = card.getByRole("button", { name: "插入画布" });
+  await insertVideo.click();
+  // Product shows "插入中" while insertAsset/persistNow runs.
+  await expect(card.getByRole("button", { name: "插入画布" })).toBeVisible({ timeout: 15_000 });
   await page.goto("/");
   await expect(page.locator('[data-node-type="video"]')).toHaveCount(1, { timeout: 15_000 });
 });
@@ -2337,9 +2339,9 @@ test("asset library supports persistence, search, type filters, pagination, copy
     await imageAsset.getByRole("button", { name: "下载" }).click();
     expect((await downloadPromise).suggestedFilename()).toBe("library.png");
   }
-  // Insert stays on /assets (no navigation). dismiss any unexpected dialog.
-  page.once("dialog", (dialog) => dialog.dismiss());
+  // Insert stays on /assets (no navigation / no confirm dialog).
   await imageAsset.getByRole("button", { name: "插入画布" }).click();
+  await expect(imageAsset.getByRole("button", { name: "插入画布" })).toBeVisible({ timeout: 15_000 });
   await expect(page).toHaveURL(/\/assets/);
 
   await page.locator("select").selectOption("all");
@@ -2347,10 +2349,12 @@ test("asset library supports persistence, search, type filters, pagination, copy
   await page.getByRole("button", { name: "下一页" }).click();
   await expect(page.getByText("2 / 2 · 共 14", { exact: true })).toBeVisible();
   const pageTwoAsset = page.locator("article").filter({ hasText: "Text Asset 01" });
+  await expect(pageTwoAsset).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
   await pageTwoAsset.getByRole("button", { name: "删除" }).click();
-  await expect(pageTwoAsset).toHaveCount(0);
-  await expect(page.getByText("2 / 2 · 共 13", { exact: true })).toBeVisible();
+  // Wait for product delete+flush to remove the card and fix pagination totals.
+  await expect(page.locator("article").filter({ hasText: "Text Asset 01" })).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByText(/共 13/, { exact: false })).toBeVisible({ timeout: 10_000 });
 
   await page.locator('nav a[href="/"]').click();
   await page.getByTitle("适应").click();

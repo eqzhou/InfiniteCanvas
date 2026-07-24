@@ -17,6 +17,7 @@ export function AssetsPage() {
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<AssetItem | null>(null);
   const [creating, setCreating] = useState(false);
+  const [insertingId, setInsertingId] = useState<string | null>(null);
   const pageSize = 12;
 
   const filtered = useMemo(() => {
@@ -226,23 +227,25 @@ export function AssetsPage() {
               <button
                 type="button"
                 className="ob-btn"
+                disabled={insertingId === a.id}
+                aria-busy={insertingId === a.id}
                 onClick={() => {
                   const project = useBoardStore.getState().getActive();
                   if (!project) {
                     alert("请先打开一个画布项目");
                     return;
                   }
-                  // Stay on the library page so multi-insert / pagination keep working.
-                  // insertAsset already awaits persistNow for durable canvas nodes.
+                  setInsertingId(a.id);
+                  // Stay on the library page; busy state ends only after persistNow.
                   void insertAsset(a.id, {
                     x: 80 + Math.random() * 120,
                     y: 80 + Math.random() * 120,
                   }).catch((cause) => {
                     alert(cause instanceof Error ? cause.message : String(cause));
-                  });
+                  }).finally(() => setInsertingId(null));
                 }}
               >
-                插入画布
+                {insertingId === a.id ? "插入中" : "插入画布"}
               </button>
               {a.kind === "text" ? (
                 <button
@@ -283,10 +286,17 @@ export function AssetsPage() {
                 onClick={() => {
                   if (!window.confirm(`删除素材“${a.title}”？`)) return;
                   void (async () => {
-                    const nextAssets = useBoardStore.getState().assets.filter((item) => item.id !== a.id);
+                    const nextAssets = structuredClone(
+                      useBoardStore.getState().assets.filter((item) => item.id !== a.id),
+                    );
                     setAssets(nextAssets);
                     await flushAssets();
                     await removeOrphanedBlob(a.storageKey, nextAssets);
+                    // Keep pagination valid after the last item on a page is removed.
+                    setPage((current) => {
+                      const totalPages = Math.max(1, Math.ceil(nextAssets.length / pageSize));
+                      return Math.min(current, totalPages);
+                    });
                   })();
                 }}
               >
