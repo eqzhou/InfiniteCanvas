@@ -85,26 +85,31 @@ export function VersionReleaseModal({
             className="ob-dialog flex flex-col max-w-2xl"
           >
             <header className="ob-dialog-header px-4 py-3">
-              <h2 id="version-release-title" className="text-base font-semibold">版本更新</h2>
+              <div className="min-w-0">
+                <p className="ob-page-kicker">Release</p>
+                <h2 id="version-release-title" className="text-base font-semibold tracking-tight">版本更新</h2>
+              </div>
               <button
                 type="button"
-                className="ob-btn-ghost ml-auto px-2 py-1 text-sm text-[var(--ob-muted)]"
+                className="ob-icon-btn ml-auto"
+                aria-label="关闭版本说明"
+                title="关闭版本说明"
                 onClick={close}
               >
-                关闭版本说明
+                ×
               </button>
             </header>
             <div className="grid grid-cols-2 gap-3 border-b border-[var(--ob-line)] p-4">
-              <div className="rounded-md border border-[var(--ob-line)] p-3">
+              <div className="rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] p-3 shadow-[var(--ob-elev-1)]">
                 <div className="text-xs text-[var(--ob-muted)]">当前版本</div>
                 <div className="mt-1 text-base font-semibold">{APP_VERSION}</div>
               </div>
-              <div className="rounded-md border border-[var(--ob-line)] p-3">
+              <div className="rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] p-3 shadow-[var(--ob-elev-1)]">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-xs text-[var(--ob-muted)]">最新版本</div>
                   <button
                     type="button"
-                    className="text-[11px] text-[var(--ob-muted)] underline-offset-2 hover:underline"
+                    className="text-[11px] font-medium text-[var(--ob-accent)] underline-offset-2 hover:underline"
                     onClick={() => void checkLatest(true)}
                   >
                     {checking ? "检查中..." : "检查更新"}
@@ -145,7 +150,10 @@ export function VersionReleaseModal({
                 ))}
               </ol>
               {!releases.length ? (
-                <p className="py-8 text-center text-sm text-[var(--ob-muted)]">暂无更新日志</p>
+                <div className="ob-empty border-0 bg-transparent py-10">
+                  <p className="ob-empty-title">暂无更新日志</p>
+                  <p className="ob-empty-desc">本地 CHANGELOG 为空时会显示这里。</p>
+                </div>
               ) : null}
             </div>
           </section>

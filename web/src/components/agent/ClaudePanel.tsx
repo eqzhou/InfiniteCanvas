@@ -240,20 +240,23 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
   };
 
   return (
-    <div className="border-t border-[var(--ob-line)] pt-2">
-      <div className="mb-1 flex items-center gap-1">
-        <strong>Claude</strong>
-        {session?.claudeSessionId ? (
-          <span className="min-w-0 truncate text-[10px] text-[var(--ob-muted)]" title={session.claudeSessionId}>
-            {session.claudeSessionId}
-          </span>
-        ) : null}
+    <div className="border-t border-[var(--ob-line)] pt-3">
+      <div className="mb-2 flex items-center gap-2">
+        <div className="min-w-0">
+          <strong className="text-sm font-semibold tracking-tight">Claude</strong>
+          {session?.claudeSessionId ? (
+            <p className="truncate text-[10px] text-[var(--ob-muted)]" title={session.claudeSessionId}>
+              {session.claudeSessionId}
+            </p>
+          ) : null}
+        </div>
         {session ? (
           <>
             <button
               type="button"
-              className="ml-auto"
+              className="ob-icon-btn ml-auto h-7 w-7"
               title="新会话"
+              aria-label="新会话"
               onClick={() => void start(true)}
               disabled={busy || turnStatus === "running"}
             >
@@ -261,7 +264,9 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
             </button>
             <button
               type="button"
+              className="ob-icon-btn h-7 w-7"
               title="关闭 Claude 会话"
+              aria-label="关闭 Claude 会话"
               disabled={turnStatus === "running"}
               onClick={() => {
                 void closeClaudeSession(connection, session.id)
@@ -279,52 +284,55 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
           </>
         ) : null}
       </div>
-      <p className="mb-1 text-[10px] text-[var(--ob-muted)]">
+      <p className="mb-2 text-[11px] leading-relaxed text-[var(--ob-muted)]">
         通过本机 Claude Code CLI（stream-json）会话；需已登录 `claude`，可选 MCP 驱动画布。
       </p>
       {!session ? (
         <button
           type="button"
-          className="rounded bg-[var(--ob-accent)] px-2 py-1 text-white disabled:opacity-50"
+          className="ob-btn-primary gap-1.5 text-xs"
           onClick={() => void start(false)}
           disabled={busy}
         >
-          {busy ? "连接中" : "开始 Claude 会话"}
+          启动 Claude 会话
         </button>
       ) : (
         <>
-          <div className="relative mb-1">
+          <div className="relative mb-2">
             <div
               ref={transcriptRef}
+              className="max-h-56 space-y-2 overflow-auto rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_50%,transparent)] p-2.5 text-xs"
               onScroll={updateStickToBottom}
-              className="max-h-48 space-y-2 overflow-auto rounded border border-[var(--ob-line)] p-2"
             >
               {messages.length ? (
-                messages.slice(-120).map((message, index) => (
+                messages.map((message, index) => (
                   <div
                     key={message.id ?? `${index}-${message.role}`}
-                    className={
-                      message.role === "user"
-                        ? "ml-8 rounded-lg bg-[var(--ob-accent-soft)] px-2 py-1 text-[var(--ob-ink)]"
-                        : "mr-4"
-                    }
+                    className="ob-msg"
+                    data-role={message.role}
                   >
+                    <div className="ob-msg-meta">
+                      {message.role === "user" ? "你" : "Claude"}
+                    </div>
                     {message.role === "assistant" ? (
                       <MarkdownMessage text={message.text} />
                     ) : (
-                      message.text
+                      <div className="whitespace-pre-wrap text-[var(--ob-ink)]">{message.text}</div>
                     )}
                   </div>
                 ))
               ) : (
-                <span className="text-[var(--ob-muted)]">等待消息</span>
+                <div className="grid place-items-center gap-1 py-8 text-center text-[var(--ob-muted)]">
+                  <span className="text-xs font-medium text-[var(--ob-ink)]">等待消息</span>
+                  <span className="text-[11px]">输入问题后发送，Claude 可驱动画布 MCP</span>
+                </div>
               )}
             </div>
             {showJumpBottom ? (
               <button
                 type="button"
                 title="回到底部"
-                className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full border border-[var(--ob-line)] bg-[var(--ob-bg)] px-2 py-1 text-[10px] shadow-sm"
+                className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full border border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-1 text-[10px] shadow-[var(--ob-elev-1)]"
                 onClick={() => scrollTranscriptToBottom("smooth")}
               >
                 <ArrowDown size={12} />
@@ -333,8 +341,8 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
             ) : null}
           </div>
           {logs.length ? (
-            <details className="mb-1 rounded border border-[var(--ob-line)] px-2 py-1">
-              <summary className="cursor-pointer">运行日志 · {logs.length}</summary>
+            <details className="mb-2 rounded-lg border border-[var(--ob-line)] px-2.5 py-1.5">
+              <summary className="cursor-pointer text-[11px] font-medium">运行日志 · {logs.length}</summary>
               <ol className="mt-1 max-h-24 list-decimal overflow-auto pl-4 text-[10px] text-[var(--ob-muted)]">
                 {logs.map((log, index) => (
                   <li key={`${index}-${log}`}>{log}</li>
@@ -342,10 +350,14 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               </ol>
             </details>
           ) : null}
-          {error ? <p className="mb-1 text-[10px] text-[var(--ob-danger)]">{error}</p> : null}
-          <div className="flex items-end gap-1">
+          {error ? (
+            <p className="mb-2 rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-1.5 text-[11px] text-[var(--ob-danger)]">
+              {error}
+            </p>
+          ) : null}
+          <div className="ob-composer flex items-end gap-1.5 p-1.5">
             <textarea
-              className="ob-field min-h-[56px] flex-1 resize-none text-xs"
+              className="min-h-[56px] flex-1 resize-none border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)]"
               placeholder="向 Claude Code 提问…（可驱动画布 MCP）"
               value={text}
               onChange={(event) => setText(event.target.value)}
@@ -357,7 +369,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               }}
             />
             {turnStatus === "running" ? (
-              <button type="button" className="ob-btn-danger rounded-lg p-2" title="停止" onClick={() => void stop()}>
+              <button type="button" className="ob-btn-danger rounded-lg p-2" title="停止" aria-label="停止" onClick={() => void stop()}>
                 <Square size={14} />
               </button>
             ) : (
@@ -365,6 +377,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
                 type="button"
                 className="ob-btn-primary rounded-lg p-2 disabled:opacity-50"
                 title="发送"
+                aria-label="发送"
                 disabled={!canSend}
                 onClick={() => void send()}
               >
@@ -372,8 +385,18 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               </button>
             )}
           </div>
-          <div className="mt-1 text-[10px] text-[var(--ob-muted)]">
-            状态：{turnStatus === "running" ? "生成中" : turnStatus === "failed" ? "已中断/失败" : turnStatus === "completed" ? "完成" : "空闲"}
+          <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-[var(--ob-muted)]">
+            <span
+              className="ob-status-dot"
+              data-status={
+                turnStatus === "running" ? "running"
+                  : turnStatus === "failed" ? "failed"
+                    : turnStatus === "completed" ? "succeeded"
+                      : "idle"
+              }
+              aria-hidden
+            />
+            {turnStatus === "running" ? "生成中" : turnStatus === "failed" ? "已中断/失败" : turnStatus === "completed" ? "完成" : "空闲"}
           </div>
         </>
       )}

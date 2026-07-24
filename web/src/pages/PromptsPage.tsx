@@ -466,11 +466,11 @@ export function PromptsPage() {
         <div className="relative mx-auto flex max-w-7xl flex-col gap-5">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0 flex-1">
+              <p className="ob-page-kicker">Library</p>
               <h1
                 aria-label="提示词库"
-                className="text-2xl font-bold tracking-tight text-[var(--ob-ink)] flex items-center gap-2.5"
+                className="text-2xl font-bold tracking-tight text-[var(--ob-ink)]"
               >
-                <div className="h-2 w-2 rounded-full bg-[var(--ob-accent)] shadow-[0_0_10px_var(--ob-accent)]" />
                 提示词中心
               </h1>
               <p className="mt-1.5 text-sm font-medium text-[var(--ob-muted)]">
