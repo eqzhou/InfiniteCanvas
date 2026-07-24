@@ -96,7 +96,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="ob-dialog ob-surface-glass flex w-full max-w-5xl flex-col overflow-hidden"
+        className="ob-dialog ob-surface-glass flex w-full max-w-5xl flex-col overflow-hidden shadow-[var(--ob-elev-2)]"
       >
         <header className="flex min-h-16 items-center gap-4 border-b border-[var(--ob-line)] px-4 sm:px-6">
           <div>

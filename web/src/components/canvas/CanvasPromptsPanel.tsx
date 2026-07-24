@@ -82,11 +82,12 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
         />
       </div>
       {!prompts.length ? (
-        <p className="p-3 text-sm text-[var(--ob-muted)]">
-          暂无提示词。可在「提示词」页接入社区目录或新建本地提示词。
-        </p>
+        <div className="ob-empty m-1">
+          <p className="ob-empty-title">暂无提示词</p>
+          <p className="ob-empty-desc">在「提示词」页接入社区目录或新建本地提示词。</p>
+        </div>
       ) : !groups.length ? (
-        <p className="p-3 text-sm text-[var(--ob-muted)]">没有匹配的提示词</p>
+        <div className="ob-empty m-1 py-8"><p className="ob-empty-title">没有匹配的提示词</p><p className="ob-empty-desc">试试其它关键词，或清空搜索。</p></div>
       ) : (
         <div role="list" aria-label="侧栏提示词库" className="space-y-2">
           {groups.map((group) => {

@@ -218,7 +218,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   return (
     <div
-      className="ob-surface absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 p-2"
+      className="ob-composer absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 p-2"
       onPointerDown={(e) => e.stopPropagation()}
     >
       <PromptChipInput
@@ -230,7 +230,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       />
       <button
         type="button"
-        className="ob-btn-primary p-2 shrink-0"
+        className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
+        aria-busy={busy}
         disabled={busy || !text.trim()}
         onClick={() => void send()}
         title="发送 (Ctrl/Cmd+Enter)"

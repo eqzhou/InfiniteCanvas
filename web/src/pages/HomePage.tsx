@@ -370,7 +370,7 @@ export function HomePage() {
               key={p.id}
               className={`group mb-2 rounded-xl border px-3 py-3 transition-colors duration-150 ${
                 p.id === activeProjectId
-                  ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)] shadow-sm"
+                  ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)] shadow-[var(--ob-elev-1)]"
                   : "border-transparent bg-transparent hover:border-[var(--ob-line)] hover:bg-[var(--ob-canvas)]"
               }`}
             >
@@ -410,9 +410,10 @@ export function HomePage() {
             </div>
           ))}
           {!sorted.length ? (
-            <p className="p-3 text-sm text-[var(--ob-muted)]">
-              还没有项目，点击右上角新建。
-            </p>
+            <div className="ob-empty m-2">
+              <p className="ob-empty-title">还没有项目</p>
+              <p className="ob-empty-desc">点击右上角「新建」创建第一个画布，开始编排节点与生成。</p>
+            </div>
           ) : null}
             </>
           ) : null}

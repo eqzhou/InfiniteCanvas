@@ -307,7 +307,10 @@ export function AssetsPage() {
         ))}
       </div>
       {!filtered.length ? (
-        <p className="mt-10 text-center text-[var(--ob-muted)]">暂无素材</p>
+        <div className="ob-empty mt-8">
+          <p className="ob-empty-title">暂无素材</p>
+          <p className="ob-empty-desc">上传图片/视频，或新增文本素材，沉淀可复用的创作原料。</p>
+        </div>
       ) : (
         <div className="mt-8 flex items-center justify-center gap-4 text-sm">
           <button

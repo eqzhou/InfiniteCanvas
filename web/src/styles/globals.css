@@ -588,6 +588,101 @@ select:focus-visible,
   }
 }
 
+
+/* Inline app banners (errors / warnings) */
+.ob-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--ob-line);
+  background: var(--ob-panel);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.ob-banner[data-tone="danger"] {
+  border-bottom-color: color-mix(in srgb, var(--ob-danger) 45%, var(--ob-line));
+  background: color-mix(in srgb, var(--ob-danger) 8%, var(--ob-panel));
+  color: var(--ob-danger);
+}
+
+.ob-banner[data-tone="warning"] {
+  border-bottom-color: color-mix(in srgb, var(--ob-warning) 45%, var(--ob-line));
+  background: color-mix(in srgb, var(--ob-warning) 10%, var(--ob-panel));
+  color: var(--ob-warning);
+}
+
+.ob-banner-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.75;
+  border-radius: 0.375rem;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.ob-banner-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* Empty states */
+.ob-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2.5rem 1.25rem;
+  text-align: center;
+  color: var(--ob-muted);
+  border: 1px dashed color-mix(in srgb, var(--ob-line) 80%, transparent);
+  border-radius: var(--ob-radius-lg);
+  background: color-mix(in srgb, var(--ob-canvas) 55%, transparent);
+}
+
+.ob-empty-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ob-ink);
+}
+
+.ob-empty-desc {
+  max-width: 22rem;
+  font-size: 0.825rem;
+  line-height: 1.5;
+}
+
+/* Assistant / floating panel shell */
+.ob-drawer {
+  border-left: 1px solid var(--ob-line);
+  background: var(--ob-panel-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: var(--ob-elev-2);
+}
+
+/* Prompt composer under nodes */
+.ob-composer {
+  border: 1px solid var(--ob-line);
+  border-radius: var(--ob-radius);
+  background: var(--ob-panel-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--ob-elev-1);
+  transition:
+    border-color var(--ob-duration) var(--ob-ease),
+    box-shadow var(--ob-duration) var(--ob-ease);
+}
+
+.ob-composer:focus-within {
+  border-color: var(--ob-accent);
+  box-shadow: var(--ob-ring), var(--ob-elev-1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -106,17 +106,17 @@ export function App() {
       <div className="flex h-full flex-col">
         <TopNav onOpenSettings={() => setSettingsOpen(true)} />
         {urlCredentialError ? (
-          <div role="alert" className="flex items-center gap-2 border-b border-[var(--ob-danger)] bg-[var(--ob-panel)] px-4 py-2 text-sm text-[var(--ob-danger)]">
+          <div role="alert" className="ob-banner" data-tone="danger">
             <span className="min-w-0 flex-1 truncate">连接参数无效：{urlCredentialError}</span>
-            <button type="button" className="shrink-0" onClick={() => setUrlCredentialError(null)}>
+            <button type="button" className="ob-banner-close" onClick={() => setUrlCredentialError(null)}>
               关闭
             </button>
           </div>
         ) : null}
         {promptSourceError ? (
-          <div role="alert" className="flex items-center gap-2 border-b border-[var(--ob-warning)] bg-[var(--ob-panel)] px-4 py-2 text-sm text-[var(--ob-warning)]">
+          <div role="alert" className="ob-banner" data-tone="warning">
             <span className="min-w-0 flex-1 truncate">提示词来源自动刷新失败：{promptSourceError}</span>
-            <button type="button" className="shrink-0" onClick={() => setPromptSourceError(null)}>关闭</button>
+            <button type="button" className="ob-banner-close" onClick={() => setPromptSourceError(null)}>关闭</button>
           </div>
         ) : null}
         <main className="min-h-0 flex-1">

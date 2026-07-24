@@ -299,13 +299,13 @@ export function AssistantPanel() {
     <aside
       id="canvas-assistant"
       aria-label="画布助手"
-      className="absolute inset-y-0 right-0 z-50 flex h-full w-full shrink-0 flex-col border-l border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-shadow)] backdrop-blur-md sm:w-[360px] xl:static xl:w-[340px] xl:shadow-none"
+      className="ob-drawer absolute inset-y-0 right-0 z-50 flex h-full w-full shrink-0 flex-col sm:w-[360px] xl:static xl:w-[340px] xl:shadow-[var(--ob-elev-1)]"
     >
-      <div className="flex items-center gap-2 border-b border-[var(--ob-line)] px-3 py-2">
-        <strong className="text-sm">画布助手</strong>
+      <div className="flex min-h-12 items-center gap-1.5 border-b border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_40%,transparent)] px-3 py-2">
+        <strong className="mr-auto text-sm font-semibold tracking-tight">画布助手</strong>
         <button
           type="button"
-          className="ob-icon-btn ml-auto h-8 w-8 xl:hidden"
+          className="ob-icon-btn h-8 w-8 xl:hidden"
           title="关闭助手"
           onClick={() => setShowAssistant(false)}
         >
