@@ -94,9 +94,9 @@ export function BoardNodeView({
             : "border-dashed bg-[color-mix(in_srgb,var(--ob-accent)_8%,transparent)]"
           : "bg-[var(--ob-node)]",
         selected
-          ? "border-[var(--ob-select)]"
+          ? "border-[var(--ob-select)] ring-2 ring-[color-mix(in_srgb,var(--ob-select)_40%,transparent)]"
           : related
-            ? "border-[var(--ob-accent)]"
+            ? "border-[var(--ob-accent)] ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_28%,transparent)]"
             : "border-[var(--ob-node-border)]",
       )}
       style={{
