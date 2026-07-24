@@ -517,7 +517,11 @@ export function BoardNodeView({
 
         {node.type === "plugin" ? (
           pluginManifest ? (
-            <PluginNodeFrame node={node} manifest={pluginManifest} />
+            <PluginNodeFrame
+              key={`${node.id}:${node.metadata.pluginId}:enabled`}
+              node={node}
+              manifest={pluginManifest}
+            />
           ) : (
             <div className="grid h-full place-items-center px-4 text-center text-xs text-[var(--ob-muted)]">
               <div>

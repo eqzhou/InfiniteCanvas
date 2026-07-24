@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { AssetItem } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
@@ -8,11 +9,11 @@ import { AssetEditorDialog, type AssetEditorValues } from "@/components/assets/A
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 
 export function AssetsPage() {
+  const navigate = useNavigate();
   const assets = useBoardStore((s) => s.assets);
   const setAssets = useBoardStore((s) => s.setAssets);
   const flushAssets = useBoardStore((s) => s.flushAssets);
   const insertAsset = useBoardStore((s) => s.insertAsset);
-  const active = useBoardStore((s) => s.getActive());
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | AssetItem["kind"]>("all");
   const [page, setPage] = useState(1);
@@ -228,14 +229,17 @@ export function AssetsPage() {
                 type="button"
                 className="ob-btn"
                 onClick={() => {
-                  if (!active) {
+                  const project = useBoardStore.getState().getActive();
+                  if (!project) {
                     alert("请先打开一个画布项目");
                     return;
                   }
-                  // insertAsset already awaits persistNow; avoid alert() which freezes automation.
+                  // insertAsset awaits persistNow; then open the canvas so the node is visible.
                   void insertAsset(a.id, {
                     x: 80 + Math.random() * 120,
                     y: 80 + Math.random() * 120,
+                  }).then(() => {
+                    navigate("/");
                   }).catch((cause) => {
                     alert(cause instanceof Error ? cause.message : String(cause));
                   });

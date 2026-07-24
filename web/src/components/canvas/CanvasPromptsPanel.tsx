@@ -5,7 +5,10 @@ import { useBoardStore } from "@/stores/use-board-store";
 
 function sourceLabel(prompt: PromptItem): string {
   const source = prompt.source?.trim();
-  return source ? source : "未分组";
+  if (source) return source;
+  const sourceId = prompt.sourceId?.trim();
+  if (sourceId) return sourceId;
+  return "未分组";
 }
 
 function groupPromptsBySource(prompts: readonly PromptItem[]): Array<{ source: string; items: PromptItem[] }> {
