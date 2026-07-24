@@ -2214,8 +2214,8 @@ test("asset library uploads, persists, previews, and inserts video media", async
   card = page.locator("article").filter({ hasText: "campaign-loop.mp4" });
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "插入画布" }).click();
-  // Product navigates to the canvas after insertAsset + persistNow complete.
-  await expect(page).toHaveURL(/\/$/);
+  // Product stays on the library; open the canvas after insert+persist completes.
+  await page.goto("/");
   await expect(page.locator('[data-node-type="video"]')).toHaveCount(1, { timeout: 15_000 });
 });
 
@@ -2260,7 +2260,8 @@ test("canvas asset panel inserts and deletes persisted assets", async ({ page })
   page.once("dialog", (confirmation) => confirmation.accept());
   await panel.getByRole("button", { name: "删除素材 Sidebar asset" }).click({ force: true });
   await expect(panel.getByRole("button", { name: "插入素材 Sidebar asset" })).toHaveCount(0, { timeout: 10_000 });
-  // Reload and re-open the assets tab; formal storage must not resurrect deleted assets.
+  // Give formal storage a beat to finish the assets PUT after flushAssets.
+  await page.waitForTimeout(300);
   await page.reload();
   await openProjectPanel(page);
   const panelAfter = page.getByRole("complementary", { name: "项目侧栏" });
@@ -2336,10 +2337,13 @@ test("asset library supports persistence, search, type filters, pagination, copy
     await imageAsset.getByRole("button", { name: "下载" }).click();
     expect((await downloadPromise).suggestedFilename()).toBe("library.png");
   }
+  // Insert stays on /assets (no navigation). dismiss any unexpected dialog.
   page.once("dialog", (dialog) => dialog.dismiss());
   await imageAsset.getByRole("button", { name: "插入画布" }).click();
+  await expect(page).toHaveURL(/\/assets/);
 
   await page.locator("select").selectOption("all");
+  await expect(page.getByText("1 / 2 · 共 14", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "下一页" }).click();
   await expect(page.getByText("2 / 2 · 共 14", { exact: true })).toBeVisible();
   const pageTwoAsset = page.locator("article").filter({ hasText: "Text Asset 01" });

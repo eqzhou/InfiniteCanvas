@@ -565,8 +565,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   flushConfig: () => configWrites.flush(),
 
   setAssets: (assets) => {
-    set({ assets });
-    assetWrites.enqueue(assets);
+    const next = structuredClone(assets);
+    set({ assets: next });
+    assetWrites.enqueue(next);
   },
 
   flushAssets: () => assetWrites.flush(),

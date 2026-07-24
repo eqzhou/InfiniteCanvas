@@ -21,9 +21,14 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
     const asset = state.assets.find((item) => item.id === assetId);
     if (!asset) return;
     const nextAssets = state.assets.filter((item) => item.id !== assetId);
-    setAssets(nextAssets);
+    // Clone so LatestWrite/server PUT cannot share a mutated array reference.
+    setAssets(structuredClone(nextAssets));
     await flushAssets();
-    await deleteAssetBlobIfUnreferenced(asset.storageKey, state.projects, nextAssets);
+    await deleteAssetBlobIfUnreferenced(
+      asset.storageKey,
+      useBoardStore.getState().projects,
+      useBoardStore.getState().assets,
+    );
   };
 
   const addMedia = async (file: File, kind: "image" | "video") => {
@@ -129,7 +134,8 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
                   void insertAsset(asset.id, {
                     x: (window.innerWidth / 2 - active.viewport.x) / active.viewport.k,
                     y: (window.innerHeight / 2 - active.viewport.y) / active.viewport.k,
-                  });
+                  }).catch((cause) =>
+                    setError(cause instanceof Error ? cause.message : String(cause)));
                 }}
               >
                 <ImageIcon size={18} />
