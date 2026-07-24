@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
@@ -27,35 +28,46 @@ export function ShortcutsModal() {
   useEscapeDismiss(open, () => setShowShortcuts(false));
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/40 p-4 backdrop-blur-sm">
+    <div className="ob-overlay z-[120] p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcuts-title"
-        className="ob-surface-glass w-full max-w-md p-6"
+        className="ob-dialog ob-surface-glass w-full max-w-md p-0 shadow-[var(--ob-elev-2)]"
       >
-        <div className="mb-4 flex items-center justify-between border-b border-[var(--ob-line)] pb-3">
-          <h2 id="shortcuts-title" className="text-lg font-semibold text-[var(--ob-ink)]">
-            画布快捷键
-          </h2>
+        <div className="flex items-center gap-3 border-b border-[var(--ob-line)] px-5 py-4">
+          <div className="min-w-0">
+            <p className="ob-page-kicker">Canvas</p>
+            <h2 id="shortcuts-title" className="text-lg font-semibold tracking-tight text-[var(--ob-ink)]">
+              画布快捷键
+            </h2>
+          </div>
           <button
             type="button"
-            className="ob-btn-ghost rounded-lg px-2.5 py-1.5 text-sm"
+            className="ob-icon-btn ml-auto"
+            aria-label="关闭快捷键"
+            title="关闭快捷键"
             onClick={() => setShowShortcuts(false)}
           >
-            关闭快捷键
+            <X size={16} />
           </button>
         </div>
-        <table className="w-full text-sm">
-          <tbody>
-            {rows.map(([k, v]) => (
-              <tr key={k} className="border-t border-[var(--ob-line)]">
-                <td className="py-2 pr-3 font-medium">{k}</td>
-                <td className="py-2 text-[var(--ob-muted)]">{v}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="max-h-[min(70vh,32rem)] overflow-y-auto px-5 py-2">
+          <table className="w-full text-sm">
+            <tbody>
+              {rows.map(([k, v]) => (
+                <tr key={k} className="border-t border-[color-mix(in_srgb,var(--ob-line)_80%,transparent)] first:border-t-0">
+                  <td className="py-2.5 pr-3">
+                    <kbd className="rounded-md border border-[var(--ob-line)] bg-[var(--ob-canvas)] px-1.5 py-0.5 text-[12px] font-medium text-[var(--ob-ink)] shadow-[var(--ob-elev-1)]">
+                      {k}
+                    </kbd>
+                  </td>
+                  <td className="py-2.5 text-[var(--ob-muted)]">{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

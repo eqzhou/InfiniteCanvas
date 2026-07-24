@@ -139,21 +139,27 @@ export function LocalAgentPanel() {
   if (!show) return null;
 
   return (
-    <div className={`ob-surface absolute bottom-16 left-2 right-2 z-[60] max-h-[calc(100vh-5rem)] w-auto overflow-auto p-3 sm:left-auto sm:w-96 ${showAssistant ? "sm:right-[356px]" : "sm:right-4"}`}>
-      <div className="mb-2 flex items-center gap-2">
-        <Bot size={16} className="text-[var(--ob-accent)]" />
-        <strong className="text-sm">本地 Agent</strong>
+    <div className={`ob-surface absolute bottom-16 left-2 right-2 z-[60] max-h-[calc(100vh-5rem)] w-auto overflow-auto p-3 shadow-[var(--ob-elev-2)] sm:left-auto sm:w-96 ${showAssistant ? "sm:right-[356px]" : "sm:right-4"}`}>
+      <div className="mb-3 flex items-center gap-2">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
+          <Bot size={16} />
+        </span>
+        <div className="min-w-0">
+          <p className="ob-page-kicker !mb-0">Runtime</p>
+          <strong className="text-sm font-semibold tracking-tight">本地 Agent</strong>
+        </div>
         <button
           type="button"
-          className="ob-btn-ghost ml-auto p-1"
+          className="ob-icon-btn ml-auto h-8 w-8"
           title="刷新"
+          aria-label="刷新 Agent 状态"
           onClick={() => void refresh()}
         >
           <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
         </button>
         <button
           type="button"
-          className="ob-btn-ghost p-1"
+          className="ob-icon-btn h-8 w-8"
           aria-label="关闭本地 Agent"
           title="关闭本地 Agent"
           onClick={() => setShow(false)}
@@ -161,9 +167,9 @@ export function LocalAgentPanel() {
           <Unplug size={14} />
         </button>
       </div>
-      <div className="mb-3 grid gap-2 border-b border-[var(--ob-line)] pb-3">
+      <div className="mb-3 grid gap-2 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] p-2.5">
         <label className="grid gap-1 text-xs">
-          <span className="text-[var(--ob-muted)]">Local URL</span>
+          <span className="ob-label !mb-0">本地地址</span>
           <input
             type="url"
             inputMode="url"
@@ -177,7 +183,7 @@ export function LocalAgentPanel() {
           />
         </label>
         <label className="grid gap-1 text-xs">
-          <span className="text-[var(--ob-muted)]">Connect token</span>
+          <span className="ob-label !mb-0">连接令牌</span>
           <input
             type="password"
             value={token}
@@ -199,34 +205,35 @@ export function LocalAgentPanel() {
         </button>
       </div>
       {error ? (
-        <p role="alert" className="text-xs text-[var(--ob-danger)]">
+        <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-2 text-xs text-[var(--ob-danger)]">
           无法连接 Agent：{error}
           <br />
-          请运行 <code>cd server && go run ./cmd/server</code>
+          请运行 <code className="rounded bg-[color-mix(in_srgb,var(--ob-canvas)_70%,transparent)] px-1">cd server && go run ./cmd/server</code>
         </p>
       ) : (
-        <div className="space-y-2 text-xs">
-          {syncError ? <p role="alert" className="text-[var(--ob-danger)]">Agent 同步失败：{syncError}</p> : null}
-          <div>
-            状态：{" "}
+        <div className="space-y-2.5 text-xs">
+          {syncError ? (
+            <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-2 text-[var(--ob-danger)]">
+              Agent 同步失败：{syncError}
+            </p>
+          ) : null}
+          <div className="flex items-center gap-2">
             <span
-              className={
-                status?.connected ? "text-[var(--ob-accent)]" : "text-[var(--ob-muted)]"
-              }
-            >
+              className="ob-status-dot"
+              data-status={status?.connected ? "succeeded" : "idle"}
+              aria-hidden
+            />
+            <span className={status?.connected ? "font-medium text-[var(--ob-accent)]" : "text-[var(--ob-muted)]"}>
               {status?.connected ? "已连接" : "未连接"}
             </span>
           </div>
-          <p className="text-[var(--ob-muted)]">{status?.message}</p>
+          {status?.message ? <p className="text-[var(--ob-muted)]">{status.message}</p> : null}
           {status?.bridges?.length ? (
             <div>
-              Bridges：
+              <span className="text-[var(--ob-muted)]">桥接</span>
               <div className="mt-1 flex flex-wrap gap-1">
                 {status.bridges.map((b) => (
-                  <span
-                    key={b}
-                    className="rounded bg-[var(--ob-accent-soft)] px-1.5 py-0.5"
-                  >
+                  <span key={b} className="ob-chip">
                     {b}
                   </span>
                 ))}
@@ -235,8 +242,8 @@ export function LocalAgentPanel() {
           ) : null}
           {status?.tools?.length ? (
             <div>
-              Tools：
-              <ul className="mt-1 list-disc pl-4">
+              <span className="text-[var(--ob-muted)]">工具</span>
+              <ul className="mt-1 list-disc pl-4 text-[var(--ob-ink)]">
                 {status.tools.map((tool) => (
                   <li key={tool}>{tool}</li>
                 ))}
@@ -248,15 +255,17 @@ export function LocalAgentPanel() {
             </p>
           )}
           {runningGenerationTasks.length ? (
-            <section className="border-t border-[var(--ob-line)] pt-2" aria-label="正在运行的生成任务">
-              <div className="mb-1 flex items-center gap-1.5 font-medium">
+            <section className="rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_45%,transparent)] p-2" aria-label="正在运行的生成任务">
+              <div className="mb-1.5 flex items-center gap-1.5 font-medium text-[var(--ob-ink)]">
                 <LoaderCircle size={13} className="animate-spin text-[var(--ob-accent)]" />
                 生成任务 · {runningGenerationTasks.length}
               </div>
-              <ul className="space-y-1 text-[10px] text-[var(--ob-muted)]">
+              <ul className="space-y-1 text-[11px] text-[var(--ob-muted)]">
                 {runningGenerationTasks.slice(0, 4).map((task) => (
                   <li key={task.id} className="flex min-w-0 items-center gap-2">
-                    <span className="shrink-0 uppercase">{task.kind}</span>
+                    <span className="ob-chip shrink-0 !px-1.5 !py-0 text-[10px]">
+                      {task.kind === "image" ? "图片" : task.kind === "video" ? "视频" : task.kind}
+                    </span>
                     <span className="min-w-0 flex-1 truncate" title={task.prompt}>{task.prompt || "无提示词"}</span>
                     <span className="shrink-0">{task.surface === "image-workbench" ? "图片工作台" : task.surface === "video-workbench" ? "视频工作台" : "画布"}</span>
                   </li>
@@ -264,12 +273,12 @@ export function LocalAgentPanel() {
               </ul>
             </section>
           ) : null}
-          <div className="mt-2 flex gap-1 border-t border-[var(--ob-line)] pt-2" role="tablist" aria-label="Agent 会话">
+          <div className="ob-segment mt-1 w-full" role="tablist" aria-label="Agent 会话">
             <button
               type="button"
               role="tab"
               aria-selected={agentTab === "codex"}
-              className="ob-tab"
+              className="ob-segment-item flex-1"
               onClick={() => setAgentTab("codex")}
             >
               Codex
@@ -278,13 +287,13 @@ export function LocalAgentPanel() {
               type="button"
               role="tab"
               aria-selected={agentTab === "claude"}
-              className="ob-tab"
+              className="ob-segment-item flex-1"
               onClick={() => setAgentTab("claude")}
             >
               Claude
             </button>
             {status?.claude?.available === false ? (
-              <span className="ml-auto self-center text-[10px] text-[var(--ob-muted)]">未检测到 claude CLI</span>
+              <span className="ml-auto self-center px-1 text-[10px] text-[var(--ob-muted)]">未检测到 claude CLI</span>
             ) : null}
           </div>
           <Suspense fallback={<div className="border-t border-[var(--ob-line)] pt-2 text-[var(--ob-muted)]">加载会话面板…</div>}>

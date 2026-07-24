@@ -100,8 +100,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       >
         <header className="flex min-h-16 items-center gap-4 border-b border-[var(--ob-line)] px-4 sm:px-6">
           <div>
-            <h2 id="settings-title" className="text-lg font-semibold">设置</h2>
-            <p className="text-xs text-[var(--ob-muted)]">本地工作区配置</p>
+            <p className="ob-page-kicker">Workspace</p>
+            <h2 id="settings-title" className="text-lg font-semibold tracking-tight">设置</h2>
+            <p className="text-xs text-[var(--ob-muted)]">本地工作区配置 · 模型、生成偏好与备份</p>
           </div>
           <button
             type="button"
@@ -159,8 +160,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
           <section className="mb-6">
             <SectionTitle title="模型服务" />
-            <div className="overflow-hidden rounded-md border border-[var(--ob-line)]">
-              <div className="hidden grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] gap-2 border-b border-[var(--ob-line)] bg-[var(--ob-canvas)] px-3 py-2 text-xs text-[var(--ob-muted)] md:grid">
+            <div className="overflow-hidden rounded-xl border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
+              <div className="hidden grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] gap-2 border-b border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_80%,var(--ob-panel))] px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-[var(--ob-muted)] md:grid">
                 <span>能力</span><span>协议</span><span>服务 URL</span><span>API Key</span><span>模型</span><span />
               </div>
               {PROVIDER_KINDS.map((kind) => (
@@ -371,8 +372,17 @@ function ProviderRow({
       </div>
       {provider.protocol === "template" ? <TemplateEditor value={provider.template} onChange={(template) => onChange({ template })} /> : null}
       {models.length ? (
-        <div className="mt-2 flex max-h-24 flex-wrap gap-1 overflow-auto pl-0 md:pl-[250px]">
-          {models.map((model) => <button key={model} type="button" className="rounded bg-[var(--ob-accent-soft)] px-2 py-1 text-xs" onClick={() => onChange({ model })}>{model}</button>)}
+        <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-auto pl-0 md:pl-[250px]">
+          {models.map((model) => (
+            <button
+              key={model}
+              type="button"
+              className="ob-chip cursor-pointer transition-colors hover:border-[var(--ob-accent)] hover:text-[var(--ob-accent)]"
+              onClick={() => onChange({ model })}
+            >
+              {model}
+            </button>
+          ))}
         </div>
       ) : null}
     </div>
@@ -380,7 +390,12 @@ function ProviderRow({
 }
 
 function SectionTitle({ title }: { title: string }) {
-  return <h3 className="mb-3 text-xs font-semibold uppercase text-[var(--ob-muted)]">{title}</h3>;
+  return (
+    <h3 className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--ob-muted)]">
+      <span className="h-px w-3 bg-[color-mix(in_srgb,var(--ob-accent)_55%,transparent)]" aria-hidden />
+      {title}
+    </h3>
+  );
 }
 
 function CompactField({ label, children }: { label: string; children: React.ReactNode }) {
@@ -441,8 +456,8 @@ function TemplateEditor({
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[var(--ob-muted)]">{label}</span>
+    <label className="flex flex-col gap-1.5">
+      <span className="ob-label !mb-0">{label}</span>
       {children}
     </label>
   );
