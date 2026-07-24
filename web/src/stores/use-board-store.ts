@@ -573,8 +573,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   flushAssets: () => assetWrites.flush(),
 
   setPrompts: (prompts) => {
-    set({ prompts });
-    promptWrites.enqueue(prompts);
+    const next = structuredClone(prompts);
+    set({ prompts: next });
+    promptWrites.enqueue(next);
   },
 
   flushPrompts: () => promptWrites.flush(),

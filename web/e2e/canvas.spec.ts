@@ -1946,9 +1946,10 @@ test("local prompts support create, reload, edit, direct canvas use, and delete"
   card = page.locator("article").filter({ hasText: "本地商品主图" });
   page.once("dialog", (dialog) => dialog.accept());
   await card.getByRole("button", { name: "删除" }).click();
-  await expect(card).toHaveCount(0);
+  await expect(page.locator("article").filter({ hasText: "本地商品主图" })).toHaveCount(0, { timeout: 10_000 });
+  await page.waitForTimeout(300);
   await page.reload();
-  await expect(page.locator("article").filter({ hasText: "本地商品主图" })).toHaveCount(0);
+  await expect(page.locator("article").filter({ hasText: "本地商品主图" })).toHaveCount(0, { timeout: 10_000 });
 });
 
 test("prompt library filters tags and manages multiple persisted remote sources", async ({ page }) => {

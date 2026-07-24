@@ -884,9 +884,17 @@ export function PromptsPage() {
                               aria-label="删除"
                               onClick={() => {
                                 if (!window.confirm(`删除提示词“${p.title}”？`)) return;
-                                setPrompts(useBoardStore.getState().prompts.filter((prompt) => prompt.id !== p.id));
-                                void flushPrompts().catch((cause) =>
-                                  setErr(cause instanceof Error ? cause.message : String(cause)));
+                                void (async () => {
+                                  try {
+                                    const next = structuredClone(
+                                      useBoardStore.getState().prompts.filter((prompt) => prompt.id !== p.id),
+                                    );
+                                    setPrompts(next);
+                                    await flushPrompts();
+                                  } catch (cause) {
+                                    setErr(cause instanceof Error ? cause.message : String(cause));
+                                  }
+                                })();
                               }}
                             >
                               <Trash2 size={13} />
