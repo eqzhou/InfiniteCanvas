@@ -64,14 +64,6 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
     void state.persistNow();
   };
 
-  if (!prompts.length) {
-    return (
-      <p className="p-3 text-sm text-[var(--ob-muted)]">
-        暂无提示词。可在「提示词」页接入社区目录或新建本地提示词。
-      </p>
-    );
-  }
-
   return (
     <div className="space-y-2">
       <div className="px-1">
@@ -83,7 +75,11 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
           onChange={(event) => setQuery(event.target.value)}
         />
       </div>
-      {!groups.length ? (
+      {!prompts.length ? (
+        <p className="p-3 text-sm text-[var(--ob-muted)]">
+          暂无提示词。可在「提示词」页接入社区目录或新建本地提示词。
+        </p>
+      ) : !groups.length ? (
         <p className="p-3 text-sm text-[var(--ob-muted)]">没有匹配的提示词</p>
       ) : (
         <div role="list" aria-label="侧栏提示词库" className="space-y-2">

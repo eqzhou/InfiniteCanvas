@@ -45,6 +45,10 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
   const rawSystemPrompt = (config as AppConfig & { systemPrompt?: unknown }).systemPrompt;
   const rawPanelWidth = (config as AppConfig & { canvasPanelWidth?: unknown }).canvasPanelWidth;
   const rawPanelTab = (config as AppConfig & { canvasPanelTab?: unknown }).canvasPanelTab;
+  const rawDisabled = (config as AppConfig & { disabledPluginIds?: unknown }).disabledPluginIds;
+  const disabledPluginIds = Array.isArray(rawDisabled)
+    ? [...new Set(rawDisabled.filter((id): id is string => typeof id === "string" && id.length > 0))]
+    : [];
   return {
     ...config,
     systemPrompt: typeof rawSystemPrompt === "string"
@@ -57,6 +61,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
     canvasPanelTab: rawPanelTab === "elements" || rawPanelTab === "assets" || rawPanelTab === "prompts"
       ? rawPanelTab
       : "projects",
+    disabledPluginIds,
     promptSources: mergeBuiltinPromptSources(normalizePromptSourceConfigs(
       (config as AppConfig & { promptSources?: unknown }).promptSources)),
   };

@@ -278,16 +278,18 @@ export function PluginsPage() {
             builtin
             enabled={!disabledPluginIds.includes(manifest.id)}
             onEnabledChange={(enabled) => {
-              const current = useBoardStore.getState().config;
-              setConfig({
-                ...current,
-                disabledPluginIds: setPluginEnabled(
-                  current.disabledPluginIds ?? [],
-                  manifest.id,
-                  enabled,
-                ),
-              });
-              void flushConfig().catch(() => undefined);
+              void (async () => {
+                const current = useBoardStore.getState().config;
+                setConfig({
+                  ...current,
+                  disabledPluginIds: setPluginEnabled(
+                    current.disabledPluginIds ?? [],
+                    manifest.id,
+                    enabled,
+                  ),
+                });
+                await flushConfig();
+              })().catch(() => undefined);
             }}
             onAdd={() => addToCanvas(manifest)}
           />
@@ -299,16 +301,18 @@ export function PluginsPage() {
             builtin={false}
             enabled={!disabledPluginIds.includes(manifest.id)}
             onEnabledChange={(enabled) => {
-              const current = useBoardStore.getState().config;
-              setConfig({
-                ...current,
-                disabledPluginIds: setPluginEnabled(
-                  current.disabledPluginIds ?? [],
-                  manifest.id,
-                  enabled,
-                ),
-              });
-              void flushConfig().catch(() => undefined);
+              void (async () => {
+                const current = useBoardStore.getState().config;
+                setConfig({
+                  ...current,
+                  disabledPluginIds: setPluginEnabled(
+                    current.disabledPluginIds ?? [],
+                    manifest.id,
+                    enabled,
+                  ),
+                });
+                await flushConfig();
+              })().catch(() => undefined);
             }}
             update={updates.get(manifest.id)}
             onUpdate={updates.has(manifest.id)

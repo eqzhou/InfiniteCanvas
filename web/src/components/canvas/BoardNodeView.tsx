@@ -84,6 +84,7 @@ export function BoardNodeView({
     <div
       data-node-id={node.id}
       data-node-type={node.type}
+      data-plugin-id={node.type === "plugin" ? node.metadata.pluginId : undefined}
       className={cn(
         "group/node absolute flex flex-col overflow-visible rounded-lg border shadow-[var(--ob-shadow)]",
         node.type === "group"
