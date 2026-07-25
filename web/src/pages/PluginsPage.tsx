@@ -48,7 +48,7 @@ function PluginCard({
             {builtin ? "内置" : "已安装"} · {manifest.id} · v{manifest.version}
           </p>
         </div>
-        <label className="ml-auto flex shrink-0 items-center gap-2 text-xs text-[var(--ob-muted)]">
+        <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-[var(--ob-muted)]">
           <button
             type="button"
             role="switch"
@@ -58,15 +58,9 @@ function PluginCard({
             className="ob-switch"
             data-checked={enabled ? "true" : "false"}
             onClick={() => onEnabledChange(!enabled)}
-            onKeyDown={(event) => {
-              if (event.key === " " || event.key === "Enter") {
-                event.preventDefault();
-                if (!disabled) onEnabledChange(!enabled);
-              }
-            }}
           />
-          {enabled ? "已启用" : "已停用"}
-        </label>
+          <span aria-hidden="true">{enabled ? "已启用" : "已停用"}</span>
+        </div>
       </div>
       <p className="mt-3 line-clamp-3 text-sm text-[var(--ob-muted)]">{manifest.description}</p>
       <p className="mt-2 text-xs text-[var(--ob-muted)]">

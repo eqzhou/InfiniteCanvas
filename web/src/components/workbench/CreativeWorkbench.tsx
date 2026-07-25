@@ -328,7 +328,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     onChange={(event) => setCount(Number(event.target.value) || 1)}
                   />
                 </label>
-                <label className="flex cursor-pointer items-center gap-2 self-end pb-2.5 text-[var(--ob-muted)]">
+                <div className="flex items-center gap-2 self-end pb-2.5 text-[var(--ob-muted)]">
                   <button
                     type="button"
                     role="switch"
@@ -338,8 +338,8 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     data-checked={transparent ? "true" : "false"}
                     onClick={() => setTransparent((value) => !value)}
                   />
-                  透明背景
-                </label>
+                  <span aria-hidden="true">透明背景</span>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
@@ -363,7 +363,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                   <span className="ob-label">清晰度</span>
                   <input className="ob-field" value={resolution} onChange={(event) => setResolution(event.target.value)} />
                 </label>
-                <label className="flex cursor-pointer items-center gap-2 self-end pb-2.5 text-[var(--ob-muted)]">
+                <div className="flex items-center gap-2 self-end pb-2.5 text-[var(--ob-muted)]">
                   <button
                     type="button"
                     role="switch"
@@ -373,9 +373,9 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     data-checked={smartDuration ? "true" : "false"}
                     onClick={() => setSmartDuration((value) => !value)}
                   />
-                  智能时长
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-[var(--ob-muted)]">
+                  <span aria-hidden="true">智能时长</span>
+                </div>
+                <div className="flex items-center gap-2 text-[var(--ob-muted)]">
                   <button
                     type="button"
                     role="switch"
@@ -385,9 +385,9 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     data-checked={generateAudio ? "true" : "false"}
                     onClick={() => setGenerateAudio((value) => !value)}
                   />
-                  生成声音
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-[var(--ob-muted)]">
+                  <span aria-hidden="true">生成声音</span>
+                </div>
+                <div className="flex items-center gap-2 text-[var(--ob-muted)]">
                   <button
                     type="button"
                     role="switch"
@@ -397,8 +397,8 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     data-checked={watermark ? "true" : "false"}
                     onClick={() => setWatermark((value) => !value)}
                   />
-                  水印
-                </label>
+                  <span aria-hidden="true">水印</span>
+                </div>
               </div>
             )}
             <label className="block">
