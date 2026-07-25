@@ -53,11 +53,17 @@ function PluginCard({
             type="button"
             role="switch"
             aria-checked={enabled}
-            aria-label={`${manifest.name} 已启用`}
+            aria-label={`${manifest.name}${enabled ? " 已启用" : " 已停用"}`}
             disabled={disabled}
             className="ob-switch"
             data-checked={enabled ? "true" : "false"}
             onClick={() => onEnabledChange(!enabled)}
+            onKeyDown={(event) => {
+              if (event.key === " " || event.key === "Enter") {
+                event.preventDefault();
+                if (!disabled) onEnabledChange(!enabled);
+              }
+            }}
           />
           {enabled ? "已启用" : "已停用"}
         </label>

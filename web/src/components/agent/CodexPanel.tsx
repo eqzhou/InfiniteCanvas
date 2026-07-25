@@ -443,7 +443,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           onClick={() => void start(false)}
           disabled={busy}
         >
-          {busy ? "连接中" : "继续会话"}
+          {busy ? "连接中" : "启动 Codex 会话"}
         </button>
       ) : (
         <>

@@ -333,6 +333,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     type="button"
                     role="switch"
                     aria-checked={transparent}
+                    aria-label="透明背景"
                     className="ob-switch"
                     data-checked={transparent ? "true" : "false"}
                     onClick={() => setTransparent((value) => !value)}
@@ -367,6 +368,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     type="button"
                     role="switch"
                     aria-checked={smartDuration}
+                    aria-label="智能时长"
                     className="ob-switch"
                     data-checked={smartDuration ? "true" : "false"}
                     onClick={() => setSmartDuration((value) => !value)}
@@ -378,6 +380,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     type="button"
                     role="switch"
                     aria-checked={generateAudio}
+                    aria-label="生成声音"
                     className="ob-switch"
                     data-checked={generateAudio ? "true" : "false"}
                     onClick={() => setGenerateAudio((value) => !value)}
@@ -389,6 +392,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                     type="button"
                     role="switch"
                     aria-checked={watermark}
+                    aria-label="水印"
                     className="ob-switch"
                     data-checked={watermark ? "true" : "false"}
                     onClick={() => setWatermark((value) => !value)}
