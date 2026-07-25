@@ -31,6 +31,21 @@ test("falls back to inline media when a persisted reference is temporarily unava
   }], 1)).resolves.toEqual([dataUrl]);
 });
 
+test("rejects an excessive image batch before contacting a provider", async () => {
+  let calls = 0;
+  globalThis.fetch = mock(async () => {
+    calls += 1;
+    return json({ data: [] });
+  }) as typeof fetch;
+  await expect(generateImages({
+    channel: channel("https://api.example/v1"),
+    model: "image",
+    prompt: "scene",
+    n: 9,
+  })).rejects.toThrow("between 1 and 8");
+  expect(calls).toBe(0);
+});
+
 function channel(baseUrl: string): AiChannel {
   return {
     id: "video-channel",
@@ -100,11 +115,15 @@ describe("generateVideo provider contracts", () => {
     };
 
     await expect(generateText({ channel: c, model: c.providers.text.model, prompt: "hello", systemPrompt: "Be concise" })).resolves.toBe("gemini text");
-    await expect(generateImages({ channel: c, model: c.providers.image.model, prompt: "draw", systemPrompt: "Use clean lines" })).resolves.toEqual(["data:image/png;base64,YWJj"]);
-    expect(requests.map((item) => item.apiKey)).toEqual([fixtureCredential, fixtureCredential]);
+    await expect(generateImages({ channel: c, model: c.providers.image.model, prompt: "draw", systemPrompt: "Use clean lines", n: 2 })).resolves.toEqual([
+      "data:image/png;base64,YWJj",
+      "data:image/png;base64,YWJj",
+    ]);
+    expect(requests.map((item) => item.apiKey)).toEqual([fixtureCredential, fixtureCredential, fixtureCredential]);
     expect(requests[0]?.url).toContain("/models/gemini-2.5-flash:generateContent");
     expect(requests[0]?.body).toMatchObject({ systemInstruction: { parts: [{ text: "Be concise" }] } });
     expect(requests[1]?.body).toMatchObject({ contents: [{ parts: [{ text: "Use clean lines\n\ndraw" }] }] });
+    expect(requests[2]?.body).toMatchObject({ contents: [{ parts: [{ text: "Use clean lines\n\ndraw" }] }] });
   });
 
   test("executes a safe image template and rejects unsupported transparency before fetch", async () => {
@@ -249,6 +268,52 @@ describe("generateVideo provider contracts", () => {
       {
         type: "image_url",
         image_url: { url: "https://cdn.example/ref.png" },
+        role: "reference_image",
+      },
+    ]);
+  });
+
+  test("maps ordered Ark image references into first and last frame roles", async () => {
+    const requests: Array<{ url: string; body?: string }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({ url: String(input), body: init?.body?.toString() });
+      if (requests.length === 1) return json({ data: { id: "frame-task" } });
+      return json({
+        data: {
+          status: "succeeded",
+          content: { video_url: { url: "https://cdn.example/frames.mp4" } },
+        },
+      });
+    }) as typeof fetch;
+
+    await generateVideo({
+      channel: channel("https://ark.cn-beijing.volces.com/api/v3"),
+      model: "seedance-1-0-pro",
+      prompt: "from start to finish",
+      frameMode: "first-last",
+      referenceImages: [
+        "https://cdn.example/first.png",
+        "https://cdn.example/last.png",
+        "https://cdn.example/extra.png",
+      ],
+      pollIntervalMs: 0,
+    });
+
+    expect(JSON.parse(requests[0]?.body ?? "{}").content).toEqual([
+      { type: "text", text: "from start to finish" },
+      {
+        type: "image_url",
+        image_url: { url: "https://cdn.example/first.png" },
+        role: "first_frame",
+      },
+      {
+        type: "image_url",
+        image_url: { url: "https://cdn.example/last.png" },
+        role: "last_frame",
+      },
+      {
+        type: "image_url",
+        image_url: { url: "https://cdn.example/extra.png" },
         role: "reference_image",
       },
     ]);

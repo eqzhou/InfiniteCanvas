@@ -1,10 +1,14 @@
+import { useRef } from "react";
 import type { PluginManifest, Point } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import {
   ClipboardPaste,
+  Clapperboard,
   CopyPlus,
   Film,
   Focus,
+  FolderOpen,
+  Globe2,
   FolderMinus,
   FolderPlus,
   ImagePlus,
@@ -13,6 +17,7 @@ import {
   Settings2,
   Trash2,
   Type,
+  Upload,
 } from "lucide-react";
 
 export type ContextMenuState = {
@@ -27,6 +32,8 @@ export function ContextMenu({
   onClose,
   onAdd,
   onPaste,
+  onUploadMedia,
+  onOpenAssets,
   onDelete,
   onDuplicate,
   onBring,
@@ -41,8 +48,12 @@ export function ContextMenu({
   state: ContextMenuState;
   multi?: boolean;
   onClose: () => void;
-  onAdd: (type: "text" | "image" | "config" | "video" | "audio" | "plugin", at: Point, pluginId?: string) => void;
+  onAdd: (type: "text" | "image" | "config" | "video" | "audio" | "panorama" | "director" | "plugin", at: Point, pluginId?: string) => void;
   onPaste: (at: Point) => void;
+  /** Blank-canvas chooser: upload local media at the menu world position. */
+  onUploadMedia?: (files: File[], at: Point) => void | Promise<void>;
+  /** Blank-canvas chooser: open the asset library picker at the menu world position. */
+  onOpenAssets?: (at: Point) => void;
   onDelete?: () => void;
   onDuplicate?: () => void;
   onBring?: () => void;
@@ -54,10 +65,18 @@ export function ContextMenu({
   onUngroup?: () => void;
   plugins?: PluginManifest[];
 }) {
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   useEscapeDismiss(Boolean(state), onClose, 80);
   if (!state) return null;
   type MenuIcon = typeof Type;
-  type Item = { label: string; action?: () => void; disabled?: boolean; icon?: MenuIcon };
+  type Item = {
+    label: string;
+    action?: () => void;
+    disabled?: boolean;
+    icon?: MenuIcon;
+    /** When true, clicking opens the hidden media file input instead of running action immediately. */
+    upload?: boolean;
+  };
   const items: Item[] = state.nodeId
     ? [
         { label: "创建副本", action: onDuplicate, icon: CopyPlus },
@@ -78,11 +97,15 @@ export function ContextMenu({
       ]
     : [
         { label: "粘贴", action: () => onPaste(state.world), icon: ClipboardPaste },
+        { label: "上传资源", upload: true, icon: Upload, disabled: !onUploadMedia },
+        { label: "从素材库插入", action: () => onOpenAssets?.(state.world), icon: FolderOpen, disabled: !onOpenAssets },
         { label: "新建文本", action: () => onAdd("text", state.world), icon: Type },
         { label: "新建图片", action: () => onAdd("image", state.world), icon: ImagePlus },
         { label: "新建配置", action: () => onAdd("config", state.world), icon: Settings2 },
         { label: "新建视频", action: () => onAdd("video", state.world), icon: Film },
         { label: "新建音频", action: () => onAdd("audio", state.world), icon: Music2 },
+        { label: "新建全景", action: () => onAdd("panorama", state.world), icon: Globe2 },
+        { label: "新建导演台", action: () => onAdd("director", state.world), icon: Clapperboard },
         ...plugins.map((plugin) => ({
           label: `插件 · ${plugin.name}`,
           action: () => onAdd("plugin", state.world, plugin.id),
@@ -128,6 +151,11 @@ export function ContextMenu({
               className="ob-menu-item"
               disabled={item.disabled}
               onClick={() => {
+                if (item.upload) {
+                  // Keep menu world position via state; close after file selection starts.
+                  uploadInputRef.current?.click();
+                  return;
+                }
                 onClose();
                 item.action?.();
               }}
@@ -138,6 +166,23 @@ export function ContextMenu({
           );
         })}
       </div>
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept="image/*,video/*,audio/*"
+        multiple
+        className="hidden"
+        aria-label="上传资源到画布"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? []);
+          event.currentTarget.value = "";
+          onClose();
+          if (!files.length || !onUploadMedia) return;
+          void Promise.resolve(onUploadMedia(files, state.world)).catch((error: unknown) => {
+            window.alert(error instanceof Error ? error.message : "资源上传失败");
+          });
+        }}
+      />
     </>
   );
 }

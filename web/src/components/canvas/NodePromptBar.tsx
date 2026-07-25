@@ -23,13 +23,24 @@ import { PromptChipInput } from "@/components/canvas/PromptChipInput";
 import {
   createImageGenerationMetadata,
 } from "@/lib/image-generation";
+import { applyCameraPrompt } from "@/lib/camera-prompt";
+import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
+import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
+import {
+  cancelServerGenerationJob,
+  createServerAudioGenerationJob,
+  createServerImageGenerationJob,
+  createServerVideoGenerationJob,
+  usesServerGenerationJobs,
+} from "@/services/generation-jobs";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
   const config = useBoardStore((s) => s.config);
   const project = useBoardStore((s) => s.getActive());
   const updateNode = useBoardStore((s) => s.updateNode);
   const updateActive = useBoardStore((s) => s.updateActive);
-  const [text, setText] = useState("");
+  const persistNow = useBoardStore((s) => s.persistNow);
+  const [text, setText] = useState(node.metadata.prompt ?? "");
   const [busy, setBusy] = useState(false);
   const channel =
     config.channels.find((c) => c.id === config.activeChannelId) ??
@@ -58,7 +69,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       return;
     }
     setBusy(true);
-    updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
+    const rawPrompt = text.trim();
+    updateNode(node.id, { metadata: { prompt: rawPrompt, status: "loading", errorDetails: undefined } });
     try {
       const activeReferences = activePromptReferences(text, references);
       if (node.type === "text") {
@@ -110,11 +122,44 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           count: config.imageCount,
           transparentBackground: Boolean(node.metadata.transparentBackground),
           referenceStorageKeys,
+          cameraPrompt: node.metadata.cameraPrompt,
         });
+        const provider = getProvider(channel, "image");
+        if (usesServerGenerationJobs() && (provider.protocol === "openai" || provider.protocol === "gemini" ||
+            (provider.protocol === "template" && Boolean(provider.template))) &&
+            imageReferences.every((reference) => Boolean(reference.storageKey))) {
+          if (provider.protocol === "gemini" && generation.transparentBackground) {
+            throw new Error("Gemini 图片生成不支持透明背景");
+          }
+          if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
+            throw new Error("当前图片模板不支持透明背景");
+          }
+          const job = await createServerImageGenerationJob({
+            projectId: project?.id,
+            prompt: applyCameraPrompt(generation.prompt, generation.cameraPrompt),
+            providerId: channel.id,
+            model: generation.model,
+            parameters: {
+              size: generation.size,
+              quality: generation.quality,
+              count: generation.count,
+              transparentBackground: generation.transparentBackground,
+              referenceStorageKeys,
+            },
+          });
+          try {
+            updateActive((current) => applyServerImagePlaceholders(current, node.id, job.id, generation));
+            await persistNow();
+          } catch (error) {
+            await cancelServerGenerationJob(job.id).catch(() => undefined);
+            throw error;
+          }
+          return;
+        }
         const urls = await generateImages({
           channel,
           model: generation.model,
-          prompt: generation.prompt,
+          prompt: applyCameraPrompt(generation.prompt, generation.cameraPrompt),
           size: generation.size,
           quality: generation.quality,
           n: generation.count,
@@ -134,11 +179,67 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
               ...(node.metadata.content ? { content: node.metadata.content } : {}),
             }]
           : [];
+        const videoProvider = getProvider(channel, "video");
+        const durableReferences = [...ownVideo, ...activeReferences];
+        const referenceStorageKeys = durableReferences
+          .map((reference) => reference.storageKey)
+          .filter((value): value is string => Boolean(value));
+        const serverVideoSupported = videoProvider.protocol === "openai" || videoProvider.protocol === "ark" ||
+          (videoProvider.protocol === "template" && Boolean(videoProvider.template)) ||
+          videoProvider.baseUrl.includes("/api/v3") || videoProvider.baseUrl.includes("/api/plan/v3");
+        if (usesServerGenerationJobs() && serverVideoSupported && referenceStorageKeys.length === durableReferences.length) {
+          const job = await createServerVideoGenerationJob({
+            projectId: project?.id,
+            prompt: applyCameraPrompt(rawPrompt, node.metadata.cameraPrompt),
+            providerId: channel.id,
+            model: node.metadata.model || videoProvider.model,
+            parameters: {
+              size: node.metadata.size,
+              seconds: resolveVideoDuration(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5),
+              ratio: node.metadata.videoRatio || "16:9",
+              resolution: node.metadata.resolution || "720p",
+              generateAudio: Boolean(node.metadata.generateAudio),
+              watermark: Boolean(node.metadata.watermark),
+              frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
+              referenceStorageKeys,
+            },
+          });
+          try {
+            if (!node.metadata.content) {
+              updateNode(node.id, { metadata: {
+                status: "loading", prompt: rawPrompt, generationJobId: job.id,
+                cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
+              } });
+            } else {
+              placeRight([createNode("video", { x: node.position.x + node.width + 60, y: node.position.y }, {
+                metadata: {
+                  status: "loading", prompt: rawPrompt, generationJobId: job.id,
+                  cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
+                },
+              })]);
+              updateNode(node.id, { metadata: { status: "success" } });
+            }
+            await persistNow();
+          } catch (error) {
+            await cancelServerGenerationJob(job.id).catch(() => undefined);
+            throw error;
+          }
+          return;
+        }
         const result = await generateVideo({
           channel,
           model: node.metadata.model || getProvider(channel, "video").model,
-          prompt: text.trim(),
-          seconds: 5,
+          prompt: applyCameraPrompt(rawPrompt, node.metadata.cameraPrompt),
+          size: node.metadata.size,
+          seconds: resolveVideoDuration(
+            Boolean(node.metadata.smartDuration),
+            node.metadata.duration ?? 5,
+          ),
+          ratio: node.metadata.videoRatio || "16:9",
+          resolution: node.metadata.resolution || "720p",
+          generateAudio: Boolean(node.metadata.generateAudio),
+          watermark: Boolean(node.metadata.watermark),
+          frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
           referenceImages: await resolvePromptReferences(activeReferences, "image", 9),
           referenceVideos: await resolvePromptReferences(
             [...ownVideo, ...activeReferences],
@@ -160,19 +261,44 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         }
         if (!node.metadata.content) {
           updateNode(node.id, {
-            metadata: { content, storageKey, status: "success", prompt: text.trim() },
+            metadata: { content, storageKey, status: "success", prompt: rawPrompt, cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined },
           });
         } else {
           placeRight([
             createNode(
               "video",
               { x: node.position.x + node.width + 60, y: node.position.y },
-              { metadata: { content, storageKey, status: "success", prompt: text.trim() } },
+              { metadata: { content, storageKey, status: "success", prompt: rawPrompt, cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined } },
             ),
           ]);
           updateNode(node.id, { metadata: { status: "success" } });
         }
       } else if (node.type === "audio") {
+        const audioProvider = getProvider(channel, "audio");
+        if (usesServerGenerationJobs() && audioProvider.protocol === "openai") {
+          const job = await createServerAudioGenerationJob({
+            projectId: project?.id,
+            prompt: rawPrompt,
+            providerId: channel.id,
+            model: node.metadata.model || audioProvider.model,
+            parameters: { voice: node.metadata.voice || "alloy", format: "mp3" },
+          });
+          try {
+            if (!node.metadata.content) {
+              updateNode(node.id, { metadata: { status: "loading", prompt: rawPrompt, generationJobId: job.id } });
+            } else {
+              placeRight([createNode("audio", { x: node.position.x + node.width + 60, y: node.position.y }, {
+                metadata: { status: "loading", prompt: rawPrompt, generationJobId: job.id },
+              })]);
+              updateNode(node.id, { metadata: { status: "success" } });
+            }
+            await persistNow();
+          } catch (error) {
+            await cancelServerGenerationJob(job.id).catch(() => undefined);
+            throw error;
+          }
+          return;
+        }
         const speech = await generateSpeech({
           channel,
           model: node.metadata.model || getProvider(channel, "audio").model,
@@ -218,7 +344,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   return (
     <div
-      className="ob-composer node-prompt absolute left-0 top-full z-20 mt-2 flex w-[min(360px,70vw)] items-end gap-2 p-2"
+      className="ob-composer node-prompt absolute left-0 top-full z-20 mt-2 flex w-[min(360px,calc(100vw-1.5rem))] max-w-full items-end gap-2 p-2"
       onPointerDown={(e) => e.stopPropagation()}
       role="group"
       aria-label="节点提示词"
@@ -228,7 +354,10 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           placeholder={placeholder}
           value={text}
           references={references}
-          onChange={setText}
+          onChange={(value) => {
+            setText(value);
+            updateNode(node.id, { metadata: { prompt: value } }, { history: false });
+          }}
           onSubmit={() => void send()}
         />
       </div>

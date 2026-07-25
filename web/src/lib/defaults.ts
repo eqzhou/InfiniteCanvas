@@ -8,6 +8,7 @@ import type {
 } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
 import { clonePresetSource, COMMUNITY_PROMPT_SOURCE_PRESETS } from "@/services/prompt-source-presets";
+import { createDefaultDirectorScene } from "@/lib/director-scene";
 
 export const DEFAULT_NODE_SIZE: Record<NodeType, { width: number; height: number }> = {
   text: { width: 280, height: 180 },
@@ -15,6 +16,8 @@ export const DEFAULT_NODE_SIZE: Record<NodeType, { width: number; height: number
   config: { width: 300, height: 300 },
   video: { width: 360, height: 240 },
   audio: { width: 320, height: 120 },
+  panorama: { width: 360, height: 280 },
+  director: { width: 360, height: 240 },
   group: { width: 480, height: 320 },
   plugin: { width: 320, height: 220 },
 };
@@ -51,6 +54,17 @@ export function createDefaultConfig(): AppConfig {
     webdavUrl: "",
     webdavUser: "",
     webdavPass: "",
+    objectStorage: {
+      enabled: false,
+      endpoint: "",
+      bucket: "",
+      region: "auto",
+      prefix: "openboard",
+      accessKeyId: "",
+      secretAccessKey: "",
+      sessionToken: "",
+      allowInsecureLoopback: false,
+    },
     promptSources: COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => clonePresetSource(preset)),
     plugins: [],
     disabledPluginIds: [],
@@ -102,6 +116,8 @@ export function createNode(
     config: "生成配置",
     video: "视频",
     audio: "音频",
+    panorama: "360° 全景",
+    director: "3D 导演台",
     group: "分组",
     plugin: "插件",
   };
@@ -115,6 +131,10 @@ export function createNode(
         }
       : type === "text"
         ? { content: "", fontSize: 14, status: "idle" as const }
+        : type === "panorama"
+          ? { status: "idle" as const, panoramaProjection: "equirectangular" as const, count: 1 }
+        : type === "director"
+          ? { status: "idle" as const, directorScene: createDefaultDirectorScene() }
         : { status: "idle" as const };
 
   return {

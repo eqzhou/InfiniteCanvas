@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -52,11 +55,20 @@ func main() {
 		}
 		defer backend.Close()
 		appServer = api.NewServerWithStore(dataDir, backend)
+		appServer.SetProcessToken(token)
 		if err := appServer.SetSecretKey(os.Getenv("OPENBOARD_MASTER_KEY")); err != nil {
 			log.Fatal(err)
 		}
 	} else {
 		appServer = api.NewServer(dataDir)
+	}
+	defer appServer.Close()
+	if config, err := blobStorageConfigFromEnv(); err != nil {
+		log.Fatal(err)
+	} else if config != nil {
+		if err := appServer.ConfigureS3BlobStorage(*config); err != nil {
+			log.Fatal(err)
+		}
 	}
 	appServer.SetRuntimeOrigins(origins)
 	if _, err := api.WriteConnectionFile(dataDir, "http://"+addr, token); err != nil {
@@ -74,9 +86,45 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+	shutdownSignal, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-shutdownSignal.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	}()
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+func blobStorageConfigFromEnv() (*api.S3BlobStorageConfig, error) {
+	backend := strings.ToLower(strings.TrimSpace(os.Getenv("OPENBOARD_BLOB_BACKEND")))
+	if backend == "" || backend == "filesystem" {
+		return nil, nil
+	}
+	if backend != "s3" {
+		return nil, fmt.Errorf("OPENBOARD_BLOB_BACKEND must be filesystem or s3")
+	}
+	allowInsecure := false
+	if raw := strings.TrimSpace(os.Getenv("OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK must be a boolean")
+		}
+		allowInsecure = parsed
+	}
+	return &api.S3BlobStorageConfig{
+		Endpoint:              os.Getenv("OPENBOARD_S3_ENDPOINT"),
+		Bucket:                os.Getenv("OPENBOARD_S3_BUCKET"),
+		Region:                env("OPENBOARD_S3_REGION", "auto"),
+		Prefix:                env("OPENBOARD_S3_PREFIX", "openboard"),
+		AccessKeyID:           os.Getenv("OPENBOARD_S3_ACCESS_KEY_ID"),
+		SecretAccessKey:       os.Getenv("OPENBOARD_S3_SECRET_ACCESS_KEY"),
+		SessionToken:          os.Getenv("OPENBOARD_S3_SESSION_TOKEN"),
+		AllowInsecureLoopback: allowInsecure,
+	}, nil
 }
 
 func rateLimitRequests(limit int, window time.Duration) func(http.Handler) http.Handler {

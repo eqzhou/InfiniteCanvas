@@ -5,6 +5,27 @@ export function resolveVideoDuration(
   return smartDuration ? undefined : duration;
 }
 
+export type VideoFrameMode = "references" | "first-last";
+
+export function normalizeVideoFrameMode(value: unknown): VideoFrameMode {
+  return value === "first-last" ? "first-last" : "references";
+}
+
+/** Assign Ark image roles for ordered reference images. */
+export function arkImageReferenceRoles(
+  mode: VideoFrameMode,
+  imageCount: number,
+): Array<"first_frame" | "last_frame" | "reference_image"> {
+  const count = Math.max(0, Math.min(9, Math.floor(imageCount)));
+  return Array.from({ length: count }, (_, index) => {
+    if (mode === "first-last") {
+      if (index === 0) return "first_frame";
+      if (index === 1) return "last_frame";
+    }
+    return "reference_image";
+  });
+}
+
 export function validateArkVideoRequest(
   model: string,
   resolution: string,

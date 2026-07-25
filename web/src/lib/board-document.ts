@@ -10,8 +10,15 @@ import type {
   NodeType,
 } from "@/types/board";
 import { validateJsonObject } from "@/lib/bounded-json";
+import { getDirectorPopulation, parseDirectorScene } from "@/lib/director-scene";
+import {
+  validatePanoramaDimensions,
+  validateProjectPanoramaBudget,
+} from "@/lib/panorama";
+import { normalizeCameraPrompt } from "@/lib/camera-prompt";
 
-const NODE_TYPES = new Set<NodeType>(["text", "image", "config", "video", "audio", "group", "plugin"]);
+const NODE_TYPES = new Set<NodeType>(["text", "image", "config", "video", "audio", "panorama", "director", "group", "plugin"]);
+const PANORAMA_BATCH_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const BACKGROUND_MODES = new Set(["dots", "lines", "blank"]);
 const GENERATION_MODES = new Set(["text", "image", "video"]);
 const VIDEO_RATIOS = new Set(["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]);
@@ -20,6 +27,9 @@ const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 const PLUGIN_ID_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$/;
 const MAX_NODES = 10_000;
 const MAX_EDGES = 30_000;
+const MAX_DIRECTOR_OBJECTS_PER_PROJECT = 2_000;
+const MAX_DIRECTOR_CAMERAS_PER_PROJECT = 320;
+const MAX_DIRECTOR_POPULATION_PER_PROJECT = 20_000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -80,6 +90,11 @@ function mediaURL(value: string | undefined, path: string): void {
 
 function parseMetadata(value: unknown, path: string): NodeMetadata {
   const input = record(value, path);
+  for (const localField of ["screenshots", "captureTray", "directorCaptures"]) {
+    if (input[localField] !== undefined) {
+      throw new Error(`${path}.${localField} is browser-local and unsupported`);
+    }
+  }
   optionalString(input.content, `${path}.content`, 20_000_000);
   optionalString(input.prompt, `${path}.prompt`, 100_000);
   optionalString(input.model, `${path}.model`, 500);
@@ -137,6 +152,10 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
       throw new Error(`${path}.${key} must be a boolean`);
     }
   }
+  if (input.videoFrameMode !== undefined &&
+      input.videoFrameMode !== "references" && input.videoFrameMode !== "first-last") {
+    throw new Error(`${path}.videoFrameMode is invalid`);
+  }
   if (input.generationType !== undefined &&
       input.generationType !== "text-to-image" && input.generationType !== "image-to-image") {
     throw new Error(`${path}.generationType is invalid`);
@@ -156,6 +175,18 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
       id(item, `${path}.childIds[${index}]`),
     );
   }
+  for (const key of ["isBatchRoot", "imageBatchExpanded"] as const) {
+    if (input[key] !== undefined && typeof input[key] !== "boolean") {
+      throw new Error(`${path}.${key} must be a boolean batch field`);
+    }
+  }
+  if (input.batchRootId !== undefined) id(input.batchRootId, `${path}.batchRootId`);
+  if (input.primaryImageId !== undefined) id(input.primaryImageId, `${path}.primaryImageId`);
+  if (input.batchChildIds !== undefined) {
+    array(input.batchChildIds, `${path}.batchChildIds`, 64).forEach((item, index) =>
+      id(item, `${path}.batchChildIds[${index}]`),
+    );
+  }
   if (input.pluginId !== undefined) {
     const pluginId = string(input.pluginId, `${path}.pluginId`, 128);
     if (!PLUGIN_ID_PATTERN.test(pluginId)) throw new Error(`${path}.pluginId is invalid`);
@@ -168,7 +199,27 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
       maxEntries: 50_000,
     });
   }
-  return input as NodeMetadata;
+  const directorScene = input.directorScene === undefined
+    ? undefined
+    : parseDirectorScene(input.directorScene, `${path}.directorScene`);
+  const cameraPrompt = input.cameraPrompt === undefined
+    ? undefined
+    : normalizeCameraPrompt(input.cameraPrompt);
+  if (input.directorPreview !== undefined) {
+    throw new Error(`${path}.directorPreview is unsupported; use managed image storage`);
+  }
+  if (input.panoramaProjection !== undefined && input.panoramaProjection !== "equirectangular") {
+    throw new Error(`${path}.panoramaProjection is invalid`);
+  }
+  for (const key of ["workflowRunId", "workflowStepId", "workflowTemplateId", "generationJobId"] as const) {
+    if (input[key] !== undefined) id(input[key], `${path}.${key}`);
+  }
+  if (input.generationResultIndex !== undefined &&
+      (typeof input.generationResultIndex !== "number" || !Number.isSafeInteger(input.generationResultIndex) ||
+        input.generationResultIndex < 0 || input.generationResultIndex > 7)) {
+    throw new Error(`${path}.generationResultIndex is invalid`);
+  }
+  return { ...input, directorScene, cameraPrompt } as NodeMetadata;
 }
 
 function parseNode(value: unknown, index: number): BoardNode {
@@ -186,7 +237,19 @@ function parseNode(value: unknown, index: number): BoardNode {
   if (type === "plugin" && !metadata.pluginId) {
     throw new Error(`${path}.metadata.pluginId is required`);
   }
-  if (type === "image" || type === "video" || type === "audio") {
+  if (type === "director" && !metadata.directorScene) {
+    throw new Error(`${path}.metadata.directorScene is required`);
+  }
+  if (type === "panorama" && (metadata.content || metadata.storageKey)) {
+    validatePanoramaDimensions(metadata.naturalWidth ?? 0, metadata.naturalHeight ?? 0);
+    if (metadata.mimeType && !metadata.mimeType.startsWith("image/")) {
+      throw new Error(`${path}.metadata.mimeType must be an image`);
+    }
+  }
+  if (metadata.cameraPrompt && type !== "image" && type !== "video" && type !== "config") {
+    throw new Error(`${path}.metadata.cameraPrompt is unsupported for ${type} nodes`);
+  }
+  if (type === "image" || type === "video" || type === "audio" || type === "panorama") {
     mediaURL(metadata.content, `${path}.metadata.content`);
   }
   return {
@@ -290,13 +353,44 @@ export function parseBoardProject(value: unknown): BoardProject {
   const nodes = array(input.nodes, "nodes", MAX_NODES).map(parseNode);
   const nodeIDs = new Set(nodes.map((node) => node.id));
   if (nodeIDs.size !== nodes.length) throw new Error("duplicate node id");
+  validateProjectPanoramaBudget(nodes);
   const nodeByID = new Map(nodes.map((node) => [node.id, node]));
+  const directorObjectCount = nodes.reduce(
+    (total, node) => total + (node.metadata.directorScene?.objects.length ?? 0),
+    0,
+  );
+  if (directorObjectCount > MAX_DIRECTOR_OBJECTS_PER_PROJECT) {
+    throw new Error("project director scenes exceed aggregate limits");
+  }
+  const directorCameraCount = nodes.reduce(
+    (total, node) => total + (node.metadata.directorScene?.cameras.length ?? 0),
+    0,
+  );
+  if (directorCameraCount > MAX_DIRECTOR_CAMERAS_PER_PROJECT) {
+    throw new Error("project director cameras exceed aggregate limits");
+  }
+  const directorPopulation = nodes.reduce(
+    (total, node) => total + (node.metadata.directorScene ? getDirectorPopulation(node.metadata.directorScene) : 0),
+    0,
+  );
+  if (directorPopulation > MAX_DIRECTOR_POPULATION_PER_PROJECT) {
+    throw new Error("project director population exceeds aggregate limits");
+  }
 
   const edges = array(input.edges, "edges", MAX_EDGES).map((edge, index) =>
     parseEdge(edge, index, nodeIDs),
   );
   const edgeIDs = new Set(edges.map((edge) => edge.id));
   if (edgeIDs.size !== edges.length) throw new Error("duplicate edge id");
+  const edgeEndpoints = new Set(edges.map((edge) => `${edge.from}\u0000${edge.to}`));
+  if (edgeEndpoints.size !== edges.length) throw new Error("duplicate edge endpoints");
+  const panoramaReferences = new Map<string, number>();
+  for (const edge of edges) {
+    if (nodeByID.get(edge.to)?.type !== "panorama" || nodeByID.get(edge.from)?.type !== "image") continue;
+    const count = (panoramaReferences.get(edge.to) ?? 0) + 1;
+    if (count > 8) throw new Error(`panorama ${edge.to} exceeds 8 image references`);
+    panoramaReferences.set(edge.to, count);
+  }
   const childOwner = new Map<string, string>();
   for (const node of nodes) {
     if (node.type !== "group") continue;
@@ -314,6 +408,59 @@ export function parseBoardProject(value: unknown): BoardProject {
       const owner = childOwner.get(childId);
       if (owner) throw new Error(`node ${childId} belongs to multiple groups`);
       childOwner.set(childId, node.id);
+    }
+  }
+
+  const batchOwner = new Map<string, string>();
+  const usablePanoramaBatchResult = (node: BoardNode) => node.type === "panorama" &&
+    Boolean(node.metadata.content && node.metadata.storageKey) &&
+    Boolean(Number.isSafeInteger(node.metadata.bytes) && (node.metadata.bytes ?? 0) > 0) &&
+    node.metadata.panoramaProjection === "equirectangular" &&
+    Boolean(node.metadata.mimeType && PANORAMA_BATCH_MIME_TYPES.has(node.metadata.mimeType));
+  for (const root of nodes) {
+    const childIds = root.metadata.batchChildIds ?? [];
+    if (root.metadata.isBatchRoot === true && childIds.length < 1) {
+      throw new Error(`batch root ${root.id} has no children`);
+    }
+    if (childIds.length > 0 && root.metadata.isBatchRoot !== true) {
+      throw new Error(`batch root ${root.id} is missing its batch flag`);
+    }
+    if (new Set(childIds).size !== childIds.length) {
+      throw new Error(`batch root ${root.id} contains duplicate children`);
+    }
+    if (root.type === "panorama" && childIds.length > 7) {
+      throw new Error(`panorama batch ${root.id} exceeds 8 results`);
+    }
+    if (root.type === "panorama" && childIds.length > 0 && !usablePanoramaBatchResult(root)) {
+      throw new Error(`panorama batch ${root.id} has an unusable root result`);
+    }
+    for (const childId of childIds) {
+      const child = nodeByID.get(childId);
+      if (!child || child.id === root.id || child.metadata.batchRootId !== root.id) {
+        throw new Error(`batch root ${root.id} references an invalid child`);
+      }
+      if (root.type === "panorama" && child.type !== "panorama") {
+        throw new Error(`panorama batch ${root.id} contains a non-panorama child`);
+      }
+      if (root.type === "panorama" && !usablePanoramaBatchResult(child)) {
+        throw new Error(`panorama batch ${root.id} contains an unusable result`);
+      }
+      if (batchOwner.has(childId)) throw new Error(`batch child ${childId} has multiple owners`);
+      batchOwner.set(childId, root.id);
+    }
+    const primaryId = root.metadata.primaryImageId;
+    if (primaryId && primaryId !== root.id && !childIds.includes(primaryId)) {
+      throw new Error(`batch root ${root.id} has an invalid primary result`);
+    }
+  }
+  for (const child of nodes) {
+    if (!child.metadata.batchRootId) continue;
+    const owner = nodeByID.get(child.metadata.batchRootId);
+    if (!owner?.metadata.batchChildIds?.includes(child.id)) {
+      throw new Error(`batch child ${child.id} references an invalid root`);
+    }
+    if (child.metadata.isBatchRoot || child.metadata.batchChildIds?.length) {
+      throw new Error(`nested batch child ${child.id} is unsupported`);
     }
   }
 

@@ -32,6 +32,10 @@ export class HistoryStack<T> {
     this.future = [];
   }
 
+  snapshots(): readonly T[] {
+    return [...this.past, ...this.future];
+  }
+
   get canUndo(): boolean {
     return this.past.length > 0;
   }

@@ -7,6 +7,35 @@ import (
 	"time"
 )
 
+func TestBlobStorageConfigFromEnv(t *testing.T) {
+	t.Run("filesystem default", func(t *testing.T) {
+		t.Setenv("OPENBOARD_BLOB_BACKEND", "")
+		config, err := blobStorageConfigFromEnv()
+		if err != nil || config != nil {
+			t.Fatalf("config = %#v, %v", config, err)
+		}
+	})
+
+	t.Run("S3 and R2 settings", func(t *testing.T) {
+		t.Setenv("OPENBOARD_BLOB_BACKEND", "s3")
+		t.Setenv("OPENBOARD_S3_ENDPOINT", "https://account.r2.cloudflarestorage.com")
+		t.Setenv("OPENBOARD_S3_BUCKET", "media-bucket")
+		t.Setenv("OPENBOARD_S3_ACCESS_KEY_ID", "access")
+		t.Setenv("OPENBOARD_S3_SECRET_ACCESS_KEY", "secret")
+		config, err := blobStorageConfigFromEnv()
+		if err != nil || config == nil || config.Region != "auto" || config.Prefix != "openboard" {
+			t.Fatalf("config = %#v, %v", config, err)
+		}
+	})
+
+	t.Run("unknown backend", func(t *testing.T) {
+		t.Setenv("OPENBOARD_BLOB_BACKEND", "ftp")
+		if _, err := blobStorageConfigFromEnv(); err == nil {
+			t.Fatal("unknown blob backend accepted")
+		}
+	})
+}
+
 func TestCORSMiddleware(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)

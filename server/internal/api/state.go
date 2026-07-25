@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,15 +10,80 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
 )
 
+func (s *Server) readTenantBlob(ctx context.Context, tenantID, key string, limit int64) (blobObject, error) {
+	name, ok := blobFilename(key)
+	if !ok {
+		return blobObject{}, errors.New("invalid blob key")
+	}
+	objects, err := s.resolveBlobObjectStore(ctx, tenantID)
+	if err != nil {
+		return blobObject{}, err
+	}
+	if objects != nil {
+		value, err := objects.Get(ctx, tenantID, name, limit)
+		if err != nil {
+			return blobObject{}, err
+		}
+		if value.Metadata.Deleted {
+			return blobObject{}, store.ErrNotFound
+		}
+		if !allowedBlobMediaType(value.Metadata.ContentType) {
+			return blobObject{}, errors.New("invalid blob metadata")
+		}
+		return value, nil
+	}
+	dir := filepath.Join(s.dataDir, "blobs", tenantID)
+	filePath := filepath.Join(dir, name)
+	metaPath := filepath.Join(dir, name+".json")
+	if _, err := os.Stat(filePath); err != nil && tenantID == store.DefaultTenantID {
+		legacy := filepath.Join(s.dataDir, "blobs", name)
+		if _, legacyErr := os.Stat(legacy); legacyErr == nil {
+			filePath = legacy
+			metaPath = filepath.Join(s.dataDir, "blobs", name+".json")
+		}
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return blobObject{}, store.ErrNotFound
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return blobObject{}, err
+	}
+	if int64(len(data)) > limit {
+		return blobObject{}, errBlobObjectTooLarge
+	}
+	metadata := readBlobMetadata(metaPath)
+	if metadata.ContentType == "" {
+		metadata.ContentType = "application/octet-stream"
+	}
+	return blobObject{Data: data, Metadata: metadata}, nil
+}
+
 const maxStateBytes = 32 << 20
+
+type blobReservation struct {
+	ID    string `json:"id"`
+	Bytes int64  `json:"bytes"`
+}
+
+type blobMetadata struct {
+	ContentType string            `json:"contentType"`
+	Reservation blobReservation   `json:"storageReservation,omitempty"`
+	Superseded  []blobReservation `json:"supersededStorageReservations,omitempty"`
+	Deleted     bool              `json:"deleted,omitempty"`
+}
 
 var stateKeys = map[string]struct{}{
 	"config": {}, "assets": {}, "prompts": {},
@@ -53,9 +120,13 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid state json", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.PutState(r.Context(), tenantIDFrom(r), key, value); err != nil {
+	tenantID := tenantIDFrom(r)
+	if err := s.store.PutState(r.Context(), tenantID, key, value); err != nil {
 		http.Error(w, "failed to store state", http.StatusInternalServerError)
 		return
+	}
+	if key == "config" {
+		s.InvalidateTenantBlobStore(tenantID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -68,6 +139,27 @@ func blobFilename(key string) (string, bool) {
 	return hex.EncodeToString(sum[:]), true
 }
 
+func blobKeyFromRequest(r *http.Request) (string, bool) {
+	escapedPath := r.URL.EscapedPath()
+	const marker = "/api/blobs/"
+	index := strings.Index(escapedPath, marker)
+	if index < 0 {
+		return "", false
+	}
+	escapedKey := escapedPath[index+len(marker):]
+	if escapedKey == "" || strings.Contains(escapedKey, "/") {
+		return "", false
+	}
+	key, err := url.PathUnescape(escapedKey)
+	if err != nil {
+		return "", false
+	}
+	if _, ok := blobFilename(key); !ok {
+		return "", false
+	}
+	return key, true
+}
+
 func (s *Server) putBlob(w http.ResponseWriter, r *http.Request) {
 	select {
 	case s.uploads <- struct{}{}:
@@ -76,7 +168,7 @@ func (s *Server) putBlob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many concurrent uploads", http.StatusTooManyRequests)
 		return
 	}
-	name, ok := blobFilename(chi.URLParam(r, "key"))
+	key, ok := blobKeyFromRequest(r)
 	if !ok {
 		http.Error(w, "invalid blob key", http.StatusBadRequest)
 		return
@@ -97,17 +189,44 @@ func (s *Server) putBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := tenantIDFrom(r)
-	dir := filepath.Join(s.dataDir, "blobs", tenantID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		http.Error(w, "failed to prepare blob store", 500)
+	if err := s.storeTenantBlob(r.Context(), tenantID, userIDFrom(r), key, mediaType, data); err != nil {
+		switch {
+		case errors.Is(err, store.ErrQuotaExceeded):
+			http.Error(w, "blob storage quota exceeded", http.StatusInsufficientStorage)
+		default:
+			http.Error(w, "failed to store blob", http.StatusInternalServerError)
+		}
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) storeTenantBlob(ctx context.Context, tenantID, userID, key, mediaType string, data []byte) error {
+	name, ok := blobFilename(key)
+	if !ok || !allowedBlobMediaType(mediaType) || len(data) > maxUploadBytes {
+		return errors.New("invalid blob")
+	}
+	objects, err := s.resolveBlobObjectStore(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if objects != nil {
+		return s.storeTenantObjectBlob(ctx, tenantID, userID, key, name, mediaType, data, objects)
+	}
+	dir := filepath.Join(s.dataDir, "blobs", tenantID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	unlockBlob, err := lockTenantBlob(s.dataDir, tenantID, name)
+	if err != nil {
+		return err
+	}
+	defer unlockBlob()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	storedBytes, err := directoryBytes(dir)
 	if err != nil {
-		http.Error(w, "failed to inspect blob storage", http.StatusInternalServerError)
-		return
+		return err
 	}
 	var replacedBytes int64
 	for _, existing := range []string{filepath.Join(dir, name), filepath.Join(dir, name+".json")} {
@@ -116,77 +235,187 @@ func (s *Server) putBlob(w http.ResponseWriter, r *http.Request) {
 			replacedBytes += info.Size()
 		}
 	}
-	if storedBytes+int64(len(data))+int64(len(mediaType))+128 > maxStoredFiles {
-		http.Error(w, "blob storage quota exceeded", http.StatusInsufficientStorage)
-		return
+	oldMetadata := blobMetadata{}
+	if value, readErr := os.ReadFile(filepath.Join(dir, name+".json")); readErr == nil {
+		_ = json.Unmarshal(value, &oldMetadata)
 	}
-	additional := int64(len(data)) + int64(len(mediaType)) + 128 - replacedBytes
-	if additional < 0 {
-		additional = 0
+	superseded := append([]blobReservation(nil), oldMetadata.Superseded...)
+	if oldMetadata.Reservation.ID != "" && oldMetadata.Reservation.Bytes > 0 {
+		superseded = append(superseded, oldMetadata.Reservation)
 	}
-	if s.store != nil {
-		if err := s.store.CheckStorageQuota(r.Context(), tenantID, additional); errors.Is(err, store.ErrQuotaExceeded) {
-			http.Error(w, "blob storage quota exceeded", http.StatusInsufficientStorage)
-			return
-		} else if err != nil {
-			http.Error(w, "failed to check storage quota", http.StatusInternalServerError)
-			return
+	compactMetadata := blobMetadata{
+		ContentType: mediaType,
+		Reservation: blobReservation{ID: randomGenerationOwner()},
+	}
+	var compactMeta []byte
+	for range 3 {
+		compactMeta, _ = json.Marshal(compactMetadata)
+		accounted := int64(len(data) + len(compactMeta))
+		if compactMetadata.Reservation.Bytes == accounted {
+			break
 		}
+		compactMetadata.Reservation.Bytes = accounted
+	}
+	compactMeta, _ = json.Marshal(compactMetadata)
+	pendingMetadata := compactMetadata
+	pendingMetadata.Superseded = superseded
+	pendingMeta, _ := json.Marshal(pendingMetadata)
+	newBytes := compactMetadata.Reservation.Bytes
+	if storedBytes+int64(len(data)+len(pendingMeta)) > maxStoredFiles {
+		return store.ErrQuotaExceeded
+	}
+	usageMeta, _ := json.Marshal(map[string]any{"blobKey": key, "reservationId": compactMetadata.Reservation.ID})
+	reserved := false
+	if s.store != nil {
+		if err := s.store.ReserveStorageUsage(ctx, tenantID, userID, newBytes, usageMeta); err != nil {
+			return err
+		}
+		reserved = true
 	}
 	if err := atomicWriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
-		http.Error(w, "failed to store blob", 500)
-		return
-	}
-	meta, _ := json.Marshal(map[string]string{"contentType": mediaType})
-	if err := atomicWriteFile(filepath.Join(dir, name+".json"), meta, 0o600); err != nil {
-		_ = os.Remove(filepath.Join(dir, name))
-		http.Error(w, "failed to store blob metadata", 500)
-		return
-	}
-	if s.store != nil && additional > 0 {
-		usageMeta, _ := json.Marshal(map[string]any{"blobKey": chi.URLParam(r, "key")})
-		units := int(additional)
-		if int64(units) != additional {
-			units = int(^uint(0) >> 1)
+		if reserved {
+			_ = s.releaseBlobReservation(context.Background(), tenantID, userID, compactMetadata.Reservation, key)
 		}
-		_ = s.store.RecordUsage(r.Context(), tenantID, userIDFrom(r), "storage_bytes", units, usageMeta)
+		return err
 	}
-	w.WriteHeader(http.StatusNoContent)
+	if err := atomicWriteFile(filepath.Join(dir, name+".json"), pendingMeta, 0o600); err != nil {
+		_ = os.Remove(filepath.Join(dir, name))
+		if reserved {
+			_ = s.releaseBlobReservation(context.Background(), tenantID, userID, compactMetadata.Reservation, key)
+		}
+		return err
+	}
+	if s.store != nil {
+		for _, reservation := range superseded {
+			if err := s.releaseBlobReservation(ctx, tenantID, userID, reservation, key); err != nil {
+				return err
+			}
+		}
+		if oldMetadata.Reservation.ID == "" && replacedBytes > 0 {
+			legacyMeta, _ := json.Marshal(map[string]any{"blobKey": key, "operation": "replace-legacy"})
+			if err := s.store.ReleaseStorageUsage(ctx, tenantID, userID, replacedBytes, legacyMeta); err != nil {
+				return err
+			}
+		}
+	}
+	if err := atomicWriteFile(filepath.Join(dir, name+".json"), compactMeta, 0o600); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) releaseBlobReservation(ctx context.Context, tenantID, userID string, reservation blobReservation, key string) error {
+	if s.store == nil || reservation.ID == "" || reservation.Bytes <= 0 {
+		return nil
+	}
+	meta, _ := json.Marshal(map[string]any{"blobKey": key, "releaseOf": reservation.ID})
+	return s.store.ReleaseStorageUsage(ctx, tenantID, userID, reservation.Bytes, meta)
+}
+
+func readBlobMetadata(path string) blobMetadata {
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return blobMetadata{}
+	}
+	metadata := blobMetadata{}
+	if json.Unmarshal(value, &metadata) != nil {
+		return blobMetadata{}
+	}
+	return metadata
+}
+
+func (s *Server) deleteTenantBlob(ctx context.Context, tenantID, userID, key string) error {
+	name, ok := blobFilename(key)
+	if !ok {
+		return errors.New("invalid blob key")
+	}
+	objects, err := s.resolveBlobObjectStore(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if objects != nil {
+		return s.deleteTenantObjectBlob(ctx, tenantID, userID, key, name, objects)
+	}
+	unlockBlob, err := lockTenantBlob(s.dataDir, tenantID, name)
+	if err != nil {
+		return err
+	}
+	defer unlockBlob()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Join(s.dataDir, "blobs", tenantID)
+	metaPath := filepath.Join(dir, name+".json")
+	metadata := readBlobMetadata(metaPath)
+	var removedBytes int64
+	for _, path := range []string{filepath.Join(dir, name), metaPath} {
+		if info, err := os.Stat(path); err == nil {
+			removedBytes += info.Size()
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	reservations := append([]blobReservation{metadata.Reservation}, metadata.Superseded...)
+	for _, reservation := range reservations {
+		if err := s.releaseBlobReservation(ctx, tenantID, userID, reservation, key); err != nil {
+			return err
+		}
+	}
+	if s.store != nil && metadata.Reservation.ID == "" && removedBytes > 0 {
+		meta, _ := json.Marshal(map[string]any{"blobKey": key, "operation": "delete"})
+		if err := s.store.ReleaseStorageUsage(ctx, tenantID, userID, removedBytes, meta); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(metaPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) readTenantImageBlob(tenantID, key string) (generatedImage, error) {
+	return s.readTenantImageBlobContext(context.Background(), tenantID, key)
+}
+
+func (s *Server) readTenantImageBlobContext(ctx context.Context, tenantID, key string) (generatedImage, error) {
+	value, err := s.readTenantBlob(ctx, tenantID, key, maxGeneratedImageBytes)
+	if err != nil {
+		return generatedImage{}, err
+	}
+	if len(value.Data) > maxGeneratedImageBytes {
+		return generatedImage{}, errors.New("invalid or oversized image blob")
+	}
+	imageValue := generatedImage{Data: value.Data, MIMEType: value.Metadata.ContentType}
+	if _, _, _, err := validateGeneratedImage(imageValue); err != nil {
+		return generatedImage{}, err
+	}
+	return imageValue, nil
 }
 
 func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
-	name, ok := blobFilename(chi.URLParam(r, "key"))
+	key, ok := blobKeyFromRequest(r)
 	if !ok {
 		http.Error(w, "invalid blob key", http.StatusBadRequest)
 		return
 	}
 	tenantID := tenantIDFrom(r)
-	dir := filepath.Join(s.dataDir, "blobs", tenantID)
-	// Pre-multi-tenant installs stored blobs flat under dataDir/blobs. For the
-	// default local tenant only, fall back so existing media remains readable.
-	filePath := filepath.Join(dir, name)
-	metaPath := filepath.Join(dir, name+".json")
-	if _, err := os.Stat(filePath); err != nil && tenantID == store.DefaultTenantID {
-		legacy := filepath.Join(s.dataDir, "blobs", name)
-		if _, legacyErr := os.Stat(legacy); legacyErr == nil {
-			filePath = legacy
-			metaPath = filepath.Join(s.dataDir, "blobs", name+".json")
-		}
+	value, err := s.readTenantBlob(r.Context(), tenantID, key, maxUploadBytes)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
 	}
-	meta := struct {
-		ContentType string `json:"contentType"`
-	}{}
-	if value, err := os.ReadFile(metaPath); err == nil {
-		_ = json.Unmarshal(value, &meta)
+	if err != nil {
+		http.Error(w, "failed to read blob", http.StatusInternalServerError)
+		return
 	}
-	if meta.ContentType != "" {
-		w.Header().Set("Content-Type", meta.ContentType)
+	if value.Metadata.ContentType != "" {
+		w.Header().Set("Content-Type", value.Metadata.ContentType)
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if meta.ContentType == "application/octet-stream" {
+	if value.Metadata.ContentType == "application/octet-stream" {
 		w.Header().Set("Content-Disposition", "attachment")
 	}
-	http.ServeFile(w, r, filePath)
+	http.ServeContent(w, r, "blob", time.Time{}, bytes.NewReader(value.Data))
 }
 
 func allowedBlobMediaType(value string) bool {
@@ -201,13 +430,14 @@ func allowedBlobMediaType(value string) bool {
 }
 
 func (s *Server) deleteBlob(w http.ResponseWriter, r *http.Request) {
-	name, ok := blobFilename(chi.URLParam(r, "key"))
+	key, ok := blobKeyFromRequest(r)
 	if !ok {
 		http.Error(w, "invalid blob key", http.StatusBadRequest)
 		return
 	}
-	dir := filepath.Join(s.dataDir, "blobs", tenantIDFrom(r))
-	_ = os.Remove(filepath.Join(dir, name))
-	_ = os.Remove(filepath.Join(dir, name+".json"))
+	if err := s.deleteTenantBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), key); err != nil {
+		http.Error(w, "failed to delete blob", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -1,4 +1,5 @@
-import type { AiChannel, AppConfig, AssetItem, BoardProject, PromptItem } from "@/types/board";
+import type { AiChannel, AiEndpointConfig, AppConfig, AssetItem, BoardProject, PromptItem } from "@/types/board";
+import { stripObjectStorageSecrets } from "@/lib/object-storage";
 
 export type BackupConfig = Omit<
   AppConfig,
@@ -153,6 +154,7 @@ export function buildBackupBundle(input: {
     prompts: input.prompts,
     config: {
       ...preferences,
+      objectStorage: preferences.objectStorage ? stripObjectStorageSecrets(preferences.objectStorage) : preferences.objectStorage,
       channels: channels.map(({ apiKey: _apiKey, ...channel }) => ({ ...channel, providers: channel.providers ? Object.fromEntries(Object.entries(channel.providers).map(([kind, provider]) => [kind, { ...provider, apiKey: "" }])) as typeof channel.providers : undefined })),
     },
   };
@@ -160,17 +162,25 @@ export function buildBackupBundle(input: {
 
 export function mergeBackupConfig(local: AppConfig, backup: BackupConfig): AppConfig {
   const localChannels = new Map(local.channels.map((channel) => [channel.id, channel]));
+  const sameProviderRoute = (left: AiEndpointConfig, right: AiEndpointConfig | undefined) => Boolean(right && left.baseUrl === right.baseUrl &&
+      (left.protocol ?? "openai") === (right.protocol ?? "openai") &&
+      JSON.stringify(left.template ?? null) === JSON.stringify(right.template ?? null));
   return {
     ...backup,
     channels: backup.channels.map((channel) => {
       const local = localChannels.get(channel.id);
       const providers = channel.providers && local?.providers
-        ? Object.fromEntries(Object.entries(channel.providers).map(([kind, provider]) => [kind, { ...provider, apiKey: local.providers?.[kind as keyof typeof local.providers]?.apiKey ?? "" }])) as typeof channel.providers
+        ? Object.fromEntries(Object.entries(channel.providers).map(([kind, provider]) => {
+          const localProvider = local.providers?.[kind as keyof typeof local.providers];
+          return [kind, { ...provider, apiKey: sameProviderRoute(provider, localProvider) ? localProvider?.apiKey ?? "" : "" }];
+        })) as typeof channel.providers
         : channel.providers;
-      return { ...channel, providers, apiKey: local?.apiKey ?? "", baseUrl: channel.baseUrl || local?.baseUrl || "" };
+      const baseUrl = channel.baseUrl || local?.baseUrl || "";
+      return { ...channel, providers, apiKey: local && baseUrl === local.baseUrl ? local.apiKey : "", baseUrl };
     }),
     webdavUrl: local.webdavUrl,
     webdavUser: local.webdavUser,
     webdavPass: local.webdavPass,
+    objectStorage: local.objectStorage,
   };
 }

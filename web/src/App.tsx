@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useBoardStore } from "@/stores/use-board-store";
 import { TopNav } from "@/components/layout/TopNav";
@@ -9,6 +9,8 @@ import { BrowserRuntime } from "@/components/agent/BrowserRuntime";
 import { PromptSourceScheduler } from "@/components/prompts/PromptSourceScheduler";
 import { HomePage } from "@/pages/HomePage";
 import { AssetsPage } from "@/pages/AssetsPage";
+import { ServerLibraryPage } from "@/pages/ServerLibraryPage";
+import { AICallLogsPage } from "@/pages/AICallLogsPage";
 import { PromptsPage } from "@/pages/PromptsPage";
 import { PluginsPage } from "@/pages/PluginsPage";
 import { ImageWorkbenchPage } from "@/pages/ImageWorkbenchPage";
@@ -17,6 +19,11 @@ import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-cre
 import { initAnalytics } from "@/lib/analytics";
 import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
 import { AuthGate } from "@/components/auth/AuthGate";
+
+const WorkflowWorkbenchPage = lazy(async () => {
+  const module = await import("@/pages/WorkflowWorkbenchPage");
+  return { default: module.WorkflowWorkbenchPage };
+});
 
 export function App() {
   const hydrate = useBoardStore((s) => s.hydrate);
@@ -123,10 +130,17 @@ export function App() {
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/assets" element={<AssetsPage />} />
+            <Route path="/library" element={<ServerLibraryPage />} />
+            <Route path="/ai-logs" element={<AICallLogsPage />} />
             <Route path="/prompts" element={<PromptsPage />} />
             <Route path="/plugins" element={<PluginsPage />} />
             <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
             <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
+            <Route path="/workbench/workflows" element={(
+              <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载工作流…</div>}>
+                <WorkflowWorkbenchPage />
+              </Suspense>
+            )} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

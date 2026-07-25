@@ -17,9 +17,9 @@ const maxGenerationJobBytes = 1 << 20
 const maxGenerationRestoreBytes = 32 << 20
 const maxGenerationRestoreItems = 10_000
 
-var generationKinds = map[string]bool{"image": true, "video": true}
+var generationKinds = map[string]bool{"image": true, "video": true, "audio": true, "workflow": true}
 var generationStatuses = map[string]bool{
-	"queued": true, "running": true, "succeeded": true, "failed": true, "cancelled": true,
+	"queued": true, "running": true, "succeeded": true, "failed": true, "cancelled": true, "deleted": true,
 }
 
 func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
@@ -47,8 +47,9 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid generation kind", http.StatusBadRequest)
 		return
 	}
+	includeDeleted := r.URL.Query().Get("includeDeleted") == "1" || r.URL.Query().Get("includeDeleted") == "true"
 	result, err := s.store.ListGenerationJobs(r.Context(), tenantIDFrom(r), store.GenerationJobQuery{
-		ProjectID: projectID, Kind: kind, Page: page, PageSize: pageSize,
+		ProjectID: projectID, Kind: kind, Page: page, PageSize: pageSize, IncludeDeleted: includeDeleted,
 	})
 	if err != nil {
 		http.Error(w, "failed to list generation jobs", http.StatusInternalServerError)
@@ -67,6 +68,10 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if isServerGenerationJob(job) {
+		http.Error(w, "server generation jobs must use the execution endpoint", http.StatusBadRequest)
+		return
+	}
 	tenantID := tenantIDFrom(r)
 	if err := s.store.CheckGenerationQuota(r.Context(), tenantID); errors.Is(err, store.ErrQuotaExceeded) {
 		http.Error(w, "generation quota exceeded", http.StatusTooManyRequests)
@@ -75,16 +80,12 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to check generation quota", http.StatusInternalServerError)
 		return
 	}
-	if _, err := s.store.GetGenerationJob(r.Context(), tenantID, job.ID); err == nil {
-		http.Error(w, "generation job already exists", http.StatusConflict)
-		return
-	} else if !errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "failed to inspect generation job", http.StatusInternalServerError)
-		return
-	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job.CreatedAt, job.UpdatedAt = now, now
-	if err := s.store.PutGenerationJob(r.Context(), tenantID, job); err != nil {
+	if err := s.store.CreateGenerationJob(r.Context(), tenantID, job); errors.Is(err, store.ErrConflict) {
+		http.Error(w, "generation job already exists", http.StatusConflict)
+		return
+	} else if err != nil {
 		http.Error(w, "failed to store generation job", http.StatusInternalServerError)
 		return
 	}
@@ -114,13 +115,20 @@ func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid generation history item", http.StatusBadRequest)
 			return
 		}
+		if isServerGenerationJob(job) && (job.Status == "queued" || job.Status == "running") {
+			http.Error(w, "active server generation jobs cannot be restored", http.StatusBadRequest)
+			return
+		}
 		if _, exists := ids[job.ID]; exists {
 			http.Error(w, "duplicate generation history id", http.StatusBadRequest)
 			return
 		}
 		ids[job.ID] = struct{}{}
 	}
-	if err := s.store.ReplaceGenerationJobs(r.Context(), tenantIDFrom(r), jobs); err != nil {
+	if err := s.store.ReplaceGenerationJobs(r.Context(), tenantIDFrom(r), jobs); errors.Is(err, store.ErrConflict) {
+		http.Error(w, "active server generation jobs must finish or be cancelled before restore", http.StatusConflict)
+		return
+	} else if err != nil {
 		http.Error(w, "failed to replace generation history", http.StatusInternalServerError)
 		return
 	}
@@ -169,6 +177,14 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
 		return
 	}
+	if isServerGenerationJob(current) {
+		http.Error(w, "server generation jobs are read-only", http.StatusConflict)
+		return
+	}
+	if isServerGenerationJob(job) {
+		http.Error(w, "browser generation jobs cannot become server-owned", http.StatusConflict)
+		return
+	}
 	job.CreatedAt = current.CreatedAt
 	job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.store.PutGenerationJob(r.Context(), tenantIDFrom(r), job); err != nil {
@@ -188,6 +204,28 @@ func (s *Server) deleteGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid generation job id", http.StatusBadRequest)
 		return
 	}
+	job, err := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), id)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
+		return
+	}
+	if isServerGenerationJob(job) && (job.Status == "queued" || job.Status == "running") {
+		http.Error(w, "active generation jobs must be cancelled before deletion", http.StatusConflict)
+		return
+	}
+	if job.Kind == "workflow" {
+		for _, childID := range workflowChildJobIDs(job.Result) {
+			child, childErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), childID)
+			if childErr == nil && (child.Status == "queued" || child.Status == "running") {
+				http.Error(w, "workflow child jobs must finish or be cancelled before deletion", http.StatusConflict)
+				return
+			}
+		}
+	}
 	if err := s.store.DeleteGenerationJob(r.Context(), tenantIDFrom(r), id); errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -196,6 +234,120 @@ func (s *Server) deleteGenerationJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) bulkDeleteGenerationJobs(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid bulk delete payload", http.StatusBadRequest)
+		return
+	}
+	if len(input.IDs) == 0 || len(input.IDs) > 100 {
+		http.Error(w, "ids must contain 1-100 generation job ids", http.StatusBadRequest)
+		return
+	}
+	unique := make([]string, 0, len(input.IDs))
+	seen := make(map[string]struct{}, len(input.IDs))
+	for _, id := range input.IDs {
+		if !validProjectID(id) {
+			http.Error(w, "invalid generation job id", http.StatusBadRequest)
+			return
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		http.Error(w, "ids must contain 1-100 generation job ids", http.StatusBadRequest)
+		return
+	}
+	tenantID := tenantIDFrom(r)
+	// Match single-delete safety: refuse active server/workflow jobs so credits stay refundable via cancel.
+	for _, id := range unique {
+		job, err := s.store.GetGenerationJob(r.Context(), tenantID, id)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			http.Error(w, "failed to read generation job", http.StatusInternalServerError)
+			return
+		}
+		if isServerGenerationJob(job) && (job.Status == "queued" || job.Status == "running") {
+			http.Error(w, "active generation jobs must be cancelled before deletion", http.StatusConflict)
+			return
+		}
+		if job.Kind == "workflow" {
+			for _, childID := range workflowChildJobIDs(job.Result) {
+				child, childErr := s.store.GetGenerationJob(r.Context(), tenantID, childID)
+				if childErr == nil && (child.Status == "queued" || child.Status == "running") {
+					http.Error(w, "workflow child jobs must finish or be cancelled before deletion", http.StatusConflict)
+					return
+				}
+			}
+		}
+	}
+	deleted, err := s.store.DeleteGenerationJobs(r.Context(), tenantID, unique)
+	if err != nil {
+		http.Error(w, "failed to bulk delete generation jobs", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"deleted": deleted})
+}
+
+func (s *Server) deleteGenerationJobsForProject(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
+		return
+	}
+	projectID := chi.URLParam(r, "projectId")
+	if !validProjectID(projectID) {
+		http.Error(w, "invalid project id", http.StatusBadRequest)
+		return
+	}
+	tenantID := tenantIDFrom(r)
+	// Cancel active server/workflow jobs first so reserved credits are refunded.
+	page := 1
+	for {
+		result, err := s.store.ListGenerationJobs(r.Context(), tenantID, store.GenerationJobQuery{
+			ProjectID: projectID, Page: page, PageSize: 100, IncludeDeleted: true,
+		})
+		if err != nil {
+			http.Error(w, "failed to list project generation jobs", http.StatusInternalServerError)
+			return
+		}
+		for _, job := range result.Items {
+			if isServerGenerationJob(job) && (job.Status == "queued" || job.Status == "running") {
+				if _, err := s.store.CancelServerGenerationJob(r.Context(), tenantID, job.ID, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrConflict) {
+					http.Error(w, "failed to cancel active generation job", http.StatusInternalServerError)
+					return
+				}
+			}
+		}
+		if page*result.PageSize >= result.Total || len(result.Items) == 0 {
+			break
+		}
+		page++
+		if page > 10_000 {
+			break
+		}
+	}
+	deleted, err := s.store.DeleteGenerationJobsForProject(r.Context(), tenantID, projectID)
+	if err != nil {
+		http.Error(w, "failed to delete project generation jobs", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"deleted": deleted})
 }
 
 func decodeGenerationJob(w http.ResponseWriter, r *http.Request) (store.GenerationJob, error) {
@@ -229,10 +381,18 @@ func validGenerationJob(job store.GenerationJob) bool {
 }
 
 func validGenerationJobFields(job store.GenerationJob) bool {
-	return validProjectID(job.ID) && (job.ProjectID == "" || validProjectID(job.ProjectID)) &&
+	valid := validProjectID(job.ID) && (job.ProjectID == "" || validProjectID(job.ProjectID)) &&
 		generationKinds[job.Kind] && generationStatuses[job.Status] &&
 		len(job.Prompt) <= 100_000 && len(job.ProviderID) <= 500 && len(job.Model) <= 500 && len(job.Error) <= 10_000 &&
 		jsonObject(job.Parameters) && jsonObject(job.Result)
+	if !valid {
+		return false
+	}
+	if job.Kind == "workflow" {
+		_, _, err := validatePersistedWorkflowJob(job)
+		return err == nil
+	}
+	return true
 }
 
 func jsonObject(value json.RawMessage) bool {

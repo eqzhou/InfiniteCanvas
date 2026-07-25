@@ -66,6 +66,7 @@ redis-cli -u "$test_redis_url" FLUSHDB >/dev/null
 export OPENBOARD_ADDR="127.0.0.1:$PORT"
 export OPENBOARD_ORIGINS="$ORIGIN"
 export OPENBOARD_TOKEN=e2e-token
+export OPENBOARD_AUTH_MODE=off
 export OPENBOARD_DATABASE_URL="$test_database_url"
 export OPENBOARD_REDIS_URL="$test_redis_url"
 export OPENBOARD_DATA="$data_dir"

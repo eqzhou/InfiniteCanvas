@@ -18,23 +18,39 @@ export async function loadServerProjects(): Promise<BoardProject[]> {
   ));
 }
 
+/** Upsert the provided projects without deleting any remote project absent from this list. */
 export async function saveServerProjects(projects: BoardProject[]): Promise<void> {
+  await Promise.all(projects.map(async (project) => {
+    const response = await request(`projects/${encodeURIComponent(project.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(project),
+    });
+    if (!response.ok) throw new Error(`Project save failed: HTTP ${response.status}`);
+  }));
+}
+
+/** Explicit single-project delete used by user-driven project removal. */
+export async function deleteServerProject(projectId: string): Promise<void> {
+  const response = await request(`projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Project delete failed: HTTP ${response.status}`);
+  }
+}
+
+/**
+ * Full workspace replacement: upsert the provided set, then delete remote projects
+ * that are not part of the replacement. Ordinary autosave must not use this path.
+ */
+export async function replaceServerProjects(projects: BoardProject[]): Promise<void> {
   const remote = await readJSON<Array<{ id: string }>>(await request("projects"));
   const localIDs = new Set(projects.map((project) => project.id));
-  await Promise.all([
-    ...projects.map(async (project) => {
-      const response = await request(`projects/${encodeURIComponent(project.id)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(project),
-      });
-      if (!response.ok) throw new Error(`Project save failed: HTTP ${response.status}`);
-    }),
-    ...remote.filter(({ id }) => !localIDs.has(id)).map(async ({ id }) => {
-      const response = await request(`projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!response.ok) throw new Error(`Project delete failed: HTTP ${response.status}`);
-    }),
-  ]);
+  await saveServerProjects(projects);
+  await Promise.all(
+    remote
+      .filter(({ id }) => !localIDs.has(id))
+      .map(({ id }) => deleteServerProject(id)),
+  );
 }
 
 export async function loadServerState<T>(key: "config" | "assets" | "prompts"): Promise<T | null> {

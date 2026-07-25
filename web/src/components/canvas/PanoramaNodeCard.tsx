@@ -1,0 +1,287 @@
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Expand, ImagePlus, Sparkles, Upload, X } from "lucide-react";
+import type { BoardNode } from "@/types/board";
+import { useBoardStore } from "@/stores/use-board-store";
+import {
+  buildPanoramaPrompt,
+  isSupportedPanoramaMimeType,
+  panoramaGenerationError,
+  readPanoramaBlobDimensions,
+  validatePanoramaDimensions,
+} from "@/lib/panorama";
+import { deleteStorageKey, getBlob, uploadMedia } from "@/services/storage";
+import { generateImages } from "@/services/ai-client";
+import { PanoramaViewport } from "@/components/panorama/PanoramaViewport";
+import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import {
+  getPanoramaGenerationSettings,
+  getPanoramaReferenceInputs,
+  loadPanoramaReferenceBlobs,
+  stagePanoramaGeneratedMedia,
+  type PanoramaGeneratedMedia,
+} from "@/lib/panorama-generation";
+import { getProvider } from "@/lib/ai-config";
+
+export function PanoramaNodeCard({ node }: { node: BoardNode }) {
+  const project = useBoardStore((state) => state.getActive());
+  const config = useBoardStore((state) => state.config);
+  const updateNode = useBoardStore((state) => state.updateNode);
+  const commitPanoramaBatch = useBoardStore((state) => state.commitPanoramaBatch);
+  const [open, setOpen] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const generationRef = useRef<AbortController | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEscapeDismiss(open, () => setOpen(false), 130);
+  useEffect(() => () => {
+    generationRef.current?.abort(new DOMException("Panorama node closed", "AbortError"));
+    generationRef.current = null;
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    const keepFocusInside = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [tabindex="0"]',
+      );
+      if (!focusable?.length) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", keepFocusInside, true);
+    return () => {
+      document.removeEventListener("keydown", keepFocusInside, true);
+      previous?.focus();
+    };
+  }, [open]);
+  const sourceImages = (project?.nodes ?? []).filter((candidate) => {
+    if (candidate.type !== "image" || !candidate.metadata.storageKey || !candidate.metadata.content ||
+        !candidate.metadata.bytes || !isSupportedPanoramaMimeType(candidate.metadata.mimeType)) return false;
+    try {
+      validatePanoramaDimensions(candidate.metadata.naturalWidth ?? 0, candidate.metadata.naturalHeight ?? 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const isBatchChild = Boolean(node.metadata.batchRootId);
+
+  const beginWrite = () => {
+    if (isBatchChild) throw new Error("全景批次子结果不可独立修改");
+    if (generationRef.current) throw new Error("全景图正在处理，请稍后再试");
+    const operation = new AbortController();
+    generationRef.current = operation;
+    setLoading(true);
+    setError(null);
+    return operation;
+  };
+
+  const finishWrite = (operation: AbortController) => {
+    if (generationRef.current !== operation) return;
+    generationRef.current = null;
+    setLoading(false);
+  };
+
+  const writeWasSuperseded = (operation: AbortController) =>
+    generationRef.current !== operation || operation.signal.aborted;
+
+  const applyMedia = async (input: Blob | string) => {
+    const operation = beginWrite();
+    let results: PanoramaGeneratedMedia[] = [];
+    try {
+      const historyProject = useBoardStore.getState().getActive();
+      if (!historyProject) throw new Error("全景项目不存在");
+      results = await stagePanoramaGeneratedMedia(
+        ["direct-upload"],
+        1,
+        () => uploadMedia(input, "image", {
+          requirePersistent: true,
+          preflightImage: readPanoramaBlobDimensions,
+        }),
+        deleteStorageKey,
+      );
+      if (writeWasSuperseded(operation)) {
+        await Promise.all(results.map((result) => deleteStorageKey(result.storageKey).catch(() => undefined)));
+        results = [];
+        throw operation.signal.reason ?? new DOMException("Panorama upload superseded", "AbortError");
+      }
+      await commitPanoramaBatch(historyProject.id, node.id, results, {
+        prompt: node.metadata.prompt ?? "",
+        model: node.metadata.model ?? "",
+        quality: node.metadata.quality ?? config.imageQuality,
+        referenceStorageKeys: [],
+      }, structuredClone(historyProject), true);
+      results = [];
+    } finally {
+      finishWrite(operation);
+    }
+  };
+
+  const selectSource = async (sourceId: string) => {
+    const operation = beginWrite();
+    try {
+      const source = sourceImages.find((candidate) => candidate.id === sourceId);
+      if (!source) return;
+      const historyProject = useBoardStore.getState().getActive();
+      if (!historyProject) throw new Error("全景项目不存在");
+      await commitPanoramaBatch(historyProject.id, node.id, [{
+        content: source.metadata.content!,
+        storageKey: source.metadata.storageKey!,
+        naturalWidth: source.metadata.naturalWidth!,
+        naturalHeight: source.metadata.naturalHeight!,
+        bytes: source.metadata.bytes!,
+        mimeType: source.metadata.mimeType!,
+      }], {
+        prompt: node.metadata.prompt ?? "",
+        model: node.metadata.model ?? "",
+        quality: node.metadata.quality ?? config.imageQuality,
+        referenceStorageKeys: [source.metadata.storageKey!],
+        derivedFromId: source.id,
+      }, structuredClone(historyProject), false);
+    } finally {
+      finishWrite(operation);
+    }
+  };
+
+  const generate = async () => {
+    if (generationRef.current) return;
+    const operation = beginWrite();
+    let uploadedResults: PanoramaGeneratedMedia[] = [];
+    let commitAttempted = false;
+    try {
+      const historyProject = useBoardStore.getState().getActive();
+      if (!historyProject) throw new Error("全景项目不存在");
+      const currentNode = historyProject.nodes.find((candidate) => candidate.id === node.id);
+      if (!currentNode || currentNode.type !== "panorama") throw new Error("全景节点不存在");
+      const channel = config.channels.find((candidate) => candidate.id === config.activeChannelId) ?? config.channels[0];
+      if (!channel) throw new Error("请先配置图片生成渠道");
+      const imageProvider = getProvider(channel, "image");
+      if (!imageProvider.apiKey || !imageProvider.baseUrl || !imageProvider.model) {
+        throw new Error("请先配置图片生成渠道");
+      }
+      const prompt = buildPanoramaPrompt(currentNode.metadata.prompt ?? "");
+      const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
+      const referenceInputs = getPanoramaReferenceInputs(historyProject, currentNode.id);
+      const referenceBlobs = await loadPanoramaReferenceBlobs(referenceInputs, (storageKey) => getBlob("image", storageKey));
+      updateNode(currentNode.id, { metadata: { status: "loading", errorDetails: undefined } }, { history: false });
+      const urls = await generateImages({
+        channel,
+        model: currentNode.metadata.model || imageProvider.model,
+        prompt,
+        size: settings.size,
+        quality: settings.quality,
+        n: settings.count,
+        referenceBlobs,
+        systemPrompt: config.systemPrompt,
+        signal: operation.signal,
+      });
+      uploadedResults = await stagePanoramaGeneratedMedia(
+        urls,
+        settings.count,
+        (url) => uploadMedia(url, "image", {
+          requirePersistent: true,
+          preflightImage: readPanoramaBlobDimensions,
+        }),
+        deleteStorageKey,
+      );
+      if (writeWasSuperseded(operation)) {
+        await Promise.all(uploadedResults.map((result) => deleteStorageKey(result.storageKey).catch(() => undefined)));
+        uploadedResults = [];
+        throw operation.signal.reason ?? new DOMException("Panorama generation superseded", "AbortError");
+      }
+      commitAttempted = true;
+      await commitPanoramaBatch(historyProject.id, currentNode.id, uploadedResults, {
+        prompt: currentNode.metadata.prompt ?? "",
+        model: currentNode.metadata.model || imageProvider.model,
+        quality: settings.quality,
+        referenceStorageKeys: referenceInputs.map((input) => input.storageKey),
+      }, structuredClone(historyProject), true);
+      uploadedResults = [];
+    } catch (cause) {
+      if (!commitAttempted && uploadedResults.length > 0) {
+        await Promise.all(uploadedResults.map((result) => deleteStorageKey(result.storageKey).catch(() => undefined)));
+      }
+      const message = panoramaGenerationError(cause);
+      if (!writeWasSuperseded(operation)) {
+        updateNode(node.id, { metadata: { status: "error", errorDetails: message } }, { history: false });
+      }
+      throw cause;
+    } finally {
+      if (generationRef.current === operation) {
+        finishWrite(operation);
+      }
+    }
+  };
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 text-white" onPointerDown={(event) => event.stopPropagation()}>
+      {node.metadata.content ? (
+        <>
+          <img src={node.metadata.content} alt={node.title} className="min-h-0 flex-1 object-cover" draggable={false} />
+          <button type="button" aria-label="打开 360° 全景" className="absolute right-2 top-2 rounded bg-black/65 p-2 hover:bg-black/80" onClick={() => setOpen(true)}><Expand size={15} /></button>
+        </>
+      ) : (
+        <div className="grid min-h-0 flex-1 place-items-center p-3 text-center text-xs text-slate-400">
+          <div><ImagePlus size={24} className="mx-auto mb-2" /><p>上传、选择或生成 2:1 全景图</p></div>
+        </div>
+      )}
+      <div className="grid gap-1 border-t border-white/10 bg-black/50 p-2">
+        <input aria-label="全景提示词" disabled={loading || isBatchChild} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs outline-none disabled:opacity-50" placeholder="描述 360° 场景…" value={node.metadata.prompt ?? ""} onChange={(event) => updateNode(node.id, { metadata: { prompt: event.target.value } }, { history: false })} />
+        <div className="flex gap-1">
+          <select aria-label="选择 2:1 画布图片" disabled={loading || isBatchChild} className="min-w-0 flex-1 rounded border border-white/10 bg-slate-900 px-1 text-[11px] disabled:opacity-50" value="" onChange={(event) => void selectSource(event.target.value).catch((cause) => setError(panoramaGenerationError(cause)))}>
+            <option value="">复用 2:1 全景</option>
+            {sourceImages.map((source) => <option key={source.id} value={source.id}>{source.title}</option>)}
+          </select>
+          <label className={`grid h-8 w-8 shrink-0 place-items-center rounded border border-white/10 ${loading || isBatchChild ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`} title="上传 2:1 全景图"><Upload size={14} /><input aria-label="上传 2:1 全景图" disabled={loading || isBatchChild} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void applyMedia(file).catch((cause) => setError(panoramaGenerationError(cause)));
+            event.currentTarget.value = "";
+          }} /></label>
+          <button type="button" aria-label="生成全景图" disabled={loading || isBatchChild} className="grid h-8 w-8 shrink-0 place-items-center rounded bg-[var(--ob-accent)] text-white disabled:opacity-50" onClick={() => void generate().catch((cause) => setError(panoramaGenerationError(cause)))}>{loading ? <span className="animate-pulse">…</span> : <Sparkles size={14} />}</button>
+        </div>
+        <div role="group" aria-label="全景生成设置" className="grid grid-cols-[1fr_5rem] gap-1">
+          <label className="grid grid-cols-[2.5rem_1fr] items-center gap-1 text-[10px] text-slate-400">
+            质量
+            <select aria-label="全景生成质量" disabled={loading || isBatchChild} className="min-w-0 rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.quality ?? config.imageQuality} onChange={(event) => updateNode(node.id, { metadata: { quality: event.target.value } })}>
+              {!["auto", "low", "medium", "high"].includes(node.metadata.quality ?? config.imageQuality) ? <option value={node.metadata.quality ?? config.imageQuality}>{node.metadata.quality ?? config.imageQuality}</option> : null}
+              <option value="auto">自动</option>
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+            </select>
+          </label>
+          <label className="grid grid-cols-[2rem_1fr] items-center gap-1 text-[10px] text-slate-400">
+            张数
+            <select aria-label="全景生成张数" disabled={loading || isBatchChild} className="rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.count ?? 1} onChange={(event) => updateNode(node.id, { metadata: { count: Number(event.target.value) } })}>
+              {Array.from({ length: 8 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}
+            </select>
+          </label>
+        </div>
+        {isBatchChild ? <p className="text-[10px] text-slate-400">批次子结果请从主结果重新生成</p> : null}
+        {project ? (() => {
+          const imageNodeIds = new Set(project.nodes.filter((candidate) => candidate.type === "image").map((candidate) => candidate.id));
+          const count = new Set(project.edges.filter((edge) => edge.to === node.id && imageNodeIds.has(edge.from)).map((edge) => edge.from)).size;
+          return count > 0 ? <p className="text-[10px] text-slate-400">已连接 {count} 张普通图片作为生成参考</p> : null;
+        })() : null}
+      </div>
+      {(error || node.metadata.errorDetails) ? <p role="alert" className="absolute bottom-20 left-2 right-2 rounded bg-red-950/90 px-2 py-1 text-[11px] text-red-200">{error || node.metadata.errorDetails}</p> : null}
+      {open && node.metadata.content ? createPortal(
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="360° 全景查看器" className="fixed inset-0 z-[160] bg-black text-white">
+          <PanoramaViewport sourceUrl={node.metadata.content} onError={setError} />
+          <div className="absolute left-4 top-4 rounded bg-black/60 px-3 py-2 text-sm">{node.title} · {node.metadata.naturalWidth}×{node.metadata.naturalHeight}</div>
+          <button ref={closeButtonRef} type="button" aria-label="关闭全景查看器" className="absolute right-4 top-4 rounded bg-black/60 p-2" onClick={() => setOpen(false)}><X size={20} /></button>
+        </div>, document.body) : null}
+    </div>
+  );
+}

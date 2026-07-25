@@ -15,12 +15,19 @@ import {
   X,
 } from "lucide-react";
 import { parseBoardProject } from "@/lib/board-document";
+import { assertPlainProjectImportSafe } from "@/lib/plain-project-import";
 import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { exportNodeSelection } from "@/lib/node-export";
 import type { BoardNode } from "@/types/board";
 import { CanvasAssetsPanel } from "@/components/canvas/CanvasAssetsPanel";
 import { CanvasPromptsPanel } from "@/components/canvas/CanvasPromptsPanel";
+import { useOptionalAuth } from "@/components/auth/AuthGate";
+import {
+  directorCaptureStore,
+  getDirectorCaptureOwnerScope,
+} from "@/services/director-capture-store";
+import { directorModelStore } from "@/services/director-model-store";
 
 const NODE_TYPE_LABELS: Record<BoardNode["type"], string> = {
   text: "文本",
@@ -28,11 +35,14 @@ const NODE_TYPE_LABELS: Record<BoardNode["type"], string> = {
   config: "配置",
   video: "视频",
   audio: "音频",
+  panorama: "全景",
+  director: "导演台",
   group: "分组",
   plugin: "插件",
 };
 
 export function HomePage() {
+  const auth = useOptionalAuth();
   const ready = useBoardStore((s) => s.ready);
   const projects = useBoardStore((s) => s.projects);
   const activeProjectId = useBoardStore((s) => s.activeProjectId);
@@ -59,7 +69,32 @@ export function HomePage() {
   const [panelWidth, setPanelWidth] = useState(config.canvasPanelWidth ?? 256);
   const panelCollapsed = config.canvasPanelCollapsed === true;
   const panelTab = config.canvasPanelTab ?? "projects";
+  const captureOwnerScope = useMemo(
+    () => getDirectorCaptureOwnerScope(auth?.user),
+    [auth?.user?.id, auth?.user?.tenantId],
+  );
+  const captureDirectory = useMemo(() => Object.fromEntries(projects.map((project) => [
+    project.id,
+    project.nodes.filter((node) => node.type === "director").map((node) => node.id),
+  ])), [projects]);
+  const captureDirectorySignature = JSON.stringify(captureDirectory);
+  const modelDirectory = useMemo(() => Object.fromEntries(projects.map((project) => [
+    project.id,
+    Object.fromEntries(project.nodes.filter((node) => node.type === "director").map((node) => [
+      node.id,
+      Object.fromEntries((node.metadata.directorScene?.objects ?? [])
+        .filter((object) => object.kind === "model" && object.modelAsset)
+        .map((object) => [object.id, object.modelAsset!.assetId])),
+    ])),
+  ])), [projects]);
+  const modelDirectorySignature = JSON.stringify(modelDirectory);
   useEscapeDismiss(projectsOpen, () => setProjectsOpen(false));
+
+  useEffect(() => {
+    if (!ready) return;
+    void directorCaptureStore.prune(captureOwnerScope, captureDirectory).catch(() => undefined);
+    void directorModelStore.prune(captureOwnerScope, modelDirectory).catch(() => undefined);
+  }, [captureDirectorySignature, captureOwnerScope, modelDirectorySignature, ready]);
 
   useEffect(() => {
     const width = config.canvasPanelWidth ?? 256;
@@ -327,11 +362,11 @@ export function HomePage() {
                   throw new Error("file too large");
                 }
                 const data = isJson
-                  ? parseBoardProject(JSON.parse(await file.text()))
+                  ? assertPlainProjectImportSafe(parseBoardProject(JSON.parse(await file.text())))
                   : await importProjectBundle(file);
                 importProject(data);
-              } catch {
-                alert("导入失败：JSON 格式不正确");
+              } catch (error) {
+                alert(`导入失败：${error instanceof Error ? error.message : "文件格式不正确"}`);
               }
               e.currentTarget.value = "";
             }}

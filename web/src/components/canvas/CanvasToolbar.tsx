@@ -2,9 +2,11 @@ import type { NodeType } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
   Bookmark,
+  Clapperboard,
   Film,
   Focus,
   Grid3X3,
+  Globe2,
   ImagePlus,
   Map,
   Music2,
@@ -55,14 +57,20 @@ export function CanvasToolbar({
       <Tool label="图片" onClick={() => onAdd("image")}>
         <ImagePlus size={16} />
       </Tool>
-      <Tool label="配置" onClick={() => onAdd("config")}>
+      <Tool label="配置" onClick={() => onAdd("config")} compact>
         <Settings2 size={16} />
       </Tool>
-      <Tool label="视频" onClick={() => onAdd("video")}>
+      <Tool label="视频" onClick={() => onAdd("video")} compact>
         <Film size={16} />
       </Tool>
-      <Tool label="音频" onClick={() => onAdd("audio")}>
+      <Tool label="音频" onClick={() => onAdd("audio")} compact>
         <Music2 size={16} />
+      </Tool>
+      <Tool label="全景" onClick={() => onAdd("panorama")} compact>
+        <Globe2 size={16} />
+      </Tool>
+      <Tool label="导演台" onClick={() => onAdd("director")} compact>
+        <Clapperboard size={16} />
       </Tool>
       <label aria-label="导入图片" title="导入图片" className="ob-file-btn shrink-0">
         <Upload size={16} />

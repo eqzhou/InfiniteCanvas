@@ -15,6 +15,11 @@ Goal: isolate projects, assets, prompts, generation jobs, secrets, and blobs per
 | `required` | Data APIs require a valid user session |
 
 Service token (`OPENBOARD_TOKEN` / Vite proxy `Authorization`) remains for process-level access.
+Paid server-owned generation never uses the anonymous `local` fallback in
+`optional` mode. It requires a user session, or explicit single-user `off`
+mode together with a service token that is revalidated by the generation
+endpoint. Encrypted provider-secret reads and writes also require a session
+once the first user exists; `off` mode revalidates the same process token.
 
 ## First user
 The first registered user becomes **owner of tenant `local`**, claiming existing formal-local data. Later registrations create a new empty personal tenant.

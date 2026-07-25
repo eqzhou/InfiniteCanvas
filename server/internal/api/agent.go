@@ -470,7 +470,8 @@ func validateNode(node map[string]any) error {
 	width, widthOK := finiteJSONNumber(node["width"])
 	height, heightOK := finiteJSONNumber(node["height"])
 	_, metadataOK := node["metadata"].(map[string]any)
-	allowedType := typeName == "text" || typeName == "image" || typeName == "config" || typeName == "video" || typeName == "audio" || typeName == "group"
+	allowedType := typeName == "text" || typeName == "image" || typeName == "config" || typeName == "video" ||
+		typeName == "audio" || typeName == "panorama" || typeName == "director" || typeName == "group" || typeName == "plugin"
 	if !validProjectID(id) || !allowedType || !titleOK || len(title) > 500 || !positionOK || !widthOK || !heightOK || !metadataOK {
 		return errors.New("invalid node shape")
 	}

@@ -1,5 +1,12 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useOptionalAuth } from "@/components/auth/AuthGate";
+import {
+  DEFAULT_SITE_POLICY,
+  getSitePolicy,
+  updateSitePolicy,
+  type SitePolicy,
+} from "@/services/auth-session";
 import { createDefaultChannel } from "@/lib/defaults";
 import { listModels } from "@/services/ai-client";
 import { webdavGetBlob, webdavPutBlob } from "@/services/webdav";
@@ -10,8 +17,10 @@ import type { AiProviderKind } from "@/types/board";
 import type { AiTemplateConfig } from "@/types/board";
 import { validateProviderTemplate } from "@/lib/provider-template";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
+import { createDefaultObjectStorage, normalizeObjectStorage, validateObjectStorageConfig } from "@/lib/object-storage";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
+import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
 import {
   AudioLines,
   CloudDownload,
@@ -42,6 +51,45 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [busyKind, setBusyKind] = useState<AiProviderKind | null>(null);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const auth = useOptionalAuth();
+  const canManageSitePolicy = !auth?.user || ["owner", "admin"].includes((auth.user.role ?? "").toLowerCase());
+  const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
+  const [sitePolicyLoaded, setSitePolicyLoaded] = useState(false);
+  const [sitePolicyBusy, setSitePolicyBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void getSitePolicy()
+      .then((policy) => {
+        if (cancelled) return;
+        setSitePolicy(policy);
+        setSitePolicyLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSitePolicy(DEFAULT_SITE_POLICY);
+        setSitePolicyLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const toggleSitePolicy = async (key: keyof SitePolicy) => {
+    if (!canManageSitePolicy || sitePolicyBusy) return;
+    const next = { ...sitePolicy, [key]: !sitePolicy[key] };
+    setSitePolicyBusy(true);
+    setError(null);
+    try {
+      const saved = await updateSitePolicy(next);
+      setSitePolicy(saved);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "站点策略保存失败");
+    } finally {
+      setSitePolicyBusy(false);
+    }
+  };
 
   const requestClose = useCallback(() => {
     if (closing) return;
@@ -102,7 +150,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           <div>
             <p className="ob-page-kicker">Workspace</p>
             <h2 id="settings-title" className="text-lg font-semibold tracking-tight">设置</h2>
-            <p className="text-xs text-[var(--ob-muted)]">本地工作区配置 · 模型、生成偏好与备份</p>
+            <p className="text-xs text-[var(--ob-muted)]">本地工作区配置 · 模型、生成偏好、对象存储与备份</p>
           </div>
           <button
             type="button"
@@ -142,9 +190,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               <button
                 type="button"
                 aria-label="添加渠道"
-                title="添加渠道"
+                title={sitePolicy.allowCustomChannel ? "添加渠道" : "管理员已关闭自定义渠道"}
                 className="ob-icon-btn mt-5"
+                disabled={!sitePolicy.allowCustomChannel}
                 onClick={() => {
+                  if (!sitePolicy.allowCustomChannel) {
+                    setError("管理员已关闭自定义模型渠道");
+                    return;
+                  }
                   const next = createDefaultChannel();
                   setConfig({
                     ...config,
@@ -205,6 +258,177 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
           </section>
 
+
+          {canManageSitePolicy ? (
+            <section className="mb-6">
+              <SectionTitle title="站点策略" />
+              <p className="mb-3 text-xs text-[var(--ob-muted)]">
+                管理员控制开放注册、用户自定义渠道与云端/后端代理生成。更改立即对当前租户生效。
+              </p>
+              {!sitePolicyLoaded ? (
+                <p className="text-xs text-[var(--ob-muted)]">正在加载站点策略…</p>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={sitePolicy.allowRegister}
+                      aria-label="允许开放注册"
+                      className="ob-switch"
+                      data-checked={sitePolicy.allowRegister ? "true" : "false"}
+                      disabled={sitePolicyBusy}
+                      onClick={() => void toggleSitePolicy("allowRegister")}
+                    />
+                    <span className="text-sm text-[var(--ob-ink)]">允许开放注册</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={sitePolicy.allowCustomChannel}
+                      aria-label="允许自定义渠道"
+                      className="ob-switch"
+                      data-checked={sitePolicy.allowCustomChannel ? "true" : "false"}
+                      disabled={sitePolicyBusy}
+                      onClick={() => void toggleSitePolicy("allowCustomChannel")}
+                    />
+                    <span className="text-sm text-[var(--ob-ink)]">允许自定义渠道</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={sitePolicy.allowCloudChannel}
+                      aria-label="允许云端渠道生成"
+                      className="ob-switch"
+                      data-checked={sitePolicy.allowCloudChannel ? "true" : "false"}
+                      disabled={sitePolicyBusy}
+                      onClick={() => void toggleSitePolicy("allowCloudChannel")}
+                    />
+                    <span className="text-sm text-[var(--ob-ink)]">允许云端渠道生成</span>
+                  </label>
+                </div>
+              )}
+              {!sitePolicy.allowCustomChannel ? (
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">当前禁止新增自定义模型渠道；已有渠道仍可编辑与使用。</p>
+              ) : null}
+              {!sitePolicy.allowCloudChannel ? (
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">后端代理/云端生成已关闭；客户端直连渠道不受此开关影响。</p>
+              ) : null}
+            </section>
+          ) : null}
+
+          <section className="mb-6">
+            <SectionTitle title="对象存储 (S3/R2)" />
+            <p className="mb-3 text-xs text-[var(--ob-muted)]">
+              登录后可随账号同步。开启后正式模式下该账号的媒体写入优先使用此配置；密钥经本地服务加密存储，不会导出到 WebDAV 备份。
+            </p>
+            <div className="mb-3 flex items-center gap-2">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={Boolean(config.objectStorage?.enabled)}
+                className="ob-switch"
+                data-checked={config.objectStorage?.enabled ? "true" : "false"}
+                onClick={() => {
+                  const current = normalizeObjectStorage(config.objectStorage);
+                  setConfig({ ...config, objectStorage: { ...current, enabled: !current.enabled } });
+                }}
+              />
+              <span className="text-sm text-[var(--ob-muted)]">启用用户级 S3/R2</span>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <Field label="Endpoint">
+                <input
+                  className="ob-field"
+                  value={config.objectStorage?.endpoint ?? ""}
+                  placeholder="https://&lt;account&gt;.r2.cloudflarestorage.com"
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), endpoint: e.target.value },
+                  })}
+                />
+              </Field>
+              <Field label="Bucket">
+                <input
+                  className="ob-field"
+                  value={config.objectStorage?.bucket ?? ""}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), bucket: e.target.value },
+                  })}
+                />
+              </Field>
+              <Field label="Region">
+                <input
+                  className="ob-field"
+                  value={config.objectStorage?.region ?? "auto"}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), region: e.target.value },
+                  })}
+                />
+              </Field>
+              <Field label="Prefix">
+                <input
+                  className="ob-field"
+                  value={config.objectStorage?.prefix ?? "openboard"}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), prefix: e.target.value },
+                  })}
+                />
+              </Field>
+              <Field label="Access Key ID">
+                <input
+                  className="ob-field"
+                  value={config.objectStorage?.accessKeyId ?? ""}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), accessKeyId: e.target.value },
+                  })}
+                />
+              </Field>
+              <Field label="Secret Access Key">
+                <input
+                  className="ob-field"
+                  type="password"
+                  value={config.objectStorage?.secretAccessKey ?? ""}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), secretAccessKey: e.target.value },
+                  })}
+                />
+              </Field>
+              <Field label="Session Token (可选)">
+                <input
+                  className="ob-field"
+                  type="password"
+                  value={config.objectStorage?.sessionToken ?? ""}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), sessionToken: e.target.value },
+                  })}
+                />
+              </Field>
+              <label className="flex items-center gap-2 self-end pb-2 text-sm text-[var(--ob-muted)]">
+                <input
+                  type="checkbox"
+                  checked={Boolean(config.objectStorage?.allowInsecureLoopback)}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), allowInsecureLoopback: e.target.checked },
+                  })}
+                />
+                允许 loopback HTTP (MinIO)
+              </label>
+            </div>
+            {(() => {
+              const validation = validateObjectStorageConfig(normalizeObjectStorage(config.objectStorage));
+              return validation ? <p className="mt-2 text-xs text-[var(--ob-danger)]">{validation}</p> : null;
+            })()}
+          </section>
           <section>
             <SectionTitle title="WebDAV 备份" />
             <div className="grid gap-3 lg:grid-cols-[1.4fr_0.7fr_0.7fr]">
@@ -252,6 +476,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                           prompts: state.prompts,
                           config: state.config,
                           generationJobs: await listAllGenerationJobs(),
+                          workflowTemplates: await loadPersonalWorkflowTemplates(),
                         });
                         await webdavPutBlob(state.config, "openboard-workspace.obundle", bundle);
                         alert("已上传完整工作区备份");
@@ -311,7 +536,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <ShieldCheck className="mt-0.5 shrink-0" size={15} />
             <p>
             {import.meta.env.VITE_OPENBOARD_STORAGE === "server"
-              ? "API Key 经本地服务加密后存入 PostgreSQL，数据库中不保存明文。"
+              ? "API Key 与对象存储密钥经本地服务加密后存入 PostgreSQL，数据库中不保存明文。"
               : "API Key 仅保存在当前浏览器的本地存储中。"}
             Ark / Seedance 请为对应服务选择 Ark 协议，并填写兼容的
             `/api/v3` Base URL 与模型名。

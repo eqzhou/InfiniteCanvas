@@ -5,13 +5,26 @@ import type {
   GenerationJob,
   PromptItem,
 } from "@/types/board";
+import type { WorkflowTemplate, WorkflowValues, WorkflowRunResult } from "@/types/workflow";
 import { parseBoardProject } from "@/lib/board-document";
 import { createZipStore, readZipStore, type ZipStoreInput } from "@/lib/zip-store";
 import { validateJsonObject } from "@/lib/bounded-json";
 import { normalizeAppConfig } from "@/lib/app-config";
 import { buildBackupBundle, mergeBackupConfig, type BackupConfig } from "@/services/webdav";
-import { validateGenerationJob } from "@/services/generation-jobs";
+import {
+  collectGenerationStorageKeysFromJobs,
+  validateGenerationJob,
+} from "@/services/generation-jobs";
+import { parseWorkflowTemplate } from "@/lib/workflow-document";
+import { parseWorkflowRunParameters, parseWorkflowRunResult } from "@/lib/workflow-job";
 import { deleteBlob, getBlob, storeImportedMedia } from "@/services/storage";
+import {
+  readPanoramaBlobDimensions,
+  validatePanoramaBlob,
+  validatePanoramaDimensions,
+  validateProjectPanoramaBudget,
+} from "@/lib/panorama";
+import { assertBundlePanoramaMediaManaged } from "@/lib/plain-project-import";
 
 type MediaKind = "image" | "media";
 
@@ -37,19 +50,35 @@ export type WorkspaceSnapshot = {
   prompts: PromptItem[];
   config: AppConfig;
   generationJobs: GenerationJob[];
+  workflowTemplates: WorkflowTemplate[];
 };
 
+export class WorkspaceReplacementRollbackError extends AggregateError {
+  constructor(commitError: unknown, rollbackError: unknown) {
+    super([commitError, rollbackError], "Workspace replacement failed and rollback is incomplete");
+    this.name = "WorkspaceReplacementRollbackError";
+  }
+}
+
 type WorkspaceDocument = Omit<WorkspaceSnapshot, "config"> & {
-  version: 1;
+  version: 2;
   exportedAt: string;
   config: BackupConfig;
 };
 
 export type WorkspaceBundleStorage = {
   load: (kind: MediaKind, storageKey: string) => Promise<Blob | undefined>;
-  store: (kind: MediaKind, blob: Blob) => Promise<{ storageKey: string; url: string }>;
+  store: (kind: MediaKind, blob: Blob) => Promise<{
+    storageKey: string;
+    url: string;
+    width: number;
+    height: number;
+    bytes: number;
+    mimeType: string;
+  }>;
   remove: (kind: MediaKind, storageKey: string) => Promise<void>;
 };
+type StoredWorkspaceMedia = Awaited<ReturnType<WorkspaceBundleStorage["store"]>>;
 
 const defaultStorage: WorkspaceBundleStorage = {
   load: getBlob,
@@ -105,21 +134,7 @@ function collectKeys(snapshot: WorkspaceSnapshot): string[] {
   const keys = new Set<string>();
   for (const project of snapshot.projects) collectProjectKeys(project, keys);
   for (const asset of snapshot.assets) if (asset.storageKey) keys.add(asset.storageKey);
-  for (const job of snapshot.generationJobs) {
-    const references = job.parameters.referenceStorageKeys;
-    if (Array.isArray(references)) {
-      for (const key of references) if (typeof key === "string") keys.add(key);
-    }
-    const items = job.result.items;
-    if (Array.isArray(items)) {
-      for (const item of items) {
-        if (item && typeof item === "object" &&
-            typeof (item as { storageKey?: unknown }).storageKey === "string") {
-          keys.add((item as { storageKey: string }).storageKey);
-        }
-      }
-    }
-  }
+  for (const key of collectGenerationStorageKeysFromJobs(snapshot.generationJobs)) keys.add(key);
   return [...keys];
 }
 
@@ -197,13 +212,14 @@ export async function exportWorkspaceBundle(
     media,
   };
   const workspace: WorkspaceDocument = {
-    version: 1,
+    version: 2,
     exportedAt,
     projects: backup.projects,
     assets: backup.assets,
     prompts: backup.prompts,
     config: backup.config,
     generationJobs: canonical.generationJobs,
+    workflowTemplates: canonical.workflowTemplates,
   };
   return createZipStore([
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
@@ -298,13 +314,16 @@ function parseWorkspace(value: unknown, localConfig: AppConfig): WorkspaceSnapsh
     maxEntries: 500_000,
   });
   const input = record(value, "Workspace document");
-  if (input.version !== 1 || typeof input.exportedAt !== "string" ||
+  if ((input.version !== 1 && input.version !== 2) || typeof input.exportedAt !== "string" ||
       Number.isNaN(Date.parse(input.exportedAt)) || !Array.isArray(input.projects) ||
       !Array.isArray(input.assets) || !Array.isArray(input.prompts) ||
       !Array.isArray(input.generationJobs) || input.projects.length > 10_000 ||
       input.assets.length > 100_000 || input.prompts.length > 100_000 ||
       input.generationJobs.length > 10_000) {
     throw new Error("Invalid workspace document");
+  }
+  if (input.version === 1 && input.workflowTemplates !== undefined) {
+    throw new Error("A v1 workspace cannot contain workflow templates");
   }
   const config = record(input.config, "Workspace config");
   if (!Array.isArray(config.channels) || config.channels.length > 100) {
@@ -320,6 +339,26 @@ function parseWorkspace(value: unknown, localConfig: AppConfig): WorkspaceSnapsh
       throw new Error(`Invalid workspace generation job ${index}`);
     }
   });
+  const rawWorkflowTemplates = input.version === 1 ? [] : input.workflowTemplates;
+  if (!Array.isArray(rawWorkflowTemplates) || rawWorkflowTemplates.length > 1_000) {
+    throw new Error("Invalid workspace workflow templates");
+  }
+  const workflowTemplates = rawWorkflowTemplates.map((template, index) => {
+    try {
+      const parsed = parseWorkflowTemplate(template);
+      if (parsed.scope !== "personal") throw new Error("public template");
+      return parsed;
+    } catch {
+      throw new Error(`Invalid workspace workflow template ${index}`);
+    }
+  });
+  if (new Set(workflowTemplates.map((template) => template.id)).size !== workflowTemplates.length) {
+    throw new Error("Duplicate workspace workflow template id");
+  }
+  if (generationJobs.some((job) => job.kind === "workflow" &&
+    (job.status === "queued" || job.status === "running"))) {
+    throw new Error("Cannot restore an active workflow run");
+  }
   for (const [values, label] of [[projects, "project"], [assets, "asset"], [prompts, "prompt"],
     [generationJobs, "generation job"]] as const) {
     const ids = new Set<string>();
@@ -333,11 +372,12 @@ function parseWorkspace(value: unknown, localConfig: AppConfig): WorkspaceSnapsh
     assets,
     prompts,
     generationJobs,
+    workflowTemplates,
     config: normalizeAppConfig(mergeBackupConfig(localConfig, config as BackupConfig)),
   };
 }
 
-function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, { storageKey: string; url: string }>): WorkspaceSnapshot {
+function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, StoredWorkspaceMedia>): WorkspaceSnapshot {
   const copy = structuredClone(snapshot);
   const replace = (key: string | undefined) => {
     if (!key) return undefined;
@@ -351,6 +391,12 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, { storageK
       if (replacement) {
         node.metadata.storageKey = replacement.storageKey;
         node.metadata.content = replacement.url;
+        if (node.type === "panorama") {
+          node.metadata.naturalWidth = replacement.width;
+          node.metadata.naturalHeight = replacement.height;
+          node.metadata.bytes = replacement.bytes;
+          node.metadata.mimeType = replacement.mimeType;
+        }
       }
       node.metadata.referenceStorageKeys = node.metadata.referenceStorageKeys?.map((key) =>
         replace(key)!.storageKey);
@@ -382,6 +428,27 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, { storageK
     }
   }
   for (const job of copy.generationJobs) {
+    if (job.kind === "workflow") {
+      const parameters = parseWorkflowRunParameters(job.parameters);
+      const values = Object.fromEntries(Object.entries(parameters.values).map(([id, value]) => [
+        id,
+        Array.isArray(value) ? value.map((key) => replace(key)!.storageKey) : value,
+      ])) as WorkflowValues;
+      const result = parseWorkflowRunResult(job.result, parameters.templateSnapshot);
+      const steps = Object.fromEntries(Object.entries(result.steps).map(([id, state]) => [
+        id,
+        state.storageKeys
+          ? { ...state, storageKeys: state.storageKeys.map((key) => replace(key)!.storageKey) }
+          : state,
+      ]));
+      job.parameters = { ...parameters, values };
+      job.result = {
+        steps,
+        outputStorageKeys: result.outputStorageKeys.map((key) => replace(key)!.storageKey),
+      } satisfies WorkflowRunResult;
+      validateGenerationJob(job);
+      continue;
+    }
     const references = job.parameters.referenceStorageKeys;
     if (Array.isArray(references)) {
       job.parameters.referenceStorageKeys = references.map((key) =>
@@ -413,6 +480,7 @@ export async function importWorkspaceBundle(
   if (!manifestBytes || !workspaceBytes) throw new Error("Workspace manifest or document is missing");
   const manifest = parseManifest(decodeJSON(manifestBytes, "workspace manifest"));
   const snapshot = parseWorkspace(decodeJSON(workspaceBytes, "workspace document"), localConfig);
+  snapshot.projects.forEach(assertBundlePanoramaMediaManaged);
   const declaredEntries = new Set([
     "manifest.json",
     "workspace.json",
@@ -428,8 +496,11 @@ export async function importWorkspaceBundle(
     throw new Error("Workspace media references do not match the manifest");
   }
 
-  const replacements = new Map<string, { storageKey: string; url: string }>();
+  const replacements = new Map<string, StoredWorkspaceMedia>();
   const stored: Array<{ kind: MediaKind; storageKey: string }> = [];
+  const panoramaKeys = new Set(snapshot.projects.flatMap((project) => project.nodes
+    .filter((node) => node.type === "panorama" && node.metadata.storageKey)
+    .map((node) => node.metadata.storageKey!)));
   try {
     for (const item of manifest.media) {
       const bytes = entries.get(item.entry);
@@ -438,18 +509,35 @@ export async function importWorkspaceBundle(
       }
       const buffer = new ArrayBuffer(bytes.byteLength);
       new Uint8Array(buffer).set(bytes);
+      const blob = new Blob([buffer], { type: item.mimeType });
+      let panoramaDimensions: { width: number; height: number } | undefined;
+      if (panoramaKeys.has(item.storageKey)) {
+        if (item.kind !== "image") throw new Error("Panorama workspace media must be an image");
+        panoramaDimensions = await readPanoramaBlobDimensions(blob);
+      }
       const replacement = await storage.store(
         item.kind,
-        new Blob([buffer], { type: item.mimeType }),
+        blob,
       );
-      replacements.set(item.storageKey, replacement);
       stored.push({ kind: item.kind, storageKey: replacement.storageKey });
+      if (panoramaKeys.has(item.storageKey)) {
+        await validatePanoramaBlob(new Blob([buffer], { type: replacement.mimeType }));
+        validatePanoramaDimensions(replacement.width, replacement.height);
+        if (replacement.bytes !== item.bytes || replacement.width !== panoramaDimensions?.width ||
+            replacement.height !== panoramaDimensions.height) {
+          throw new Error("Panorama workspace media changed during import");
+        }
+      }
+      replacements.set(item.storageKey, replacement);
     }
     const restored = remap(snapshot, replacements);
+    restored.projects.forEach((project) => validateProjectPanoramaBudget(project.nodes));
     await apply?.(restored);
     return restored;
   } catch (error) {
-    await Promise.allSettled(stored.map((item) => storage.remove(item.kind, item.storageKey)));
+    if (!(error instanceof WorkspaceReplacementRollbackError)) {
+      await Promise.allSettled(stored.map((item) => storage.remove(item.kind, item.storageKey)));
+    }
     throw error;
   }
 }

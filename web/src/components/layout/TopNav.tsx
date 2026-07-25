@@ -7,6 +7,7 @@ import {
   Bot,
   HelpCircle,
   LayoutDashboard,
+  Library,
   MessageSquare,
   MoreHorizontal,
   Moon,
@@ -16,6 +17,7 @@ import {
   UserRound,
   Sun,
   Sparkles,
+  ScrollText,
   WandSparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -67,6 +69,8 @@ export function TopNav({
   const links = [
     { to: "/", label: "画布", icon: LayoutDashboard },
     { to: "/assets", label: "素材", icon: Bookmark },
+    { to: "/library", label: "服务器素材", ariaLabel: "服务器素材库页面", icon: Library },
+    { to: "/ai-logs", label: "AI 日志", ariaLabel: "AI 调用日志页面", icon: ScrollText },
     { to: "/prompts", label: "提示词", ariaLabel: "提示库页面", icon: Sparkles },
     { to: "/plugins", label: "插件", icon: Puzzle },
     { to: "/workbench/image", label: "工作台", icon: WandSparkles },

@@ -12,8 +12,20 @@ import type {
   PromptItem,
   Viewport,
 } from "@/types/board";
-import type { WorkspaceSnapshot } from "@/lib/workspace-bundle";
-import { listAllGenerationJobs, replaceGenerationJobs } from "@/services/generation-jobs";
+import {
+  WorkspaceReplacementRollbackError,
+  type WorkspaceSnapshot,
+} from "@/lib/workspace-bundle";
+import {
+  deleteGenerationJobsForNodeIds,
+  deleteGenerationJobsForProject,
+  listAllGenerationJobs,
+  replaceGenerationJobs,
+} from "@/services/generation-jobs";
+import {
+  loadPersonalWorkflowTemplates,
+  replacePersonalWorkflowTemplates,
+} from "@/services/workflow-templates";
 import { createDefaultConfig, createEmptySession, createNode, createProject } from "@/lib/defaults";
 import { normalizeAppConfig } from "@/lib/app-config";
 import { HistoryStack } from "@/lib/history";
@@ -26,23 +38,40 @@ import {
 } from "@/lib/grouping";
 import {
   cleanupUnusedMedia,
+  collectBoardContentStorageKeys,
   collectStorageKeys,
   loadAssets,
   loadConfig,
+  deleteProjectsById,
   loadProjects,
   loadPrompts,
   rehydrateAssets,
   rehydrateProjects,
+  replaceProjects,
   saveAssets,
   saveConfig,
   saveProjects,
   savePrompts,
+  deleteStorageKey,
   uploadMedia,
 } from "@/services/storage";
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
 import { fitMediaDisplaySize } from "@/lib/geometry";
+import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { collectGenerationStorageKeys } from "@/services/generation-jobs";
 import { LatestWrite } from "@/lib/latest-write";
+import { bindDirectorPanorama, removeEdgeAndReconcilePanorama } from "@/lib/director-panorama";
+import {
+  chooseLocalTwoToOneImageImportMode,
+  readPanoramaBlobDimensions,
+  validateProjectPanoramaBudget,
+  type LocalImageImportMode,
+} from "@/lib/panorama";
+import {
+  commitPanoramaGeneration as applyPanoramaGeneration,
+  type PanoramaGeneratedMedia,
+  type PanoramaGenerationDescriptor,
+} from "@/lib/panorama-generation";
 
 type Snapshot = {
   nodes: BoardNode[];
@@ -52,6 +81,13 @@ type Snapshot = {
   chatSessions: BoardProject["chatSessions"];
   activeChatId: string | null;
 };
+
+export class ProjectCommitRollbackError extends AggregateError {
+  constructor(commitError: unknown, rollbackError: unknown) {
+    super([commitError, rollbackError], "项目提交失败，且回滚尚未持久化");
+    this.name = "ProjectCommitRollbackError";
+  }
+}
 
 type BoardState = {
   ready: boolean;
@@ -80,6 +116,30 @@ type BoardState = {
   setViewport: (viewport: Viewport, history?: boolean) => void;
   setBackground: (mode: BackgroundMode) => void;
   addNode: (type: NodeType, position: Point, partial?: Partial<BoardNode>) => string;
+  addConnectedNode: (from: string, type: NodeType, position: Point, partial?: Partial<BoardNode>) => string | null;
+  commitDirectorCaptureNodes: (
+    projectId: string,
+    directorId: string,
+    nodes: BoardNode[],
+  ) => Promise<void>;
+  commitWorkflowResultNodes: (
+    projectId: string,
+    workflowRunId: string,
+    nodes: BoardNode[],
+  ) => Promise<void>;
+  commitPanoramaBatch: (
+    projectId: string,
+    panoramaId: string,
+    results: PanoramaGeneratedMedia[],
+    descriptor: PanoramaGenerationDescriptor,
+    historyProject: BoardProject,
+    cleanupStorageKeys: boolean,
+  ) => Promise<void>;
+  bindDirectorPanorama: (
+    directorId: string,
+    panoramaId: string | null,
+    opts?: { history?: boolean },
+  ) => void;
   updateNode: (
     id: string,
     patch: Partial<BoardNode> | ((n: BoardNode) => BoardNode),
@@ -165,6 +225,7 @@ const assetWrites = new LatestWrite(saveAssets, (error) =>
   console.error("OpenBoard asset persistence failed", error));
 const promptWrites = new LatestWrite(savePrompts, (error) =>
   console.error("OpenBoard prompt persistence failed", error));
+let panoramaCommitChain: Promise<void> = Promise.resolve();
 
 export const useBoardStore = create<BoardState>((set, get) => ({
   ready: false,
@@ -266,15 +327,25 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   deleteProjects: (ids) => {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length) return;
     set((s) => {
-      const projects = s.projects.filter((p) => !ids.includes(p.id));
-      const activeProjectId = ids.includes(s.activeProjectId ?? "")
+      const projects = s.projects.filter((p) => !unique.includes(p.id));
+      const activeProjectId = unique.includes(s.activeProjectId ?? "")
         ? projects[0]?.id ?? null
         : s.activeProjectId;
-      for (const id of ids) histories.delete(id);
+      for (const id of unique) histories.delete(id);
       return { projects, activeProjectId, selectedIds: [] };
     });
-    void get().persist();
+    void (async () => {
+      try {
+        await deleteProjectsById(unique);
+      } catch (error) {
+        console.error("Failed to delete projects", error);
+      }
+      await get().persistNow();
+      await Promise.all(unique.map((id) => deleteGenerationJobsForProject(id).catch(() => 0)));
+    })();
   },
 
   importProject: (project) => {
@@ -340,6 +411,198 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     return node.id;
   },
 
+  addConnectedNode: (from, type, position, partial) => {
+    const node = createNode(type, position, partial);
+    let added = false;
+    get().updateActive((project) => {
+      if (!project.nodes.some((candidate) => candidate.id === from)) return project;
+      added = true;
+      return {
+        ...project,
+        nodes: [...project.nodes, node],
+        edges: [...project.edges, { id: uid("edge"), from, to: node.id }],
+      };
+    });
+    if (!added) return null;
+    set({ selectedIds: [node.id] });
+    return node.id;
+  },
+
+  commitDirectorCaptureNodes: async (projectId, directorId, nodes) => {
+    const state = get();
+    const project = state.projects.find((item) => item.id === projectId);
+    const director = project?.nodes.find((item) => item.id === directorId);
+    if (!project || state.activeProjectId !== projectId || director?.type !== "director") {
+      throw new Error("导演台节点已不存在，无法发送截图");
+    }
+    if (!nodes.length || nodes.some((node) => node.type !== "image")) {
+      throw new Error("导演台截图节点无效");
+    }
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    if (nodeIds.size !== nodes.length || project.nodes.some((node) => nodeIds.has(node.id))) {
+      throw new Error("导演台截图节点 ID 冲突");
+    }
+    const before = snap(project);
+    const edges = nodes.map((node) => ({ id: uid("edge"), from: directorId, to: node.id }));
+    const nextProject: BoardProject = {
+      ...project,
+      nodes: [...project.nodes, ...nodes],
+      edges: [...project.edges, ...edges],
+      updatedAt: nowIso(),
+    };
+    set({
+      projects: state.projects.map((item) => item.id === projectId ? nextProject : item),
+    });
+    projectWrites.enqueue(structuredClone(get().projects));
+    try {
+      await projectWrites.flush();
+    } catch (error) {
+      const latest = get();
+      const rolledBackProjects = latest.projects.map((item) => item.id === projectId ? {
+        ...item,
+        nodes: item.nodes.filter((node) => !nodeIds.has(node.id)),
+        edges: item.edges.filter((edge) => !nodeIds.has(edge.from) && !nodeIds.has(edge.to)),
+        updatedAt: nowIso(),
+      } : item);
+      set({ projects: rolledBackProjects });
+      projectWrites.enqueue(structuredClone(rolledBackProjects));
+      try {
+        await projectWrites.flush();
+      } catch (rollbackError) {
+        throw new ProjectCommitRollbackError(error, rollbackError);
+      }
+      throw error;
+    }
+    historyFor(projectId).push(before);
+    set({ selectedIds: nodes.map((node) => node.id) });
+  },
+
+  commitWorkflowResultNodes: (projectId, workflowRunId, nodes) => {
+    const run = async () => {
+      if (!workflowRunId || !nodes.length || nodes.length > 64 ||
+          nodes.some((node) => node.type !== "image" || node.metadata.workflowRunId !== workflowRunId ||
+            !node.metadata.storageKey || !node.metadata.content)) {
+        throw new Error("工作流结果节点无效");
+      }
+      const ids = new Set(nodes.map((node) => node.id));
+      if (ids.size !== nodes.length) throw new Error("工作流结果节点 ID 重复");
+      let candidateAttempted = false;
+      try {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const state = get();
+        const project = state.projects.find((item) => item.id === projectId);
+        if (!project || state.activeProjectId !== projectId || project.nodes.some((node) => ids.has(node.id))) {
+          throw new Error("当前画布已变化，无法插入工作流结果");
+        }
+        const before = snap(project);
+        const nextProject = {
+          ...project,
+          nodes: [...project.nodes, ...structuredClone(nodes)],
+          updatedAt: nowIso(),
+        };
+        const candidateProjects = state.projects.map((item) => item.id === projectId ? nextProject : item);
+        candidateAttempted = true;
+        await projectWrites.writeExact(structuredClone(candidateProjects));
+        if (get().projects !== state.projects) continue;
+        set({ projects: candidateProjects, selectedIds: nodes.map((node) => node.id) });
+        historyFor(projectId).push(before);
+        return;
+      }
+      throw new Error("工作流结果插入期间画布持续变化，请重试");
+      } catch (error) {
+        if (candidateAttempted) {
+          try {
+            await projectWrites.writeExact(structuredClone(get().projects));
+          } catch (rollbackError) {
+            throw new ProjectCommitRollbackError(error, rollbackError);
+          }
+        }
+        throw error;
+      }
+    };
+    const pending = panoramaCommitChain.then(run, run);
+    panoramaCommitChain = pending.then(() => undefined, () => undefined);
+    return pending;
+  },
+
+  commitPanoramaBatch: (
+    projectId,
+    panoramaId,
+    results,
+    descriptor,
+    historyProject,
+    cleanupStorageKeys,
+  ) => {
+    const run = async () => {
+    const cleanup = async () => {
+      if (!cleanupStorageKeys) return;
+      const latest = get();
+      const retained = collectStorageKeys(latest.projects, latest.assets);
+      for (const history of histories.values()) {
+        for (const snapshot of history.snapshots()) {
+          for (const key of collectBoardContentStorageKeys(snapshot.nodes, snapshot.chatSessions)) retained.add(key);
+        }
+      }
+      for (const key of await collectGenerationStorageKeys()) retained.add(key);
+      await Promise.all(results.filter((result) => !retained.has(result.storageKey))
+        .map((result) => deleteStorageKey(result.storageKey).catch(() => undefined)));
+    };
+    const originalRoot = historyProject.nodes.find((node) => node.id === panoramaId);
+    if (historyProject.id !== projectId || originalRoot?.type !== "panorama") {
+      await cleanup();
+      throw new Error("全景节点已不存在，无法提交生成结果");
+    }
+    let candidateAttempted = false;
+    try {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const state = get();
+        const project = state.projects.find((item) => item.id === projectId);
+        if (!project || state.activeProjectId !== projectId) throw new Error("全景节点已不存在，无法提交生成结果");
+        const beforeCommit = project;
+        const nextProject = applyPanoramaGeneration(project, panoramaId, results, descriptor);
+        const candidateProjects = state.projects.map((item) => item.id === projectId ? nextProject : item);
+
+        candidateAttempted = true;
+        await projectWrites.writeExact(structuredClone(candidateProjects));
+        if (get().projects !== state.projects) continue;
+
+        const historyBaseline: BoardProject = {
+          ...beforeCommit,
+          nodes: beforeCommit.nodes.map((node) => node.id === panoramaId ? {
+            ...node,
+            metadata: {
+              ...node.metadata,
+              status: originalRoot.metadata.status,
+              errorDetails: originalRoot.metadata.errorDetails,
+            },
+          } : node),
+        };
+        set({ projects: candidateProjects });
+        historyFor(projectId).push(snap(historyBaseline));
+        return;
+      }
+      throw new Error("全景提交期间项目持续变化，请重试");
+    } catch (error) {
+      if (candidateAttempted) {
+        try {
+          await projectWrites.writeExact(structuredClone(get().projects));
+        } catch (rollbackError) {
+          throw new ProjectCommitRollbackError(error, rollbackError);
+        }
+      }
+      await cleanup();
+      throw error;
+    }
+    };
+    const pending = panoramaCommitChain.then(run, run);
+    panoramaCommitChain = pending.then(() => undefined, () => undefined);
+    return pending;
+  },
+
+  bindDirectorPanorama: (directorId, panoramaId, opts) => {
+    get().updateActive((project) => bindDirectorPanorama(project, directorId, panoramaId), opts);
+  },
+
   updateNode: (id, patch, opts) => {
     get().updateActive((p) => {
       let changed = false;
@@ -372,6 +635,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         }
       }
     }
+    const nodeJobIds = new Set(
+      (project?.nodes ?? [])
+        .filter((node) => selected.has(node.id))
+        .map((node) => node.metadata.generationJobId)
+        .filter((value): value is string => Boolean(value)),
+    );
     get().updateActive((p) => {
       const remaining = pruneGroupMembership(p.nodes, selected)
         .map((n) => {
@@ -398,6 +667,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
     });
     set({ selectedIds: [] });
+    void deleteGenerationJobsForNodeIds(project?.id, selected, { nodeJobIds }).catch(() => 0);
   },
 
 
@@ -454,6 +724,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   connect: (from, to) => {
     if (from === to) return;
     get().updateActive((p) => {
+      const source = p.nodes.find((node) => node.id === from);
+      const target = p.nodes.find((node) => node.id === to);
+      if (
+        target?.type === "director" &&
+        (source?.type === "panorama" || source?.type === "image")
+      ) {
+        return bindDirectorPanorama(p, to, from);
+      }
       if (p.edges.some((e) => e.from === from && e.to === to)) return p;
       const edge: BoardEdge = { id: uid("edge"), from, to };
       return { ...p, edges: [...p.edges, edge] };
@@ -464,10 +742,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setConnectingFrom: (id) => set({ connectingFrom: id }),
 
   deleteEdge: (id) => {
-    get().updateActive((p) => ({
-      ...p,
-      edges: p.edges.filter((e) => e.id !== id),
-    }));
+    get().updateActive((p) => removeEdgeAndReconcilePanorama(p, id));
   },
 
   copySelected: () => {
@@ -754,6 +1029,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     await projectWrites.flush();
     const { projects, assets } = get();
     const keys = collectStorageKeys(projects, assets);
+    for (const history of histories.values()) {
+      for (const snapshot of history.snapshots()) {
+        for (const key of collectBoardContentStorageKeys(snapshot.nodes, snapshot.chatSessions)) {
+          keys.add(key);
+        }
+      }
+    }
     for (const key of await collectGenerationStorageKeys()) keys.add(key);
     await cleanupUnusedMedia(keys);
   },
@@ -773,13 +1055,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       prompts: structuredClone(current.prompts),
       config: structuredClone(current.config),
       generationJobs: await listAllGenerationJobs(),
+      workflowTemplates: await loadPersonalWorkflowTemplates(),
     };
     const persistSnapshot = async (value: WorkspaceSnapshot) => {
-      await saveProjects(value.projects);
+      await replaceProjects(value.projects);
       await saveAssets(value.assets);
       await savePrompts(value.prompts);
       await saveConfig(value.config);
       await replaceGenerationJobs(value.generationJobs);
+      await replacePersonalWorkflowTemplates(value.workflowTemplates);
     };
     try {
       await persistSnapshot(imported);
@@ -787,7 +1071,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       try {
         await persistSnapshot(previous);
       } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], "工作区恢复失败，且原数据回滚未完成");
+        throw new WorkspaceReplacementRollbackError(error, rollbackError);
       }
       throw error;
     }
@@ -805,10 +1089,97 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 }));
 
+export type AttachUploadedImageOptions = {
+  /** Force ordinary image or panorama import; default auto prompts for strict 2:1 candidates. */
+  mode?: LocalImageImportMode | "auto";
+  /** Injectable confirm() for tests; only used when mode is auto and the file is a 2:1 candidate. */
+  chooseMode?: (message: string) => boolean;
+};
+
+async function detectStrictTwoToOneCandidate(
+  file: File | Blob,
+): Promise<{ width: number; height: number } | null> {
+  if (file.type !== "image/jpeg" && file.type !== "image/png" && file.type !== "image/webp") {
+    return null;
+  }
+  try {
+    return await readPanoramaBlobDimensions(file);
+  } catch {
+    return null;
+  }
+}
+
 export async function attachUploadedImage(
   file: File | Blob,
   position: Point,
+  options: AttachUploadedImageOptions = {},
 ): Promise<string> {
+  const forced = options.mode ?? "auto";
+  let mode: LocalImageImportMode = "image";
+  if (forced === "image" || forced === "panorama") {
+    mode = forced;
+  } else {
+    const candidate = await detectStrictTwoToOneCandidate(file);
+    if (candidate) {
+      mode = chooseLocalTwoToOneImageImportMode(options.chooseMode);
+    }
+  }
+
+  if (mode === "panorama") {
+    const project = useBoardStore.getState().getActive();
+    if (!project) throw new Error("请先创建一个画布项目");
+    let uploaded: Awaited<ReturnType<typeof uploadMedia>> | undefined;
+    try {
+      uploaded = await uploadMedia(file, "image", {
+        preflightImage: readPanoramaBlobDimensions,
+      });
+      const display = fitMediaDisplaySize(
+        uploaded.width,
+        uploaded.height,
+        120,
+        Math.max(DEFAULT_NODE_SIZE.panorama.width, DEFAULT_NODE_SIZE.panorama.height),
+      );
+      const provisional = {
+        id: "__import_panorama__",
+        type: "panorama" as const,
+        title: "360° 全景",
+        position,
+        width: display.width,
+        height: display.height,
+        metadata: {
+          content: uploaded.url,
+          storageKey: uploaded.storageKey,
+          naturalWidth: uploaded.width,
+          naturalHeight: uploaded.height,
+          bytes: uploaded.bytes,
+          mimeType: uploaded.mimeType,
+          panoramaProjection: "equirectangular" as const,
+          status: "success" as const,
+        },
+      };
+      validateProjectPanoramaBudget([...project.nodes, provisional as BoardNode]);
+      return useBoardStore.getState().addNode("panorama", position, {
+        metadata: {
+          content: uploaded.url,
+          storageKey: uploaded.storageKey,
+          naturalWidth: uploaded.width,
+          naturalHeight: uploaded.height,
+          bytes: uploaded.bytes,
+          mimeType: uploaded.mimeType,
+          panoramaProjection: "equirectangular",
+          status: "success",
+        },
+        width: display.width,
+        height: display.height,
+      });
+    } catch (error) {
+      if (uploaded?.storageKey) {
+        await deleteStorageKey(uploaded.storageKey).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
   const uploaded = await uploadMedia(file, "image");
   const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
   return useBoardStore.getState().addNode("image", position, {

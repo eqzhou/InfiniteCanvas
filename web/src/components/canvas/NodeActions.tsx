@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
@@ -11,6 +11,13 @@ import {
   resolveNodeImageDataUrls,
 } from "@/services/ai-client";
 import { downloadStorageKey, uploadMedia } from "@/services/storage";
+import {
+  cancelServerGenerationJob,
+  createServerAudioGenerationJob,
+  createServerImageGenerationJob,
+  createServerVideoGenerationJob,
+  usesServerGenerationJobs,
+} from "@/services/generation-jobs";
 import { generateTextBatch } from "@/services/text-batch";
 import { makeCroppedNode, makeRotatedNode } from "@/lib/image-ops";
 import { createNode } from "@/lib/defaults";
@@ -33,9 +40,14 @@ import {
   assertResolvedImageReferences,
   createImageGenerationMetadata,
 } from "@/lib/image-generation";
-import { resolveVideoDuration } from "@/lib/video-generation";
+import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
+import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
+import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
+import { CameraPromptPanel } from "@/components/canvas/CameraPromptPanel";
 import {
   BookmarkPlus,
+  BookmarkCheck,
+  Camera,
   Crop,
   Download,
   ImagePlus,
@@ -44,6 +56,7 @@ import {
   Plus,
   RotateCw,
   Sparkles,
+	Square,
   Type,
   Wand2,
 } from "lucide-react";
@@ -54,12 +67,79 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
   const updateNode = useBoardStore((s) => s.updateNode);
   const updateActive = useBoardStore((s) => s.updateActive);
   const addAssetFromNode = useBoardStore((s) => s.addAssetFromNode);
+	const persistNow = useBoardStore((s) => s.persistNow);
   const [cropOpen, setCropOpen] = useState(false);
   const [angleOpen, setAngleOpen] = useState(false);
   const [imageTool, setImageTool] = useState<ImageToolMode | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [assetSaveState, setAssetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const cameraAnchorRef = useRef<HTMLSpanElement>(null);
   const channel =
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
+  const cameraAvailable = node.type === "image" || node.type === "video" ||
+    (node.type === "config" && (node.metadata.generationMode ?? "image") !== "text");
+  const promptForGeneration = (prompt: string) => applyCameraPrompt(prompt, node.metadata.cameraPrompt);
+	const serverProviderSupported = (kind: "image" | "video" | "audio") => {
+		if (!channel || !usesServerGenerationJobs()) return false;
+		const provider = getProvider(channel, kind);
+		if (kind === "image") return provider.protocol === "openai" || provider.protocol === "gemini" ||
+			(provider.protocol === "template" && Boolean(provider.template));
+		if (kind === "audio") return provider.protocol === "openai";
+		return provider.protocol === "openai" || provider.protocol === "ark" ||
+			(provider.protocol === "template" && Boolean(provider.template)) ||
+			provider.baseUrl.includes("/api/v3") || provider.baseUrl.includes("/api/plan/v3");
+	};
+	const startServerImageGeneration = async (
+		rootId: string,
+		generation: ReturnType<typeof createImageGenerationMetadata>,
+		prompt: string,
+		referenceStorageKeys: string[],
+	) => {
+		if (!channel) throw new Error("图片生成渠道不可用");
+		const provider = getProvider(channel, "image");
+		if (provider.protocol === "gemini" && generation.transparentBackground) {
+			throw new Error("Gemini 图片生成不支持透明背景");
+		}
+		if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
+			throw new Error("当前图片模板不支持透明背景");
+		}
+		const job = await createServerImageGenerationJob({
+			projectId: project?.id,
+			prompt,
+			providerId: channel.id,
+			model: generation.model,
+			parameters: {
+				size: generation.size,
+				quality: generation.quality,
+				count: generation.count,
+				transparentBackground: generation.transparentBackground,
+				referenceStorageKeys,
+			},
+		});
+		try {
+			updateActive((current) => applyServerImagePlaceholders(current, rootId, job.id, generation));
+			await persistNow();
+		} catch (error) {
+			await cancelServerGenerationJob(job.id).catch(() => undefined);
+			throw error;
+		}
+		return job;
+	};
+	const cancelNodeGeneration = async () => {
+		const jobId = node.metadata.generationJobId;
+		if (!jobId) return;
+		try {
+			const job = await cancelServerGenerationJob(jobId);
+			updateNode(node.id, { metadata: {
+				status: "error",
+				errorDetails: job.error || "已取消",
+				generationJobId: job.id,
+			} });
+		} catch (cause) {
+			updateNode(node.id, { metadata: { status: "error", errorDetails: cause instanceof Error ? cause.message : String(cause) } });
+		}
+	};
   const transformRegistry = useMemo(() => {
     const providers = [createLocalCanvasTransformProvider()];
     if (channel && getProvider(channel, "image").apiKey && getProvider(channel, "image").baseUrl) {
@@ -80,7 +160,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
     }));
   }, [imageTool, transformRegistry]);
 
-    const upstream = () => {
+  const upstream = () => {
     if (!project)
       return {
         texts: [] as string[],
@@ -201,7 +281,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
       alert("请先在设置中配置对应模型服务的 API Key");
       return;
     }
-    const { texts, imageKeys } = upstream();
+    const { texts, imageKeys, images } = upstream();
     const prompt =
       texts.join("\n\n") || node.metadata.prompt || node.metadata.content || "";
     if (!prompt && mode !== "image") {
@@ -230,8 +310,6 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
         ));
         placeRight(created);
       } else if (mode === "image") {
-        const refs = await resolveNodeImageDataUrls(imageKeys);
-        assertResolvedImageReferences(imageKeys, refs);
         const generation = createImageGenerationMetadata({
           prompt: prompt || "a clean product photo",
           model: node.metadata.model || getProvider(channel, "image").model,
@@ -240,11 +318,19 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
           count: node.metadata.count || config.imageCount,
           transparentBackground: Boolean(node.metadata.transparentBackground),
           referenceStorageKeys: imageKeys,
+          cameraPrompt: node.metadata.cameraPrompt,
         });
-        const urls = await generateImages({
+        const materializedImages = images.filter((image) => image.storageKey || image.content);
+        if (serverProviderSupported("image") && imageKeys.length === materializedImages.length) {
+          await startServerImageGeneration(node.id, generation, promptForGeneration(generation.prompt), imageKeys);
+          return;
+        }
+        const refs = await resolveNodeImageDataUrls(imageKeys);
+        assertResolvedImageReferences(imageKeys, refs);
+      const urls = await generateImages({
           channel,
           model: generation.model,
-          prompt: generation.prompt,
+          prompt: promptForGeneration(generation.prompt),
           size: generation.size,
           quality: generation.quality,
           n: generation.count,
@@ -271,6 +357,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
                   bytes: uploaded.bytes,
                   mimeType: uploaded.mimeType,
                   status: "success",
+                  cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
                   ...generation,
                 },
                 width: Math.min(360, uploaded.width || 320),
@@ -281,7 +368,41 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
         }
         placeImageBatch(node.id, created, generation);
       } else {
-        const { images, videos, audios } = upstream();
+		const { images, videos, audios, imageKeys, videoKeys, audioKeys } = upstream();
+		const referenceCount = images.filter((value) => value.storageKey || value.content).length +
+			videos.filter((value) => value.storageKey || value.content).length +
+			audios.filter((value) => value.storageKey || value.content).length;
+		const referenceStorageKeys = [...imageKeys, ...videoKeys, ...audioKeys];
+		if (serverProviderSupported("video") && referenceStorageKeys.length === referenceCount) {
+			const job = await createServerVideoGenerationJob({
+				projectId: project?.id,
+				prompt: promptForGeneration(prompt),
+				providerId: channel.id,
+				model: node.metadata.model || getProvider(channel, "video").model,
+				parameters: {
+					size: node.metadata.size,
+					seconds: resolveVideoDuration(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5),
+					ratio: node.metadata.videoRatio || "16:9",
+					resolution: node.metadata.resolution || "720p",
+					generateAudio: Boolean(node.metadata.generateAudio),
+					watermark: Boolean(node.metadata.watermark),
+					frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
+					referenceStorageKeys,
+				},
+			});
+			const placeholder = createNode("video", { x: node.position.x + node.width + 60, y: node.position.y }, {
+				metadata: {
+					status: "loading",
+					prompt,
+					generationJobId: job.id,
+					cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
+				},
+			});
+			placeRight([placeholder]);
+			updateNode(node.id, { metadata: { status: "success" } });
+			await persistNow();
+			return;
+		}
         const [referenceImages, referenceVideos, referenceAudios] = await Promise.all([
           resolveMediaRefs(images, 9),
           resolveMediaRefs(videos, 3),
@@ -290,7 +411,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
         const result = await generateVideo({
           channel,
           model: node.metadata.model || getProvider(channel, "video").model,
-          prompt,
+          prompt: promptForGeneration(prompt),
           size: node.metadata.size,
           seconds: resolveVideoDuration(
             Boolean(node.metadata.smartDuration),
@@ -300,6 +421,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
           resolution: node.metadata.resolution || "720p",
           generateAudio: Boolean(node.metadata.generateAudio),
           watermark: Boolean(node.metadata.watermark),
+          frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
           referenceImages,
           referenceVideos,
           referenceAudios,
@@ -328,6 +450,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
               storageKey,
               status: "success",
               prompt,
+              cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
             },
           },
         );
@@ -377,11 +500,16 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
         count: cfg.metadata.count || config.imageCount,
         transparentBackground: Boolean(cfg.metadata.transparentBackground),
         referenceStorageKeys: [],
+        cameraPrompt: node.metadata.cameraPrompt,
       });
+      if (serverProviderSupported("image")) {
+        await startServerImageGeneration(cfg.id, generation, promptForGeneration(generation.prompt), []);
+        return;
+      }
       const urls = await generateImages({
         channel,
         model: generation.model,
-        prompt: generation.prompt,
+        prompt: promptForGeneration(generation.prompt),
         size: generation.size,
         quality: generation.quality,
         n: generation.count,
@@ -468,8 +596,6 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
     updateNode(node.id, { metadata: { status: "loading", prompt } });
     try {
       const referenceStorageKeys = node.metadata.storageKey ? [node.metadata.storageKey] : [];
-      const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
-      assertResolvedImageReferences(referenceStorageKeys, refs);
       const generation = createImageGenerationMetadata({
         prompt,
         model: node.metadata.model || getProvider(channel, "image").model,
@@ -478,11 +604,18 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
         count: config.imageCount,
         transparentBackground: Boolean(node.metadata.transparentBackground),
         referenceStorageKeys,
+        cameraPrompt: node.metadata.cameraPrompt,
       });
-      const urls = await generateImages({
+      if (serverProviderSupported("image") && (!node.metadata.content || referenceStorageKeys.length === 1)) {
+        await startServerImageGeneration(node.id, generation, promptForGeneration(generation.prompt), referenceStorageKeys);
+        return;
+      }
+      const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
+      assertResolvedImageReferences(referenceStorageKeys, refs);
+        const urls = await generateImages({
         channel,
         model: generation.model,
-        prompt: generation.prompt,
+        prompt: promptForGeneration(generation.prompt),
         size: generation.size,
         quality: generation.quality,
         n: generation.count,
@@ -501,6 +634,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
             bytes: uploaded.bytes,
             mimeType: uploaded.mimeType,
             status: "success",
+            cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
             ...generation,
           },
         });
@@ -520,6 +654,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
                   content: uploaded.url,
                   storageKey: uploaded.storageKey,
                   status: "success",
+                  cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
                   ...generation,
                 },
               },
@@ -641,6 +776,44 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
         ...upstreamRefs,
         ...(node.type === "image" || node.type === "video" || node.type === "audio" ? [node] : []),
       ];
+		const materializedRefs = refs.filter((item) => item.metadata.storageKey || item.metadata.content);
+		const referenceStorageKeys = materializedRefs
+			.map((item) => item.metadata.storageKey)
+			.filter((value): value is string => Boolean(value));
+		if (serverProviderSupported("video") && referenceStorageKeys.length === materializedRefs.length) {
+			const job = await createServerVideoGenerationJob({
+				projectId: project?.id,
+				prompt: promptForGeneration(prompt),
+				providerId: channel.id,
+				model: node.metadata.model || getProvider(channel, "video").model,
+				parameters: {
+					size: node.metadata.size,
+					seconds: resolveVideoDuration(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5),
+					ratio: node.metadata.videoRatio || "16:9",
+					resolution: node.metadata.resolution || "720p",
+					generateAudio: Boolean(node.metadata.generateAudio),
+					watermark: Boolean(node.metadata.watermark),
+					frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
+					referenceStorageKeys,
+				},
+			});
+			if (node.type === "video" && !node.metadata.content) {
+				updateNode(node.id, { metadata: { status: "loading", prompt, generationJobId: job.id } });
+			} else {
+				const placeholder = createNode("video", { x: node.position.x + node.width + 60, y: node.position.y }, {
+					metadata: {
+						status: "loading",
+						prompt,
+						generationJobId: job.id,
+						cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
+					},
+				});
+				placeRight([placeholder]);
+				updateNode(node.id, { metadata: { status: "success" } });
+			}
+			await persistNow();
+			return;
+		}
       const [referenceImages, referenceVideos, referenceAudios] = await Promise.all([
         resolveMediaRefs(
           refs.filter((n) => n.type === "image").map((n) => ({
@@ -670,7 +843,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
       const result = await generateVideo({
         channel,
         model: node.metadata.model || getProvider(channel, "video").model,
-        prompt,
+        prompt: promptForGeneration(prompt),
         size: node.metadata.size,
         seconds: resolveVideoDuration(
           Boolean(node.metadata.smartDuration),
@@ -680,6 +853,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
         resolution: node.metadata.resolution || "720p",
         generateAudio: Boolean(node.metadata.generateAudio),
         watermark: Boolean(node.metadata.watermark),
+        frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
         referenceImages,
         referenceVideos,
         referenceAudios,
@@ -706,6 +880,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
             storageKey,
             status: "success",
             prompt,
+            cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
           },
         });
       } else {
@@ -718,6 +893,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
               storageKey,
               status: "success",
               prompt,
+              cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
             },
           },
         );
@@ -789,6 +965,26 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
     if (!prompt) return;
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
     try {
+		if (serverProviderSupported("audio")) {
+			const job = await createServerAudioGenerationJob({
+				projectId: project?.id,
+				prompt,
+				providerId: channel.id,
+				model: node.metadata.model || getProvider(channel, "audio").model,
+				parameters: { voice: node.metadata.voice || "alloy", format: "mp3" },
+			});
+			if (!node.metadata.content) {
+				updateNode(node.id, { metadata: { status: "loading", prompt, generationJobId: job.id } });
+			} else {
+				const placeholder = createNode("audio", { x: node.position.x + node.width + 60, y: node.position.y }, {
+					metadata: { status: "loading", prompt, generationJobId: job.id },
+				});
+				placeRight([placeholder]);
+				updateNode(node.id, { metadata: { status: "success" } });
+			}
+			await persistNow();
+			return;
+		}
       const speech = await generateSpeech({
         channel,
         model: node.metadata.model || getProvider(channel, "audio").model,
@@ -838,7 +1034,7 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
 return (
     <>
       <div
-        className="ob-chrome absolute bottom-full left-0 z-30 mb-8 flex max-w-[min(520px,70vw)] flex-wrap items-center gap-0.5 p-1"
+        className="ob-chrome absolute bottom-full left-0 z-30 mb-8 flex max-w-[min(360px,calc(100vw-1.5rem))] flex-wrap items-center gap-0.5 overflow-hidden p-1"
         onPointerDown={(e) => e.stopPropagation()}
       >
         {node.type === "text" ? (
@@ -879,8 +1075,11 @@ return (
         ) : null}
         {node.type === "image" ? (
           <>
-            <IconBtn title="生成/重试" onClick={() => void generateOnImage()}>
-              <Sparkles size={14} />
+            <IconBtn
+              title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "生成/重试"}
+              onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnImage())}
+            >
+              {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
             </IconBtn>
             <IconBtn title="生成视频" onClick={() => void generateOnVideo()}>
               <span className="text-[10px] font-semibold">视频</span>
@@ -937,9 +1136,12 @@ return (
         ) : null}
         {node.type === "video" ? (
           <>
-            <IconBtn title="生成视频" onClick={() => void generateOnVideo()}>
-              <Sparkles size={14} />
-            </IconBtn>
+			<IconBtn
+				title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "生成视频"}
+				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnVideo())}
+			>
+			  {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
+			</IconBtn>
             <IconBtn title="下载" onClick={() => void downloadNode()}>
               <Download size={14} />
             </IconBtn>
@@ -947,28 +1149,73 @@ return (
         ) : null}
         {node.type === "audio" ? (
           <>
-            <IconBtn title="语音生成" onClick={() => void generateOnAudio()}>
-              <Sparkles size={14} />
-            </IconBtn>
+			<IconBtn
+				title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "语音生成"}
+				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnAudio())}
+			>
+			  {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
+			</IconBtn>
             <IconBtn title="下载" onClick={() => void downloadNode()}>
               <Download size={14} />
             </IconBtn>
           </>
         ) : null}
         {node.type === "config" ? (
-          <IconBtn title="运行生成" onClick={() => void runConfigGenerate()}>
-            <Sparkles size={14} />
+          <IconBtn
+            title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "运行生成"}
+            onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : runConfigGenerate())}
+          >
+            {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
           </IconBtn>
         ) : null}
+        {cameraAvailable ? (
+          <span ref={cameraAnchorRef} className="inline-flex">
+            <IconBtn
+              title={node.metadata.cameraPrompt?.enabled ? "摄像机设置（已启用）" : "摄像机设置"}
+              onClick={() => setCameraOpen((open) => !open)}
+            >
+              <Camera size={14} className={node.metadata.cameraPrompt?.enabled ? "text-[var(--ob-accent)]" : undefined} />
+            </IconBtn>
+          </span>
+        ) : null}
         {(node.type === "text" || node.type === "image") && (
-          <IconBtn title="加入素材" onClick={() => void addAssetFromNode(node.id)}>
-            <BookmarkPlus size={14} />
+          <IconBtn
+            title={node.type === "image" && !node.metadata.content
+              ? "素材尚未就绪"
+              : assetSaveState === "saving"
+                ? "正在加入素材"
+                : assetSaveState === "saved"
+                  ? "已加入素材"
+                  : assetSaveState === "error"
+                    ? "加入素材失败"
+                    : "加入素材"}
+            disabled={(node.type === "image" && !node.metadata.content) || assetSaveState === "saving"}
+            onClick={() => void (async () => {
+              setAssetSaveState("saving");
+              try {
+                await addAssetFromNode(node.id);
+                setAssetSaveState("saved");
+              } catch {
+                setAssetSaveState("error");
+              }
+            })()}
+          >
+            {assetSaveState === "saved" ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
           </IconBtn>
         )}
         <IconBtn title="查看 JSON" onClick={inspect}>
           <Info size={14} />
         </IconBtn>
       </div>
+
+      {cameraAvailable && cameraOpen ? (
+        <CameraPromptPanel
+          value={node.metadata.cameraPrompt ?? createDefaultCameraPrompt()}
+          anchor={cameraAnchorRef.current}
+          onClose={() => setCameraOpen(false)}
+          onChange={(cameraPrompt) => updateNode(node.id, { metadata: { cameraPrompt } })}
+        />
+      ) : null}
 
       {node.type === "image" ? (
         <CropDialog
@@ -1111,10 +1358,12 @@ return (
 
 function IconBtn({
   title,
+  disabled = false,
   onClick,
   children,
 }: {
   title: string;
+  disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -1123,6 +1372,7 @@ function IconBtn({
       type="button"
       title={title}
       aria-label={title}
+      disabled={disabled}
       className="ob-icon-btn h-8 w-8 rounded-md"
       onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}

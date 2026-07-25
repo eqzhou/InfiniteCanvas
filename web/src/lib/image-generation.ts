@@ -1,4 +1,4 @@
-import type { NodeMetadata } from "@/types/board";
+import type { CameraPromptConfig, NodeMetadata } from "@/types/board";
 
 export type ImageGenerationRequest = {
   prompt: string;
@@ -8,6 +8,7 @@ export type ImageGenerationRequest = {
   count: number;
   transparentBackground: boolean;
   referenceStorageKeys: readonly string[];
+  cameraPrompt?: CameraPromptConfig;
 };
 
 export type ImageGenerationMetadata = {
@@ -19,6 +20,7 @@ export type ImageGenerationMetadata = {
   transparentBackground: boolean;
   generationType: NonNullable<NodeMetadata["generationType"]>;
   referenceStorageKeys: string[];
+  cameraPrompt?: CameraPromptConfig;
 };
 
 export function createImageGenerationMetadata(
@@ -34,6 +36,7 @@ export function createImageGenerationMetadata(
     transparentBackground: request.transparentBackground,
     generationType: referenceStorageKeys.length ? "image-to-image" : "text-to-image",
     referenceStorageKeys,
+    cameraPrompt: request.cameraPrompt ? { ...request.cameraPrompt } : undefined,
   };
 }
 

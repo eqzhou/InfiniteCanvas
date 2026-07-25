@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readBoundedResponse } from "./remote-content";
+import { decodeBoundedDataUrl, readBoundedResponse } from "./remote-content";
 
 function response(chunks: string[], headers: Record<string, string> = {}) {
   const encoder = new TextEncoder();
@@ -42,5 +42,31 @@ describe("bounded remote content", () => {
     }), { maxBytes: 20, mimeTypes: ["text/plain"] });
     expect(new TextDecoder().decode(result.bytes)).toBe("hello world");
     expect(result.mimeType).toBe("text/plain");
+  });
+});
+
+describe("bounded data URLs", () => {
+  test("decodes base64 media without relying on browser fetch", () => {
+    const decoded = decodeBoundedDataUrl("data:image/png;base64,aGVsbG8=", {
+      maxBytes: 5,
+      mimeTypes: ["image/png"],
+    });
+    expect(decoded.mimeType).toBe("image/png");
+    expect(new TextDecoder().decode(decoded.bytes)).toBe("hello");
+  });
+
+  test("rejects invalid MIME, malformed base64, and oversized payloads", () => {
+    expect(() => decodeBoundedDataUrl("data:image/svg+xml;base64,PHN2Zz4=", {
+      maxBytes: 100,
+      mimeTypes: ["image/png"],
+    })).toThrow("MIME");
+    expect(() => decodeBoundedDataUrl("data:image/png;base64,%%%", {
+      maxBytes: 100,
+      mimeTypes: ["image/png"],
+    })).toThrow("base64");
+    expect(() => decodeBoundedDataUrl("data:image/png;base64,aGVsbG8=", {
+      maxBytes: 4,
+      mimeTypes: ["image/png"],
+    })).toThrow("too large");
   });
 });

@@ -1,4 +1,5 @@
 import type { AppConfig, PromptSourceConfig } from "@/types/board";
+import { normalizeObjectStorage } from "@/lib/object-storage";
 import { normalizePromptSourceConfigs } from "@/services/prompt-sources";
 import {
   clonePresetSource,
@@ -62,6 +63,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
       ? rawPanelTab
       : "projects",
     disabledPluginIds,
+    objectStorage: normalizeObjectStorage((config as AppConfig & { objectStorage?: unknown }).objectStorage),
     promptSources: mergeBuiltinPromptSources(normalizePromptSourceConfigs(
       (config as AppConfig & { promptSources?: unknown }).promptSources)),
   };

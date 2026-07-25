@@ -37,6 +37,8 @@ import { enabledPluginManifests } from "@/lib/plugin-catalog";
 import { BUILTIN_PLUGINS } from "@/plugins/builtins";
 import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { findOpenNodePosition } from "@/lib/node-placement";
+import { useCanvasGenerationRecovery } from "@/components/canvas/useCanvasGenerationRecovery";
+import { OPENBOARD_ASSET_DRAG_MIME, readOpenBoardAssetDrag } from "@/lib/asset-drag";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -54,6 +56,7 @@ type DragMode =
 
 export function BoardCanvas() {
   const project = useBoardStore((s) => s.getActive());
+	useCanvasGenerationRecovery();
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const connectingFrom = useBoardStore((s) => s.connectingFrom);
   const showMinimap = useBoardStore((s) => s.showMinimap);
@@ -72,6 +75,7 @@ export function BoardCanvas() {
   const redo = useBoardStore((s) => s.redo);
   const selectAll = useBoardStore((s) => s.selectAll);
   const addNode = useBoardStore((s) => s.addNode);
+  const insertAsset = useBoardStore((s) => s.insertAsset);
   const configuredPlugins = useBoardStore((s) => s.config.plugins ?? []);
   const disabledPluginIds = useBoardStore((s) => s.config.disabledPluginIds ?? []);
   const installedPlugins = useMemo(
@@ -87,6 +91,7 @@ export function BoardCanvas() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
+  const activePointerIdRef = useRef<number | null>(null);
   const touchGestureRef = useRef<GestureState | null>(null);
   const viewportFrameRef = useRef<number | null>(null);
   const pendingViewportRef = useRef<ReturnType<typeof createGestureState>["viewport"] | null>(null);
@@ -174,8 +179,52 @@ export function BoardCanvas() {
     );
   }, []);
 
+  const captureCanvasPointer = useCallback((pointerId: number) => {
+    const surface = rootRef.current;
+    if (!surface) return;
+    try {
+      if (activePointerIdRef.current !== null && activePointerIdRef.current !== pointerId) {
+        surface.releasePointerCapture(activePointerIdRef.current);
+      }
+    } catch {
+      // Capture may already have been released by the browser.
+    }
+    try {
+      surface.setPointerCapture(pointerId);
+      activePointerIdRef.current = pointerId;
+    } catch {
+      activePointerIdRef.current = null;
+    }
+  }, []);
+
+  const releaseCanvasPointer = useCallback((pointerId?: number) => {
+    const surface = rootRef.current;
+    const activeId = pointerId ?? activePointerIdRef.current;
+    if (!surface || activeId === null || activeId === undefined) {
+      activePointerIdRef.current = null;
+      return;
+    }
+    try {
+      if (surface.hasPointerCapture(activeId)) {
+        surface.releasePointerCapture(activeId);
+      }
+    } catch {
+      // Ignore browsers that already cleared capture.
+    }
+    if (activePointerIdRef.current === activeId) {
+      activePointerIdRef.current = null;
+    }
+  }, []);
+
+  const endDragInteraction = useCallback((pointerId?: number) => {
+    releaseCanvasPointer(pointerId);
+    setGroupHoverId(null);
+    setDrag(null);
+  }, [releaseCanvasPointer]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       if (e.code === "Space") setSpaceDown(true);
       const meta = e.metaKey || e.ctrlKey;
       const target = e.target as HTMLElement | null;
@@ -226,7 +275,7 @@ export function BoardCanvas() {
         setSelected([]);
         setSelectedEdgeId(null);
         setConnectingFrom(null);
-        setDrag(null);
+        endDragInteraction();
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -242,6 +291,8 @@ export function BoardCanvas() {
     copySelected,
     deleteEdge,
     deleteSelected,
+    duplicateSelected,
+    endDragInteraction,
     pasteClipboard,
     redo,
     selectAll,
@@ -316,12 +367,13 @@ export function BoardCanvas() {
     );
   };
 
+
   const onPointerDownBackground = (e: ReactPointerEvent) => {
     if (!project) return;
     if (e.pointerType === "touch") return;
     if (e.button !== 0) return;
     const p = localPoint(e);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    captureCanvasPointer(e.pointerId);
     if (spaceDown || e.altKey) {
       setDrag({
         kind: "pan",
@@ -347,7 +399,7 @@ export function BoardCanvas() {
 
   const onTouchPointerDownCapture = (e: ReactPointerEvent) => {
     if (!project || e.pointerType !== "touch") return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    captureCanvasPointer(e.pointerId);
     const current = touchGestureRef.current ?? createGestureState(project.viewport);
     const next = reduceGesture(current, {
       type: "pointerdown",
@@ -439,6 +491,11 @@ export function BoardCanvas() {
       touchGestureRef.current = next.pointers.length ? next : null;
       if (wasMultiTouch || drag?.kind !== "node") {
         scheduleViewport(next.viewport);
+        if (drag && drag.kind !== "node") {
+          endDragInteraction(e.pointerId);
+        } else if (!drag) {
+          releaseCanvasPointer(e.pointerId);
+        }
         return;
       }
     }
@@ -495,30 +552,68 @@ export function BoardCanvas() {
     } else if (drag.kind === "node") {
       commitPendingNodeMove(drag.rootIds);
     }
+    endDragInteraction(e.pointerId);
+  };
+
+  const onPointerCancel = (e: ReactPointerEvent) => {
+    if (e.pointerType === "touch" && touchGestureRef.current) {
+      const next = reduceGesture(touchGestureRef.current, {
+        type: "pointercancel",
+        pointerId: e.pointerId,
+      });
+      touchGestureRef.current = next.pointers.length ? next : null;
+      scheduleViewport(next.viewport);
+    }
+    if (drag?.kind === "node") {
+      commitPendingNodeMove(drag.rootIds);
+    }
+    endDragInteraction(e.pointerId);
+  };
+
+  const onLostPointerCapture = (e: ReactPointerEvent) => {
+    if (activePointerIdRef.current !== e.pointerId) return;
+    if (drag?.kind === "node") {
+      commitPendingNodeMove(drag.rootIds);
+    }
+    activePointerIdRef.current = null;
     setGroupHoverId(null);
     setDrag(null);
   };
 
-  const onPointerCancel = (e: ReactPointerEvent) => {
-    if (e.pointerType !== "touch" || !touchGestureRef.current) {
-      setDrag(null);
-      setGroupHoverId(null);
-      return;
-    }
-    const next = reduceGesture(touchGestureRef.current, {
-      type: "pointercancel",
-      pointerId: e.pointerId,
-    });
-    touchGestureRef.current = next.pointers.length ? next : null;
-    scheduleViewport(next.viewport);
+  const onDragOverCanvas = (e: React.DragEvent) => {
+    const types = Array.from(e.dataTransfer?.types ?? []);
+    const acceptsAsset = types.includes(OPENBOARD_ASSET_DRAG_MIME);
+    const acceptsFiles = types.includes("Files");
+    if (!acceptsAsset && !acceptsFiles) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = acceptsAsset ? "copy" : e.dataTransfer.dropEffect;
   };
 
   const onDropFiles = async (e: React.DragEvent) => {
     e.preventDefault();
     if (!project) return;
-    const files = Array.from(e.dataTransfer.files);
     const p = localPoint(e);
     const world = screenToWorld(p, project.viewport);
+
+    const assetId = readOpenBoardAssetDrag(e.dataTransfer);
+    if (assetId) {
+      const preferred = {
+        x: world.x - DEFAULT_NODE_SIZE.image.width / 2,
+        y: world.y - DEFAULT_NODE_SIZE.image.height / 2,
+      };
+      const asset = useBoardStore.getState().assets.find((item) => item.id === assetId);
+      const size = asset?.kind === "text"
+        ? DEFAULT_NODE_SIZE.text
+        : asset?.kind === "video"
+          ? DEFAULT_NODE_SIZE.video
+          : asset?.kind === "audio"
+            ? DEFAULT_NODE_SIZE.audio
+            : DEFAULT_NODE_SIZE.image;
+      await insertAsset(assetId, findOpenNodePosition(project.nodes, preferred, size));
+      return;
+    }
+
+    const files = Array.from(e.dataTransfer.files);
     let i = 0;
     for (const file of files) {
       const pos = { x: world.x + i * 30, y: world.y + i * 30 };
@@ -657,7 +752,8 @@ export function BoardCanvas() {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
-        onDragOver={(e) => e.preventDefault()}
+        onLostPointerCapture={onLostPointerCapture}
+        onDragOver={onDragOverCanvas}
         onDrop={onDropFiles}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -750,6 +846,9 @@ export function BoardCanvas() {
               groupHighlighted={groupHoverId === node.id}
               onSelect={(additive) => toggleSelect(node.id, additive)}
               onDragStart={(client) => {
+                if ("pointerId" in client && typeof client.pointerId === "number") {
+                  captureCanvasPointer(client.pointerId);
+                }
                 const p = localPoint(client);
                 const selectedForDrag = selectedIds.includes(node.id)
                   ? selectedIds
@@ -765,6 +864,9 @@ export function BoardCanvas() {
                 setDrag({ kind: "node", ids, rootIds: selectedForDrag, start: p, origins });
               }}
               onResizeStart={(client, free) => {
+                if ("pointerId" in client && typeof client.pointerId === "number") {
+                  captureCanvasPointer(client.pointerId);
+                }
                 const p = localPoint(client);
                 captureHistory();
                 setDrag({
@@ -776,7 +878,10 @@ export function BoardCanvas() {
                   free,
                 });
               }}
-              onStartConnect={() => {
+              onStartConnect={(client) => {
+                if (client && "pointerId" in client && typeof client.pointerId === "number") {
+                  captureCanvasPointer(client.pointerId);
+                }
                 setConnectingFrom(node.id);
                 const port = nodePort(node, "right");
                 setDrag({
@@ -792,7 +897,7 @@ export function BoardCanvas() {
                 if (connectingFrom && connectingFrom !== node.id) {
                   connect(connectingFrom, node.id);
                   setConnectingFrom(null);
-                  setDrag(null);
+                  endDragInteraction();
                 }
               }}
               onContextMenu={(e) => {
@@ -849,6 +954,30 @@ export function BoardCanvas() {
             }}
             plugins={installedPlugins}
             onPaste={() => pasteClipboard({ x: 40, y: 40 })}
+            onUploadMedia={async (files, at) => {
+              for (const file of files) {
+                const currentNodes = useBoardStore.getState().getActive()?.nodes ?? [];
+                const position = findOpenNodePosition(
+                  currentNodes,
+                  at,
+                  file.type.startsWith("video/")
+                    ? DEFAULT_NODE_SIZE.video
+                    : file.type.startsWith("audio/")
+                      ? DEFAULT_NODE_SIZE.audio
+                      : DEFAULT_NODE_SIZE.image,
+                );
+                if (file.type.startsWith("video/")) {
+                  await attachUploadedVideo(file, position);
+                } else if (file.type.startsWith("audio/")) {
+                  await attachUploadedAudio(file, position);
+                } else {
+                  await attachUploadedImage(file, position);
+                }
+              }
+            }}
+            onOpenAssets={(at) => {
+              setAssetPicker({ open: true, at });
+            }}
             onDelete={() => {
               if (menu?.nodeId) {
                 if (!selectedIds.includes(menu.nodeId)) setSelected([menu.nodeId]);

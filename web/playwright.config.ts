@@ -11,13 +11,13 @@ const dataDir = production
   : "../web/node_modules/.cache/openboard-agent-e2e";
 
 export default defineConfig({
-  timeout: 60_000,
+	timeout: formal ? 120_000 : 60_000,
   testDir: "./e2e",
   testMatch: formal ? "formal-storage.spec.ts" : "canvas.spec.ts",
   outputDir: "./node_modules/.cache/playwright-test-results",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 0,
+	retries: formal ? 0 : process.env.CI ? 2 : 0,
   workers: 1,
   reporter: process.env.CI ? "github" : "list",
   use: {
@@ -65,7 +65,7 @@ export default defineConfig({
           ? `VITE_OPENBOARD_STORAGE=server bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`
         : `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run dev --host 127.0.0.1`,
       url: origin,
-      reuseExistingServer: !process.env.CI,
+		reuseExistingServer: !formal && !process.env.CI,
       timeout: 120_000,
     },
     {
@@ -75,7 +75,7 @@ export default defineConfig({
           ? `../scripts/run-formal-e2e-server.sh ${agentPort} ${origin}`
         : `cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_DATA=../web/node_modules/.cache/openboard-agent-e2e go run ./cmd/server`,
       url: `http://127.0.0.1:${agentPort}/api/health`,
-      reuseExistingServer: !process.env.CI,
+		reuseExistingServer: !formal && !process.env.CI,
       timeout: 120_000,
     },
   ],

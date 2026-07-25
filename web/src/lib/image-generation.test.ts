@@ -47,4 +47,14 @@ describe("image generation lineage", () => {
     expect(() => assertResolvedImageReferences(["image:one"], ["data:image/png;base64,AA=="]))
       .not.toThrow();
   });
+
+  test("copies structured camera metadata without aliasing the request", () => {
+    const cameraPrompt = { enabled: true, camera: "cinema" as const, lens: "wide" as const, focalLength: 24, aperture: 4 };
+    const metadata = createImageGenerationMetadata({
+      prompt: "city", model: "image", size: "1024x1024", quality: "auto", count: 1,
+      transparentBackground: false, referenceStorageKeys: [], cameraPrompt,
+    });
+    expect(metadata.cameraPrompt).toEqual(cameraPrompt);
+    expect(metadata.cameraPrompt).not.toBe(cameraPrompt);
+  });
 });

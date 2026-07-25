@@ -33,4 +33,15 @@ describe("HistoryStack", () => {
     expect(history.undo(3)).toBe(2);
     expect(history.undo(2)).toBeNull();
   });
+
+  test("exposes retained past and future snapshots without exposing internal arrays", () => {
+    const history = new HistoryStack<{ id: number }>();
+    history.push({ id: 1 });
+    history.push({ id: 2 });
+    expect(history.undo({ id: 3 })).toEqual({ id: 2 });
+
+    const snapshots = history.snapshots();
+    expect(snapshots.map((item) => item.id)).toEqual([1, 3]);
+    expect(history.snapshots()).not.toBe(snapshots);
+  });
 });

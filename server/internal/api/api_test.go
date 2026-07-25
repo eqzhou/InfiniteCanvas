@@ -390,6 +390,9 @@ func testHandler(t *testing.T) http.Handler {
 func request(t *testing.T, handler http.Handler, method, path string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if token := strings.TrimSpace(os.Getenv("OPENBOARD_TOKEN")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	return recorder

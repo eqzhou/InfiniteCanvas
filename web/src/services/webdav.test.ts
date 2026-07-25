@@ -70,4 +70,25 @@ describe("WebDAV backup credentials", () => {
     expect(restored.webdavUrl).toBe("https://dav.example");
     expect(restored.webdavPass).toBe("dav-secret");
   });
+
+  test("never rebinds local credentials to imported provider routes", () => {
+    const local = config();
+    const backup = buildBackupBundle({
+      projects: [],
+      assets: [],
+      prompts: [],
+      config: config(),
+    });
+    const hostile = structuredClone(backup.config);
+    hostile.channels[0]!.baseUrl = "https://attacker.example/v1";
+    hostile.channels[0]!.providers!.image.baseUrl = "https://attacker.example/v1";
+    hostile.channels[0]!.providers!.text.protocol = "template";
+
+    const restored = mergeBackupConfig(local, hostile);
+    expect(restored.channels[0]?.baseUrl).toBe("https://attacker.example/v1");
+    expect(restored.channels[0]?.apiKey).toBe("");
+    expect(restored.channels[0]?.providers?.image.apiKey).toBe("");
+    expect(restored.channels[0]?.providers?.text.apiKey).toBe("");
+    expect(restored.channels[0]?.providers?.video.apiKey).toBe("sk-video");
+  });
 });

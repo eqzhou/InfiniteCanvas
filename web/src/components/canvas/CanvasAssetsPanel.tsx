@@ -5,6 +5,7 @@ import { nowIso, uid } from "@/lib/id";
 import { useBoardStore } from "@/stores/use-board-store";
 import { uploadMedia } from "@/services/storage";
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
+import { writeOpenBoardAssetDrag } from "@/lib/asset-drag";
 
 export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
   const assets = useBoardStore((state) => state.assets);
@@ -108,16 +109,32 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
             <Boxes size={16} />
           </span>
           <p className="ob-empty-title">暂无素材</p>
-          <p className="ob-empty-desc">可上传图片/视频，或从素材页添加后在此插入画布。</p>
+          <p className="ob-empty-desc">可上传图片/视频，或从素材页添加后拖到画布 / 点击插入。</p>
         </div>
       ) : (
         <ul role="list" aria-label="侧栏素材" className="grid grid-cols-2 gap-2">
           {assets.map((asset) => (
-            <li key={asset.id} className="group relative min-h-24 overflow-hidden rounded-xl border border-[var(--ob-line)] bg-[var(--ob-canvas)] shadow-[var(--ob-elev-1)]">
+            <li
+              key={asset.id}
+              draggable
+              data-asset-id={asset.id}
+              data-testid="sidebar-asset-item"
+              aria-grabbed="false"
+              title="拖到画布或点击插入"
+              className="group relative min-h-24 cursor-grab overflow-hidden rounded-xl border border-[var(--ob-line)] bg-[var(--ob-canvas)] shadow-[var(--ob-elev-1)] active:cursor-grabbing"
+              onDragStart={(event) => {
+                if (!event.dataTransfer) return;
+                writeOpenBoardAssetDrag(event.dataTransfer, asset.id);
+                event.currentTarget.setAttribute('aria-grabbed', 'true');
+              }}
+              onDragEnd={(event) => {
+                event.currentTarget.setAttribute('aria-grabbed', 'false');
+              }}
+            >
               {asset.kind === "image" && asset.coverUrl ? (
-                <img src={asset.coverUrl} alt={asset.title} className="h-24 w-full object-cover" />
+                <img src={asset.coverUrl} alt={asset.title} draggable={false} className="pointer-events-none h-24 w-full object-cover" />
               ) : asset.kind === "video" && asset.coverUrl ? (
-                <video src={asset.coverUrl} aria-label={asset.title} muted preload="metadata" className="h-24 w-full bg-black object-contain" />
+                <video src={asset.coverUrl} aria-label={asset.title} muted preload="metadata" draggable={false} className="pointer-events-none h-24 w-full bg-black object-contain" />
               ) : asset.kind === "audio" && asset.coverUrl ? (
                 <div className="grid h-24 place-items-center px-2 text-xs text-[var(--ob-muted)]">音频</div>
               ) : (

@@ -62,4 +62,42 @@ describe("LatestWrite", () => {
     writer.enqueue("recovered");
     await expect(writer.flush()).resolves.toBeUndefined();
   });
+
+  test("serializes exact transactional writes before later coalesced updates", async () => {
+    const exact = deferred();
+    const values: string[] = [];
+    const writer = new LatestWrite<string>(async (value) => {
+      values.push(value);
+      if (value === "candidate") await exact.promise;
+    });
+
+    const candidate = writer.writeExact("candidate");
+    writer.enqueue("concurrent-stale");
+    writer.enqueue("concurrent-latest");
+    await Promise.resolve();
+    expect(values).toEqual(["candidate"]);
+
+    exact.resolve();
+    await candidate;
+    await writer.flush();
+    expect(values).toEqual(["candidate", "concurrent-latest"]);
+  });
+
+  test("reserves an exact write behind an in-flight ordinary write", async () => {
+    const prior = deferred();
+    const values: string[] = [];
+    const writer = new LatestWrite<string>(async (value) => {
+      values.push(value);
+      if (value === "prior") await prior.promise;
+    });
+
+    writer.enqueue("prior");
+    const candidate = writer.writeExact("candidate");
+    writer.enqueue("concurrent");
+    prior.resolve();
+    await candidate;
+    await writer.flush();
+
+    expect(values).toEqual(["prior", "candidate", "concurrent"]);
+  });
 });

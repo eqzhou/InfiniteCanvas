@@ -1,42 +1,54 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Download, ImagePlus, RefreshCw, Square, Trash2, Video } from "lucide-react";
-import type { GenerationJob, GenerationKind } from "@/types/board";
+import { ImagePlus, PanelBottom, PanelLeft, RefreshCw, Square, Trash2, Video } from "lucide-react";
+import type { GenerationJob } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { getProvider } from "@/lib/ai-config";
-import { resolveVideoDuration } from "@/lib/video-generation";
+import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import { assertResolvedImageReferences } from "@/lib/image-generation";
-import { generateImages, generateVideo } from "@/services/ai-client";
+import { generateImages, generateVideo, resolveMediaRefs } from "@/services/ai-client";
 import {
   createGenerationJob,
+	cancelServerGenerationJob,
+	createServerImageGenerationJob,
+	createServerVideoGenerationJob,
   deleteGenerationJob,
+  deleteGenerationJobs,
   findInterruptedGenerationJobs,
-  findUnreferencedGenerationStorageKeys,
-  listAllGenerationJobs,
   listGenerationJobs,
+	isServerOwnedGenerationJob,
   updateGenerationJob,
+	usesServerGenerationJobs,
+	waitForGenerationJob,
 } from "@/services/generation-jobs";
 import {
   blobToDataUrl,
-  collectStorageKeys,
   deleteStorageKey,
-  downloadStorageKey,
   getBlob,
   uploadMedia,
 } from "@/services/storage";
 import { completeGenerationActivity, getGenerationActivities } from "@/services/generation-activity";
 import { getRuntimeOwnerId } from "@/services/runtime-identity";
+import { uid } from "@/lib/id";
+import {
+  filterWorkbenchJobs,
+  normalizeWorkbenchCategory,
+  normalizeWorkbenchLayout,
+  WORKBENCH_ALL_CATEGORIES,
+  workbenchCategories,
+  workbenchImageAssets,
+  type WorkbenchLayout,
+} from "@/lib/workbench-history";
+import { AssetReferenceThumbnail, FileReferencePreviews } from "@/components/workbench/WorkbenchReferences";
+import {
+  WorkbenchHistoryRow,
+  type WorkbenchResultItem,
+} from "@/components/workbench/WorkbenchHistoryRow";
+import { DraggableWorkflowEntry } from "@/components/workbench/DraggableWorkflowEntry";
 
-type ResultItem = {
-  url?: string;
-  storageKey?: string;
-  mimeType?: string;
-  width?: number;
-  height?: number;
-};
-
-export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
+export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const config = useBoardStore((state) => state.config);
+  const assets = useBoardStore((state) => state.assets);
   const project = useBoardStore((state) => state.getActive());
   const addNode = useBoardStore((state) => state.addNode);
   const persistNow = useBoardStore((state) => state.persistNow);
@@ -55,11 +67,27 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
   const [resolution, setResolution] = useState("720p");
   const [generateAudio, setGenerateAudio] = useState(false);
   const [watermark, setWatermark] = useState(false);
+  const [frameMode, setFrameMode] = useState<"references" | "first-last">("references");
   const [references, setReferences] = useState<File[]>([]);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [category, setCategory] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState(WORKBENCH_ALL_CATEGORIES);
+  const [layout, setLayout] = useState<WorkbenchLayout>(() => {
+    try {
+      return normalizeWorkbenchLayout(window.localStorage.getItem("openboard.workbench.layout"));
+    } catch {
+      return "side";
+    }
+  });
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
+  const [activeRuns, setActiveRuns] = useState(0);
   const [error, setError] = useState("");
-  const abortRef = useRef<AbortController | null>(null);
+  const controllersRef = useRef(new Map<string, AbortController>());
+  const activeServerJobIdsRef = useRef(new Map<string, string>());
+  const reusableAssets = useMemo(() => workbenchImageAssets(assets), [assets]);
+  const categories = useMemo(() => workbenchCategories(jobs), [jobs]);
+  const visibleJobs = useMemo(() => filterWorkbenchJobs(jobs, categoryFilter), [categoryFilter, jobs]);
 
   useEffect(() => {
     setModel(provider?.model ?? "");
@@ -80,28 +108,111 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
     setJobs(page.items.map((job) => recovered.get(job.id) ?? job));
   }, [kind, project?.id]);
 
+  const selectedVisibleIds = useMemo(
+    () => visibleJobs.map((job) => job.id).filter((id) => selectedJobIds.includes(id)),
+    [selectedJobIds, visibleJobs],
+  );
+  const allVisibleSelected = Boolean(visibleJobs.length) && selectedVisibleIds.length === visibleJobs.length;
+
+  const toggleJobSelected = useCallback((jobId: string, selected: boolean) => {
+    setSelectedJobIds((current) => {
+      if (selected) return current.includes(jobId) ? current : [...current, jobId];
+      return current.filter((id) => id !== jobId);
+    });
+  }, []);
+
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedJobIds((current) => {
+      if (allVisibleSelected) {
+        const visible = new Set(visibleJobs.map((job) => job.id));
+        return current.filter((id) => !visible.has(id));
+      }
+      const merged = new Set(current);
+      for (const job of visibleJobs) merged.add(job.id);
+      return [...merged];
+    });
+  }, [allVisibleSelected, visibleJobs]);
+
+  const deleteSelectedHistory = useCallback(async () => {
+    const targets = visibleJobs.filter((job) => selectedJobIds.includes(job.id));
+    if (!targets.length) return;
+    try {
+      const removable = targets.filter((job) => !(
+        isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running")
+      ));
+      if (!removable.length) {
+        setError("进行中的任务请先取消，再批量删除");
+        return;
+      }
+      // Soft-delete keeps tombstones for multi-device history sync; media is retained until project cleanup.
+      await deleteGenerationJobs(removable.map((job) => job.id));
+      setSelectedJobIds((current) => current.filter((id) => !removable.some((job) => job.id === id)));
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [refresh, selectedJobIds, visibleJobs]);
+
+
+
+
   useEffect(() => {
     void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   }, [refresh]);
+
+	useEffect(() => {
+		if (!jobs.some((job) => isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running"))) {
+			return;
+		}
+		const timer = window.setInterval(() => {
+			void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+		}, 1_000);
+		return () => window.clearInterval(timer);
+	}, [jobs, refresh]);
+
+	useEffect(() => () => {
+		for (const controller of controllersRef.current.values()) controller.abort();
+	}, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("openboard.workbench.layout", layout);
+    } catch {
+      // Layout persistence is optional in restricted browser contexts.
+    }
+  }, [layout]);
+
+  useEffect(() => {
+    if (!categories.includes(categoryFilter)) setCategoryFilter(WORKBENCH_ALL_CATEGORIES);
+  }, [categories, categoryFilter]);
 
   const run = async (source?: GenerationJob) => {
     const runPrompt = source?.prompt ?? prompt;
     const runModel = source?.model ?? model;
     const runChannel = config.channels.find((item) => item.id === source?.providerId) ?? channel;
     const runProvider = runChannel ? getProvider(runChannel, kind) : undefined;
-    if (!runChannel || !runProvider?.baseUrl || !runPrompt.trim() || busy) {
+		const serverProtocolSupported = kind === "image"
+			? runProvider?.protocol === "openai" || runProvider?.protocol === "gemini" ||
+				(runProvider?.protocol === "template" && Boolean(runProvider.template))
+			: runProvider?.protocol === "openai" || runProvider?.protocol === "ark" ||
+				(runProvider?.protocol === "template" && Boolean(runProvider.template)) ||
+				Boolean(runProvider?.baseUrl.includes("/api/v3") || runProvider?.baseUrl.includes("/api/plan/v3"));
+		let runOnServer = usesServerGenerationJobs() && serverProtocolSupported;
+    if (!runChannel || !runProvider?.baseUrl || !runPrompt.trim()) {
       setError(!runProvider?.baseUrl ? "请先在设置中配置对应模型服务 URL" : "请输入提示词");
       return;
     }
     const controller = new AbortController();
-    abortRef.current = controller;
-    setBusy(true);
+    const runToken = uid("run");
+    controllersRef.current.set(runToken, controller);
+    setActiveRuns((value) => value + 1);
     setError("");
     let job: GenerationJob | undefined;
     const uploadedReferenceKeys: string[] = [];
     try {
       const referenceData: string[] = [];
       const referenceStorageKeys: string[] = [];
+		let serverReferencesSupported = true;
       if (source) {
         const keys = Array.isArray(source.parameters.referenceStorageKeys)
           ? source.parameters.referenceStorageKeys.filter((value): value is string => typeof value === "string")
@@ -109,23 +220,55 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
         for (const key of keys) {
           const blob = await getBlob(key.startsWith("media:") ? "media" : "image", key);
           if (blob) {
+			serverReferencesSupported = serverReferencesSupported && (kind === "image"
+				? blob.type === "image/png" || blob.type === "image/jpeg"
+				: /^(image|video|audio)\//.test(blob.type));
             referenceData.push(await blobToDataUrl(blob));
             referenceStorageKeys.push(key);
           }
         }
         assertResolvedImageReferences(keys, referenceData);
       } else {
+        const selectedAssets = reusableAssets.filter((asset) => selectedAssetIds.includes(asset.id));
+        for (const asset of selectedAssets) {
+          let storageKey = asset.storageKey;
+          let content = asset.coverUrl || asset.content;
+          if (!storageKey && content) {
+            const uploaded = await uploadMedia(content, "image");
+            storageKey = uploaded.storageKey;
+            content = uploaded.url;
+            uploadedReferenceKeys.push(storageKey);
+          }
+          const resolved = await resolveMediaRefs([{
+            ...(storageKey ? { storageKey } : {}),
+            ...(content ? { content } : {}),
+          }], 1);
+          if (!resolved[0]) throw new Error(`素材“${asset.title}”的图片内容无法恢复`);
+          referenceData.push(resolved[0]);
+          if (storageKey) {
+            if (!referenceStorageKeys.includes(storageKey)) referenceStorageKeys.push(storageKey);
+          } else {
+            serverReferencesSupported = false;
+          }
+        }
         for (const file of references) {
+			serverReferencesSupported = serverReferencesSupported && (kind === "image"
+				? file.type === "image/png" || file.type === "image/jpeg"
+				: /^(image|video|audio)\//.test(file.type));
           const uploaded = await uploadMedia(file, file.type.startsWith("image/") ? "image" : "media");
           uploadedReferenceKeys.push(uploaded.storageKey);
           referenceStorageKeys.push(uploaded.storageKey);
           referenceData.push(await blobToDataUrl(file));
         }
       }
-      const ownerClientId = getRuntimeOwnerId();
-      const parameters: Record<string, unknown> = {
+		runOnServer = runOnServer && serverReferencesSupported;
+		const ownerClientId = runOnServer ? "" : getRuntimeOwnerId();
+		const parameters: Record<string, unknown> = {
         ...(source?.parameters ?? (kind === "image"
-        ? { size, quality, count, transparentBackground: transparent, referenceStorageKeys }
+        ? {
+            size, quality, count, transparentBackground: transparent,
+            category: normalizeWorkbenchCategory(category), referenceStorageKeys,
+          }
         : {
             seconds,
             smartDuration,
@@ -133,21 +276,71 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
             resolution,
             generateAudio,
             watermark,
+            frameMode,
             referenceStorageKeys,
           })),
         ...(ownerClientId ? { ownerClientId } : {}),
       };
-      job = await createGenerationJob({
-        projectId: project?.id,
-        kind,
-        status: "running",
-        prompt: runPrompt.trim(),
-        providerId: runChannel.id,
-        model: runModel,
-        parameters,
-        result: {},
-      });
-      const items: ResultItem[] = [];
+		if (runOnServer) {
+			if (kind === "image" && runProvider.protocol === "gemini" && Boolean(parameters.transparentBackground)) {
+				throw new Error("Gemini 图片生成不支持透明背景");
+			}
+			if (kind === "image" && runProvider.protocol === "template" && Boolean(parameters.transparentBackground) &&
+				!runProvider.template?.supportsTransparentBackground) {
+				throw new Error("当前图片模板不支持透明背景");
+			}
+			job = kind === "image" ? await createServerImageGenerationJob({
+				projectId: project?.id,
+				prompt: runPrompt.trim(),
+				providerId: runChannel.id,
+				model: runModel,
+				parameters: {
+					size: String(parameters.size ?? size),
+					quality: String(parameters.quality ?? quality),
+					count: Number(parameters.count ?? count),
+					category: normalizeWorkbenchCategory(parameters.category),
+					transparentBackground: Boolean(parameters.transparentBackground),
+					referenceStorageKeys,
+				},
+			}) : await createServerVideoGenerationJob({
+				projectId: project?.id,
+				prompt: runPrompt.trim(),
+				providerId: runChannel.id,
+				model: runModel,
+				parameters: {
+					size: String(parameters.size ?? ""),
+					seconds: resolveVideoDuration(Boolean(parameters.smartDuration), Number(parameters.seconds ?? seconds)),
+					ratio: String(parameters.ratio ?? ratio),
+					resolution: String(parameters.resolution ?? resolution),
+					generateAudio: Boolean(parameters.generateAudio),
+					watermark: Boolean(parameters.watermark),
+					frameMode: normalizeVideoFrameMode(parameters.frameMode),
+					referenceStorageKeys,
+				},
+			});
+			activeServerJobIdsRef.current.set(runToken, job.id);
+			setJobs((current) => [job!, ...current.filter((item) => item.id !== job!.id)]);
+			const completed = await waitForGenerationJob(job.id, {
+				signal: controller.signal,
+				onUpdate: (next) => setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]),
+			});
+			if (completed.status === "failed") throw new Error(completed.error || `${kind === "image" ? "图片" : "视频"}生成失败`);
+			if (completed.status === "cancelled") return;
+			await refresh();
+			return;
+		}
+		job = await createGenerationJob({
+			projectId: project?.id,
+			kind,
+			status: "running",
+			prompt: runPrompt.trim(),
+			providerId: runChannel.id,
+			model: runModel,
+			parameters,
+			result: {},
+		});
+      setJobs((current) => [job!, ...current.filter((item) => item.id !== job!.id)]);
+      const items: WorkbenchResultItem[] = [];
       if (kind === "image") {
         const urls = await generateImages({
           channel: runChannel,
@@ -166,7 +359,10 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
         });
         for (const url of urls) {
           const media = await uploadMedia(url, "image");
-          items.push(media);
+          items.push({
+            url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
+            bytes: media.bytes, mimeType: media.mimeType,
+          });
         }
       } else {
         const output = await generateVideo({
@@ -181,6 +377,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           resolution: String(parameters.resolution ?? resolution),
           generateAudio: Boolean(parameters.generateAudio),
           watermark: Boolean(parameters.watermark),
+          frameMode: normalizeVideoFrameMode(parameters.frameMode),
           referenceImages: referenceData.filter((value) => value.startsWith("data:image/")),
           referenceVideos: referenceData.filter((value) => value.startsWith("data:video/")),
           referenceAudios: referenceData.filter((value) => value.startsWith("data:audio/")),
@@ -191,7 +388,11 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
         });
         if (!output.url) throw new Error("视频服务没有返回结果 URL");
         try {
-          items.push(await uploadMedia(output.url, "media"));
+          const media = await uploadMedia(output.url, "media");
+          items.push({
+            url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
+            bytes: media.bytes, mimeType: media.mimeType,
+          });
         } catch {
           items.push({ url: output.url, mimeType: "video/mp4" });
         }
@@ -205,7 +406,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
       if (!job && uploadedReferenceKeys.length) {
         await Promise.allSettled(uploadedReferenceKeys.map(deleteStorageKey));
       }
-      if (job) {
+		if (job && !isServerOwnedGenerationJob(job)) {
         completeGenerationActivity(
           job.id,
           cancelled ? "cancelled" : "failed",
@@ -219,12 +420,27 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
       if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
       await refresh().catch(() => undefined);
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      setBusy(false);
+      controllersRef.current.delete(runToken);
+			activeServerJobIdsRef.current.delete(runToken);
+      setActiveRuns((value) => Math.max(0, value - 1));
     }
   };
 
-  const insert = async (item: ResultItem, job: GenerationJob) => {
+	const stopActiveJobs = async () => {
+		const jobIds = [...new Set(activeServerJobIdsRef.current.values())];
+		const cancelled = await Promise.allSettled(jobIds.map(cancelServerGenerationJob));
+		for (const result of cancelled) {
+			if (result.status === "fulfilled") {
+				setJobs((current) => [result.value, ...current.filter((item) => item.id !== result.value.id)]);
+			} else {
+				setError(result.reason instanceof Error ? result.reason.message : String(result.reason));
+			}
+		}
+		for (const controller of controllersRef.current.values()) controller.abort();
+		activeServerJobIdsRef.current.clear();
+	};
+
+  const insert = async (item: WorkbenchResultItem, job: GenerationJob) => {
     const viewport = project?.viewport ?? { x: 0, y: 0, k: 1 };
     let content = item.url;
     if (item.storageKey) {
@@ -273,10 +489,44 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           >
             视频
           </Link>
+          <Link
+            role="tab"
+            aria-selected={false}
+            className="ob-segment-item no-underline"
+            to="/workbench/workflows"
+          >
+            工作流
+          </Link>
+        </div>
+        <div className="ob-segment ml-auto" role="group" aria-label="工作台布局">
+          <button
+            type="button"
+            className="ob-segment-item inline-flex items-center gap-1.5"
+            aria-pressed={layout === "side"}
+            onClick={() => setLayout("side")}
+          >
+            <PanelLeft size={15} /> 侧边
+          </button>
+          <button
+            type="button"
+            className="ob-segment-item inline-flex items-center gap-1.5"
+            aria-pressed={layout === "bottom"}
+            onClick={() => setLayout("bottom")}
+          >
+            <PanelBottom size={15} /> 底部
+          </button>
         </div>
       </header>
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[380px_1fr]">
-        <section className="relative z-10 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-elev-1)] lg:border-b-0 lg:border-r">
+      <div
+        data-workbench-layout={layout}
+        className={layout === "side"
+          ? "grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[380px_1fr]"
+          : "flex min-h-0 flex-1 flex-col-reverse overflow-auto"}
+      >
+        <section className={layout === "side"
+          ? "relative z-10 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-elev-1)] lg:border-b-0 lg:border-r"
+          : "relative z-10 border-t border-[var(--ob-line)] bg-[var(--ob-panel)] p-5 shadow-[var(--ob-elev-1)]"}
+        >
           <div className="space-y-4 text-sm">
             <label className="block">
               <span className="ob-label">提示词</span>
@@ -287,6 +537,24 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                 onChange={(event) => setPrompt(event.target.value)}
               />
             </label>
+            {kind === "image" ? (
+              <label className="block">
+                <span className="ob-label">分类</span>
+                <input
+                  className="ob-field"
+                  value={category}
+                  maxLength={100}
+                  list="workbench-category-options"
+                  placeholder="例如：海报、角色、分镜"
+                  onChange={(event) => setCategory(event.target.value)}
+                />
+                <datalist id="workbench-category-options">
+                  {categories.filter((value) => value !== WORKBENCH_ALL_CATEGORIES).map((value) => (
+                    <option key={value} value={value} />
+                  ))}
+                </datalist>
+              </label>
+            ) : null}
             <label className="block">
               <span className="ob-label">渠道</span>
               <select
@@ -399,6 +667,23 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
                   />
                   <span aria-hidden="true">水印</span>
                 </div>
+                <label className="col-span-2 block">
+                  <span className="ob-label">图片参考模式</span>
+                  <select
+                    aria-label="图片参考模式"
+                    className="ob-field"
+                    value={frameMode}
+                    onChange={(event) => setFrameMode(event.target.value === "first-last" ? "first-last" : "references")}
+                  >
+                    <option value="references">普通参考图</option>
+                    <option value="first-last">首尾帧</option>
+                  </select>
+                  {frameMode === "first-last" ? (
+                    <p className="mt-1.5 text-xs text-[var(--ob-muted)]">
+                      按参考图片顺序：第 1 张为首帧，第 2 张为尾帧；其余仍作为参考图。
+                    </p>
+                  ) : null}
+                </label>
               </div>
             )}
             <label className="block">
@@ -413,24 +698,49 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
               {references.length ? (
                 <p className="mt-1.5 text-xs text-[var(--ob-muted)]">已选 {references.length} 个参考文件</p>
               ) : null}
+              <FileReferencePreviews files={references} />
             </label>
+            {reusableAssets.length ? (
+              <fieldset className="rounded-xl border border-[var(--ob-line)] p-3">
+                <legend className="px-1 text-xs font-semibold text-[var(--ob-muted)]">从“我的素材”复用</legend>
+                <div className="mt-1 grid max-h-40 grid-cols-2 gap-2 overflow-auto">
+                  {reusableAssets.map((asset) => {
+                    const selected = selectedAssetIds.includes(asset.id);
+                    return (
+                      <label key={asset.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--ob-line)] p-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => setSelectedAssetIds((current) => selected
+                            ? current.filter((id) => id !== asset.id)
+                            : [...current, asset.id])}
+                        />
+                        <AssetReferenceThumbnail asset={asset} />
+                        <span className="min-w-0 truncate">{asset.title}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">已选 {selectedAssetIds.length} 个素材</p>
+              </fieldset>
+            ) : null}
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
                 aria-label="生成"
                 className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold"
-                disabled={busy || !prompt.trim()}
+                disabled={!prompt.trim()}
                 onClick={() => void run()}
               >
                 {kind === "image" ? <ImagePlus size={18} /> : <Video size={18} />}
-                {busy ? "生成中..." : "开始生成"}
+                {activeRuns ? `继续生成（${activeRuns} 个进行中）` : "开始生成"}
               </button>
               <button
                 type="button"
                 title="停止"
                 className="ob-btn-danger rounded-xl p-3"
-                disabled={!busy}
-                onClick={() => abortRef.current?.abort()}
+                disabled={!activeRuns}
+				onClick={() => void stopActiveJobs()}
               >
                 <Square size={18} />
               </button>
@@ -448,33 +758,74 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
               <h2 className="text-base font-semibold text-[var(--ob-ink)]">生成历史</h2>
               <p className="text-xs text-[var(--ob-muted)]">最近任务与结果预览</p>
             </div>
-            <button type="button" title="刷新" className="ob-icon-btn" onClick={() => void refresh()}>
-              <RefreshCw size={18} />
-            </button>
+            <div className="flex items-center gap-2">
+              {kind === "image" ? (
+                <select
+                  aria-label="生成历史分类"
+                  className="ob-field min-w-28 py-1.5 text-xs"
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                >
+                  {categories.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              ) : null}
+              <label className="flex items-center gap-1 text-xs text-[var(--ob-muted)]">
+                <input
+                  type="checkbox"
+                  aria-label="全选当前历史"
+                  checked={allVisibleSelected}
+                  disabled={!visibleJobs.length}
+                  onChange={() => toggleSelectAllVisible()}
+                />
+                全选
+              </label>
+              <button
+                type="button"
+                title="批量删除"
+                className="ob-btn-danger rounded-lg p-1.5"
+                disabled={!selectedVisibleIds.length}
+                onClick={() => void deleteSelectedHistory()}
+              >
+                <Trash2 size={16} />
+                <span className="sr-only">批量删除</span>
+              </button>
+              {selectedVisibleIds.length ? (
+                <span className="text-xs text-[var(--ob-muted)]">已选 {selectedVisibleIds.length}</span>
+              ) : null}
+              <button type="button" title="刷新" className="ob-icon-btn" onClick={() => void refresh()}>
+                <RefreshCw size={18} />
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {jobs.map((job) => (
-              <HistoryRow
+            {visibleJobs.map((job) => (
+              <WorkbenchHistoryRow
                 key={job.id}
                 job={job}
+                selected={selectedJobIds.includes(job.id)}
+                onSelectedChange={(selected) => toggleJobSelected(job.id, selected)}
                 onRetry={() => void run(job)}
                 onInsert={(item) => insert(item, job)}
+				onCancel={isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running")
+					? async () => {
+						try {
+							const cancelled = await cancelServerGenerationJob(job.id);
+							setJobs((current) => [cancelled, ...current.filter((item) => item.id !== cancelled.id)]);
+						} catch (cause) {
+							setError(cause instanceof Error ? cause.message : String(cause));
+						}
+					}
+					: undefined}
                 onDelete={async () => {
+                  // Soft-delete hides the card while retaining a sync tombstone and media ownership.
                   await deleteGenerationJob(job.id);
-                  const state = useBoardStore.getState();
-                  const externalKeys = collectStorageKeys(state.projects, state.assets);
-                  const orphanedKeys = findUnreferencedGenerationStorageKeys(
-                    job,
-                    await listAllGenerationJobs(),
-                    externalKeys,
-                  );
-                  await Promise.allSettled([...orphanedKeys].map(deleteStorageKey));
+                  setSelectedJobIds((current) => current.filter((id) => id !== job.id));
                   await refresh();
                 }}
               />
             ))}
           </div>
-          {!jobs.length ? (
+          {!visibleJobs.length ? (
             <div className="ob-empty mt-4 py-16">
               <span className="ob-empty-icon" aria-hidden>
                 {kind === "image" ? <ImagePlus size={16} /> : <Video size={16} />}
@@ -485,103 +836,7 @@ export function CreativeWorkbench({ kind }: { kind: GenerationKind }) {
           ) : null}
         </section>
       </div>
+      {kind === "image" ? <DraggableWorkflowEntry /> : null}
     </div>
   );
-}
-
-function resultItems(job: GenerationJob): ResultItem[] {
-  return Array.isArray(job.result.items) ? job.result.items.filter((item): item is ResultItem => Boolean(item && typeof item === "object")) : [];
-}
-
-function HistoryRow({ job, onRetry, onInsert, onDelete }: { job: GenerationJob; onRetry: () => void; onInsert: (item: ResultItem) => Promise<void>; onDelete: () => Promise<void> }) {
-  const items = resultItems(job);
-  const [inserting, setInserting] = useState<number | null>(null);
-  const [inserted, setInserted] = useState<number | null>(null);
-  const statusLabel =
-    job.status === "succeeded" ? "成功"
-      : job.status === "running" ? "进行中"
-        : job.status === "failed" ? "失败"
-          : job.status === "cancelled" ? "已取消"
-            : job.status;
-  return (
-    <article className="ob-card p-4">
-      <div className="mb-3 flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-semibold text-[var(--ob-ink)]">{job.prompt}</div>
-          <div className="mt-0.5 text-xs font-medium text-[var(--ob-muted)]">
-            <span className="ob-status-dot mr-1" data-status={job.status} />
-            {statusLabel} · {job.model || "默认模型"}
-          </div>
-        </div>
-        <button type="button" className="ob-icon-btn h-8 w-8" title="重试" onClick={onRetry}>
-          <RefreshCw size={16} />
-        </button>
-        <button type="button" className="ob-btn-danger rounded-lg p-1.5" title="删除" onClick={() => void onDelete()}>
-          <Trash2 size={16} />
-        </button>
-      </div>
-      {job.error ? <p className="mb-2 text-xs text-[var(--ob-danger)]">{job.error}</p> : null}
-      <div className="grid grid-cols-2 gap-3">
-        {items.map((item, index) => (
-          <div key={item.storageKey ?? item.url ?? index} className="group flex min-w-0 flex-col">
-            <div className="overflow-hidden rounded-xl bg-[var(--ob-canvas)]">
-              <MediaPreview item={item} video={job.kind === "video"} />
-            </div>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                className="ob-icon-btn h-8 w-8 border border-[var(--ob-line)]"
-                title="下载"
-                onClick={() => item.storageKey
-                  ? void downloadStorageKey(item.storageKey, `${job.kind}-${index + 1}.${job.kind === "video" ? "mp4" : "png"}`)
-                  : downloadURL(item.url)}
-              >
-                <Download size={16} />
-              </button>
-              <button
-                type="button"
-                disabled={inserting !== null}
-                className="ob-btn flex-1 px-3 py-1.5 text-xs"
-                onClick={() => void (async () => {
-                  setInserting(index);
-                  try {
-                    await onInsert(item);
-                    setInserted(index);
-                  } finally {
-                    setInserting(null);
-                  }
-                })()}
-              >
-                {inserting === index ? "插入中" : inserted === index ? "已插入" : "插入画布"}
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function MediaPreview({ item, video }: { item: ResultItem; video: boolean }) {
-  const [url, setUrl] = useState(item.url);
-  useEffect(() => {
-    if (!item.storageKey) return;
-    let objectURL = "";
-    void getBlob(item.storageKey.startsWith("media:") ? "media" : "image", item.storageKey).then((blob) => {
-      if (!blob) return;
-      objectURL = URL.createObjectURL(blob);
-      setUrl(objectURL);
-    });
-    return () => { if (objectURL) URL.revokeObjectURL(objectURL); };
-  }, [item.storageKey]);
-  if (!url) return <div className="grid aspect-video place-items-center text-xs font-medium text-[var(--ob-muted)]">结果不可用</div>;
-  return video ? <video src={url} controls className="aspect-video w-full object-contain" /> : <img src={url} alt="生成结果" className="aspect-video w-full object-contain" />;
-}
-
-function downloadURL(url?: string) {
-  if (!url) return;
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = "openboard-result";
-  anchor.click();
 }

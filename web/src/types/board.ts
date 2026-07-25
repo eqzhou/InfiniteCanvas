@@ -1,12 +1,98 @@
-export type NodeType = "text" | "image" | "config" | "video" | "audio" | "group" | "plugin";
+export type NodeType = "text" | "image" | "config" | "video" | "audio" | "panorama" | "director" | "group" | "plugin";
 export type BackgroundMode = "dots" | "lines" | "blank";
 export type GenMode = "text" | "image" | "video";
 export type NodeStatus = "idle" | "loading" | "success" | "error";
 export type AssistantMode = "ask" | "image";
+export type CameraPromptCamera = "cinema" | "mirrorless" | "dslr" | "drone" | "action";
+export type CameraPromptLens = "wide" | "standard" | "telephoto" | "macro" | "anamorphic";
+export type CameraPromptConfig = {
+  enabled: boolean;
+  camera: CameraPromptCamera;
+  lens: CameraPromptLens;
+  focalLength: number;
+  aperture: number;
+};
 
 export type Point = { x: number; y: number };
 export type Size = { width: number; height: number };
 export type Viewport = { x: number; y: number; k: number };
+export type DirectorVector3 = { x: number; y: number; z: number };
+export type DirectorTransform = {
+  position: DirectorVector3;
+  rotation: DirectorVector3;
+  scale: DirectorVector3;
+};
+export type DirectorCharacterPreset = "studio" | "tall" | "compact" | "athletic" | "broad" | "casual" | "formal" | "future";
+export type DirectorPosePreset =
+  | "neutral" | "contrapposto" | "arms-crossed" | "hands-hips" | "wave-left"
+  | "wave-right" | "point-left" | "point-right" | "walk-left" | "walk-right"
+  | "run" | "sit" | "crouch" | "lean" | "reach" | "look-back" | "guard"
+  | "celebrate" | "talk" | "camera-ready";
+export type DirectorPrimitive = "box" | "sphere" | "cylinder" | "cone" | "torus" | "plane";
+export type DirectorCharacterConfig = {
+  preset: DirectorCharacterPreset;
+  pose: DirectorPosePreset;
+  role: "actor" | "extra";
+};
+export type DirectorCrowdConfig = {
+  preset: DirectorCharacterPreset;
+  pose: DirectorPosePreset;
+  rows: number;
+  columns: number;
+  spacingX: number;
+  spacingZ: number;
+  variation: boolean;
+  seed: number;
+};
+export type DirectorObjectKind = "character" | "crowd" | "prop" | "light" | "model";
+export type DirectorModelAssetRef = {
+  assetId: string;
+  fileName: string;
+  bytes: number;
+};
+export type DirectorObject = {
+  id: string;
+  kind: DirectorObjectKind;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  color: string;
+  intensity: number;
+  transform: DirectorTransform;
+  character?: DirectorCharacterConfig;
+  crowd?: DirectorCrowdConfig;
+  primitive?: DirectorPrimitive;
+  modelAsset?: DirectorModelAssetRef;
+};
+export type DirectorCamera = {
+  id: string;
+  name: string;
+  position: DirectorVector3;
+  target: DirectorVector3;
+  focalLength: number;
+  aperture: number;
+  aspect: "16:9" | "4:3" | "1:1" | "3:4" | "9:16";
+};
+export type DirectorScene = {
+  version: 4;
+  background: string;
+  showGroundGrid: boolean;
+  showRuleOfThirds: boolean;
+  showSafeFrame: boolean;
+  viewMode: "director" | "camera";
+  directorView: {
+    position: DirectorVector3;
+    target: DirectorVector3;
+  };
+  selectedObjectId: string | null;
+  activeCameraId: string;
+  cameras: DirectorCamera[];
+  environment: {
+    rotationY: number;
+    intensity: number;
+  };
+  objects: DirectorObject[];
+};
 export type PluginPermission =
   | "node:read"
   | "node:write"
@@ -64,6 +150,8 @@ export type NodeMetadata = {
   resolution?: string;
   generateAudio?: boolean;
   watermark?: boolean;
+  /** Video reference interpretation: ordered refs or first/last frame pair. */
+  videoFrameMode?: "references" | "first-last";
   transparentBackground?: boolean;
   generationType?: "text-to-image" | "image-to-image";
   referenceStorageKeys?: string[];
@@ -90,6 +178,14 @@ export type NodeMetadata = {
   childIds?: string[];
   pluginId?: string;
   pluginState?: Record<string, unknown>;
+  directorScene?: DirectorScene;
+  panoramaProjection?: "equirectangular";
+  cameraPrompt?: CameraPromptConfig;
+  workflowRunId?: string;
+  workflowStepId?: string;
+  workflowTemplateId?: string;
+  generationJobId?: string;
+  generationResultIndex?: number;
 };
 
 
@@ -265,6 +361,19 @@ export type AiEndpointConfig = {
 };
 export type AiProviders = Record<AiProviderKind, AiEndpointConfig>;
 
+/** Optional per-user/tenant S3-compatible object storage (AWS S3, Cloudflare R2, MinIO). */
+export type ObjectStorageConfig = {
+  enabled: boolean;
+  endpoint: string;
+  bucket: string;
+  region: string;
+  prefix: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  allowInsecureLoopback?: boolean;
+};
+
 export type AppConfig = {
   channels: AiChannel[];
   activeChannelId: string | null;
@@ -276,6 +385,7 @@ export type AppConfig = {
   webdavUrl?: string;
   webdavUser?: string;
   webdavPass?: string;
+  objectStorage?: ObjectStorageConfig;
   promptSources?: PromptSourceConfig[];
   plugins?: PluginManifest[];
   disabledPluginIds?: string[];
@@ -291,8 +401,8 @@ export type ClipboardPayload = {
   edges: BoardEdge[];
 };
 
-export type GenerationKind = "image" | "video";
-export type GenerationStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type GenerationKind = "image" | "video" | "audio" | "workflow";
+export type GenerationStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "deleted";
 export type GenerationJob = {
   id: string;
   projectId?: string;

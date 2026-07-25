@@ -128,3 +128,40 @@ export function formatUsageChip(snapshot: UsageSnapshot): string {
   const quota = snapshot.generationQuotaMonthly ?? 0;
   return `${plan} · 本月生成 ${used}/${quota}`;
 }
+
+export type SitePolicy = {
+  allowRegister: boolean;
+  allowCustomChannel: boolean;
+  allowCloudChannel: boolean;
+};
+
+export const DEFAULT_SITE_POLICY: SitePolicy = {
+  allowRegister: true,
+  allowCustomChannel: true,
+  allowCloudChannel: true,
+};
+
+export async function getSitePolicy(): Promise<SitePolicy> {
+  try {
+    const response = await authFetch("site-policy");
+    if (!response.ok) return { ...DEFAULT_SITE_POLICY };
+    const data = (await response.json()) as Partial<SitePolicy>;
+    return {
+      allowRegister: data.allowRegister !== false,
+      allowCustomChannel: data.allowCustomChannel !== false,
+      allowCloudChannel: data.allowCloudChannel !== false,
+    };
+  } catch {
+    return { ...DEFAULT_SITE_POLICY };
+  }
+}
+
+export async function updateSitePolicy(policy: SitePolicy): Promise<SitePolicy> {
+  return parseJSON<SitePolicy>(
+    await authFetch("site-policy", {
+      method: "PUT",
+      body: JSON.stringify(policy),
+    }),
+  );
+}
+

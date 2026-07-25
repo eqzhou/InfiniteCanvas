@@ -1,18 +1,33 @@
-import { useRef, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import type { BoardNode } from "@/types/board";
 import { cn } from "@/lib/cn";
-import { useBoardStore } from "@/stores/use-board-store";
+import { ProjectCommitRollbackError, useBoardStore } from "@/stores/use-board-store";
 import { NodeActions } from "@/components/canvas/NodeActions";
 import { NodePromptBar } from "@/components/canvas/NodePromptBar";
 import { BatchGroupControls } from "@/components/canvas/BatchGroupControls";
 import { PluginNodeFrame } from "@/components/canvas/PluginNodeFrame";
 import { ImagePreviewDialog } from "@/components/canvas/ImagePreviewDialog";
+import { createDefaultDirectorScene, getDirectorPopulation } from "@/lib/director-scene";
+import { createNode } from "@/lib/defaults";
 import { findPluginManifest } from "@/plugins/builtins";
-import { uploadMedia } from "@/services/storage";
+import { deleteBlob, uploadMedia } from "@/services/storage";
+import {
+  getDirectorCaptureOwnerScope,
+  type DirectorCapture,
+} from "@/services/director-capture-store";
+import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { defaultModelForMode } from "@/lib/generation-model";
 import { normalizeNodeTitle } from "@/lib/node-format";
-import { Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
+import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
+import { listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
+
+const DirectorDialog = lazy(() => import("@/components/director/DirectorDialog").then((module) => ({
+  default: module.DirectorDialog,
+})));
+const PanoramaNodeCard = lazy(() => import("@/components/canvas/PanoramaNodeCard").then((module) => ({
+  default: module.PanoramaNodeCard,
+})));
 
 function moveInput(order: readonly string[], index: number, offset: -1 | 1): string[] {
   const target = index + offset;
@@ -29,9 +44,9 @@ type Props = {
   related: boolean;
   groupHighlighted?: boolean;
   onSelect: (additive: boolean) => void;
-  onDragStart: (e: { clientX: number; clientY: number }) => void;
-  onResizeStart: (e: { clientX: number; clientY: number }, free: boolean) => void;
-  onStartConnect: () => void;
+  onDragStart: (e: { clientX: number; clientY: number; pointerId?: number }) => void;
+  onResizeStart: (e: { clientX: number; clientY: number; pointerId?: number }, free: boolean) => void;
+  onStartConnect: (e?: { pointerId?: number }) => void;
   onCompleteConnect: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
 };
@@ -49,11 +64,19 @@ export function BoardNodeView({
   onContextMenu,
 }: Props) {
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
+  const directorEditStartedRef = useRef(false);
   const updateNode = useBoardStore((s) => s.updateNode);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
+  const [directorOpen, setDirectorOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(node.title);
   const project = useBoardStore((s) => s.getActive());
+  const auth = useOptionalAuth();
+  const captureOwnerScope = useMemo(
+    () => getDirectorCaptureOwnerScope(auth?.user),
+    [auth?.user?.id, auth?.user?.tenantId],
+  );
+  const directorProjectId = project?.id ?? node.id;
   const config = useBoardStore((s) => s.config);
   const prompts = useBoardStore((s) => s.prompts);
   const installedPlugins = config.plugins ?? [];
@@ -70,6 +93,10 @@ export function BoardNodeView({
       ? Type
       : node.type === "image"
         ? Image
+        : node.type === "panorama"
+          ? Globe2
+        : node.type === "director"
+          ? Clapperboard
         : node.type === "video"
           ? Film
           : node.type === "audio"
@@ -170,17 +197,18 @@ export function BoardNodeView({
       <div className="min-h-0 flex-1 overflow-hidden rounded-b-lg p-2">
         {node.type === "text" ? (
           <div className="flex h-full flex-col gap-1" onPointerDown={(event) => event.stopPropagation()}>
-            <div className="flex gap-1">
+            <div className="flex min-w-0 items-center gap-1">
               <input
                 aria-label="文本节点模型"
-                className="min-w-0 flex-1 rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-0.5 text-[11px]"
+                className="min-w-0 flex-1 truncate rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-0.5 text-[11px]"
                 value={node.metadata.model ?? ""}
+                title={node.metadata.model || (activeChannel ? defaultModelForMode(activeChannel, "text") : "继承默认文本模型")}
                 placeholder={activeChannel ? defaultModelForMode(activeChannel, "text") : "继承默认文本模型"}
                 onChange={(event) => updateNode(node.id, { metadata: { model: event.target.value || undefined } })}
               />
               <select
                 aria-label="提示词库"
-                className="max-w-[45%] rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
+                className="w-[38%] min-w-[5.5rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
                 value=""
                 onChange={(event) => {
                   const prompt = prompts.find((item) => item.id === event.target.value);
@@ -232,18 +260,61 @@ export function BoardNodeView({
         ) : null}
 
         {node.type === "video" ? (
-          node.metadata.content ? (
-            <video
-              src={node.metadata.content}
-              className="h-full w-full object-contain"
-              controls
-              onPointerDown={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <div className="grid h-full place-items-center text-sm text-[var(--ob-muted)]">
-              {node.metadata.status === "loading" ? "生成中…" : "空视频节点"}
+          <div className="flex h-full flex-col gap-2" onPointerDown={(e) => e.stopPropagation()}>
+            {node.metadata.content ? (
+              <video
+                src={node.metadata.content}
+                className="min-h-0 flex-1 w-full object-contain"
+                controls
+              />
+            ) : (
+              <div className="grid min-h-0 flex-1 place-items-center text-sm text-[var(--ob-muted)]">
+                {node.metadata.status === "loading"
+                  ? "生成中…"
+                  : node.metadata.status === "error"
+                    ? node.metadata.errorDetails || "生成失败"
+                    : "空视频节点"}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-1 text-[10px]">
+              <label className="flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={Boolean(node.metadata.generateAudio)}
+                  onChange={(e) => updateNode(node.id, {
+                    metadata: { generateAudio: e.target.checked },
+                  })}
+                />
+                生成声音
+              </label>
+              <label className="flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={Boolean(node.metadata.watermark)}
+                  onChange={(e) => updateNode(node.id, {
+                    metadata: { watermark: e.target.checked },
+                  })}
+                />
+                水印
+              </label>
+              <label className="col-span-2 flex flex-col gap-1">
+                图片参考模式
+                <select
+                  aria-label="图片参考模式"
+                  className="rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5"
+                  value={node.metadata.videoFrameMode ?? "references"}
+                  onChange={(e) => updateNode(node.id, {
+                    metadata: {
+                      videoFrameMode: e.target.value === "first-last" ? "first-last" : "references",
+                    },
+                  })}
+                >
+                  <option value="references">普通参考图</option>
+                  <option value="first-last">首尾帧</option>
+                </select>
+              </label>
             </div>
-          )
+          </div>
         ) : null}
 
         {node.type === "audio" ? (
@@ -256,7 +327,11 @@ export function BoardNodeView({
             </div>
           ) : (
             <div className="grid h-full place-items-center text-sm text-[var(--ob-muted)]">
-              空音频节点
+			  {node.metadata.status === "loading"
+				? "生成中…"
+				: node.metadata.status === "error"
+					? node.metadata.errorDetails || "生成失败"
+					: "空音频节点"}
             </div>
           )
         ) : null}
@@ -300,11 +375,13 @@ export function BoardNodeView({
                 透明背景
               </label>
             ) : null}
-            <label className="flex flex-col gap-1">
+            <label className="flex min-w-0 flex-col gap-1">
               模型
               <input
-                className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                aria-label="配置节点模型"
+                className="min-w-0 truncate rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                 value={node.metadata.model ?? ""}
+                title={node.metadata.model || "继承全局默认"}
                 placeholder="继承全局默认"
                 onChange={(e) =>
                   updateNode(node.id, { metadata: { model: e.target.value } })
@@ -416,6 +493,29 @@ export function BoardNodeView({
                   />
                   水印
                 </label>
+                <label className="flex flex-col gap-1">
+                  图片参考模式
+                  <select
+                    aria-label="图片参考模式"
+                    className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                    value={node.metadata.videoFrameMode ?? "references"}
+                    onChange={(e) =>
+                      updateNode(node.id, {
+                        metadata: {
+                          videoFrameMode: e.target.value === "first-last" ? "first-last" : "references",
+                        },
+                      })
+                    }
+                  >
+                    <option value="references">普通参考图</option>
+                    <option value="first-last">首尾帧</option>
+                  </select>
+                </label>
+                {node.metadata.videoFrameMode === "first-last" ? (
+                  <p className="text-[10px] leading-snug text-[var(--ob-muted)]">
+                    按上游图片顺序：第 1 张为首帧，第 2 张为尾帧；其余仍作为参考图。
+                  </p>
+                ) : null}
               </>
             ) : null}
             <div className="rounded border border-[var(--ob-line)] p-1.5">
@@ -510,6 +610,34 @@ export function BoardNodeView({
           </div>
         ) : null}
 
+        {node.type === "director" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 bg-gradient-to-b from-slate-950 to-slate-900 text-center" onPointerDown={(event) => event.stopPropagation()}>
+            <Clapperboard size={30} className="text-[var(--ob-accent)]" />
+            <div>
+              <div className="text-sm font-medium">3D 导演台</div>
+              <div className="mt-1 text-[11px] text-slate-400">
+                {node.metadata.directorScene?.objects.length ?? 0} 个舞台元素 · {node.metadata.directorScene ? getDirectorPopulation(node.metadata.directorScene) : 0} 人 · {node.metadata.directorScene?.cameras.length ?? 1} 个机位
+              </div>
+            </div>
+            <button
+              type="button"
+              className="rounded-lg bg-[var(--ob-accent)] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:brightness-110"
+              onClick={() => {
+                directorEditStartedRef.current = false;
+                setDirectorOpen(true);
+              }}
+            >
+              打开导演台
+            </button>
+          </div>
+        ) : null}
+
+        {node.type === "panorama" ? (
+          <Suspense fallback={<div className="grid h-full place-items-center bg-slate-950 text-xs text-slate-400">正在加载全景节点…</div>}>
+            <PanoramaNodeCard node={node} />
+          </Suspense>
+        ) : null}
+
         {node.type === "group" ? (
           <div className="grid h-full place-items-center text-xs text-[var(--ob-muted)]">
             {node.metadata.childIds?.length ?? 0} 个节点
@@ -535,7 +663,7 @@ export function BoardNodeView({
         ) : null}
       </div>
 
-      {selected && node.type !== "group" && node.type !== "plugin" ? (
+      {selected && node.type !== "group" && node.type !== "plugin" && node.type !== "director" && node.type !== "panorama" ? (
         <NodeActions
           node={node}
           onEditText={node.type === "text" ? () => {
@@ -546,7 +674,7 @@ export function BoardNodeView({
           } : undefined}
         />
       ) : null}
-      {selected && node.type !== "config" && node.type !== "group" && node.type !== "plugin" ? (
+      {selected && node.type !== "config" && node.type !== "group" && node.type !== "plugin" && node.type !== "director" && node.type !== "panorama" ? (
         <NodePromptBar node={node} />
       ) : null}
       {(node.metadata.isBatchRoot || node.metadata.batchRootId) ? (
@@ -606,7 +734,7 @@ export function BoardNodeView({
             title="输出端口 / 拖出连线"
             onPointerDown={(e) => {
               e.stopPropagation();
-              onStartConnect();
+              onStartConnect(e);
             }}
             onPointerUp={(e) => e.stopPropagation()}
           />
@@ -620,6 +748,103 @@ export function BoardNodeView({
           alt={node.title}
           onClose={() => setImagePreviewOpen(false)}
         />
+      ) : null}
+
+      {node.type === "director" ? (
+        <Suspense fallback={directorOpen ? <div role="dialog" aria-modal="true" aria-label="正在加载 3D 导演台" className="fixed inset-0 z-[150] grid place-items-center bg-[#111] text-sm text-white">正在加载 3D 导演台…</div> : null}>
+          <DirectorDialog
+            open={directorOpen}
+            ownerScope={captureOwnerScope}
+            projectId={directorProjectId}
+            directorNodeId={node.id}
+            title={node.title}
+            scene={node.metadata.directorScene ?? createDefaultDirectorScene()}
+            panoramaOptions={(project ? listDirectorEnvironmentOptions(project, node.id) : []).map((candidate) => ({ id: candidate.id, label: candidate.type === "image" ? `${candidate.title}（图片）` : candidate.title, url: candidate.metadata.content! }))}
+            activePanoramaId={project ? resolveDirectorPanorama(project, node.id)?.id ?? null : null}
+            onPanoramaChange={(panoramaId) => {
+              const store = useBoardStore.getState();
+              if (!directorEditStartedRef.current) {
+                store.captureHistory();
+                directorEditStartedRef.current = true;
+              }
+              store.bindDirectorPanorama(node.id, panoramaId, { history: false });
+            }}
+            onChange={(directorScene) => {
+              if (!directorEditStartedRef.current) {
+                useBoardStore.getState().captureHistory();
+                directorEditStartedRef.current = true;
+              }
+              updateNode(node.id, { metadata: { directorScene } }, { history: false });
+            }}
+            onTransformCommit={(directorScene) => {
+              useBoardStore.getState().captureHistory();
+              directorEditStartedRef.current = true;
+              updateNode(node.id, { metadata: { directorScene } }, { history: false });
+            }}
+            onModelCommit={(directorScene) => {
+              useBoardStore.getState().captureHistory();
+              directorEditStartedRef.current = true;
+              updateNode(node.id, { metadata: { directorScene } }, { history: false });
+            }}
+            onClose={() => {
+              setDirectorOpen(false);
+              void useBoardStore.getState().persistNow();
+            }}
+            onSendCaptures={async (captures: DirectorCapture[]) => {
+              const uploaded: Awaited<ReturnType<typeof uploadMedia>>[] = [];
+              try {
+                for (const capture of captures) uploaded.push(await uploadMedia(capture.blob, "image"));
+              } catch (error) {
+                await Promise.all(uploaded.map((item) => deleteBlob("image", item.storageKey).catch(() => undefined)));
+                throw error;
+              }
+              const store = useBoardStore.getState();
+              const active = store.getActive();
+              const current = active?.nodes.find((item) => item.id === node.id);
+              if (!active || active.id !== directorProjectId || !current || current.type !== "director") {
+                await Promise.all(uploaded.map((item) => deleteBlob("image", item.storageKey).catch(() => undefined)));
+                throw new Error("导演台节点已不存在，无法发送截图");
+              }
+              const existingBottom = active.nodes
+                .filter((item) => item.metadata.derivedFromId === current.id && item.type === "image")
+                .reduce((bottom, item) => Math.max(bottom, item.position.y + item.height + 24), current.position.y);
+              let cursorY = existingBottom;
+              const created = uploaded.map((item, index) => {
+                const display = fitMediaDisplaySize(item.width, item.height);
+                const capture = captures[index]!;
+                const createdNode = createNode("image", {
+                  x: current.position.x + current.width + 80,
+                  y: cursorY,
+                }, {
+                  title: `${current.title} · ${capture.cameraName}`,
+                  width: display.width,
+                  height: display.height,
+                  metadata: {
+                    content: item.url,
+                    storageKey: item.storageKey,
+                    naturalWidth: item.width,
+                    naturalHeight: item.height,
+                    bytes: item.bytes,
+                    mimeType: item.mimeType,
+                    derivedFromId: current.id,
+                    status: "success",
+                  },
+                });
+                cursorY += display.height + 24;
+                return createdNode;
+              });
+              try {
+                await store.commitDirectorCaptureNodes(directorProjectId, current.id, created);
+              } catch (error) {
+                if (!(error instanceof ProjectCommitRollbackError)) {
+                  await Promise.all(uploaded.map((item) => deleteBlob("image", item.storageKey).catch(() => undefined)));
+                }
+                throw error;
+              }
+              directorEditStartedRef.current = false;
+            }}
+          />
+        </Suspense>
       ) : null}
 
       <div

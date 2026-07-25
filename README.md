@@ -70,8 +70,9 @@ canvas.
 - Transparent images, reverse prompting, adjustable split guides, and lineage
 - Reproducible image retries with reference protection and expandable result batches
 - Direct text/image-to-video creation with smart duration and provider preflight validation
-- Persistent image/video generation jobs, history, retry, cancel, and canvas insertion
-- WebDAV project and full-workspace backup/restore for projects, assets, prompts, history, and deduplicated media
+- Persistent image/video/audio generation jobs, history, retry, cancel, and canvas insertion; the image workbench adds side/bottom layouts, concurrent runs, persistent categories and filtering, reference/result previews with byte sizes, reusable assets, and a draggable workflow entrance; formal OpenAI/Gemini/restricted-Template image, OpenAI/Ark/restricted-Template video, OpenAI audio, and multi-step image workflows execute in the Go service and continue across browser reloads, including indexed canvas image batches
+- Public/personal image workflow templates with typed variables, DAG references, AI-assisted draft creation, durable step checkpoints, image-history children, and atomic canvas insertion
+- WebDAV project and full-workspace backup/restore for projects, assets, prompts, workflow templates, history, and deduplicated media
 
 ### Phase 3 — Independent plugins
 - Manifest v2 permissions, registry install/enable/disable/upgrade/rollback/uninstall
@@ -84,6 +85,9 @@ canvas.
 - MCP stdio and owner-only remote connection file with compatibility tools
 - Client-scoped `generation_get_status` for canvas and workbench tasks
 - Continuous shared Codex threads, cross-tab running state, safe Markdown, structured logs, stop, attachments, and approvals
+- Per-node camera prompt controls for image/video/config generation, with structured camera/lens/focal-length/aperture persistence and retry-safe prompt assembly
+- Native director scene v4 with visual catalogs for eight procedural character looks and twenty poses, actor/extra staging, six primitive geometries, bounded instanced crowd arrays, named multi-camera shots, independent director/camera views, composition guides, bounded browser-local GLB import/relink, interactive move/rotate/scale controls, and a screenshot tray that uses protected cross-device storage in formal mode while retaining offline IndexedDB compatibility
+- Native panorama nodes with strict 2:1 upload/reuse, ordinary managed image references, fixed 2048x1024 AI generation, controlled quality and 1–8 result batches, 360° viewing, durable atomic commit, and director environment handoff
 - Codex user bubbles, open assistant replies, auto-scroll, jump-to-bottom, and attachment-to-canvas image/config flow
 - Independent OpenBoard Codex plugin installer and standard Claude MCP instructions
 
@@ -118,7 +122,7 @@ cd server && go test -race ./... && go vet ./...
 GitHub Actions runs the web tests, typecheck, production build, performance
 assertion, OSV dependency audit, cross-browser and production Playwright suites, Go race
 detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The Bun coverage report reaches 84.26% lines and 86.20% functions for covered
+pull requests. The Bun coverage report reaches 84.20% lines and 86.41% functions for covered
 library/service modules; browser-only UI and persistence paths are validated by
 Playwright and are outside that report.
 
@@ -190,7 +194,10 @@ container deployment uses its isolated `/data` volume.
 The production image contains a prebuilt Vite SPA, a non-root Nginx listener,
 and the Go API bound only to loopback inside the container. Nginx serves the app
 and proxies `/api/`. PostgreSQL is the authoritative project/state store, Redis
-is a disposable cache, and media files live in the OpenBoard data volume.
+is a disposable cache, and protected media uses the OpenBoard data volume by
+default. Set the optional `OPENBOARD_BLOB_BACKEND=s3` variables documented in
+[`server/README.md`](server/README.md) to use AWS S3, Cloudflare R2, or a
+compatible private object store instead.
 
 ```bash
 cp .env.example .env
@@ -234,7 +241,7 @@ docker run --rm --read-only --cap-drop ALL \
 ## Tech stack
 
 - **Web:** Vite, React 19, TypeScript, Zustand, idb-keyval, Tailwind
-- **Server:** Go 1.26.5+, chi router, pgx/PostgreSQL, go-redis, filesystem media storage
+- **Server:** Go 1.26.5+, chi router, pgx/PostgreSQL, go-redis, protected filesystem or S3/R2 media storage
 
 ### Product boundary: local single-user mode
 

@@ -2,6 +2,13 @@ import type { BoardProject } from "@/types/board";
 import { parseBoardProject } from "@/lib/board-document";
 import { createZipStore, readZipStore, type ZipStoreInput } from "@/lib/zip-store";
 import { deleteBlob, getBlob, uploadMedia } from "@/services/storage";
+import {
+  readPanoramaBlobDimensions,
+  validatePanoramaBlob,
+  validatePanoramaDimensions,
+  validateProjectPanoramaBudget,
+} from "@/lib/panorama";
+import { assertBundlePanoramaMediaManaged } from "@/lib/plain-project-import";
 
 type MediaKind = "image" | "media";
 
@@ -23,15 +30,30 @@ type ProjectBundleManifest = {
 
 export type ProjectBundleStorage = {
   load: (kind: MediaKind, storageKey: string) => Promise<Blob | undefined>;
-  store: (kind: MediaKind, blob: Blob) => Promise<{ storageKey: string; url: string }>;
+  store: (kind: MediaKind, blob: Blob) => Promise<{
+    storageKey: string;
+    url: string;
+    width: number;
+    height: number;
+    bytes: number;
+    mimeType: string;
+  }>;
   remove: (kind: MediaKind, storageKey: string) => Promise<void>;
 };
+type StoredBundleMedia = Awaited<ReturnType<ProjectBundleStorage["store"]>>;
 
 const defaultStorage: ProjectBundleStorage = {
   load: getBlob,
   store: async (kind, blob) => {
-    const result = await uploadMedia(blob, kind);
-    return { storageKey: result.storageKey, url: result.url };
+    const result = await uploadMedia(blob, kind, { requirePersistent: true });
+    return {
+      storageKey: result.storageKey,
+      url: result.url,
+      width: result.width,
+      height: result.height,
+      bytes: result.bytes,
+      mimeType: result.mimeType,
+    };
   },
   remove: deleteBlob,
 };
@@ -181,7 +203,7 @@ function parseManifest(value: unknown): ProjectBundleManifest {
 
 function remapProject(
   project: BoardProject,
-  replacements: Map<string, { storageKey: string; url: string }>,
+  replacements: Map<string, StoredBundleMedia>,
 ): BoardProject {
   const copy = structuredClone(project);
   const replace = (storageKey: string | undefined) => {
@@ -195,6 +217,12 @@ function remapProject(
     if (result) {
       node.metadata.storageKey = result.storageKey;
       node.metadata.content = result.url;
+      if (node.type === "panorama") {
+        node.metadata.naturalWidth = result.width;
+        node.metadata.naturalHeight = result.height;
+        node.metadata.bytes = result.bytes;
+        node.metadata.mimeType = result.mimeType;
+      }
     }
     node.metadata.referenceStorageKeys = node.metadata.referenceStorageKeys?.map((storageKey) =>
       replace(storageKey)!.storageKey);
@@ -229,7 +257,9 @@ export async function importProjectBundle(
   const projectBytes = entries.get("project.json");
   if (!manifestBytes || !projectBytes) throw new Error("Bundle manifest or project is missing");
   const manifest = parseManifest(decodeJSON(manifestBytes, "bundle manifest"));
-  const project = parseBoardProject(decodeJSON(projectBytes, "project document"));
+  const project = assertBundlePanoramaMediaManaged(
+    parseBoardProject(decodeJSON(projectBytes, "project document")),
+  );
 
   const declaredEntries = new Set([
     "manifest.json",
@@ -250,8 +280,11 @@ export async function importProjectBundle(
     throw new Error("Bundle project media references do not match the manifest");
   }
 
-  const replacements = new Map<string, { storageKey: string; url: string }>();
+  const replacements = new Map<string, StoredBundleMedia>();
   const stored: Array<{ kind: MediaKind; storageKey: string }> = [];
+  const panoramaKeys = new Set(project.nodes
+    .filter((node) => node.type === "panorama" && node.metadata.storageKey)
+    .map((node) => node.metadata.storageKey!));
   try {
     for (const item of manifest.media) {
       const data = entries.get(item.entry);
@@ -260,14 +293,30 @@ export async function importProjectBundle(
       }
       const buffer = new ArrayBuffer(data.byteLength);
       new Uint8Array(buffer).set(data);
+      const blob = new Blob([buffer], { type: item.mimeType });
+      let panoramaDimensions: { width: number; height: number } | undefined;
+      if (panoramaKeys.has(item.storageKey)) {
+        if (item.kind !== "image") throw new Error("Panorama bundle media must be an image");
+        panoramaDimensions = await readPanoramaBlobDimensions(blob);
+      }
       const result = await storage.store(
         item.kind,
-        new Blob([buffer], { type: item.mimeType }),
+        blob,
       );
-      replacements.set(item.storageKey, result);
       stored.push({ kind: item.kind, storageKey: result.storageKey });
+      if (panoramaKeys.has(item.storageKey)) {
+        await validatePanoramaBlob(new Blob([buffer], { type: result.mimeType }));
+        validatePanoramaDimensions(result.width, result.height);
+        if (result.bytes !== item.bytes || result.width !== panoramaDimensions?.width ||
+            result.height !== panoramaDimensions.height) {
+          throw new Error("Panorama bundle media changed during import");
+        }
+      }
+      replacements.set(item.storageKey, result);
     }
-    return remapProject(project, replacements);
+    const restored = remapProject(project, replacements);
+    validateProjectPanoramaBudget(restored.nodes);
+    return restored;
   } catch (error) {
     await Promise.allSettled(
       stored.map((item) => storage.remove(item.kind, item.storageKey)),

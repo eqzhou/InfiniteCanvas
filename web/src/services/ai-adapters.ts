@@ -5,6 +5,10 @@ import {
   resolveTemplateEndpoint,
   validateProviderTemplate,
 } from "@/lib/provider-template";
+import { readBoundedProviderJson, readBoundedProviderText } from "@/services/bounded-provider-json";
+
+const MAX_PROVIDER_JSON_BYTES = 64 * 1024 * 1024;
+const MAX_PROVIDER_ERROR_BYTES = 64 * 1024;
 
 function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -26,10 +30,10 @@ export async function providerJsonFetch(
   }
   const response = await fetch(url, { ...init, headers, redirect: "error" });
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
     throw new Error(`AI ${response.status}: ${detail || response.statusText}`);
   }
-  return response.json();
+  return readBoundedProviderJson(response, MAX_PROVIDER_JSON_BYTES);
 }
 
 export async function generateGeminiText(

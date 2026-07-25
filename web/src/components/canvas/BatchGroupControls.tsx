@@ -19,6 +19,7 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
   const children = project.nodes.filter((n) => childIds.includes(n.id));
   const expanded = root.metadata.imageBatchExpanded !== false;
   const primaryId = root.metadata.primaryImageId ?? childIds[0];
+  const panoramaBatch = root.type === "panorama";
 
   const toggleExpand = () => {
     updateActive((p) => {
@@ -42,17 +43,17 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
                   x: root.position.x + 12 + idx * 8,
                   y: root.position.y + 12 + idx * 8,
                 },
-                width: Math.min(n.width, root.width - 20),
-                height: Math.min(n.height, root.height - 20),
               };
             }
             // expand: fan out to the right
             const idx = childIds.indexOf(n.id);
+            const columnStride = Math.max(300, root.width + 48);
+            const rowStride = Math.max(300, root.height + 48);
             return {
               ...n,
               position: {
-                x: root.position.x + root.width + 48 + (idx % 3) * 300,
-                y: root.position.y + Math.floor(idx / 3) * 300,
+                x: root.position.x + root.width + 48 + (idx % 3) * columnStride,
+                y: root.position.y + Math.floor(idx / 3) * rowStride,
               },
             };
           }
@@ -72,7 +73,7 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
       onPointerDown={(e) => e.stopPropagation()}
     >
       <span className="px-1 text-[var(--ob-muted)]">
-        组 {children.length + (root.metadata.content ? 1 : 0)}
+        {panoramaBatch ? "全景组" : "组"} {children.length + (root.metadata.content ? 1 : 0)}
       </span>
       <button
         type="button"
@@ -89,11 +90,15 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
           className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--ob-accent-soft)] ${
             primaryId === node.id ? "text-[var(--ob-accent)]" : ""
           }`}
-          title="设为主图"
+          title={panoramaBatch ? "设为主全景" : "设为主图"}
+          aria-label={panoramaBatch
+            ? (primaryId === node.id ? "当前主全景" : "设为主全景")
+            : (primaryId === node.id ? "当前主图" : "设为主图")}
+          aria-pressed={primaryId === node.id}
           onClick={() => setPrimary(node.id)}
         >
           <Star size={12} fill={primaryId === node.id ? "currentColor" : "none"} />
-          主图
+          {panoramaBatch ? "主结果" : "主图"}
         </button>
       ) : null}
     </div>

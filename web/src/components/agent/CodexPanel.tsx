@@ -70,7 +70,7 @@ async function insertAttachmentImageNodes(files: File[]): Promise<void> {
       const id = await attachUploadedImage(file, {
         x: center.x - 180 + index * 36,
         y: center.y - 120 + index * 28,
-      });
+      }, { mode: "image" });
       imageIds.push(id);
     }
     if (!imageIds.length) return;
@@ -450,6 +450,9 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           <div className="relative mb-2">
             <div
               ref={transcriptRef}
+              role="log"
+              aria-label="Codex 消息记录"
+              aria-live="polite"
               className="max-h-56 space-y-2 overflow-auto rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_50%,transparent)] p-2.5 text-xs"
               onScroll={updateStickToBottom}
             >

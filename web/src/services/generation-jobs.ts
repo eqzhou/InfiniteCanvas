@@ -8,6 +8,7 @@ import type {
 import { nowIso, uid } from "@/lib/id";
 import { validateJsonObject } from "@/lib/bounded-json";
 import { authFetch } from "@/services/auth-session";
+import { collectWorkflowJobStorageKeys, validateWorkflowGenerationJob } from "@/lib/workflow-job";
 
 const SERVER_STORAGE = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
 const jobStore = createStore("openboard-generation-jobs", "jobs");
@@ -19,9 +20,70 @@ export type GenerationJobQuery = {
   kind?: GenerationKind;
   page?: number;
   pageSize?: number;
+  /** When true, include soft-deleted tombstones (ownership/cleanup only). */
+  includeDeleted?: boolean;
 };
 
 export type NewGenerationJob = Omit<GenerationJob, "id" | "createdAt" | "updatedAt"> & { id?: string };
+
+export type ServerImageGenerationInput = {
+	id?: string;
+	projectId?: string;
+	prompt: string;
+	providerId: string;
+	model?: string;
+	parameters: {
+		size: string;
+		quality?: string;
+		count: number;
+		category?: string;
+		transparentBackground?: boolean;
+		referenceStorageKeys?: string[];
+	};
+};
+
+export type ServerVideoGenerationInput = {
+	id?: string;
+	projectId?: string;
+	prompt: string;
+	providerId: string;
+	model?: string;
+	parameters: {
+		size?: string;
+		seconds?: number;
+		ratio: string;
+		resolution: string;
+		generateAudio?: boolean;
+		watermark?: boolean;
+		frameMode?: "references" | "first-last";
+		referenceStorageKeys?: string[];
+	};
+};
+
+export type ServerAudioGenerationInput = {
+	id?: string;
+	projectId?: string;
+	prompt: string;
+	providerId: string;
+	model?: string;
+	parameters: { voice: string; format: string };
+};
+
+export type GenerationJobPollingOptions = {
+	signal?: AbortSignal;
+	intervalMs?: number;
+	getJob?: (id: string) => Promise<GenerationJob | undefined>;
+	wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+	onUpdate?: (job: GenerationJob) => void;
+};
+
+export function usesServerGenerationJobs(): boolean {
+	return SERVER_STORAGE;
+}
+
+export function isServerOwnedGenerationJob(job: GenerationJob): boolean {
+	return job.parameters.executor === "server" || job.parameters.executor === "workflow";
+}
 
 function validatePagination(page: number, pageSize: number): void {
   if (!Number.isInteger(page) || page < 1) throw new Error("page must be a positive integer");
@@ -59,7 +121,7 @@ export function findInterruptedGenerationJobs(
   if (!ownerClientId) return [];
   return jobs
     .filter((job) => {
-      if (job.status !== "running" || liveActivityIds.has(job.id)) return false;
+		if (job.status !== "running" || isServerOwnedGenerationJob(job) || liveActivityIds.has(job.id)) return false;
       if (job.parameters.ownerClientId === ownerClientId) return true;
       return now - Date.parse(job.updatedAt) >= LEGACY_GENERATION_GRACE_MS;
     })
@@ -67,8 +129,8 @@ export function findInterruptedGenerationJobs(
 }
 
 export function validateGenerationJob(job: GenerationJob): GenerationJob {
-  const kinds = new Set<GenerationKind>(["image", "video"]);
-  const statuses = new Set<GenerationStatus>(["queued", "running", "succeeded", "failed", "cancelled"]);
+	const kinds = new Set<GenerationKind>(["image", "video", "audio", "workflow"]);
+  const statuses = new Set<GenerationStatus>(["queued", "running", "succeeded", "failed", "cancelled", "deleted"]);
   if (!ID.test(job.id) || (job.projectId && !ID.test(job.projectId)) || !kinds.has(job.kind) ||
     !statuses.has(job.status) || job.prompt.length > 100_000 || (job.providerId?.length ?? 0) > 500 ||
     (job.model?.length ?? 0) > 500 || (job.error?.length ?? 0) > 10_000 ||
@@ -77,7 +139,8 @@ export function validateGenerationJob(job: GenerationJob): GenerationJob {
   }
   validateJsonObject(job.parameters, { label: "generation parameters", maxBytes: 256 * 1024, maxDepth: 20, maxEntries: 20_000 });
   validateJsonObject(job.result, { label: "generation result", maxBytes: 512 * 1024, maxDepth: 20, maxEntries: 20_000 });
-  return structuredClone(job);
+  const validated = structuredClone(job);
+  return validated.kind === "workflow" ? validateWorkflowGenerationJob(validated) : validated;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -95,10 +158,13 @@ export async function listGenerationJobs(query: GenerationJobQuery = {}): Promis
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (query.projectId) params.set("projectId", query.projectId);
     if (query.kind) params.set("kind", query.kind);
+    if (query.includeDeleted) params.set("includeDeleted", "1");
     const result = await api<GenerationJobPage>(`generation-jobs?${params}`);
     return { ...result, items: result.items.map(validateGenerationJob) };
   }
-  const values = (await entries<string, GenerationJob>(jobStore)).map(([, value]) => validateGenerationJob(value));
+  const values = (await entries<string, GenerationJob>(jobStore))
+    .map(([, value]) => validateGenerationJob(value))
+    .filter((job) => query.includeDeleted || job.status !== "deleted");
   return paginateGenerationJobs(values, query);
 }
 
@@ -127,6 +193,82 @@ export async function createGenerationJob(input: NewGenerationJob): Promise<Gene
   return job;
 }
 
+export async function createServerImageGenerationJob(input: ServerImageGenerationInput): Promise<GenerationJob> {
+	return createServerGenerationJob("image", input);
+}
+
+export async function createServerVideoGenerationJob(input: ServerVideoGenerationInput): Promise<GenerationJob> {
+	return createServerGenerationJob("video", input);
+}
+
+export async function createServerAudioGenerationJob(input: ServerAudioGenerationInput): Promise<GenerationJob> {
+	return createServerGenerationJob("audio", input);
+}
+
+async function createServerGenerationJob(
+	kind: "image" | "video" | "audio",
+	input: ServerImageGenerationInput | ServerVideoGenerationInput | ServerAudioGenerationInput,
+): Promise<GenerationJob> {
+	if (!SERVER_STORAGE) throw new Error(`server ${kind} generation requires server storage`);
+	const id = input.id ?? uid("job");
+	if (!ID.test(id) || (input.projectId && !ID.test(input.projectId)) || !ID.test(input.providerId)) {
+		throw new Error("invalid server image generation input");
+	}
+	return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${kind}`, {
+		method: "POST",
+		body: JSON.stringify({ ...input, id }),
+	}));
+}
+
+export async function cancelServerGenerationJob(id: string): Promise<GenerationJob> {
+	if (!SERVER_STORAGE) throw new Error("server generation requires server storage");
+	if (!ID.test(id)) throw new Error("invalid generation job id");
+	return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}/cancel`, {
+		method: "POST",
+	}));
+}
+
+function defaultPollingWait(milliseconds: number, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+	return new Promise((resolve, reject) => {
+		const complete = () => {
+			signal?.removeEventListener("abort", abort);
+			resolve();
+		};
+		const timer = setTimeout(complete, milliseconds);
+		const abort = () => {
+			clearTimeout(timer);
+			reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+	});
+}
+
+export async function waitForGenerationJob(
+	id: string,
+	options: GenerationJobPollingOptions = {},
+): Promise<GenerationJob> {
+	if (!ID.test(id)) throw new Error("invalid generation job id");
+	const read = options.getJob ?? getGenerationJob;
+	const wait = options.wait ?? defaultPollingWait;
+	const intervalMs = options.intervalMs ?? 1_000;
+	if (!Number.isFinite(intervalMs) || intervalMs < 0 || intervalMs > 60_000) {
+		throw new Error("invalid generation polling interval");
+	}
+	for (;;) {
+		if (options.signal?.aborted) {
+			throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+		}
+		const job = await read(id);
+		if (!job) throw new Error("generation job not found");
+		options.onUpdate?.(job);
+		if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") {
+			return job;
+		}
+		await wait(intervalMs, options.signal);
+	}
+}
+
 export async function updateGenerationJob(id: string, patch: Partial<GenerationJob>): Promise<GenerationJob> {
   const current = await getGenerationJob(id);
   if (!current) throw new Error("generation job not found");
@@ -144,14 +286,129 @@ export async function deleteGenerationJob(id: string): Promise<void> {
     await api<void>(`generation-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
     return;
   }
-  await del(id, jobStore);
+  const current = await get<GenerationJob>(id, jobStore);
+  if (!current) return;
+  const job = validateGenerationJob({
+    ...current,
+    status: "deleted",
+    error: current.error || "已删除",
+    updatedAt: nowIso(),
+  });
+  await set(id, job, jobStore);
 }
 
-export async function listAllGenerationJobs(): Promise<GenerationJob[]> {
+export function uniqueGenerationJobIds(ids: readonly string[]): string[] {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (!ID.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  return unique;
+}
+
+/** Delete many history jobs in one request (server) or local batch. */
+export async function deleteGenerationJobs(ids: readonly string[]): Promise<number> {
+  const unique = uniqueGenerationJobIds(ids);
+  if (!unique.length) return 0;
+  if (unique.length > 100) throw new Error("too many generation job ids");
+  if (SERVER_STORAGE) {
+    const result = await api<{ deleted?: number }>("generation-jobs/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids: unique }),
+    });
+    return Number(result?.deleted ?? 0);
+  }
+  let deleted = 0;
+  for (const id of unique) {
+    const current = await get<GenerationJob>(id, jobStore);
+    if (!current || current.status === "deleted") continue;
+    await set(id, validateGenerationJob({
+      ...current,
+      status: "deleted",
+      error: current.error || "已删除",
+      updatedAt: nowIso(),
+    }), jobStore);
+    deleted += 1;
+  }
+  return deleted;
+}
+
+export function selectGenerationJobsForProject(
+  jobs: readonly GenerationJob[],
+  projectId: string,
+): GenerationJob[] {
+  return jobs.filter((job) => job.projectId === projectId);
+}
+
+export function selectGenerationJobsForNodeCleanup(
+  jobs: readonly GenerationJob[],
+  projectId: string | undefined,
+  nodeIds: ReadonlySet<string>,
+  nodeJobIds: ReadonlySet<string> = new Set(),
+): GenerationJob[] {
+  if (!nodeIds.size && !nodeJobIds.size) return [];
+  return jobs.filter((job) => {
+    if (projectId && job.projectId && job.projectId !== projectId) return false;
+    const linkedNodeId = typeof job.parameters.nodeId === "string" ? job.parameters.nodeId : undefined;
+    return Boolean((linkedNodeId && nodeIds.has(linkedNodeId)) || nodeJobIds.has(job.id));
+  });
+}
+
+export async function deleteGenerationJobsForProject(projectId: string): Promise<number> {
+  if (!ID.test(projectId)) throw new Error("invalid project id");
+  if (SERVER_STORAGE) {
+    const result = await api<{ deleted?: number }>(
+      `generation-jobs/project/${encodeURIComponent(projectId)}`,
+      { method: "DELETE" },
+    );
+    return Number(result?.deleted ?? 0);
+  }
+  const values = await entries<string, GenerationJob>(jobStore);
+  const targets = selectGenerationJobsForProject(values.map(([, job]) => job), projectId);
+  for (const job of targets) {
+    await del(job.id, jobStore);
+  }
+  return targets.length;
+}
+
+/** Remove jobs owned by deleted canvas nodes. Active server jobs are cancelled first. */
+export async function deleteGenerationJobsForNodeIds(
+  projectId: string | undefined,
+  nodeIds: ReadonlySet<string>,
+  options: { nodeJobIds?: ReadonlySet<string> } = {},
+): Promise<number> {
+  const targets = selectGenerationJobsForNodeCleanup(
+    await listAllGenerationJobs(),
+    projectId,
+    nodeIds,
+    options.nodeJobIds ?? new Set(),
+  );
+  let deleted = 0;
+  for (const job of targets) {
+    try {
+      if (isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running")) {
+        await cancelServerGenerationJob(job.id);
+      }
+      await deleteGenerationJob(job.id);
+      deleted += 1;
+    } catch {
+      // Best-effort cleanup; board deletion should still succeed.
+    }
+  }
+  return deleted;
+}
+
+export async function listAllGenerationJobs(options: { includeDeleted?: boolean } = {}): Promise<GenerationJob[]> {
   const jobs: GenerationJob[] = [];
   let page = 1;
   while (true) {
-    const result = await listGenerationJobs({ page, pageSize: 100 });
+    const result = await listGenerationJobs({
+      page,
+      pageSize: 100,
+      includeDeleted: options.includeDeleted,
+    });
     jobs.push(...result.items);
     if (page * result.pageSize >= result.total) return jobs;
     page += 1;
@@ -179,6 +436,10 @@ export function collectGenerationStorageKeysFromJobs(
 ): Set<string> {
   const keys = new Set<string>();
   for (const job of jobs) {
+    if (job.kind === "workflow") {
+      for (const key of collectWorkflowJobStorageKeys(job)) keys.add(key);
+      continue;
+    }
     const references = Array.isArray(job.parameters.referenceStorageKeys)
       ? job.parameters.referenceStorageKeys
       : [];
@@ -205,5 +466,5 @@ export function findUnreferencedGenerationStorageKeys(
 }
 
 export async function collectGenerationStorageKeys(): Promise<Set<string>> {
-  return collectGenerationStorageKeysFromJobs(await listAllGenerationJobs());
+  return collectGenerationStorageKeysFromJobs(await listAllGenerationJobs({ includeDeleted: true }));
 }

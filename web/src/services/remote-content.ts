@@ -22,6 +22,39 @@ function acceptsMime(actual: string, allowed: readonly string[]): boolean {
     : actual === value);
 }
 
+export function decodeBoundedDataUrl(
+  value: string,
+  options: BoundedResponseOptions,
+): BoundedResponse {
+  if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
+    throw new Error("Invalid data URL byte limit");
+  }
+  const match = /^data:([^;,\s]+);base64,([A-Za-z0-9+/=]*)$/i.exec(value);
+  if (!match) throw new Error("Invalid base64 data URL");
+  const mimeType = match[1]!.toLowerCase();
+  if (!acceptsMime(mimeType, options.mimeTypes)) {
+    throw new Error(`Unsupported data URL MIME type: ${mimeType}`);
+  }
+  const encoded = match[2]!;
+  if (encoded.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error("Invalid base64 data URL");
+  }
+  if (encoded.length > Math.ceil(options.maxBytes / 3) * 4 + 4) {
+    throw new Error("Data URL is too large");
+  }
+  let binary: string;
+  try {
+    binary = atob(encoded);
+  } catch {
+    throw new Error("Invalid base64 data URL");
+  }
+  if (binary.length > options.maxBytes) throw new Error("Data URL is too large");
+  const bytes: Uint8Array<ArrayBuffer> = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return { bytes, mimeType };
+}
+
 export async function readBoundedResponse(
   response: Response,
   options: BoundedResponseOptions,

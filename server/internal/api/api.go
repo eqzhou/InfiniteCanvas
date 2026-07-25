@@ -8,11 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,15 +33,42 @@ const (
 var projectIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 type Server struct {
-	dataDir        string
-	mu             sync.Mutex
-	uploads        chan struct{}
-	codex          *codexManager
-	claude         *claudeManager
-	runtime        *runtimeHub
-	runtimeOrigins map[string]struct{}
-	store          store.Store
-	secrets        cipher.AEAD
+	dataDir               string
+	mu                    sync.Mutex
+	uploads               chan struct{}
+	codex                 *codexManager
+	claude                *claudeManager
+	runtime               *runtimeHub
+	runtimeOrigins        map[string]struct{}
+	store                 store.Store
+	blobObjects           blobObjectStore
+	tenantBlobStoreMu     sync.Mutex
+	tenantBlobStores      map[string]tenantBlobStoreCacheEntry
+	secrets               cipher.AEAD
+	imageExecutor         imageExecutor
+	videoExecutor         videoExecutor
+	audioExecutor         audioExecutor
+	generationMu          sync.Mutex
+	generationCancels     map[string]context.CancelFunc
+	generationWG          sync.WaitGroup
+	generationWorkerWG    sync.WaitGroup
+	generationWorkersOnce sync.Once
+	generationRoot        context.Context
+	stopGeneration        context.CancelFunc
+	generationWake        chan struct{}
+	workflowWorkerWG      sync.WaitGroup
+	workflowWG            sync.WaitGroup
+	workflowWorkersOnce   sync.Once
+	workflowWake          chan struct{}
+	videoWorkerWG         sync.WaitGroup
+	videoWG               sync.WaitGroup
+	videoWorkersOnce      sync.Once
+	videoWake             chan struct{}
+	audioWorkerWG         sync.WaitGroup
+	audioWG               sync.WaitGroup
+	audioWorkersOnce      sync.Once
+	audioWake             chan struct{}
+	processToken          string
 }
 
 func Mount(r chi.Router, dataDir string) {
@@ -78,19 +107,55 @@ func Mount(r chi.Router, dataDir string) {
 		r.Put("/blobs/{key}", s.putBlob)
 		r.Get("/blobs/{key}", s.getBlob)
 		r.Delete("/blobs/{key}", s.deleteBlob)
+		r.Get("/director-captures", s.listDirectorCaptures)
+		r.Post("/director-captures", s.createDirectorCapture)
+		r.Put("/director-captures/prune", s.pruneDirectorCaptures)
+		r.Delete("/director-captures/{id}", s.deleteDirectorCapture)
 		r.Get("/secrets/config", s.getSecrets)
 		r.Put("/secrets/config", s.putSecrets)
 		r.Get("/generation-jobs", s.listGenerationJobs)
 		r.Put("/generation-jobs", s.replaceGenerationJobs)
 		r.Post("/generation-jobs", s.createGenerationJob)
+		r.Post("/generation-jobs/image", s.createServerImageJob)
+		r.Post("/generation-jobs/video", s.createServerVideoJob)
+		r.Post("/generation-jobs/audio", s.createServerAudioJob)
+		r.Post("/generation-jobs/workflow", s.createServerWorkflowJob)
+		r.Post("/generation-jobs/{id}/cancel", s.cancelServerGenerationJob)
 		r.Get("/generation-jobs/{id}", s.getGenerationJob)
 		r.Put("/generation-jobs/{id}", s.updateGenerationJob)
+		r.Delete("/generation-jobs/project/{projectId}", s.deleteGenerationJobsForProject)
+		r.Post("/generation-jobs/bulk-delete", s.bulkDeleteGenerationJobs)
 		r.Delete("/generation-jobs/{id}", s.deleteGenerationJob)
+		r.Get("/workflow-templates", s.listWorkflowTemplates)
+		r.Put("/workflow-templates", s.replaceWorkflowTemplates)
+		r.Put("/workflow-templates/{id}", s.putWorkflowTemplate)
+		r.Delete("/workflow-templates/{id}", s.deleteWorkflowTemplate)
+		r.Get("/library-assets", s.listLibraryAssets)
+		r.Post("/library-assets", s.createLibraryAsset)
+		r.Get("/library-assets/{id}", s.getLibraryAsset)
+		r.Put("/library-assets/{id}", s.updateLibraryAsset)
+		r.Delete("/library-assets/{id}", s.deleteLibraryAsset)
+		r.Get("/ai-call-logs", s.listAICallLogs)
+		r.Get("/ai-call-logs/{id}", s.getAICallLog)
+		r.Post("/ai-call-logs/delete", s.deleteAICallLogs)
+		r.Get("/site-policy", s.getSitePolicy)
+		r.Put("/site-policy", s.putSitePolicy)
+		r.Get("/auth/oauth/linuxdo/start", s.linuxDoOAuthStart)
+		r.Get("/auth/oauth/linuxdo/callback", s.linuxDoOAuthCallback)
+		r.Get("/billing/estimate", s.estimateCredits)
+		r.Get("/admin/channels", s.getAdminChannels)
+		r.Put("/admin/channels", s.putAdminChannels)
+		r.Get("/admin/models", s.getAdminModels)
+		r.Get("/admin/users", s.listAdminUsers)
+		r.Patch("/admin/users/{id}", s.patchAdminUser)
+		r.Post("/media/references", s.createMediaReferences)
+		r.Get("/media/references/{token}", s.getMediaReference)
 	})
 }
 
 func NewServer(dataDir string) *Server {
 	purgeCodexAttachmentRoot(dataDir)
+	generationRoot, stopGeneration := context.WithCancel(context.Background())
 	return &Server{
 		dataDir: dataDir,
 		uploads: make(chan struct{}, 2),
@@ -101,7 +166,21 @@ func NewServer(dataDir string) *Server {
 			"http://localhost:5173": {},
 			"http://127.0.0.1:5173": {},
 		},
+		imageExecutor:     newOpenAIImageExecutor(),
+		videoExecutor:     newHTTPVideoExecutor(),
+		audioExecutor:     newHTTPAudioExecutor(),
+		generationCancels: make(map[string]context.CancelFunc),
+		generationRoot:    generationRoot,
+		stopGeneration:    stopGeneration,
+		generationWake:    make(chan struct{}, 1),
+		workflowWake:      make(chan struct{}, 1),
+		videoWake:         make(chan struct{}, 1),
+		audioWake:         make(chan struct{}, 1),
 	}
+}
+
+func (s *Server) SetProcessToken(token string) {
+	s.processToken = strings.TrimSpace(token)
 }
 
 func (s *Server) SetRuntimeOrigins(origins map[string]struct{}) {
@@ -115,6 +194,48 @@ func NewServerWithStore(dataDir string, backend store.Store) *Server {
 	s := NewServer(dataDir)
 	s.store = backend
 	return s
+}
+
+func (s *Server) setBlobObjectStore(objects blobObjectStore) {
+	s.blobObjects = objects
+}
+
+func (s *Server) ConfigureS3BlobStorage(config S3BlobStorageConfig) error {
+	objects, err := newS3BlobObjectStore(config)
+	if err != nil {
+		return err
+	}
+	s.blobObjects = objects
+	return nil
+}
+
+func (s *Server) Close() {
+	s.stopGeneration()
+	s.generationMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(s.generationCancels))
+	for _, cancel := range s.generationCancels {
+		cancels = append(cancels, cancel)
+	}
+	s.generationMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	s.generationWorkerWG.Wait()
+	s.generationWG.Wait()
+	s.workflowWorkerWG.Wait()
+	s.workflowWG.Wait()
+	s.videoWorkerWG.Wait()
+	s.videoWG.Wait()
+	s.audioWorkerWG.Wait()
+	s.audioWG.Wait()
+}
+
+func randomGenerationOwner() string {
+	value := make([]byte, 12)
+	if _, err := rand.Read(value); err != nil {
+		return fmt.Sprintf("worker-%d", time.Now().UnixNano())
+	}
+	return "worker-" + hex.EncodeToString(value)
 }
 
 func MountServer(r chi.Router, s *Server) {
@@ -159,14 +280,49 @@ func MountServer(r chi.Router, s *Server) {
 		r.Put("/blobs/{key}", s.putBlob)
 		r.Get("/blobs/{key}", s.getBlob)
 		r.Delete("/blobs/{key}", s.deleteBlob)
+		r.Get("/director-captures", s.listDirectorCaptures)
+		r.Post("/director-captures", s.createDirectorCapture)
+		r.Put("/director-captures/prune", s.pruneDirectorCaptures)
+		r.Delete("/director-captures/{id}", s.deleteDirectorCapture)
 		r.Get("/secrets/config", s.getSecrets)
 		r.Put("/secrets/config", s.putSecrets)
 		r.Get("/generation-jobs", s.listGenerationJobs)
 		r.Put("/generation-jobs", s.replaceGenerationJobs)
 		r.Post("/generation-jobs", s.createGenerationJob)
+		r.Post("/generation-jobs/image", s.createServerImageJob)
+		r.Post("/generation-jobs/video", s.createServerVideoJob)
+		r.Post("/generation-jobs/audio", s.createServerAudioJob)
+		r.Post("/generation-jobs/workflow", s.createServerWorkflowJob)
+		r.Post("/generation-jobs/{id}/cancel", s.cancelServerGenerationJob)
 		r.Get("/generation-jobs/{id}", s.getGenerationJob)
 		r.Put("/generation-jobs/{id}", s.updateGenerationJob)
+		r.Delete("/generation-jobs/project/{projectId}", s.deleteGenerationJobsForProject)
+		r.Post("/generation-jobs/bulk-delete", s.bulkDeleteGenerationJobs)
 		r.Delete("/generation-jobs/{id}", s.deleteGenerationJob)
+		r.Get("/workflow-templates", s.listWorkflowTemplates)
+		r.Put("/workflow-templates", s.replaceWorkflowTemplates)
+		r.Put("/workflow-templates/{id}", s.putWorkflowTemplate)
+		r.Delete("/workflow-templates/{id}", s.deleteWorkflowTemplate)
+		r.Get("/library-assets", s.listLibraryAssets)
+		r.Post("/library-assets", s.createLibraryAsset)
+		r.Get("/library-assets/{id}", s.getLibraryAsset)
+		r.Put("/library-assets/{id}", s.updateLibraryAsset)
+		r.Delete("/library-assets/{id}", s.deleteLibraryAsset)
+		r.Get("/ai-call-logs", s.listAICallLogs)
+		r.Get("/ai-call-logs/{id}", s.getAICallLog)
+		r.Post("/ai-call-logs/delete", s.deleteAICallLogs)
+		r.Get("/site-policy", s.getSitePolicy)
+		r.Put("/site-policy", s.putSitePolicy)
+		r.Get("/auth/oauth/linuxdo/start", s.linuxDoOAuthStart)
+		r.Get("/auth/oauth/linuxdo/callback", s.linuxDoOAuthCallback)
+		r.Get("/billing/estimate", s.estimateCredits)
+		r.Get("/admin/channels", s.getAdminChannels)
+		r.Put("/admin/channels", s.putAdminChannels)
+		r.Get("/admin/models", s.getAdminModels)
+		r.Get("/admin/users", s.listAdminUsers)
+		r.Patch("/admin/users/{id}", s.patchAdminUser)
+		r.Post("/media/references", s.createMediaReferences)
+		r.Get("/media/references/{token}", s.getMediaReference)
 	})
 }
 
@@ -199,11 +355,22 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	blobStorage := "filesystem"
+	if s.blobObjects != nil {
+		blobStorage = s.blobObjects.Kind()
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := s.blobObjects.Ping(ctx); err != nil {
+			http.Error(w, "blob storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	writeJSON(w, map[string]any{
-		"ok":      true,
-		"service": "openboard-local",
-		"time":    time.Now().UTC().Format(time.RFC3339),
-		"storage": storage,
+		"ok":          true,
+		"service":     "openboard-local",
+		"time":        time.Now().UTC().Format(time.RFC3339),
+		"storage":     storage,
+		"blobStorage": blobStorage,
 	})
 }
 
@@ -499,8 +666,13 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		if err := s.store.DeleteProject(r.Context(), tenantIDFrom(r), id); err != nil {
+		tenantID := tenantIDFrom(r)
+		if err := s.store.DeleteProject(r.Context(), tenantID, id); err != nil {
 			http.Error(w, "failed to delete project", http.StatusInternalServerError)
+			return
+		}
+		if _, err := s.store.DeleteGenerationJobsForProject(r.Context(), tenantID, id); err != nil {
+			http.Error(w, "failed to delete project generation jobs", http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

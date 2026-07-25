@@ -1,16 +1,20 @@
 import { clear, createStore, del, entries, get, set } from "idb-keyval";
-import type { AppConfig, AssetItem, BoardProject, PromptItem } from "@/types/board";
-import { readBoundedResponse } from "@/services/remote-content";
+import type { AppConfig, AssetItem, AssistantSession, BoardNode, BoardProject, PromptItem } from "@/types/board";
+import { decodeBoundedDataUrl, readBoundedResponse } from "@/services/remote-content";
 import { normalizeExternalHttpsUrl } from "@/lib/remote-url";
 import { normalizeChannel } from "@/lib/ai-config";
+import { normalizeObjectStorage, stripObjectStorageSecrets } from "@/lib/object-storage";
 import { parseBoardProject } from "@/lib/board-document";
+import { readPanoramaBlobDimensions, validateProjectPanoramaBudget } from "@/lib/panorama";
 import {
   deleteServerBlob,
+  deleteServerProject,
   getServerBlob,
   loadServerProjects,
   loadServerSecrets,
   loadServerState,
   putServerBlob,
+  replaceServerProjects,
   saveServerProjects,
   saveServerSecrets,
   saveServerState,
@@ -32,6 +36,22 @@ const PROMPTS_KEY = "openboard:prompts";
 const CONFIG_SECRETS_KEY = "openboard:config-secrets";
 
 let serverMigration: Promise<void> | undefined;
+
+type StoredBlobRecord = {
+  version: 1;
+  mimeType: string;
+  bytes: ArrayBuffer;
+};
+
+function storedValueToBlob(value: unknown): Blob | undefined {
+  if (value instanceof Blob) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Partial<StoredBlobRecord>;
+  if (record.version !== 1 || typeof record.mimeType !== "string" || !(record.bytes instanceof ArrayBuffer)) {
+    return undefined;
+  }
+  return new Blob([record.bytes], { type: record.mimeType });
+}
 
 function ensureServerMigration(): Promise<void> {
   if (!SERVER_STORAGE) return Promise.resolve();
@@ -66,11 +86,10 @@ function ensureServerMigration(): Promise<void> {
       ] : []),
       saveServerState("assets", assets ?? []),
       saveServerState("prompts", prompts ?? []),
-      ...[...images, ...media].map(([key, value]) =>
-        typeof key === "string" && value instanceof Blob
-          ? putServerBlob(key, value)
-          : Promise.resolve(),
-      ),
+      ...[...images, ...media].map(([key, value]) => {
+        const blob = storedValueToBlob(value);
+        return typeof key === "string" && blob ? putServerBlob(key, blob) : Promise.resolve();
+      }),
     ]);
     await Promise.all([clear(appStore), clear(imageStore), clear(mediaStore)]);
   })();
@@ -111,12 +130,59 @@ export async function saveProjects(projects: BoardProject[]): Promise<void> {
   await set(PROJECTS_KEY, projects, appStore);
 }
 
-type ConfigSecrets = {
+/** Explicit deletes for user-driven project removal. Ordinary save never deletes remote projects. */
+export async function deleteProjectsById(ids: readonly string[]): Promise<void> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return;
+  if (SERVER_STORAGE) {
+    await Promise.all(unique.map((id) => deleteServerProject(id)));
+    return;
+  }
+  const current = ((await get<BoardProject[]>(PROJECTS_KEY, appStore)) ?? [])
+    .filter((project) => !unique.includes(project.id));
+  await set(PROJECTS_KEY, current, appStore);
+}
+
+/** Full project-catalog replacement for workspace restore only. */
+export async function replaceProjects(projects: BoardProject[]): Promise<void> {
+  if (SERVER_STORAGE) return replaceServerProjects(projects);
+  await set(PROJECTS_KEY, projects, appStore);
+}
+
+export type ConfigSecrets = {
   apiKeys: Record<string, Record<string, string>>;
   webdavPass: string;
+  objectStorageAccessKeyId?: string;
+  objectStorageSecretAccessKey?: string;
+  objectStorageSessionToken?: string;
 };
 
+export function mergeConfigSecrets(
+	session: ConfigSecrets,
+	persisted: ConfigSecrets,
+): ConfigSecrets {
+	const apiKeys: Record<string, Record<string, string>> = Object.fromEntries(
+		Object.entries(session.apiKeys).map(([id, keys]) => [id, { ...keys }]),
+	);
+	for (const [id, keys] of Object.entries(persisted.apiKeys)) {
+		const nonEmpty = Object.fromEntries(Object.entries(keys).filter(([, key]) => key !== ""));
+		if (Object.keys(nonEmpty).length > 0) {
+			apiKeys[id] = { ...(apiKeys[id] ?? {}), ...nonEmpty };
+		}
+	}
+	return {
+		apiKeys,
+		webdavPass: persisted.webdavPass || session.webdavPass,
+		objectStorageAccessKeyId: persisted.objectStorageAccessKeyId || session.objectStorageAccessKeyId || "",
+		objectStorageSecretAccessKey: persisted.objectStorageSecretAccessKey || session.objectStorageSecretAccessKey || "",
+		objectStorageSessionToken: persisted.objectStorageSessionToken || session.objectStorageSessionToken || "",
+	};
+}
+
 export function sanitizeConfigForPersistence(config: AppConfig): AppConfig {
+  const objectStorage = config.objectStorage
+    ? stripObjectStorageSecrets(normalizeObjectStorage(config.objectStorage))
+    : undefined;
   return {
     ...config,
     channels: config.channels.map((channel) => {
@@ -125,26 +191,31 @@ export function sanitizeConfigForPersistence(config: AppConfig): AppConfig {
       return { ...n, apiKey: "", providers: { text: { ...p.text, apiKey: "" }, image: { ...p.image, apiKey: "" }, video: { ...p.video, apiKey: "" }, audio: { ...p.audio, apiKey: "" } } };
     }),
     webdavPass: "",
+    objectStorage,
   };
 }
 
 function extractConfigSecrets(config: AppConfig): ConfigSecrets {
+  const objectStorage = config.objectStorage ? normalizeObjectStorage(config.objectStorage) : undefined;
   return {
     apiKeys: Object.fromEntries(config.channels.map((channel) => {
       const p = normalizeChannel(channel).providers!;
       return [channel.id, { text: p.text.apiKey, image: p.image.apiKey, video: p.video.apiKey, audio: p.audio.apiKey }];
     })),
     webdavPass: config.webdavPass ?? "",
+    objectStorageAccessKeyId: objectStorage?.accessKeyId ?? "",
+    objectStorageSecretAccessKey: objectStorage?.secretAccessKey ?? "",
+    objectStorageSessionToken: objectStorage?.sessionToken ?? "",
   };
 }
 
 function readSessionConfigSecrets(): ConfigSecrets {
-  const empty: ConfigSecrets = { apiKeys: {}, webdavPass: "" };
+  const empty: ConfigSecrets = { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" };
   if (typeof sessionStorage === "undefined") return empty;
   try {
     const value = JSON.parse(sessionStorage.getItem(CONFIG_SECRETS_KEY) ?? "null") as unknown;
     if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
-    const input = value as { apiKeys?: unknown; webdavPass?: unknown };
+    const input = value as { apiKeys?: unknown; webdavPass?: unknown; objectStorageAccessKeyId?: unknown; objectStorageSecretAccessKey?: unknown; objectStorageSessionToken?: unknown };
     const apiKeys: Record<string, Record<string, string>> = {};
     if (input.apiKeys && typeof input.apiKeys === "object" && !Array.isArray(input.apiKeys)) {
       for (const [id, value] of Object.entries(input.apiKeys)) {
@@ -161,6 +232,15 @@ function readSessionConfigSecrets(): ConfigSecrets {
       apiKeys,
       webdavPass: typeof input.webdavPass === "string" && input.webdavPass.length <= 64 * 1024
         ? input.webdavPass
+        : "",
+      objectStorageAccessKeyId: typeof input.objectStorageAccessKeyId === "string" && input.objectStorageAccessKeyId.length <= 64 * 1024
+        ? input.objectStorageAccessKeyId
+        : "",
+      objectStorageSecretAccessKey: typeof input.objectStorageSecretAccessKey === "string" && input.objectStorageSecretAccessKey.length <= 64 * 1024
+        ? input.objectStorageSecretAccessKey
+        : "",
+      objectStorageSessionToken: typeof input.objectStorageSessionToken === "string" && input.objectStorageSessionToken.length <= 64 * 1024
+        ? input.objectStorageSessionToken
         : "",
     };
   } catch {
@@ -184,23 +264,18 @@ export async function loadConfig(): Promise<AppConfig | null> {
     : (await get<AppConfig>(CONFIG_KEY, appStore)) ?? null;
   if (!stored) return null;
   const sessionSecrets = SERVER_STORAGE
-    ? (await loadServerSecrets<ConfigSecrets>()) ?? { apiKeys: {}, webdavPass: "" }
+    ? (await loadServerSecrets<ConfigSecrets>()) ?? { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" }
     : readSessionConfigSecrets();
   const persistedSecrets = extractConfigSecrets(stored);
-  const secrets: ConfigSecrets = {
-    apiKeys: { ...sessionSecrets.apiKeys },
-    webdavPass: persistedSecrets.webdavPass || sessionSecrets.webdavPass,
-  };
-  for (const [id, keys] of Object.entries(persistedSecrets.apiKeys)) {
-    if (keys && typeof keys === "object") secrets.apiKeys[id] = { ...(secrets.apiKeys[id] ?? {}), ...keys };
-  }
+	const secrets = mergeConfigSecrets(sessionSecrets, persistedSecrets);
   if (!SERVER_STORAGE) writeSessionConfigSecrets(secrets);
 
   const sanitized = sanitizeConfigForPersistence(stored);
-  if (Object.values(persistedSecrets.apiKeys).some(Boolean) || persistedSecrets.webdavPass) {
+  if (Object.values(persistedSecrets.apiKeys).some(Boolean) || persistedSecrets.webdavPass || persistedSecrets.objectStorageAccessKeyId || persistedSecrets.objectStorageSecretAccessKey || persistedSecrets.objectStorageSessionToken) {
     if (SERVER_STORAGE) await saveServerState("config", sanitized);
     else await set(CONFIG_KEY, sanitized, appStore);
   }
+  const objectStorage = normalizeObjectStorage(sanitized.objectStorage);
   return {
     ...sanitized,
     channels: sanitized.channels.map((raw) => {
@@ -210,6 +285,12 @@ export async function loadConfig(): Promise<AppConfig | null> {
       return { ...channel, providers, apiKey: providers.text.apiKey };
     }),
     webdavPass: secrets.webdavPass,
+    objectStorage: {
+      ...objectStorage,
+      accessKeyId: secrets.objectStorageAccessKeyId || "",
+      secretAccessKey: secrets.objectStorageSecretAccessKey || "",
+      sessionToken: secrets.objectStorageSessionToken || "",
+    },
   };
 }
 
@@ -254,7 +335,12 @@ export async function putBlob(
   blob: Blob,
 ): Promise<void> {
   if (SERVER_STORAGE) return putServerBlob(key, blob);
-  await set(key, blob, kind === "image" ? imageStore : mediaStore);
+  const record: StoredBlobRecord = {
+    version: 1,
+    mimeType: blob.type || "application/octet-stream",
+    bytes: await blob.arrayBuffer(),
+  };
+  await set(key, record, kind === "image" ? imageStore : mediaStore);
 }
 
 export async function getBlob(
@@ -262,7 +348,7 @@ export async function getBlob(
   key: string,
 ): Promise<Blob | undefined> {
   if (SERVER_STORAGE) return getServerBlob(key);
-  return get<Blob>(key, kind === "image" ? imageStore : mediaStore);
+  return storedValueToBlob(await get<unknown>(key, kind === "image" ? imageStore : mediaStore));
 }
 
 export async function deleteBlob(kind: "image" | "media", key: string): Promise<void> {
@@ -284,7 +370,14 @@ export async function deleteBlob(kind: "image" | "media", key: string): Promise<
 export async function storeImportedMedia(
   kind: "image" | "media",
   blob: Blob,
-): Promise<{ storageKey: string; url: string }> {
+): Promise<{
+  storageKey: string;
+  url: string;
+  width: number;
+  height: number;
+  bytes: number;
+  mimeType: string;
+}> {
   const maxBytes = kind === "image"
     ? MEDIA_UPLOAD_LIMITS.imageBytes
     : MEDIA_UPLOAD_LIMITS.mediaBytes;
@@ -294,7 +387,15 @@ export async function storeImportedMedia(
   try {
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
-    return { storageKey, url };
+    const dimensions = kind === "image" ? await readImageSize(url) : { width: 0, height: 0 };
+    return {
+      storageKey,
+      url,
+      width: dimensions.width,
+      height: dimensions.height,
+      bytes: blob.size,
+      mimeType: blob.type || "application/octet-stream",
+    };
   } catch (error) {
     await deleteBlob(kind, storageKey);
     throw error;
@@ -322,6 +423,10 @@ function mediaKindFromKey(storageKey: string): "image" | "media" {
 export async function uploadMedia(
   input: Blob | string,
   kind: "image" | "media" = "image",
+  options: {
+    requirePersistent?: boolean;
+    preflightImage?: (blob: Blob) => Promise<{ width: number; height: number }>;
+  } = {},
 ): Promise<{
   url: string;
   storageKey: string;
@@ -329,13 +434,20 @@ export async function uploadMedia(
   height: number;
   bytes: number;
   mimeType: string;
+  blob: Blob;
 }> {
   let blob: Blob;
   const maxBytes = kind === "image"
     ? MEDIA_UPLOAD_LIMITS.imageBytes
     : MEDIA_UPLOAD_LIMITS.mediaBytes;
   if (typeof input === "string") {
-    if (input.startsWith("data:") || input.startsWith("blob:")) {
+    if (input.startsWith("data:")) {
+      const decoded = decodeBoundedDataUrl(input, {
+        maxBytes,
+        mimeTypes: kind === "image" ? REMOTE_IMAGE_MIME_TYPES : REMOTE_MEDIA_MIME_TYPES,
+      });
+      blob = new Blob([decoded.bytes], { type: decoded.mimeType });
+    } else if (input.startsWith("blob:")) {
       const response = await fetch(input);
       const remote = await readBoundedResponse(response, {
         maxBytes,
@@ -365,21 +477,39 @@ export async function uploadMedia(
     }
   }
 
+  const preflightDimensions = options.preflightImage && (blob.type.startsWith("image/") || kind === "image")
+    ? await options.preflightImage(blob)
+    : undefined;
+
   const storageKey = `${kind}:${createStorageId()}`;
-  let url: string;
+  let url: string | undefined;
   try {
     await putBlob(kind, storageKey, blob);
-    url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-  } catch {
-    // Some private/WebKit contexts reject Blob writes or object URLs. Keep the
-    // current node usable with a data URL; persistence can be retried later.
+  } catch (cause) {
+    if (options.requirePersistent) throw cause;
     url = await blobToDataUrl(blob);
   }
+  if (!url) {
+    try {
+      url = URL.createObjectURL(blob);
+      objectUrls.set(storageKey, url);
+    } catch (cause) {
+      if (options.requirePersistent) {
+        try {
+          await deleteBlob(kind, storageKey);
+        } catch (cleanupError) {
+          throw new AggregateError([cause, cleanupError], "Media URL creation failed and stored blob cleanup failed");
+        }
+        throw cause;
+      }
+      // Some private/WebKit contexts reject object URLs. The stored key remains valid.
+      url = await blobToDataUrl(blob);
+    }
+  }
 
-  let width = 0;
-  let height = 0;
-  if (blob.type.startsWith("image/") || kind === "image") {
+  let width = preflightDimensions?.width ?? 0;
+  let height = preflightDimensions?.height ?? 0;
+  if (!preflightDimensions && (blob.type.startsWith("image/") || kind === "image")) {
     try {
       const dims = await readImageSize(url);
       width = dims.width;
@@ -396,6 +526,7 @@ export async function uploadMedia(
     height,
     bytes: blob.size,
     mimeType: blob.type || "application/octet-stream",
+    blob,
   };
 }
 
@@ -465,23 +596,114 @@ export async function deleteStorageKey(storageKey: string): Promise<void> {
   objectUrls.delete(storageKey);
 }
 
+export async function validatePersistedPanoramaBlob(
+  metadata: BoardNode["metadata"],
+  blob: Blob,
+): Promise<{ width: number; height: number }> {
+  const dimensions = await readPanoramaBlobDimensions(blob);
+  if ((metadata.bytes !== undefined && metadata.bytes !== blob.size) ||
+      (metadata.mimeType !== undefined && metadata.mimeType !== blob.type) ||
+      (metadata.naturalWidth !== undefined && metadata.naturalWidth !== dimensions.width) ||
+      (metadata.naturalHeight !== undefined && metadata.naturalHeight !== dimensions.height)) {
+    throw new Error("panorama metadata mismatch");
+  }
+  return dimensions;
+}
+
+export function repairInvalidPanoramaBatches(nodes: BoardNode[]): BoardNode[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const ownerByChild = new Map<string, string>();
+  const childIdsByRoot = new Map<string, string[]>();
+  const usable = (node: BoardNode | undefined) => node?.type === "panorama" &&
+    Boolean(node.metadata.content && node.metadata.storageKey && node.metadata.bytes &&
+      node.metadata.panoramaProjection === "equirectangular");
+
+  for (const root of nodes) {
+    const declared = root.metadata.batchChildIds ?? [];
+    if (declared.length === 0) continue;
+    const valid = usable(root) ? declared.filter((childId) => {
+      const child = byId.get(childId);
+      return usable(child) && child?.metadata.batchRootId === root.id;
+    }) : [];
+    childIdsByRoot.set(root.id, valid);
+    for (const childId of valid) ownerByChild.set(childId, root.id);
+  }
+
+  return nodes.map((node) => {
+    const validChildren = childIdsByRoot.get(node.id);
+    const validOwner = ownerByChild.get(node.id);
+    if (validChildren) {
+      return {
+        ...node,
+        metadata: validChildren.length > 0 ? {
+          ...node.metadata,
+          isBatchRoot: true,
+          batchChildIds: validChildren,
+          primaryImageId: node.id,
+          count: validChildren.length + 1,
+        } : {
+          ...node.metadata,
+          isBatchRoot: undefined,
+          batchChildIds: undefined,
+          primaryImageId: undefined,
+          count: 1,
+        },
+      };
+    }
+    if (node.metadata.batchRootId && validOwner !== node.metadata.batchRootId) {
+      return { ...node, metadata: { ...node.metadata, batchRootId: undefined } };
+    }
+    return node;
+  });
+}
+
 /** Restore displayable blob: URLs after page reload. */
 export async function rehydrateProjects(
   projects: BoardProject[],
 ): Promise<BoardProject[]> {
   const next: BoardProject[] = [];
+  const migratedStorageKeys: string[] = [];
   for (const project of projects) {
-    const nodes = [];
+    const nodes: BoardNode[] = [];
+    try {
     for (const node of project.nodes) {
       let metadata = { ...node.metadata };
       if (metadata.storageKey) {
         const kind = mediaKindFromKey(metadata.storageKey);
-        const url = await resolveObjectUrl(kind, metadata.storageKey, metadata.content);
-        if (url) metadata = { ...metadata, content: url };
+        if (node.type === "panorama") {
+          try {
+            const blob = await getBlob(kind, metadata.storageKey);
+            if (!blob) throw new Error("missing panorama blob");
+            const dimensions = await validatePersistedPanoramaBlob(metadata, blob);
+            const url = await resolveObjectUrl(kind, metadata.storageKey);
+            if (!url) throw new Error("missing panorama object URL");
+            metadata = {
+              ...metadata,
+              content: url,
+              naturalWidth: dimensions.width,
+              naturalHeight: dimensions.height,
+              bytes: blob.size,
+              mimeType: blob.type,
+            };
+          } catch {
+            metadata = {
+              ...metadata,
+              content: undefined,
+              status: "error",
+              errorDetails: "全景媒体损坏或尺寸不匹配",
+            };
+          }
+        } else {
+          const url = await resolveObjectUrl(kind, metadata.storageKey, metadata.content);
+          if (url) metadata = { ...metadata, content: url };
+        }
       } else if (metadata.content?.startsWith("data:")) {
         try {
           const kind = node.type === "video" ? "media" : "image";
-          const uploaded = await uploadMedia(metadata.content, kind);
+          const uploaded = await uploadMedia(metadata.content, kind, node.type === "panorama" ? {
+            requirePersistent: true,
+            preflightImage: readPanoramaBlobDimensions,
+          } : undefined);
           metadata = {
             ...metadata,
             content: uploaded.url,
@@ -491,8 +713,17 @@ export async function rehydrateProjects(
             bytes: uploaded.bytes,
             mimeType: uploaded.mimeType,
           };
+          migratedStorageKeys.push(uploaded.storageKey);
         } catch {
-          // keep original data URL if migration fails
+          if (node.type === "panorama") {
+            metadata = {
+              ...metadata,
+              content: undefined,
+              status: "error",
+              errorDetails: "全景媒体损坏或尺寸不匹配",
+            };
+          }
+          // Other legacy data URLs remain usable when migration fails.
         }
       }
       nodes.push({ ...node, metadata });
@@ -515,6 +746,7 @@ export async function rehydrateProjects(
                 url: uploaded.url,
                 storageKey: uploaded.storageKey,
               });
+              migratedStorageKeys.push(uploaded.storageKey);
             } catch {
               images.push(img);
             }
@@ -541,7 +773,13 @@ export async function rehydrateProjects(
       chatSessions.push({ ...session, messages });
     }
 
-    next.push({ ...project, nodes, chatSessions });
+    const repairedNodes = repairInvalidPanoramaBatches(nodes);
+    validateProjectPanoramaBudget(repairedNodes);
+    next.push({ ...project, nodes: repairedNodes, chatSessions });
+    } catch (error) {
+      await Promise.allSettled(migratedStorageKeys.map((storageKey) => deleteStorageKey(storageKey)));
+      throw error;
+    }
   }
   return next;
 }
@@ -677,6 +915,26 @@ export function collectStorageKeys(
   }
   for (const a of assets) {
     if (a.storageKey) keys.add(a.storageKey);
+  }
+  return keys;
+}
+
+export function collectBoardContentStorageKeys(
+  nodes: readonly BoardNode[],
+  chatSessions: readonly AssistantSession[],
+): Set<string> {
+  const keys = new Set<string>();
+  for (const node of nodes) {
+    if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
+    for (const storageKey of node.metadata.referenceStorageKeys ?? []) keys.add(storageKey);
+  }
+  for (const session of chatSessions) {
+    for (const message of session.messages) {
+      for (const image of message.images ?? []) if (image.storageKey) keys.add(image.storageKey);
+      for (const reference of message.references ?? []) {
+        if (reference.storageKey) keys.add(reference.storageKey);
+      }
+    }
   }
   return keys;
 }

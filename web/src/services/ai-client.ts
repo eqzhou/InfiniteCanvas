@@ -1,5 +1,5 @@
 import type { AiChannel } from "@/types/board";
-import { validateArkVideoRequest } from "@/lib/video-generation";
+import { arkImageReferenceRoles, normalizeVideoFrameMode, validateArkVideoRequest } from "@/lib/video-generation";
 import { getProvider } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
 import { compileProviderTemplate, readTemplatePath, resolveTemplateEndpoint } from "@/lib/provider-template";
@@ -11,6 +11,11 @@ import {
 } from "@/services/ai-adapters";
 import { applySystemPrompt } from "@/lib/app-config";
 import { runTrackedGeneration } from "@/services/generation-activity";
+import { readBoundedProviderJson, readBoundedProviderText } from "@/services/bounded-provider-json";
+import { decodeBoundedDataUrl } from "@/services/remote-content";
+
+const MAX_IMAGE_PROVIDER_RESPONSE_BYTES = 64 * 1024 * 1024;
+const MAX_PROVIDER_ERROR_BYTES = 64 * 1024;
 export {
   resolveMediaRefs,
   resolveNodeImageDataUrl,
@@ -56,10 +61,28 @@ async function authFetch(
   }
   const res = await fetch(joinUrl(provider.baseUrl, path), { ...init, headers, redirect: "error" });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = await readBoundedProviderText(res, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
     throw new Error(`AI ${res.status}: ${text || res.statusText}`);
   }
   return res;
+}
+
+async function readImageProviderResults(response: Response, expectedMaximum: number): Promise<string[]> {
+  const payload = await readBoundedProviderJson(response, MAX_IMAGE_PROVIDER_RESPONSE_BYTES);
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) {
+    throw new Error("Image provider response is malformed");
+  }
+  const data = (payload as { data: unknown[] }).data;
+  if (data.length > expectedMaximum || data.length > 8) throw new Error("Image provider returned too many results");
+  return data.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Image provider result is malformed");
+    const result = item as { b64_json?: unknown; url?: unknown };
+    if (typeof result.b64_json === "string" && result.b64_json.length <= MAX_IMAGE_PROVIDER_RESPONSE_BYTES) {
+      return `data:image/png;base64,${result.b64_json}`;
+    }
+    if (typeof result.url === "string" && result.url.length <= 20_000) return result.url;
+    throw new Error("Image provider result is malformed");
+  });
 }
 
 export async function listModels(channel: AiChannel, kind: AiProviderKind = "text"): Promise<string[]> {
@@ -181,6 +204,8 @@ type ImageGenerationOptions = {
   quality?: string;
   n?: number;
   referenceDataUrls?: string[];
+  /** Managed binary references avoid a base64 round trip for multipart providers. */
+  referenceBlobs?: Blob[];
   transparentBackground?: boolean;
   systemPrompt?: string;
   signal?: AbortSignal;
@@ -210,15 +235,33 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     quality = "auto",
     n = 1,
     referenceDataUrls = [],
+    referenceBlobs = [],
     transparentBackground = false,
     systemPrompt = "",
     signal,
   } = options;
+  if (!Number.isSafeInteger(n) || n < 1 || n > 8) {
+    throw new Error("Image generation count must be between 1 and 8");
+  }
+  if (referenceDataUrls.length + referenceBlobs.length > 16 ||
+      referenceBlobs.reduce((total, blob) => total + blob.size, 0) > 64 * 1024 * 1024) {
+    throw new Error("Image generation references exceed the supported limit");
+  }
   const effectivePrompt = applySystemPrompt(systemPrompt, prompt);
   const provider = getProvider(channel, "image");
+  const encodedBlobReferences = async () => Promise.all(referenceBlobs.map((blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  })));
   if (provider.protocol === "gemini") {
     if (transparentBackground) throw new Error("Gemini image generation does not support transparent background");
-    return generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, referenceDataUrls, signal);
+    const references = [...referenceDataUrls, ...await encodedBlobReferences()];
+    const batches = await Promise.all(Array.from({ length: n }, () =>
+      generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, references, signal),
+    ));
+    return batches.flat().slice(0, n);
   }
   if (provider.protocol === "template") {
     if (!provider.template) throw new Error("Image template configuration is missing");
@@ -227,14 +270,14 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     }
     return generateTemplateImages(provider, {
       prompt: effectivePrompt, model, size, quality, count: n, transparentBackground,
-      referenceImages: referenceDataUrls,
+      referenceImages: [...referenceDataUrls, ...await encodedBlobReferences()],
     }, signal);
   }
   if (provider.protocol !== "openai") {
     throw new Error(`${provider.protocol} does not support image generation`);
   }
 
-  if (referenceDataUrls.length > 0) {
+  if (referenceDataUrls.length > 0 || referenceBlobs.length > 0) {
     const form = new FormData();
     form.set("model", model);
     form.set("prompt", effectivePrompt);
@@ -242,18 +285,18 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     form.set("size", size);
     if (quality) form.set("quality", quality);
     for (const [i, dataUrl] of referenceDataUrls.entries()) {
-      const blob = await (await fetch(dataUrl)).blob();
+      const decoded = decodeBoundedDataUrl(dataUrl, {
+        maxBytes: MAX_IMAGE_PROVIDER_RESPONSE_BYTES,
+        mimeTypes: ["image/"],
+      });
+      const blob = new Blob([decoded.bytes], { type: decoded.mimeType });
       form.append("image", blob, `ref-${i}.png`);
     }
+    for (const [i, blob] of referenceBlobs.entries()) {
+      form.append("image", blob, `ref-${referenceDataUrls.length + i}.png`);
+    }
     const res = await authFetch(channel, "/images/edits", { method: "POST", body: form, signal }, "image");
-    const data = (await res.json()) as {
-      data?: Array<{ b64_json?: string; url?: string }>;
-    };
-    return (data.data ?? [])
-      .map((item) =>
-        item.b64_json ? `data:image/png;base64,${item.b64_json}` : item.url,
-      )
-      .filter((x): x is string => Boolean(x));
+    return readImageProviderResults(res, n);
   }
 
   const res = await authFetch(channel, "/images/generations", {
@@ -268,14 +311,7 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     }),
     signal,
   }, "image");
-  const data = (await res.json()) as {
-    data?: Array<{ b64_json?: string; url?: string }>;
-  };
-  return (data.data ?? [])
-    .map((item) =>
-      item.b64_json ? `data:image/png;base64,${item.b64_json}` : item.url,
-    )
-    .filter((x): x is string => Boolean(x));
+  return readImageProviderResults(res, n);
 }
 
 export type VideoGenOptions = {
@@ -288,6 +324,8 @@ export type VideoGenOptions = {
   resolution?: string;
   generateAudio?: boolean;
   watermark?: boolean;
+  /** Ordered image references become first/last frames when set. */
+  frameMode?: "references" | "first-last";
   /** data URLs or https URLs */
   referenceImages?: string[];
   referenceVideos?: string[];
@@ -512,6 +550,7 @@ async function generateVideoRequest(
     resolution = "720p",
     generateAudio = false,
     watermark = false,
+    frameMode = "references",
     referenceImages = [],
     referenceVideos = [],
     referenceAudios = [],
@@ -519,6 +558,7 @@ async function generateVideoRequest(
     timeoutMs = VIDEO_TIMEOUT_MS,
     pollIntervalMs = VIDEO_POLL_INTERVAL_MS,
   } = options;
+  const resolvedFrameMode = normalizeVideoFrameMode(frameMode);
   validateTiming(timeoutMs, pollIntervalMs);
   const provider = getProvider(channel, "video");
   const base = normalizeBase(provider.baseUrl);
@@ -568,6 +608,7 @@ async function generateVideoRequest(
         resolution,
         generateAudio,
         watermark,
+        frameMode: resolvedFrameMode,
         referenceImages,
         referenceVideos,
         referenceAudios,
@@ -605,17 +646,19 @@ async function generateArkVideo(
     resolution: string;
     generateAudio: boolean;
     watermark: boolean;
+    frameMode: "references" | "first-last";
     referenceImages: string[];
     referenceVideos: string[];
     referenceAudios: string[];
   },
 ): Promise<VideoResult> {
+  const imageRoles = arkImageReferenceRoles(options.frameMode, options.referenceImages.length);
   const content: Array<Record<string, unknown>> = [
     { type: "text", text: options.prompt },
-    ...options.referenceImages.slice(0, 9).map((url) => ({
+    ...options.referenceImages.slice(0, 9).map((url, index) => ({
       type: "image_url",
       image_url: { url },
-      role: "reference_image",
+      role: imageRoles[index] ?? "reference_image",
     })),
     ...options.referenceVideos.slice(0, 3).map((url) => ({
       type: "video_url",

@@ -1,7 +1,9 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
+  type ClipboardEvent,
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
@@ -9,6 +11,12 @@ import {
   splitPromptReferenceValue,
   type PromptReference,
 } from "@/lib/prompt-references";
+import {
+  expandPromptTextWithBreaks,
+  normalizePromptClipboardText,
+  serializePromptEditorChildren,
+  type PromptEditorChild,
+} from "@/lib/prompt-chip-editor";
 import { isSubmitShortcut } from "@/lib/keyboard";
 
 type MentionState = {
@@ -40,13 +48,26 @@ function createReferenceChip(reference: PromptReference): HTMLSpanElement {
   return chip;
 }
 
-function serializeNode(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
-  if (node instanceof HTMLElement) {
-    if (node.dataset.refLabel) return node.dataset.refLabel;
-    if (node.tagName === "BR") return "\n";
+function readEditorChildren(node: Node): PromptEditorChild[] {
+  return Array.from(node.childNodes).map((child) => readEditorChild(child));
+}
+
+function readEditorChild(node: Node): PromptEditorChild {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return { type: "text", value: node.textContent ?? "" };
   }
-  return Array.from(node.childNodes).map(serializeNode).join("");
+  if (node instanceof HTMLElement) {
+    if (node.dataset.refLabel) return { type: "reference", label: node.dataset.refLabel };
+    if (node.tagName === "BR") return { type: "break" };
+    if (node.tagName === "DIV" || node.tagName === "P") {
+      return { type: "block", children: readEditorChildren(node) };
+    }
+  }
+  return { type: "block", children: readEditorChildren(node) };
+}
+
+function serializeEditor(editor: HTMLElement): string {
+  return serializePromptEditorChildren(readEditorChildren(editor), { root: true });
 }
 
 function valueBeforeCaret(editor: HTMLElement): string | null {
@@ -57,13 +78,22 @@ function valueBeforeCaret(editor: HTMLElement): string | null {
   const prefix = range.cloneRange();
   prefix.selectNodeContents(editor);
   prefix.setEnd(range.startContainer, range.startOffset);
-  return serializeNode(prefix.cloneContents());
+  return serializePromptEditorChildren(readEditorChildren(prefix.cloneContents()), { root: true });
 }
 
 function placeCaretAfter(node: Node) {
   const range = document.createRange();
   range.setStartAfter(node);
   range.collapse(true);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function placeCaretAtEnd(editor: HTMLElement) {
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.collapse(false);
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
@@ -84,6 +114,48 @@ function adjacentReference(editor: HTMLElement): HTMLElement | null {
     return previous instanceof HTMLElement && previous.dataset.refLabel ? previous : null;
   }
   return null;
+}
+
+function insertPlainTextAtSelection(editor: HTMLElement, text: string) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) {
+    editor.append(...expandPromptTextWithBreaks(text).map(toDomNode));
+    placeCaretAtEnd(editor);
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) {
+    editor.append(...expandPromptTextWithBreaks(text).map(toDomNode));
+    placeCaretAtEnd(editor);
+    return;
+  }
+  range.deleteContents();
+  const fragment = document.createDocumentFragment();
+  const nodes = expandPromptTextWithBreaks(text).map(toDomNode);
+  const last = nodes[nodes.length - 1];
+  for (const node of nodes) fragment.append(node);
+  range.insertNode(fragment);
+  if (last) placeCaretAfter(last);
+  else placeCaretAtEnd(editor);
+}
+
+function toDomNode(part: { type: "text"; value: string } | { type: "break" }): Node {
+  if (part.type === "break") return document.createElement("br");
+  return document.createTextNode(part.value);
+}
+
+function renderValue(editor: HTMLElement, value: string, references: readonly PromptReference[]) {
+  const fragment = document.createDocumentFragment();
+  for (const segment of splitPromptReferenceValue(value, references)) {
+    if (segment.type === "reference") {
+      fragment.append(createReferenceChip(segment.reference));
+      continue;
+    }
+    for (const part of expandPromptTextWithBreaks(segment.value)) {
+      fragment.append(toDomNode(part));
+    }
+  }
+  editor.replaceChildren(fragment);
 }
 
 export function PromptChipInput({
@@ -119,19 +191,13 @@ export function PromptChipInput({
   useLayoutEffect(() => {
     const editor = editorRef.current;
     if (!editor || document.activeElement === editor) return;
-    const fragment = document.createDocumentFragment();
-    for (const segment of splitPromptReferenceValue(value, references)) {
-      fragment.append(segment.type === "text"
-        ? document.createTextNode(segment.value)
-        : createReferenceChip(segment.reference));
-    }
-    editor.replaceChildren(fragment);
+    renderValue(editor, value, references);
   }, [references, value]);
 
   const sync = () => {
     const editor = editorRef.current;
     if (!editor) return;
-    onChange(serializeNode(editor));
+    onChange(serializeEditor(editor));
   };
 
   const updateMention = () => {
@@ -217,6 +283,29 @@ export function PromptChipInput({
     }
   };
 
+  const onPaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const plain = event.clipboardData.getData("text/plain");
+    if (!plain) return;
+    event.preventDefault();
+    event.stopPropagation();
+    insertPlainTextAtSelection(editor, normalizePromptClipboardText(plain));
+    sync();
+    updateMention();
+  };
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    // Capture early so canvas zoom never sees wheel gestures aimed at the prompt.
+    const onWheel = (event: Event) => {
+      event.stopPropagation();
+    };
+    editor.addEventListener("wheel", onWheel, { capture: true });
+    return () => editor.removeEventListener("wheel", onWheel, { capture: true });
+  }, []);
+
   return (
     <div ref={rootRef} className="relative min-w-0 flex-1">
       {!value ? (
@@ -232,7 +321,7 @@ export function PromptChipInput({
         aria-placeholder={placeholder}
         contentEditable
         suppressContentEditableWarning
-        className={`min-h-[56px] whitespace-pre-wrap break-words rounded-md border border-[var(--ob-line)] bg-transparent p-2 text-xs outline-none ${className}`}
+        className={`max-h-40 min-h-[56px] overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-[var(--ob-line)] bg-transparent p-2 text-xs outline-none ${className}`}
         style={style}
         onInput={() => {
           sync();
@@ -241,6 +330,7 @@ export function PromptChipInput({
         onKeyDown={onKeyDown}
         onKeyUp={() => updateMention()}
         onClick={() => updateMention()}
+        onPaste={onPaste}
         onCompositionStart={() => { composingRef.current = true; }}
         onCompositionEnd={() => {
           composingRef.current = false;
