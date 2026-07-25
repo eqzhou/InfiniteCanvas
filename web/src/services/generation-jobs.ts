@@ -262,7 +262,12 @@ export async function waitForGenerationJob(
 		const job = await read(id);
 		if (!job) throw new Error("generation job not found");
 		options.onUpdate?.(job);
-		if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") {
+		if (
+			job.status === "succeeded" ||
+			job.status === "failed" ||
+			job.status === "cancelled" ||
+			job.status === "deleted"
+		) {
 			return job;
 		}
 		await wait(intervalMs, options.signal);

@@ -144,9 +144,17 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         setError("进行中的任务请先取消，再批量删除");
         return;
       }
+      const removableIds = new Set(removable.map((job) => job.id));
+      // Abort waiters for soft-deleted jobs so polling does not hang on tombstones.
+      for (const [token, jobId] of [...activeServerJobIdsRef.current.entries()]) {
+        if (removableIds.has(jobId)) {
+          controllersRef.current.get(token)?.abort();
+          activeServerJobIdsRef.current.delete(token);
+        }
+      }
       // Soft-delete keeps tombstones for multi-device history sync; media is retained until project cleanup.
       await deleteGenerationJobs(removable.map((job) => job.id));
-      setSelectedJobIds((current) => current.filter((id) => !removable.some((job) => job.id === id)));
+      setSelectedJobIds((current) => current.filter((id) => !removableIds.has(id)));
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -325,7 +333,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				onUpdate: (next) => setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]),
 			});
 			if (completed.status === "failed") throw new Error(completed.error || `${kind === "image" ? "图片" : "视频"}生成失败`);
-			if (completed.status === "cancelled") return;
+			if (completed.status === "cancelled" || completed.status === "deleted") return;
 			await refresh();
 			return;
 		}
@@ -818,6 +826,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					: undefined}
                 onDelete={async () => {
                   // Soft-delete hides the card while retaining a sync tombstone and media ownership.
+                  // Abort any in-flight waiters for this job so waitForGenerationJob does not spin.
+                  for (const [token, jobId] of activeServerJobIdsRef.current.entries()) {
+                    if (jobId === job.id) {
+                      controllersRef.current.get(token)?.abort();
+                      activeServerJobIdsRef.current.delete(token);
+                    }
+                  }
                   await deleteGenerationJob(job.id);
                   setSelectedJobIds((current) => current.filter((id) => id !== job.id));
                   await refresh();

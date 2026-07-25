@@ -118,6 +118,19 @@ describe("generation job recovery", () => {
 		)).toEqual([]);
 	});
 
+
+	test("stops polling when a job is soft-deleted", async () => {
+		const states: GenerationJob[] = [
+			{ ...job("server-job", "2026-07-05T00:00:00Z"), status: "running", parameters: { executor: "server" } },
+			{ ...job("server-job", "2026-07-05T00:00:00Z"), status: "deleted", parameters: { executor: "server" } },
+		];
+		const completed = await waitForGenerationJob("server-job", {
+			getJob: async () => states.shift(),
+			wait: async () => undefined,
+		});
+		expect(completed.status).toBe("deleted");
+	});
+
 	test("polls one persisted server job until it reaches a terminal state", async () => {
 		const states: GenerationJob[] = [
 			{ ...job("server-job", "2026-07-05T00:00:00Z"), status: "queued", parameters: { executor: "server" } },
