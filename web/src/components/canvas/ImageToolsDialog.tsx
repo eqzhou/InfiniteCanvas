@@ -53,6 +53,7 @@ export function ImageToolsDialog({
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
 
   useEscapeDismiss(open, () => {
     abortRef.current?.abort();
@@ -113,6 +114,37 @@ export function ImageToolsDialog({
     onClose();
   };
 
+
+  function imageLayoutRect(): DOMRect | null {
+    return imageRef.current?.getBoundingClientRect() ?? null;
+  }
+
+  function fractionFromClientX(clientX: number): number {
+    const rect = imageLayoutRect();
+    if (!rect || rect.width <= 0) return 0.5;
+    return Math.min(0.99, Math.max(0.01, (clientX - rect.left) / rect.width));
+  }
+
+  function fractionFromClientY(clientY: number): number {
+    const rect = imageLayoutRect();
+    if (!rect || rect.height <= 0) return 0.5;
+    return Math.min(0.99, Math.max(0.01, (clientY - rect.top) / rect.height));
+  }
+
+  function imageOverlayStyle(): Record<string, string | number> {
+    const box = previewRef.current?.getBoundingClientRect();
+    const img = imageLayoutRect();
+    if (!box || !img) {
+      return { left: 0, top: 0, width: "100%", height: "100%" };
+    }
+    return {
+      left: img.left - box.left,
+      top: img.top - box.top,
+      width: img.width,
+      height: img.height,
+    };
+  }
+
   return createPortal(
     <div className="ob-overlay-canvas p-4">
       <div
@@ -139,66 +171,75 @@ export function ImageToolsDialog({
         <div className="ob-dialog-body space-y-3">
         {node.metadata.content ? (
           <div ref={previewRef} className="relative overflow-hidden rounded-xl bg-[var(--ob-canvas)] p-2 shadow-[var(--ob-elev-1)]">
-            <img src={node.metadata.content} alt="" className="mx-auto max-h-48 object-contain" />
-            {mode === "mask" ? (
-              <div
-                className="pointer-events-none absolute border-2 border-[var(--ob-select)] bg-[color-mix(in_srgb,var(--ob-select)_18%,transparent)]"
-                style={{
-                  left: `${x * 100}%`,
-                  top: `${y * 100}%`,
-                  width: `${w * 100}%`,
-                  height: `${h * 100}%`,
-                }}
-              />
-            ) : null}
-            {mode === "split" ? (
-              <>
-                {vertical.map((value, index) => (
-                  <button
-                    key={`v-${index}`}
-                    type="button"
-                    aria-label={`纵向分割线 ${index + 1}`}
-                    className="absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:bg-[var(--ob-select)]"
-                    style={{ left: `${value * 100}%` }}
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      setSelectedGuide({ axis: "vertical", index });
-                    }}
-                    onMouseDown={() => setSelectedGuide({ axis: "vertical", index })}
-                    onClick={() => setSelectedGuide({ axis: "vertical", index })}
-                    onPointerMove={(event) => {
-                      if (!event.currentTarget.hasPointerCapture(event.pointerId) || !previewRef.current) return;
-                      const rect = previewRef.current.getBoundingClientRect();
-                      const next = Math.min(0.99, Math.max(0.01, (event.clientX - rect.left) / rect.width));
-                      setVertical((current) => current.map((item, itemIndex) => itemIndex === index ? next : item));
-                    }}
-                  />
-                ))}
-                {horizontal.map((value, index) => (
-                  <button
-                    key={`h-${index}`}
-                    type="button"
-                    aria-label={`横向分割线 ${index + 1}`}
-                    className="absolute inset-x-0 z-10 h-3 -translate-y-1/2 cursor-row-resize bg-transparent after:absolute after:inset-x-0 after:top-1/2 after:h-0.5 after:bg-[var(--ob-select)]"
-                    style={{ top: `${value * 100}%` }}
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      setSelectedGuide({ axis: "horizontal", index });
-                    }}
-                    onMouseDown={() => setSelectedGuide({ axis: "horizontal", index })}
-                    onClick={() => setSelectedGuide({ axis: "horizontal", index })}
-                    onPointerMove={(event) => {
-                      if (!event.currentTarget.hasPointerCapture(event.pointerId) || !previewRef.current) return;
-                      const rect = previewRef.current.getBoundingClientRect();
-                      const next = Math.min(0.99, Math.max(0.01, (event.clientY - rect.top) / rect.height));
-                      setHorizontal((current) => current.map((item, itemIndex) => itemIndex === index ? next : item));
-                    }}
-                  />
-                ))}
-              </>
-            ) : null}
+            <img
+              ref={imageRef}
+              src={node.metadata.content}
+              alt=""
+              className="mx-auto max-h-48 object-contain"
+              onLoad={() => {
+                // Force a re-render so overlay geometry uses the laid-out image box.
+                setX((value) => value);
+              }}
+            />
+            <div className="pointer-events-none absolute" style={imageOverlayStyle()}>
+              {mode === "mask" ? (
+                <div
+                  className="absolute border-2 border-[var(--ob-select)] bg-[color-mix(in_srgb,var(--ob-select)_18%,transparent)]"
+                  style={{
+                    left: `${x * 100}%`,
+                    top: `${y * 100}%`,
+                    width: `${w * 100}%`,
+                    height: `${h * 100}%`,
+                  }}
+                />
+              ) : null}
+              {mode === "split" ? (
+                <div className="pointer-events-auto absolute inset-0">
+                  {vertical.map((value, index) => (
+                    <button
+                      key={`v-${index}`}
+                      type="button"
+                      aria-label={`纵向分割线 ${index + 1}`}
+                      className="absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:bg-[var(--ob-select)]"
+                      style={{ left: `${value * 100}%` }}
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        setSelectedGuide({ axis: "vertical", index });
+                      }}
+                      onMouseDown={() => setSelectedGuide({ axis: "vertical", index })}
+                      onClick={() => setSelectedGuide({ axis: "vertical", index })}
+                      onPointerMove={(event) => {
+                        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                        const next = fractionFromClientX(event.clientX);
+                        setVertical((current) => current.map((item, itemIndex) => itemIndex === index ? next : item));
+                      }}
+                    />
+                  ))}
+                  {horizontal.map((value, index) => (
+                    <button
+                      key={`h-${index}`}
+                      type="button"
+                      aria-label={`横向分割线 ${index + 1}`}
+                      className="absolute inset-x-0 z-10 h-3 -translate-y-1/2 cursor-row-resize bg-transparent after:absolute after:inset-x-0 after:top-1/2 after:h-0.5 after:bg-[var(--ob-select)]"
+                      style={{ top: `${value * 100}%` }}
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        setSelectedGuide({ axis: "horizontal", index });
+                      }}
+                      onMouseDown={() => setSelectedGuide({ axis: "horizontal", index })}
+                      onClick={() => setSelectedGuide({ axis: "horizontal", index })}
+                      onPointerMove={(event) => {
+                        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                        const next = fractionFromClientY(event.clientY);
+                        setHorizontal((current) => current.map((item, itemIndex) => itemIndex === index ? next : item));
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

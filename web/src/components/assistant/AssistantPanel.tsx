@@ -596,6 +596,7 @@ export function AssistantPanel() {
                   isComposing: e.nativeEvent.isComposing,
                 })
               ) {
+                e.preventDefault();
                 void send();
               }
             }}

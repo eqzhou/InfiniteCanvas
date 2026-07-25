@@ -362,7 +362,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               value={text}
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   void send();
                 }

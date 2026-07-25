@@ -530,9 +530,21 @@ select:focus-visible,
   border-radius: var(--ob-radius-lg);
 }
 
-/* Canvas-level overlays use a lower z-index */
+/* Canvas-level overlays: full-screen chrome with lower z-index than app modals */
 .ob-overlay-canvas {
+  position: fixed;
+  inset: 0;
   z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, #000 42%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+html.dark .ob-overlay-canvas {
+  background: color-mix(in srgb, #000 58%, transparent);
 }
 
 /* Tab bar primitives */
