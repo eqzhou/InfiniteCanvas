@@ -4,9 +4,10 @@ import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
 const rows = [
   ["拖动画布空白", "平移视图"],
+  ["空格 / Alt + 拖动", "在节点上也能平移视图"],
   ["滚轮", "缩放"],
   ["Ctrl/Cmd + 拖动", "框选"],
-  ["Shift/Ctrl/Cmd + 点击", "追加选择"],
+  ["Shift/Ctrl/Cmd + 点击", "追加或取消选择"],
   ["Ctrl/Cmd + A", "全选"],
   ["Ctrl/Cmd + C / V", "复制 / 粘贴"],
   ["Ctrl/Cmd + D", "复制副本"],
@@ -15,7 +16,7 @@ const rows = [
   ["Ctrl/Cmd + Z", "撤销"],
   ["Ctrl/Cmd + Shift + Z / Y", "重做"],
   ["Delete / Backspace", "删除"],
-  ["Esc", "取消选择"],
+  ["Esc", "取消选择，并关闭当前浮层"],
   ["拖入图片文件", "上传到画布"],
   ["右键菜单", "对齐/分布/新建节点"],
   ["双击连线", "删除连线"],

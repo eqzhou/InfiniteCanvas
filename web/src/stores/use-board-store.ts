@@ -125,6 +125,7 @@ type BoardState = {
   updateActive: (mutator: (project: BoardProject) => BoardProject, opts?: { history?: boolean }) => void;
   getActive: () => BoardProject | null;
   setViewport: (viewport: Viewport, history?: boolean) => void;
+  commitViewportRun: () => void;
   setBackground: (mode: BackgroundMode) => void;
   addNode: (type: NodeType, position: Point, partial?: Partial<BoardNode>) => string;
   addConnectedNode: (from: string, type: NodeType, position: Point, partial?: Partial<BoardNode>) => string | null;
@@ -193,6 +194,13 @@ type BoardState = {
 };
 
 const histories = new Map<string, HistoryStack<Snapshot>>();
+
+/**
+ * Project whose camera is mid-run, so consecutive viewport writes collapse into
+ * one undo step. A gesture writes the viewport on every animation frame; without
+ * coalescing a single wheel zoom would evict the whole history.
+ */
+let viewportRunProjectId: string | null = null;
 
 function historyFor(id: string): HistoryStack<Snapshot> {
   let h = histories.get(id);
@@ -483,6 +491,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     if (!current) return;
     const next = mutator(current);
     if (next === current) return;
+    // Any other edit ends the current camera run, so the next viewport write
+    // starts a fresh undo step instead of merging into the previous gesture.
+    viewportRunProjectId = null;
     if (opts?.history !== false) {
       historyFor(current.id).push(snap(current));
     }
@@ -494,8 +505,23 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     void get().persist();
   },
 
-  setViewport: (viewport, history = false) => {
-    get().updateActive((p) => ({ ...p, viewport }), { history });
+  setViewport: (viewport, history) => {
+    const current = get().getActive();
+    if (!current) return;
+    // Upstream lists the viewport in the undo scope. A gesture writes it on
+    // every frame, so only the first write of a run becomes an undo step and
+    // the rest merge into it; a bare write outside a run is a step of its own.
+    const merging = viewportRunProjectId === current.id;
+    const record = history ?? !merging;
+    get().updateActive((p) => ({ ...p, viewport }), { history: record });
+    // A caller that opted out of the undo scope entirely (a programmatic
+    // animation, say) must not leave a run open, or the user's next real
+    // gesture would merge into it and never become undoable.
+    viewportRunProjectId = history === false ? null : current.id;
+  },
+
+  commitViewportRun: () => {
+    viewportRunProjectId = null;
   },
 
   setBackground: (mode) => {

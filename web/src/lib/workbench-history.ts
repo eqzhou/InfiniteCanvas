@@ -48,6 +48,91 @@ export function workbenchReferenceKeys(job: GenerationJob): string[] {
     .slice(0, 16);
 }
 
+/** The subset of the generation form a history record can restore. */
+export type WorkbenchRefillForm = {
+  prompt: string;
+  model: string;
+  providerId: string;
+  size: string;
+  quality: string;
+  count: number;
+  transparentBackground: boolean;
+  category: string;
+  referenceStorageKeys: string[];
+};
+
+const WORKBENCH_MIN_COUNT = 1;
+const WORKBENCH_MAX_COUNT = 8;
+
+function refillText(raw: unknown, current: string): string {
+  if (typeof raw !== "string") return current;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : current;
+}
+
+/**
+ * Restores a past generation record into the form.
+ *
+ * Upstream lists refill separately from retry: retry re-runs a record exactly
+ * as it was, while refill puts its settings back on the form so they can be
+ * adjusted before generating again. A record is persisted data, so every field
+ * is validated here; anything missing or unusable keeps the value the form
+ * already has rather than blanking it. Neither input is mutated.
+ */
+export function workbenchRefillForm(
+  job: GenerationJob,
+  current: WorkbenchRefillForm,
+): WorkbenchRefillForm {
+  const parameters = job.parameters ?? {};
+  const count = parameters.count;
+  const transparent = parameters.transparentBackground;
+  const category = parameters.category;
+  const references = workbenchReferenceKeys(job);
+  return {
+    prompt: refillText(job.prompt, current.prompt),
+    model: refillText(job.model, current.model),
+    providerId: refillText(job.providerId, current.providerId),
+    size: refillText(parameters.size, current.size),
+    quality: refillText(parameters.quality, current.quality),
+    count: typeof count === "number" && Number.isInteger(count)
+      ? Math.min(WORKBENCH_MAX_COUNT, Math.max(WORKBENCH_MIN_COUNT, count))
+      : current.count,
+    transparentBackground: transparent === undefined ? current.transparentBackground : transparent === true,
+    category: category === undefined ? current.category : normalizeWorkbenchCategory(category),
+    // An empty reference list is indistinguishable from "not recorded", so it
+    // falls back rather than silently dropping the references already picked.
+    referenceStorageKeys: references.length ? references : [...current.referenceStorageKeys],
+  };
+}
+
+/**
+ * Maps the storage keys a record kept back onto selectable library assets.
+ *
+ * A reference uploaded straight from disk has no asset behind it, so the form
+ * cannot re-select it. Those are counted rather than dropped silently, so the
+ * caller can tell the user which references need picking again.
+ */
+export function workbenchRefillAssetIds(
+  storageKeys: readonly string[],
+  assets: readonly AssetItem[],
+): { assetIds: string[]; unresolved: number } {
+  const byStorageKey = new Map<string, string>();
+  for (const asset of workbenchImageAssets(assets)) {
+    if (asset.storageKey && !byStorageKey.has(asset.storageKey)) byStorageKey.set(asset.storageKey, asset.id);
+  }
+  const assetIds: string[] = [];
+  let unresolved = 0;
+  for (const key of storageKeys) {
+    const assetId = byStorageKey.get(key);
+    if (!assetId) {
+      unresolved += 1;
+    } else if (!assetIds.includes(assetId)) {
+      assetIds.push(assetId);
+    }
+  }
+  return { assetIds, unresolved };
+}
+
 export function workbenchImageAssets(assets: readonly AssetItem[]): AssetItem[] {
   return assets.filter((asset) =>
     asset.kind === "image" && Boolean(asset.storageKey || asset.coverUrl || asset.content));

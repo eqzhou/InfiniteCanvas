@@ -35,8 +35,11 @@ import {
   normalizeWorkbenchCategory,
   normalizeWorkbenchLayout,
   WORKBENCH_ALL_CATEGORIES,
+  WORKBENCH_UNCATEGORIZED,
   workbenchCategories,
   workbenchImageAssets,
+  workbenchRefillAssetIds,
+  workbenchRefillForm,
   type WorkbenchLayout,
 } from "@/lib/workbench-history";
 import { AssetReferenceThumbnail, FileReferencePreviews } from "@/components/workbench/WorkbenchReferences";
@@ -106,6 +109,36 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   useEffect(() => {
     setModel(provider?.model ?? "");
   }, [provider?.model]);
+
+  /**
+   * Puts a past record back on the form so it can be adjusted before running
+   * again. Distinct from retry, which re-runs the record untouched.
+   */
+  const refill = useCallback((job: GenerationJob) => {
+    const restored = workbenchRefillForm(job, {
+      prompt, model, providerId: channelId, size, quality, count,
+      transparentBackground: transparent,
+      category,
+      referenceStorageKeys: [],
+    });
+    setPrompt(restored.prompt);
+    setModel(restored.model);
+    setSize(restored.size);
+    setQuality(restored.quality);
+    setCount(restored.count);
+    setTransparent(restored.transparentBackground);
+    setCategory(restored.category === WORKBENCH_UNCATEGORIZED ? "" : restored.category);
+    if (channelChoices.some((item) => item.id === restored.providerId)) setChannelId(restored.providerId);
+
+    const { assetIds, unresolved } = workbenchRefillAssetIds(restored.referenceStorageKeys, reusableAssets);
+    setSelectedAssetIds(assetIds);
+    // Files uploaded straight from disk have no asset to re-select, so say so
+    // rather than letting the user believe the references came back.
+    setReferences([]);
+    setError(unresolved
+      ? `已回填设置，但有 ${unresolved} 张参考图来自本地上传，需要重新选择`
+      : "");
+  }, [category, channelChoices, channelId, count, model, prompt, quality, reusableAssets, size, transparent]);
 
   const refresh = useCallback(async () => {
     const page = await listGenerationJobs({ projectId: project?.id, kind, page: 1, pageSize: 50 });
@@ -877,6 +910,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 job={job}
                 selected={selectedJobIds.includes(job.id)}
                 onSelectedChange={(selected) => toggleJobSelected(job.id, selected)}
+                onRefill={() => refill(job)}
                 onRetry={() => void run(job)}
                 onInsert={(item) => insert(item, job)}
 				onCancel={isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running")

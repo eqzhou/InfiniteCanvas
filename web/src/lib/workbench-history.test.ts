@@ -8,6 +8,8 @@ import {
   workbenchCategories,
   workbenchImageAssets,
   workbenchReferenceKeys,
+  workbenchRefillAssetIds,
+  workbenchRefillForm,
 } from "./workbench-history";
 
 const job = (id: string, category?: unknown): GenerationJob => ({
@@ -49,5 +51,97 @@ describe("creative workbench history presentation", () => {
     expect(normalizeWorkbenchLayout("bottom")).toBe("bottom");
     expect(normalizeWorkbenchLayout("side")).toBe("side");
     expect(normalizeWorkbenchLayout("grid")).toBe("side");
+  });
+});
+
+describe("creative workbench history refill", () => {
+  const imageJob: GenerationJob = {
+    id: "hist-1", kind: "image", status: "succeeded", prompt: "  一只纸雕老虎  ",
+    providerId: "channel-b", model: "gpt-image-1",
+    parameters: {
+      size: "1536x1024", quality: "high", count: 3, transparentBackground: true,
+      category: " 海报 ", referenceStorageKeys: ["image:ref-a", "image:ref-b"],
+    },
+    result: {}, createdAt: "2026-07-25T00:00:00.000Z", updatedAt: "2026-07-25T00:00:00.000Z",
+  };
+
+  const currentForm = {
+    prompt: "草稿", model: "current-model", providerId: "channel-a",
+    size: "1024x1024", quality: "auto", count: 1, transparentBackground: false,
+    category: "", referenceStorageKeys: [] as string[],
+  };
+
+  test("restores every field the record saved", () => {
+    // Upstream lists refill separately from retry: retry re-runs the record
+    // as-is, refill puts it back in the form so it can be tweaked first.
+    expect(workbenchRefillForm(imageJob, currentForm)).toEqual({
+      prompt: "一只纸雕老虎",
+      model: "gpt-image-1",
+      providerId: "channel-b",
+      size: "1536x1024",
+      quality: "high",
+      count: 3,
+      transparentBackground: true,
+      category: "海报",
+      referenceStorageKeys: ["image:ref-a", "image:ref-b"],
+    });
+  });
+
+  test("keeps the current form value where the record has nothing usable", () => {
+    const sparse: GenerationJob = {
+      ...imageJob, prompt: "   ", model: "", providerId: "", parameters: {},
+    };
+    expect(workbenchRefillForm(sparse, currentForm)).toEqual(currentForm);
+  });
+
+  test("rejects out-of-range and malformed record values", () => {
+    const hostile: GenerationJob = {
+      ...imageJob,
+      parameters: {
+        size: 42, quality: null, count: 99, transparentBackground: "yes",
+        category: "x".repeat(101), referenceStorageKeys: ["ok", "", 7],
+      },
+    };
+    const refilled = workbenchRefillForm(hostile, currentForm);
+    expect(refilled.size).toBe(currentForm.size);
+    expect(refilled.quality).toBe(currentForm.quality);
+    expect(refilled.count).toBe(8);
+    expect(refilled.transparentBackground).toBe(false);
+    expect(refilled.category).toBe("未分类");
+    expect(refilled.referenceStorageKeys).toEqual(["ok"]);
+  });
+
+  test("never mutates the record or the current form", () => {
+    const jobSnapshot = JSON.stringify(imageJob);
+    const formSnapshot = JSON.stringify(currentForm);
+    const refilled = workbenchRefillForm(imageJob, currentForm);
+    refilled.referenceStorageKeys.push("mutated");
+    expect(JSON.stringify(imageJob)).toBe(jobSnapshot);
+    expect(JSON.stringify(currentForm)).toBe(formSnapshot);
+  });
+});
+
+describe("creative workbench refill references", () => {
+  const assets: AssetItem[] = [
+    { id: "a1", kind: "image", title: "A", tags: [], storageKey: "image:ref-a", createdAt: "x", updatedAt: "x" },
+    { id: "a2", kind: "image", title: "B", tags: [], storageKey: "image:ref-b", createdAt: "x", updatedAt: "x" },
+    { id: "a3", kind: "text", title: "C", tags: [], storageKey: "text:ref-c", createdAt: "x", updatedAt: "x" },
+  ];
+
+  test("maps recorded reference keys back to selectable library assets", () => {
+    expect(workbenchRefillAssetIds(["image:ref-b", "image:ref-a"], assets))
+      .toEqual({ assetIds: ["a2", "a1"], unresolved: 0 });
+  });
+
+  test("reports one-off uploads that no library asset can restore", () => {
+    // A reference uploaded straight from disk has no asset behind it, so the
+    // form cannot re-select it. Say so instead of dropping it silently.
+    expect(workbenchRefillAssetIds(["image:ref-a", "image:gone"], assets))
+      .toEqual({ assetIds: ["a1"], unresolved: 1 });
+    expect(workbenchRefillAssetIds([], assets)).toEqual({ assetIds: [], unresolved: 0 });
+  });
+
+  test("ignores assets that are not reusable images", () => {
+    expect(workbenchRefillAssetIds(["text:ref-c"], assets)).toEqual({ assetIds: [], unresolved: 1 });
   });
 });

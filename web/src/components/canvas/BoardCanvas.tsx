@@ -63,6 +63,7 @@ export function BoardCanvas() {
   const showMinimap = useBoardStore((s) => s.showMinimap);
   const panelCollapsed = useBoardStore((s) => s.config.canvasPanelCollapsed === true);
   const setViewport = useBoardStore((s) => s.setViewport);
+  const commitViewportRun = useBoardStore((s) => s.commitViewportRun);
   const setSelected = useBoardStore((s) => s.setSelected);
   const toggleSelect = useBoardStore((s) => s.toggleSelect);
   const resizeNode = useBoardStore((s) => s.resizeNode);
@@ -140,7 +141,9 @@ export function BoardCanvas() {
         viewportFrameRef.current = null;
         const pending = pendingViewportRef.current;
         pendingViewportRef.current = null;
-        if (pending) setViewport({ ...pending }, false);
+        // No explicit history flag: the store coalesces the frames of one
+        // gesture into a single undo step and `commitViewportRun` closes it.
+        if (pending) setViewport({ ...pending });
       });
     },
     [setViewport],
@@ -239,7 +242,10 @@ export function BoardCanvas() {
     releaseCanvasPointer(pointerId);
     setGroupHoverId(null);
     setDrag(null);
-  }, [releaseCanvasPointer]);
+    // A pan or pinch is over, so the next viewport write starts a new undo step
+    // instead of merging into the gesture that just finished.
+    commitViewportRun();
+  }, [commitViewportRun, releaseCanvasPointer]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -376,14 +382,11 @@ export function BoardCanvas() {
     const oldK = project.viewport.k;
     const nextK = clamp(oldK * (e.deltaY > 0 ? 0.9 : 1.1), 0.15, 3);
     const world = screenToWorld(p, project.viewport);
-    setViewport(
-      {
-        k: nextK,
-        x: p.x - world.x * nextK,
-        y: p.y - world.y * nextK,
-      },
-      false,
-    );
+    setViewport({
+      k: nextK,
+      x: p.x - world.x * nextK,
+      y: p.y - world.y * nextK,
+    });
   };
 
 
@@ -757,6 +760,9 @@ export function BoardCanvas() {
         onFitView={() => {
           const vp = fitViewport(project.nodes, size.w, size.h);
           setViewport(vp);
+          // A discrete jump is one undo step on its own, unlike a pan or zoom
+          // gesture whose frames merge together.
+          commitViewportRun();
         }}
       />
       <div
@@ -853,6 +859,7 @@ export function BoardCanvas() {
         </svg>
 
         <div
+          data-canvas-world
           className="absolute left-0 top-0 origin-top-left"
           style={{
             transform: `translate(${project.viewport.x}px, ${project.viewport.y}px) scale(${project.viewport.k})`,
@@ -952,7 +959,10 @@ export function BoardCanvas() {
               y: center.y - world.y * k,
             });
           }}
-          onReset={() => setViewport({ x: size.w / 2, y: size.h / 2, k: 1 })}
+          onReset={() => {
+            setViewport({ x: size.w / 2, y: size.h / 2, k: 1 });
+            commitViewportRun();
+          }}
         />
 
         {menu ? (
@@ -1020,6 +1030,7 @@ export function BoardCanvas() {
               if (!project) return;
               const vp = fitViewport(project.nodes, size.w, size.h);
               setViewport(vp);
+              commitViewportRun();
             }}
             onAlign={(mode) => alignSelected(mode)}
             onDistribute={(axis) => distributeSelected(axis)}
@@ -1048,7 +1059,10 @@ export function BoardCanvas() {
             viewport={project.viewport}
             width={size.w}
             height={size.h}
-            onJump={(viewport) => setViewport(viewport)}
+            onJump={(viewport) => {
+              setViewport(viewport);
+              commitViewportRun();
+            }}
             className={selectedIds.length
               ? "absolute right-3 top-3 z-10 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:right-4 sm:top-4 sm:rounded-lg"
               : "absolute bottom-3 right-3 z-10 overflow-hidden rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_92%,transparent)] shadow-[var(--ob-shadow)] sm:bottom-4 sm:right-4 sm:rounded-lg"}

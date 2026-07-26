@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, RefreshCw, Square, Trash2 } from "lucide-react";
+import { CornerUpLeft, Download, RefreshCw, Square, Trash2 } from "lucide-react";
 import type { GenerationJob } from "@/types/board";
 import { downloadStorageKey, getBlob } from "@/services/storage";
 import {
@@ -23,10 +23,11 @@ function resultItems(job: GenerationJob): WorkbenchResultItem[] {
     : [];
 }
 
-export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, onRetry, onInsert, onDelete, onCancel }: {
+export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, onRefill, onRetry, onInsert, onDelete, onCancel }: {
   job: GenerationJob;
   selected?: boolean;
   onSelectedChange?: (selected: boolean) => void;
+  onRefill: () => void;
   onRetry: () => void;
   onInsert: (item: WorkbenchResultItem) => Promise<void>;
   onDelete: () => Promise<void>;
@@ -74,6 +75,15 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
           </button>
         ) : (
           <>
+            <button
+              type="button"
+              className="ob-icon-btn h-8 w-8"
+              title="回填设置到表单"
+              aria-label="回填设置到表单"
+              onClick={onRefill}
+            >
+              <CornerUpLeft size={16} />
+            </button>
             <button type="button" className="ob-icon-btn h-8 w-8" title="重试" onClick={onRetry}>
               <RefreshCw size={16} />
             </button>

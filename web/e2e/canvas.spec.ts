@@ -4904,3 +4904,108 @@ test("global generation defaults are editable and seed new nodes", async ({ page
   await expect(page.getByRole("dialog", { name: "设置" }).getByLabel("默认视频比例"))
     .toHaveValue("9:16");
 });
+
+test("a camera gesture is one undo step and leaves canvas content alone", async ({ page }) => {
+  await openFreshBoard(page);
+  await importSingleImageProject(page, "camera-undo");
+  const node = page.locator('[data-node-type="image"]');
+  await expect(node).toHaveCount(1);
+
+  const readCamera = () => page.locator('[data-testid="canvas-surface"]').evaluate((surface) => {
+    const world = surface.querySelector("[data-canvas-world]") as HTMLElement | null;
+    return world?.style.transform ?? "";
+  });
+
+  const before = await readCamera();
+  // One continuous wheel gesture: four notches, one undo step. The notches are
+  // dispatched in a single synchronous burst so no unrelated store write can
+  // land between them — an interleaved edit legitimately ends the run and
+  // would split the gesture into two steps.
+  await page.getByTestId("canvas-surface").evaluate((surface) => {
+    const rect = surface.getBoundingClientRect();
+    for (let i = 0; i < 4; i += 1) {
+      surface.dispatchEvent(new WheelEvent("wheel", {
+        deltaY: -120,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+  });
+  await expect.poll(readCamera).not.toBe(before);
+  const zoomed = await readCamera();
+
+  const toolbar = page.getByRole("toolbar", { name: "画布工具栏" });
+  await toolbar.getByRole("button", { name: "撤销" }).click();
+  await expect.poll(readCamera).toBe(before);
+  // Undoing the camera must not remove canvas content.
+  await expect(node).toHaveCount(1);
+
+  await toolbar.getByRole("button", { name: "重做" }).click();
+  await expect.poll(readCamera).toBe(zoomed);
+  await expect(node).toHaveCount(1);
+});
+
+test("workbench history refills the form without generating", async ({ page }) => {
+  await openFreshBoard(page);
+
+  // Seed a finished record straight into the history store. Generating one for
+  // real would need a provider, and the point here is the refill path.
+  const timestamp = "2026-07-27T00:00:00.000Z";
+  await page.evaluate(async (createdAt) => {
+    const read = <T,>(database: string, store: string, key: IDBValidKey) => new Promise<T>((resolve, reject) => {
+      const request = indexedDB.open(database);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const transaction = request.result.transaction(store, "readonly");
+        const get = transaction.objectStore(store).get(key);
+        get.onerror = () => reject(get.error);
+        get.onsuccess = () => resolve(get.result as T);
+      };
+    });
+    const write = (database: string, store: string, values: Array<[IDBValidKey, unknown]>) =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open(database);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const transaction = request.result.transaction(store, "readwrite");
+          transaction.onerror = () => reject(transaction.error);
+          transaction.oncomplete = () => resolve();
+          for (const [key, value] of values) transaction.objectStore(store).put(value, key);
+        };
+      });
+    const projects = await read<Array<{ id: string }>>("openboard-app", "app_state", "openboard:projects");
+    const job = {
+      id: "refill_probe_job", projectId: projects[0]!.id, kind: "image", status: "succeeded",
+      prompt: "回填探针提示词", providerId: "", model: "probe-image-model",
+      parameters: { size: "1536x1024", quality: "high", count: 3, category: "探针" },
+      result: { items: [] }, createdAt, updatedAt: createdAt,
+    };
+    await write("openboard-generation-jobs", "jobs", [[job.id, job]]);
+  }, timestamp);
+
+  await page.goto("/workbench/image");
+  const prompt = page.getByPlaceholder("描述想生成的图片…");
+  await expect(prompt).toBeVisible();
+
+  // The record must actually be listed, otherwise this test proves nothing.
+  const refill = page.getByRole("button", { name: "回填设置到表单" });
+  await expect(refill).toHaveCount(1);
+
+  // Move the form away from the record so a successful refill is unambiguous.
+  await prompt.fill("另一个草稿");
+  await page.getByLabel("尺寸").fill("1024x1024");
+  await page.getByLabel("质量").fill("auto");
+  await page.getByLabel("数量").fill("1");
+
+  await refill.click();
+  await expect(prompt).toHaveValue("回填探针提示词");
+  await expect(page.getByLabel("尺寸")).toHaveValue("1536x1024");
+  await expect(page.getByLabel("质量")).toHaveValue("high");
+  await expect(page.getByLabel("数量")).toHaveValue("3");
+  await expect(page.getByLabel("模型")).toHaveValue("probe-image-model");
+
+  // Refilling must not start a generation: the record count stays put.
+  await expect(refill).toHaveCount(1);
+});
