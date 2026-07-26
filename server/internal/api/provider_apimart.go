@@ -162,15 +162,41 @@ func validateAPIMartPublicURL(rawURL string) error {
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
 		return errors.New("invalid APIMart public reference URL")
 	}
-	// These URLs are forwarded to APIMart, which fetches them server-side, so a
-	// literal internal address would turn the provider into an SSRF proxy for
-	// this deployment's network. Reject non-public literal IP hosts.
-	if address, parseErr := netip.ParseAddr(parsed.Hostname()); parseErr == nil {
-		if isUnsafeGenerationAddress(address.Unmap()) {
-			return errors.New("APIMart public reference URL must not target an internal address")
-		}
+	// These URLs are forwarded to APIMart, which fetches them from its own
+	// network. An internal literal therefore reaches APIMart's infrastructure
+	// rather than ours, but sending one is still meaningless and abuses the
+	// partner, so reject hosts that cannot be a public reference.
+	if !isPublicAPIMartReferenceHost(parsed.Hostname()) {
+		return errors.New("APIMart public reference URL must not target an internal address")
 	}
 	return nil
+}
+
+// isPublicAPIMartReferenceHost rejects loopback names and every non-public IP
+// literal, including non-canonical spellings such as octal (0177.0.0.1),
+// decimal (2130706433) and hex (0x7f.1) forms that netip.ParseAddr refuses and
+// would otherwise be treated as ordinary hostnames.
+func isPublicAPIMartReferenceHost(host string) bool {
+	if host == "" || isExplicitLoopbackHost(host) {
+		return false
+	}
+	if address, err := netip.ParseAddr(host); err == nil {
+		return !isUnsafeGenerationAddress(address.Unmap())
+	}
+	// A public DNS name always contains a non-digit label separator character
+	// beyond digits and dots. Anything built only from digits and dots is an
+	// IP literal spelling that netip rejected, so treat it as unsafe.
+	if strings.Trim(host, "0123456789.") == "" {
+		return false
+	}
+	// Reject hex/octal-style literals such as 0x7f.0.0.1 and 0177.0.0.1.
+	for _, label := range strings.Split(host, ".") {
+		lowered := strings.ToLower(label)
+		if strings.HasPrefix(lowered, "0x") || (len(lowered) > 1 && lowered[0] == '0' && strings.Trim(lowered, "01234567") == "") {
+			return false
+		}
+	}
+	return true
 }
 
 func apimartJSONRequest(ctx context.Context, client *http.Client, baseURL, apiKey, method, suffix string, body any) (map[string]any, error) {

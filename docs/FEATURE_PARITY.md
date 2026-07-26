@@ -120,7 +120,7 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 483 Bun unit/integration tests at the 2026-07-26 verification baseline, with 81.88% line and 85.96% function coverage
+- [verified] 486 Bun unit/integration tests at the 2026-07-26 verification baseline, with 81.94% line and 86.00% function coverage
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)

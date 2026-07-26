@@ -205,7 +205,7 @@
 每个 Phase 都必须满足：
 
 - [x] TDD：先 RED，再最小 GREEN，最后重构。
-- [x] 单元、集成、关键 E2E 齐全；Bun 覆盖率 81.88% lines / 85.96% functions。
+- [x] 单元、集成、关键 E2E 齐全；Bun 覆盖率 81.94% lines / 86.00% functions。
 - [x] 所有外部输入使用 schema/边界校验；URL 禁止凭据、危险重定向和非受控内网访问。
 - [x] provider 响应设置大小、MIME、解码和超时限制。
 - [x] API Key、S3 secret、JWT、OAuth secret 不进入客户端、日志、错误和导出包。
@@ -216,7 +216,7 @@
 ### 2026-07-26 验收证据
 
 - 上游基准复核：`git ls-remote` 仍为 Tiger `main@64cb00a6da99a50017abcb2e443166a13364c6c1`、tag `v0.4.4@0bb25f0`。
-- Web：483 项 Bun 单元/集成测试通过；coverage 81.88% lines / 85.96% functions；根目录 typecheck 与 production build 通过。
+- Web：486 项 Bun 单元/集成测试通过；coverage 81.94% lines / 86.00% functions；根目录 typecheck 与 production build 通过。
 - Go：`go test ./...`、`go test -race ./...`、`go vet ./...`、server/MCP 两个 binary build 通过；真实 PostgreSQL 退款回滚/并发 exactly-once 测试通过。
 - 浏览器：production Chromium 在 production Vite build 与隔离 Go 数据目录下完整顺序复跑 99/99 通过；Tiger HEAD 关键映射、管理端、Kling、图片工具、共享渠道和存储池均包含在该套件。
 - Formal：本机 PostgreSQL/Redis 隔离 run、Redis DB 14 与临时媒体目录下 7/7 通过，测试数据库名与 Redis DB 残留检查通过。
@@ -266,7 +266,15 @@
 - `allowSecrets` 由客户端角色推导（本轮引入）：新增服务端 `GET /api/migration/capabilities`，前端只采用服务端
   声明值（客户端提示只能收窄不能放宽），写入端点继续独立强制授权。
 
-复审后证据：Bun 483/483（coverage 81.88% lines / 85.96% functions）、typecheck、production build、
+第三轮复审（approve-with-nits）又修复两项：
+
+- 迁移能力接口把「不可达」误当「拒绝」：网络抖动或 5xx 会让前端以为服务端禁止迁移密钥，于是不带密钥迁移并在
+  之后清空存放密钥的本地库，造成唯一副本被销毁。现在只有 401/403 视为拒绝，其余一律抛
+  `MigrationCapabilitiesUnavailableError` 并在任何清理动作前中止迁移。
+- `validateAPIMartPublicURL` 的非规范写法绕过：`localhost` 与八进制/十进制/十六进制 IP 字面量此前仍能通过。
+  现已一并拒绝，并修正注释——这些 URL 由 APIMart 在其自身网络抓取，因此该校验保护的是伙伴方而非本部署边界。
+
+复审后证据：Bun 486/486（coverage 81.94% lines / 86.00% functions）、typecheck、production build、
 `go test ./...`、`go test -race ./...`、`go vet ./...` 全绿；production Chromium 99/99 通过；
 formal PostgreSQL/Redis 7/7 通过；clean-room 扫描与 OSV 226 包审计通过。
 

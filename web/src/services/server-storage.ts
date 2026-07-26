@@ -70,19 +70,38 @@ function migrationHeaders(contentType: string, expectedVersion: string | null): 
     : { "Content-Type": contentType, "If-Match": `"${expectedVersion}"` };
 }
 
+export class MigrationCapabilitiesUnavailableError extends Error {
+  constructor() {
+    super("无法确认服务端迁移权限，已保留本地数据。请稍后重试。");
+    this.name = "MigrationCapabilitiesUnavailableError";
+  }
+}
+
 /**
  * Server-declared migration capabilities. Secret migration rights must come
- * from the server, never from a client-side role copy. Write endpoints enforce
- * the same rule independently, so a failure here is treated as "not allowed".
+ * from the server, never from a client-side role copy; write endpoints enforce
+ * the same rule independently.
+ *
+ * A denial ("server says no") and an unreachable server ("could not ask") must
+ * stay distinguishable. Treating a transient network failure as a denial would
+ * migrate without secrets and then clear the local stores that hold them,
+ * destroying the only copy.
  */
 export async function loadMigrationCapabilities(): Promise<{ allowSecrets: boolean }> {
+  let response: Response;
   try {
-    const response = await request("migration/capabilities");
-    if (!response.ok) return { allowSecrets: false };
+    response = await request("migration/capabilities");
+  } catch {
+    throw new MigrationCapabilitiesUnavailableError();
+  }
+  // 401/403 are authoritative denials; anything else means we could not ask.
+  if (response.status === 401 || response.status === 403) return { allowSecrets: false };
+  if (!response.ok) throw new MigrationCapabilitiesUnavailableError();
+  try {
     const payload = (await response.json()) as { allowSecrets?: unknown };
     return { allowSecrets: payload?.allowSecrets === true };
   } catch {
-    return { allowSecrets: false };
+    throw new MigrationCapabilitiesUnavailableError();
   }
 }
 

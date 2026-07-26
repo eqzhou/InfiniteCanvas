@@ -559,9 +559,23 @@ func TestAPIMartProtocolParsingHelpers(t *testing.T) {
 		"https://169.254.169.254/latest/meta-data",
 		"https://[::1]/image.png",
 		"https://100.64.0.1/image.png",
+		"https://localhost/image.png",
+		"https://LOCALHOST/image.png",
+		"https://0177.0.0.1/image.png",
+		"https://2130706433/image.png",
+		"https://0x7f.1/image.png",
 	} {
 		if err := validateAPIMartPublicURL(rawURL); err == nil {
 			t.Fatalf("internal reference URL accepted: %s", rawURL)
+		}
+	}
+	for _, rawURL := range []string{
+		"https://cdn.example/image.png",
+		"https://cdn-1.example.com/a/b.png?sig=read",
+		"https://8.8.8.8/image.png",
+	} {
+		if err := validateAPIMartPublicURL(rawURL); err != nil {
+			t.Fatalf("public reference URL rejected: %s (%v)", rawURL, err)
 		}
 	}
 }

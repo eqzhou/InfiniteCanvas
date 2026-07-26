@@ -140,3 +140,40 @@ describe("migration compare-and-swap transport", () => {
       .rejects.toBeInstanceOf(MigrationPreconditionError);
   });
 });
+
+describe("migration capability declaration", () => {
+  test("uses the server answer when the server actually answers", async () => {
+    for (const allowSecrets of [true, false]) {
+      globalThis.fetch = mock(async () => new Response(JSON.stringify({ allowSecrets }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+      const { loadMigrationCapabilities } = await import("./server-storage");
+      expect(await loadMigrationCapabilities()).toEqual({ allowSecrets });
+    }
+  });
+
+  test("treats an explicit rejection as a denial", async () => {
+    for (const status of [401, 403]) {
+      globalThis.fetch = mock(async () => new Response(null, { status })) as typeof fetch;
+      const { loadMigrationCapabilities } = await import("./server-storage");
+      expect(await loadMigrationCapabilities()).toEqual({ allowSecrets: false });
+    }
+  });
+
+  test("never downgrades an unreachable server to a silent denial", async () => {
+    // A denial migrates without secrets and then clears the local stores that
+    // hold them. Treating a transient failure as a denial would destroy the
+    // only copy, so these cases must abort the migration instead.
+    const { MigrationCapabilitiesUnavailableError, loadMigrationCapabilities } = await import("./server-storage");
+
+    globalThis.fetch = mock(async () => { throw new TypeError("network down"); }) as typeof fetch;
+    await expect(loadMigrationCapabilities()).rejects.toBeInstanceOf(MigrationCapabilitiesUnavailableError);
+
+    globalThis.fetch = mock(async () => new Response(null, { status: 503 })) as typeof fetch;
+    await expect(loadMigrationCapabilities()).rejects.toBeInstanceOf(MigrationCapabilitiesUnavailableError);
+
+    globalThis.fetch = mock(async () => new Response("not json", { status: 200 })) as typeof fetch;
+    await expect(loadMigrationCapabilities()).rejects.toBeInstanceOf(MigrationCapabilitiesUnavailableError);
+  });
+});
