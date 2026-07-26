@@ -108,14 +108,14 @@
 
 验收：四角均可缩放且不破坏分组与撤销（E2E 已覆盖锚定不动）；上述入口均可键盘访问。
 
+## 4. 横向质量门禁
+
+每个 Phase 均需满足：先 RED 后 GREEN 的 TDD；单元/集成/E2E 齐全；所有外部输入 schema 校验；密钥不进客户端、日志与导出；不可变更新；通过 Bun test/typecheck/build、Go race/vet、Playwright、formal E2E、clean-room、OSV 与 SBOM 审计。
+
 ## 5. 实施后验证证据（2026-07-26）
 
 - Web：504 项 Bun 单元/集成测试通过；根目录 typecheck 与 production build 通过。
 - Go：`go test ./...`、`go vet ./...` 通过。
 - 浏览器：production Chromium 101/101 通过，含四角缩放与节点信息两个新场景。
 - Formal：本机 PostgreSQL/Redis 隔离 run 7/7 通过。
-- 供应链：clean-room 标识扫描通过。
-
-## 4. 横向质量门禁
-
-每个 Phase 均需满足：先 RED 后 GREEN 的 TDD；单元/集成/E2E 齐全；所有外部输入 schema 校验；密钥不进客户端、日志与导出；不可变更新；通过 Bun test/typecheck/build、Go race/vet、Playwright、formal E2E、clean-room、OSV 与 SBOM 审计。
+- 供应链：clean-room 标识扫描与 OSV 226 包审计通过。
