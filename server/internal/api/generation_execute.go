@@ -152,6 +152,11 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid image generation job", http.StatusBadRequest)
 		return
 	}
+	// The tenant model allow list is a governance rule, so it must hold here
+	// and not only in the picker the client renders.
+	if !s.requireAllowedModel(w, r, input.Model) {
+		return
+	}
 	input.Parameters.Category = strings.TrimSpace(input.Parameters.Category)
 
 	tenantID := tenantIDFrom(r)

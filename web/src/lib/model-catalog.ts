@@ -123,3 +123,26 @@ export function resolveDefaultModel(
   if (generic && selectable.includes(generic)) return generic;
   return selectable[0]!;
 }
+
+/**
+ * Reconciles the model stored on a channel provider with the tenant catalog.
+ *
+ * An explicit, still-selectable choice always wins: governance narrows what may
+ * be picked, it does not override a valid pick. An unset model is seeded from
+ * the tenant default, and a model no enabled channel offers any more is
+ * replaced rather than left to fail at request time. When nothing is selectable
+ * yet — the usual state before models are pulled — the value is returned
+ * untouched so a hand-typed model is never discarded.
+ */
+export function reconcileProviderModel(
+  catalog: ModelCatalog | null | undefined,
+  kind: ModelCatalogKind,
+  currentModel: string | undefined,
+  selectableModels: readonly string[],
+): string {
+  const current = cleanModel(currentModel);
+  const selectable = cleanModelList(selectableModels);
+  if (!selectable.length) return current;
+  if (current && selectable.includes(current)) return current;
+  return resolveDefaultModel(catalog, kind, selectable);
+}

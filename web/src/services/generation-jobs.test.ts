@@ -4,6 +4,7 @@ import {
   collectGenerationStorageKeysFromJobs,
   findInterruptedGenerationJobs,
   findUnreferencedGenerationStorageKeys,
+  generationRequestError,
   paginateGenerationJobs,
   selectGenerationJobsForNodeCleanup,
   selectGenerationJobsForProject,
@@ -25,6 +26,22 @@ const job = (id: string, createdAt: string, kind: "image" | "video" | "audio" = 
 });
 
 describe("generation job pagination", () => {
+  test("surfaces the server's refusal reason instead of a bare status", () => {
+    // A tenant allow-list refusal explains what to change; collapsing it to
+    // "HTTP 403" leaves the user with no idea why generation was blocked.
+    expect(generationRequestError(403, "model is not in the tenant allow list").message)
+      .toContain("model is not in the tenant allow list");
+    expect(generationRequestError(403, "cloud channel generation disabled by admin").message)
+      .toContain("cloud channel generation disabled by admin");
+  });
+
+  test("falls back to the status when the body carries no usable reason", () => {
+    expect(generationRequestError(500, "").message).toContain("500");
+    // An HTML error page or an oversized body is not a reason worth showing.
+    expect(generationRequestError(502, "<!doctype html><html>...</html>").message).toContain("502");
+    expect(generationRequestError(503, "x".repeat(1000)).message.length).toBeLessThan(400);
+  });
+
   test("filters, sorts newest first, paginates, and leaves input immutable", () => {
     const input = [
       job("old", "2026-07-01T00:00:00Z"),

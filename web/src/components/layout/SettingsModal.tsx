@@ -17,7 +17,7 @@ import type { AiProviderKind } from "@/types/board";
 import type { AiTemplateConfig } from "@/types/board";
 import { validateProviderTemplate } from "@/lib/provider-template";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
-import { resolveSelectableModels } from "@/lib/model-catalog";
+import { reconcileProviderModel, resolveSelectableModels } from "@/lib/model-catalog";
 import { createDefaultObjectStorage, normalizeObjectStorage, validateObjectStorageConfig } from "@/lib/object-storage";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
@@ -149,7 +149,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     try {
       const list = await listModels(channel, kind);
       setModels((current) => ({ ...current, [kind]: list }));
-      if (!list.length) setError("未拉取到模型（该服务可能不支持模型列表，请手动填写）");
+      if (!list.length) {
+        setError("未拉取到模型（该服务可能不支持模型列表，请手动填写）");
+        return;
+      }
+      // Now that the channel has told us what it serves, apply the tenant
+      // catalog: seed an unset model from the admin default and replace one the
+      // channel no longer offers, so the field cannot keep a model that is
+      // certain to fail at request time.
+      const selectable = resolveSelectableModels(sitePolicy, list);
+      const current = getProvider(channel, kind).model;
+      const reconciled = reconcileProviderModel(sitePolicy, kind, current, selectable);
+      if (reconciled !== current) updateProvider(kind, { model: reconciled });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

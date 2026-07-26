@@ -190,6 +190,11 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid video generation job", http.StatusBadRequest)
 		return
 	}
+	// The tenant model allow list is a governance rule, so it must hold here
+	// and not only in the picker the client renders.
+	if !s.requireAllowedModel(w, r, input.Model) {
+		return
+	}
 	hash, err := hashGenerationInput(input)
 	if err != nil {
 		http.Error(w, "invalid video generation job", http.StatusBadRequest)
@@ -243,6 +248,9 @@ func (s *Server) createServerAudioJob(w http.ResponseWriter, r *http.Request) {
 	var input createAudioJobRequest
 	if !decodeStrictGenerationInput(w, r, &input) || !validCreateAudioJob(input) {
 		http.Error(w, "invalid audio generation job", http.StatusBadRequest)
+		return
+	}
+	if !s.requireAllowedModel(w, r, input.Model) {
 		return
 	}
 	hash, err := hashGenerationInput(input)

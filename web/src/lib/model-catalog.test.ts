@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   MODEL_CATALOG_LIMITS,
   normalizeModelCatalog,
+  reconcileProviderModel,
   resolveDefaultModel,
   resolveSelectableModels,
 } from "./model-catalog";
@@ -59,6 +60,34 @@ describe("tenant model catalog", () => {
 
   test("returns an empty default rather than inventing a model", () => {
     expect(resolveDefaultModel({}, "image", [])).toBe("");
+  });
+
+  test("keeps an explicitly chosen model that is still selectable", () => {
+    // The user's own pick outranks the tenant default while it remains valid.
+    expect(reconcileProviderModel({ defaultImageModel: "seedream-4" }, "image", "gpt-image-2",
+      ["gpt-image-2", "seedream-4"])).toBe("gpt-image-2");
+  });
+
+  test("seeds an unset model from the tenant default", () => {
+    expect(reconcileProviderModel({ defaultImageModel: "seedream-4" }, "image", "",
+      ["gpt-image-2", "seedream-4"])).toBe("seedream-4");
+    expect(reconcileProviderModel({ defaultImageModel: "seedream-4" }, "image", "   ",
+      ["gpt-image-2", "seedream-4"])).toBe("seedream-4");
+  });
+
+  test("replaces a model the channel no longer offers", () => {
+    // A retired model must not linger and fail at request time.
+    expect(reconcileProviderModel({ defaultImageModel: "seedream-4" }, "image", "retired",
+      ["gpt-image-2", "seedream-4"])).toBe("seedream-4");
+    // With no configured default the kind keyword decides.
+    expect(reconcileProviderModel({}, "video", "retired", ["chat-pro", "seedance-2.0"]))
+      .toBe("seedance-2.0");
+  });
+
+  test("leaves the model untouched when nothing is selectable yet", () => {
+    // Before models are pulled the list is empty; clearing the field then would
+    // discard a hand-typed model the picker simply cannot confirm.
+    expect(reconcileProviderModel({}, "image", "hand-typed", [])).toBe("hand-typed");
   });
 
   test("normalizes hostile persisted catalogs", () => {

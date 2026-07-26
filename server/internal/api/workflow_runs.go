@@ -41,6 +41,13 @@ func (s *Server) createServerWorkflowJob(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid workflow template snapshot", http.StatusBadRequest)
 		return
 	}
+	// Each step carries its own model, so a run is a second way to reach a
+	// provider with a model the tenant allow list forbids.
+	for _, step := range template.Steps {
+		if !s.requireAllowedModel(w, r, step.Model) {
+			return
+		}
+	}
 	values, err := normalizeWorkflowValues(template, input.Values)
 	if err != nil {
 		http.Error(w, "invalid workflow values", http.StatusBadRequest)

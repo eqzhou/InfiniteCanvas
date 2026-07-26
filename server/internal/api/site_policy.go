@@ -221,3 +221,46 @@ func sitePolicyTenantForRegister(r *http.Request) string {
 // ensure register path can cite a stable forbidden message
 const registrationDisabledMessage = "registration disabled by admin"
 const cloudChannelDisabledMessage = "cloud channel generation disabled by admin"
+const modelNotAllowedMessage = "model is not in the tenant allow list"
+
+// modelAllowedByPolicy reports whether a requested model may be generated with.
+// An empty allow list means "no restriction", so a tenant that never configured
+// a catalog is never stranded. The check is deliberately tenant-wide rather
+// than user-role dependent: the catalog is the governance boundary, and a
+// client-side picker alone can be bypassed by posting the job directly.
+func (s *Server) modelAllowedByPolicy(ctx context.Context, tenantID, model string) (bool, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		// No explicit model means the channel default applies, which the admin
+		// configured; there is nothing the user chose to police here.
+		return true, nil
+	}
+	policy, err := s.loadSitePolicy(ctx, tenantID)
+	if err != nil {
+		return false, err
+	}
+	if len(policy.AvailableModels) == 0 {
+		return true, nil
+	}
+	for _, allowed := range policy.AvailableModels {
+		if allowed == model {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// requireAllowedModel writes the refusal itself so every generation entry point
+// enforces the catalog identically.
+func (s *Server) requireAllowedModel(w http.ResponseWriter, r *http.Request, model string) bool {
+	allowed, err := s.modelAllowedByPolicy(r.Context(), tenantIDFrom(r), model)
+	if err != nil {
+		http.Error(w, "failed to load site policy", http.StatusInternalServerError)
+		return false
+	}
+	if !allowed {
+		http.Error(w, modelNotAllowedMessage, http.StatusForbidden)
+		return false
+	}
+	return true
+}

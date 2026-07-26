@@ -149,9 +149,33 @@ export function validateGenerationJob(job: GenerationJob): GenerationJob {
   return validated.kind === "workflow" ? validateWorkflowGenerationJob(validated) : validated;
 }
 
+/** Longest server reason worth showing; anything longer is not a message. */
+const MAX_SERVER_REASON_LENGTH = 300;
+
+/**
+ * Builds the error for a failed generation request. Server refusals such as a
+ * disabled cloud channel or a model outside the tenant allow list explain what
+ * the user must change, so the reason is preserved rather than collapsed into a
+ * bare status code. An HTML error page or an oversized body is not a usable
+ * reason and falls back to the status.
+ */
+export function generationRequestError(status: number, body: string): Error {
+  const reason = body.trim();
+  const usable = reason.length > 0 &&
+    reason.length <= MAX_SERVER_REASON_LENGTH &&
+    !reason.startsWith("<");
+  return new Error(usable
+    ? `Generation request failed: ${reason}`
+    : `Generation history failed: HTTP ${status}`);
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await authFetch(path, init);
-  if (!response.ok) throw new Error(`Generation history failed: HTTP ${response.status}`);
+  if (!response.ok) {
+    // Reading the body must never mask the original failure.
+    const body = await response.text().catch(() => "");
+    throw generationRequestError(response.status, body);
+  }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
