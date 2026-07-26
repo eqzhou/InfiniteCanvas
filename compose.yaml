@@ -53,6 +53,11 @@ services:
       # Require an explicit token even for local production-like deployments;
       # this prevents an accidental non-loopback bind from exposing the API.
       OPENBOARD_TOKEN: "${OPENBOARD_TOKEN:?Set OPENBOARD_TOKEN in .env}"
+      OPENBOARD_AUTH_MODE: "${OPENBOARD_AUTH_MODE:-optional}"
+      OPENBOARD_PUBLIC_BASE_URL: "${OPENBOARD_PUBLIC_BASE_URL:-}"
+      OPENBOARD_LINUXDO_CLIENT_ID: "${OPENBOARD_LINUXDO_CLIENT_ID:-}"
+      OPENBOARD_LINUXDO_CLIENT_SECRET: "${OPENBOARD_LINUXDO_CLIENT_SECRET:-}"
+      OPENBOARD_LINUXDO_REDIRECT_URL: "${OPENBOARD_LINUXDO_REDIRECT_URL:-}"
       OPENBOARD_DATABASE_URL: "postgres://openboard_local:${OPENBOARD_POSTGRES_PASSWORD}@postgres:5432/openboard_local?sslmode=disable"
       OPENBOARD_REDIS_URL: "redis://:${OPENBOARD_REDIS_PASSWORD}@redis:6379/0"
       OPENBOARD_MASTER_KEY: "${OPENBOARD_MASTER_KEY:?Set OPENBOARD_MASTER_KEY in .env}"

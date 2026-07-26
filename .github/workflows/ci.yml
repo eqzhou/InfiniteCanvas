@@ -73,6 +73,7 @@ jobs:
       - run: bun install --cwd web --frozen-lockfile
       - run: node scripts/audit-licenses.mjs
       - run: bun run audit:vulnerabilities
+      - run: bun run audit:deployment-env
       - uses: actions/upload-artifact@v7
         with:
           name: openboard-sbom
