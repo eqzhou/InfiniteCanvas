@@ -16,6 +16,7 @@ import {
   type AdminPromptCatalog,
   type AdminPromptSource,
 } from "@/services/admin";
+import { COMMUNITY_PROMPT_SOURCE_PRESETS } from "@/services/prompt-source-presets";
 
 const EMPTY: AdminPromptCatalog = { version: 1, revision: 0, categories: [], prompts: [], sources: [], syncRuns: [] };
 
@@ -113,6 +114,24 @@ export function AdminPromptCatalogPanel() {
       <p className="text-xs text-[var(--ob-muted)]">服务端调度采用持久化 nextRunAt；当前由管理员点击“运行到期任务”触发，适合外部定时器调用同一受保护接口。</p>
       <div className="grid gap-2 md:grid-cols-3"><input className="ob-field" placeholder="来源 ID" value={source.id} onChange={(event) => setSource({ ...source, id: event.target.value })} /><input className="ob-field" placeholder="来源名称" value={source.name} onChange={(event) => setSource({ ...source, name: event.target.value })} /><input className="ob-field" placeholder="https://…/prompts.json" value={source.url} onChange={(event) => setSource({ ...source, url: event.target.value })} /></div>
       <button className="ob-btn" type="button" onClick={() => void perform(() => createAdminPromptSource({ ...source, format: "json", enabled: true, scheduleEnabled: false, intervalMinutes: 0 }))}>新增来源</button>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-[var(--ob-muted)]">内置来源：</span>
+        {COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            className="ob-btn"
+            type="button"
+            title={preset.description}
+            disabled={catalog.sources.some((item) => item.id === preset.id || item.url === preset.source.url)}
+            onClick={() => void perform(() => createAdminPromptSource({
+              id: preset.id, name: preset.name, url: preset.source.url,
+              format: "json", enabled: true, scheduleEnabled: false, intervalMinutes: 0,
+            }))}
+          >
+            添加 {preset.name}
+          </button>
+        ))}
+      </div>
       <div className="flex flex-wrap gap-2"><button className="ob-btn" type="button" onClick={() => void perform(syncAllAdminPromptSources)}>同步全部</button><button className="ob-btn" type="button" onClick={() => void perform(runDueAdminPromptSources)}>运行到期任务</button></div>
       <div className="space-y-2">{catalog.sources.map((item) => <PromptSourceRow key={item.id} source={item} perform={perform} />)}</div>
       <div className="space-y-1 text-xs text-[var(--ob-muted)]"><div>最近运行</div>{catalog.syncRuns.slice(-8).reverse().map((run) => <div key={run.id}>{syncRunSummary(run)}</div>)}{catalog.syncRuns.length ? null : <div>暂无</div>}</div>

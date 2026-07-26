@@ -11,6 +11,7 @@ import {
   type LibraryAssetKind,
 } from "@/services/library-assets";
 import { findOpenNodePosition } from "@/lib/node-placement";
+import { LibraryAssetDetailDialog } from "@/components/library/LibraryAssetDetailDialog";
 import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { nowIso, uid } from "@/lib/id";
 import type { AssetItem } from "@/types/board";
@@ -51,6 +52,7 @@ export function ServerLibraryPage() {
   const [draft, setDraft] = useState<LibraryAssetInput>(emptyDraft());
   const [busy, setBusy] = useState(false);
   const [insertingId, setInsertingId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<LibraryAsset | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const pageSize = 12;
   const canManage = !auth?.user || isAdminRole(auth.user.role);
@@ -361,6 +363,9 @@ export function ServerLibraryPage() {
                 >
                   {asset.kind === "text" ? "复制文本" : "复制链接"}
                 </button>
+                <button type="button" className="ob-btn" onClick={() => setDetail(asset)}>
+                  查看详情
+                </button>
                 <button
                   type="button"
                   className="ob-btn"
@@ -505,6 +510,8 @@ export function ServerLibraryPage() {
           </div>
         </div>
       ) : null}
+
+      <LibraryAssetDetailDialog asset={detail} onClose={() => setDetail(null)} />
     </div>
   );
 }

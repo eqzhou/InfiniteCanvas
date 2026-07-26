@@ -270,6 +270,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   placeholder="应用于文本、图片生成和图片编辑请求"
                 />
               </Field>
+              <Field label="工作流 Agent 系统提示词">
+                <textarea
+                  className="ob-field min-h-24 resize-y"
+                  maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+                  value={config.workflowAgentSystemPrompt ?? ""}
+                  onChange={(e) => setConfig({ ...config, workflowAgentSystemPrompt: e.target.value })}
+                  placeholder="留空则使用内置默认提示词"
+                />
+              </Field>
             </div>
             <div className="grid content-start grid-cols-1 gap-3 sm:grid-cols-3 lg:mt-8 lg:grid-cols-1">
               <Field label="图片尺寸">

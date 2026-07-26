@@ -398,6 +398,8 @@ export type AppConfig = {
   canvasPanelTab?: "projects" | "elements" | "assets" | "prompts";
   imageToolbar?: import("@/lib/image-toolbar-preferences").ImageToolbarPreferences;
   generationDefaults?: import("@/lib/generation-defaults").GenerationDefaults;
+  /** Workflow agent instruction. Blank falls back to the built-in default. */
+  workflowAgentSystemPrompt?: string;
 };
 
 export type ClipboardPayload = {

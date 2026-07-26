@@ -75,5 +75,8 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
       (config as AppConfig & { imageToolbar?: unknown }).imageToolbar),
     generationDefaults: normalizeGenerationDefaults(
       (config as AppConfig & { generationDefaults?: unknown }).generationDefaults),
+    workflowAgentSystemPrompt: typeof (config as AppConfig & { workflowAgentSystemPrompt?: unknown }).workflowAgentSystemPrompt === "string"
+      ? ((config as AppConfig & { workflowAgentSystemPrompt?: string }).workflowAgentSystemPrompt ?? "").slice(0, SYSTEM_PROMPT_MAX_LENGTH)
+      : "",
   };
 }

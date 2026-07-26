@@ -30,13 +30,22 @@ import { useBoardStore } from "@/stores/use-board-store";
 import type { GenerationJob } from "@/types/board";
 import type { WorkflowTemplate } from "@/types/workflow";
 
-const WORKFLOW_AGENT_SYSTEM_PROMPT = [
+export const DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT = [
   "你是图片创作工作流设计助手。",
   "只返回一个 JSON 对象，不要 Markdown。",
   "对象必须包含 title、description、category、variables、steps。",
   "variables 支持 text、textarea、select、number、boolean、image；steps 为 1-16 个图片步骤。",
   "提示词变量只能使用 {{变量ID}}，步骤图片依赖必须放在 references。",
 ].join("\n");
+
+/**
+ * The workflow agent uses its own instruction, separate from the global system
+ * prompt. An administrator may override it; an unset or blank value falls back
+ * to the built-in default so the agent never runs without guidance.
+ */
+export function resolveWorkflowAgentSystemPrompt(configured: string | undefined): string {
+  return configured?.trim() || DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT;
+}
 
 function initialValues(template: WorkflowTemplate): Record<string, unknown> {
   return Object.fromEntries(template.variables.map((variable) => {
@@ -197,7 +206,7 @@ export function WorkflowWorkbench() {
       const output = await generateText({
         channel,
         model: provider.model,
-        systemPrompt: WORKFLOW_AGENT_SYSTEM_PROMPT,
+        systemPrompt: resolveWorkflowAgentSystemPrompt(config.workflowAgentSystemPrompt),
         prompt: agentPrompt.trim(),
       });
       const candidate = extractJSONObject(output) as Record<string, unknown>;
