@@ -70,6 +70,22 @@ function migrationHeaders(contentType: string, expectedVersion: string | null): 
     : { "Content-Type": contentType, "If-Match": `"${expectedVersion}"` };
 }
 
+/**
+ * Server-declared migration capabilities. Secret migration rights must come
+ * from the server, never from a client-side role copy. Write endpoints enforce
+ * the same rule independently, so a failure here is treated as "not allowed".
+ */
+export async function loadMigrationCapabilities(): Promise<{ allowSecrets: boolean }> {
+  try {
+    const response = await request("migration/capabilities");
+    if (!response.ok) return { allowSecrets: false };
+    const payload = (await response.json()) as { allowSecrets?: unknown };
+    return { allowSecrets: payload?.allowSecrets === true };
+  } catch {
+    return { allowSecrets: false };
+  }
+}
+
 async function migrationWrite(path: string, body: BodyInit, contentType: string, expectedVersion: string | null): Promise<void> {
   const response = await request(`migration/${path}`, {
     method: "PUT",

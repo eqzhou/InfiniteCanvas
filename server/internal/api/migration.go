@@ -36,6 +36,31 @@ type migrationResourceVersion struct {
 	Version string `json:"version,omitempty"`
 }
 
+// migrationCapabilities is the server's authoritative statement about what the
+// caller may migrate. The client must not derive secret migration rights from
+// its own role copy; write endpoints enforce the same rule independently.
+type migrationCapabilities struct {
+	AllowSecrets bool `json:"allowSecrets"`
+}
+
+func (s *Server) migrationCapabilities(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeMigration(w, r) {
+		return
+	}
+	writeJSON(w, migrationCapabilities{AllowSecrets: s.migrationSecretsAllowed(r)})
+}
+
+func (s *Server) migrationSecretsAllowed(r *http.Request) bool {
+	if s.store == nil || s.secrets == nil {
+		return false
+	}
+	if authMode() == "off" {
+		return s.processToken != "" && s.authorizeProcessToken(r)
+	}
+	user, ok := authUserFrom(r.Context())
+	return ok && isTenantAdmin(user)
+}
+
 func migrationVersion(value []byte) string {
 	sum := sha256.Sum256(value)
 	return "m1-" + hex.EncodeToString(sum[:])

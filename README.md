@@ -122,7 +122,7 @@ cd server && go test -race ./... && go vet ./...
 GitHub Actions runs the web tests, typecheck, production build, performance
 assertion, OSV dependency audit, cross-browser and production Playwright suites, Go race
 detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The current Bun coverage report reaches 81.92% lines and 85.98% functions for covered
+pull requests. The current Bun coverage report reaches 81.88% lines and 85.96% functions for covered
 library/service modules; browser-only UI and persistence paths are validated by
 Playwright and are outside that report.
 

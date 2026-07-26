@@ -552,6 +552,18 @@ func TestAPIMartProtocolParsingHelpers(t *testing.T) {
 	if err := validateAPIMartPublicURL("https://user:pass@cdn.example/image.png"); err == nil {
 		t.Fatal("credential-bearing URL accepted")
 	}
+	for _, rawURL := range []string{
+		"https://127.0.0.1/image.png",
+		"https://10.0.0.5/image.png",
+		"https://192.168.1.10/image.png",
+		"https://169.254.169.254/latest/meta-data",
+		"https://[::1]/image.png",
+		"https://100.64.0.1/image.png",
+	} {
+		if err := validateAPIMartPublicURL(rawURL); err == nil {
+			t.Fatalf("internal reference URL accepted: %s", rawURL)
+		}
+	}
 }
 
 func TestAPIMartImageCapabilityRejectsUnsupportedPaidParametersBeforeCreate(t *testing.T) {

@@ -391,8 +391,19 @@ export async function executeWorkspaceMigration(
     await saveJournal(journal);
     const cancelledBeforeClear = await stopIfCancelled();
     if (cancelledBeforeClear) return cancelledBeforeClear;
-    await options.clearLocal();
+    // Cleanup runs only after the server manifest verification above proved the
+    // remote copy is complete, so local data is no longer the only copy. A
+    // partial cleanup failure must not be reported as a migration failure:
+    // that would tell the user to retry from local data that is already
+    // partially removed. Record the cleanup error and still complete.
+    let cleanupError = "";
+    try {
+      await options.clearLocal();
+    } catch (error) {
+      cleanupError = error instanceof Error ? error.message : String(error);
+    }
     journal = advanceMigrationJournal(journal, "complete");
+    if (cleanupError) journal = { ...journal, error: cleanupError };
     await saveJournal(journal);
     return { status: "complete", plan, journal };
   } catch (error) {

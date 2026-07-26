@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -268,6 +269,55 @@ func TestMediaExecutorsRejectUnsafeURLsAndProviderRedirects(t *testing.T) {
 	}); err == nil {
 		t.Fatal("credential-bearing audio provider URL accepted")
 	}
+}
+
+func TestGenerationResultURLRejectsLoopbackUnlessProviderIsLoopback(t *testing.T) {
+	// A provider-returned result URL is attacker controlled. It may only reach a
+	// loopback address when the operator deliberately configured a loopback
+	// provider endpoint (local development and tests).
+	for _, rawURL := range []string{"http://127.0.0.1/result.mp4", "http://localhost:9000/result.mp4"} {
+		if _, err := validateGenerationResultURL(rawURL, "https://api.provider.example/v1"); err == nil {
+			t.Fatalf("loopback result URL accepted for a public provider: %s", rawURL)
+		}
+		if _, err := validateGenerationResultURL(rawURL, "http://127.0.0.1:9000/v1"); err != nil {
+			t.Fatalf("loopback result URL rejected for a loopback provider: %s (%v)", rawURL, err)
+		}
+	}
+	if _, err := validateGenerationResultURL("https://cdn.example/result.mp4?X-Amz-Signature=abc", "https://api.provider.example/v1"); err != nil {
+		t.Fatalf("public presigned result URL rejected: %v", err)
+	}
+}
+
+func TestGenerationDownloadErrorsNeverCarryTheRequestURL(t *testing.T) {
+	// Go's *url.Error embeds the full URL, including presigned query
+	// credentials, and workers log provider errors verbatim.
+	video := newHTTPVideoExecutor()
+	video.client = &http.Client{Transport: failingRoundTripper{}}
+	_, err := video.download(context.Background(), "https://cdn.example/result.mp4?X-Amz-Signature=leaked-secret",
+		"https://api.provider.example/v1", maxGeneratedVideoBytes)
+	if err == nil {
+		t.Fatal("expected the transport failure to surface")
+	}
+	if strings.Contains(err.Error(), "leaked-secret") || strings.Contains(err.Error(), "cdn.example") {
+		t.Fatalf("download error leaked the result URL: %v", err)
+	}
+
+	image := newOpenAIImageExecutor()
+	image.client = &http.Client{Transport: failingRoundTripper{}}
+	_, imageErr := image.downloadImage(context.Background(), "https://cdn.example/result.png?X-Amz-Signature=leaked-secret",
+		"https://api.provider.example/v1")
+	if imageErr == nil {
+		t.Fatal("expected the image transport failure to surface")
+	}
+	if strings.Contains(imageErr.Error(), "leaked-secret") || strings.Contains(imageErr.Error(), "cdn.example") {
+		t.Fatalf("image download error leaked the result URL: %v", imageErr)
+	}
+}
+
+type failingRoundTripper struct{}
+
+func (failingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return nil, errors.New("dial tcp: simulated failure")
 }
 
 func TestHTTPVideoExecutorArkFirstLastFrameRoles(t *testing.T) {

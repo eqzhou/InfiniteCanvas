@@ -196,7 +196,7 @@ func (e *httpVideoExecutor) generateTemplate(ctx context.Context, request videoG
 	if !ok || strings.TrimSpace(rawURL) == "" {
 		return generatedMedia{}, errors.New("video template response must resolve to a URL")
 	}
-	return e.download(ctx, rawURL, maxGeneratedVideoBytes)
+	return e.download(ctx, rawURL, request.BaseURL, maxGeneratedVideoBytes)
 }
 
 func (e *httpVideoExecutor) create(ctx context.Context, request videoGenerationRequest) (map[string]any, error) {
@@ -286,7 +286,7 @@ func (e *httpVideoExecutor) completed(ctx context.Context, request videoGenerati
 		if status != kieTaskSucceeded || len(urls) == 0 {
 			return generatedMedia{}, true, errors.New("KIE video task completed without a result")
 		}
-		media, err := e.download(ctx, urls[0], maxGeneratedVideoBytes)
+		media, err := e.download(ctx, urls[0], request.BaseURL, maxGeneratedVideoBytes)
 		if err != nil {
 			return generatedMedia{}, true, errors.New("KIE video result download failed")
 		}
@@ -304,7 +304,7 @@ func (e *httpVideoExecutor) completed(ctx context.Context, request videoGenerati
 		outputURL = apimartVideoResultURL(payload)
 	}
 	if outputURL != "" {
-		media, err := e.download(ctx, outputURL, maxGeneratedVideoBytes)
+		media, err := e.download(ctx, outputURL, request.BaseURL, maxGeneratedVideoBytes)
 		return media, true, err
 	}
 	if mediaSuccessfulStatus(status) {
@@ -377,8 +377,8 @@ func (e *httpVideoExecutor) jsonRequest(ctx context.Context, request videoGenera
 	return payload, nil
 }
 
-func (e *httpVideoExecutor) download(ctx context.Context, rawURL string, limit int) (generatedMedia, error) {
-	if _, err := validateGenerationDownloadURL(rawURL); err != nil {
+func (e *httpVideoExecutor) download(ctx context.Context, rawURL, providerBaseURL string, limit int) (generatedMedia, error) {
+	if _, err := validateGenerationResultURL(rawURL, providerBaseURL); err != nil {
 		return generatedMedia{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -388,7 +388,7 @@ func (e *httpVideoExecutor) download(ctx context.Context, rawURL string, limit i
 	request.Header.Set("Accept", "video/mp4,video/webm,application/octet-stream")
 	response, err := e.client.Do(request)
 	if err != nil {
-		return generatedMedia{}, err
+		return generatedMedia{}, errGenerationDownloadFailed
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -454,6 +454,40 @@ func validateGenerationDownloadURL(rawURL string) (*url.URL, error) {
 		return nil, errors.New("generation result URL must use HTTPS")
 	}
 	return parsed, nil
+}
+
+// errGenerationDownloadFailed replaces raw transport errors on result
+// downloads. Go's *url.Error embeds the full request URL, and provider result
+// URLs are frequently presigned, so propagating the original error would write
+// signature/credential query parameters into logs and job error details.
+var errGenerationDownloadFailed = errors.New("generation result download failed")
+
+// validateGenerationResultURL validates a provider-returned result URL.
+// Result URLs are attacker-controlled, so loopback is only tolerated when the
+// operator explicitly configured a loopback provider endpoint (local
+// development and tests). Otherwise a malicious or compromised provider could
+// make the server fetch its own internal services.
+func validateGenerationResultURL(rawURL, providerBaseURL string) (*url.URL, error) {
+	parsed, err := validateGenerationDownloadURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if isExplicitLoopbackHost(parsed.Hostname()) && !isLoopbackProviderEndpoint(providerBaseURL) {
+		return nil, errors.New("generation result URL must not target a loopback address")
+	}
+	return parsed, nil
+}
+
+func isLoopbackProviderEndpoint(rawURL string) bool {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+	return isExplicitLoopbackHost(parsed.Hostname())
 }
 
 func waitContext(ctx context.Context, duration time.Duration) error {

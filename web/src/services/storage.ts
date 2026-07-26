@@ -24,6 +24,7 @@ import {
   saveMigrationProject,
   saveMigrationSecrets,
   saveMigrationState,
+  loadMigrationCapabilities,
   TenantConfigAdminRequiredError,
   type MigrationResourceRef,
 } from "@/services/server-storage";
@@ -296,7 +297,16 @@ async function runLocalWorkspaceMigration(
       });
     },
     clearLocal: async () => {
-      await Promise.all([clear(appStore), clear(imageStore), clear(mediaStore), clearLocalGenerationJobsAfterMigration()]);
+      // Each store is cleared independently so one failing database cannot
+      // abort the others and leave the workspace half cleaned.
+      const results = await Promise.allSettled([
+        clear(appStore),
+        clear(imageStore),
+        clear(mediaStore),
+        clearLocalGenerationJobsAfterMigration(),
+      ]);
+      const failures = results.filter((result) => result.status === "rejected").length;
+      if (failures) throw new Error(`本地数据清理未完全完成（${failures} 项失败），账号副本已完成校验。`);
     },
     signal,
   });
@@ -308,7 +318,11 @@ export async function preflightLocalWorkspaceMigration(
 ): Promise<StorageMigrationPreflight | null> {
   if (!SERVER_STORAGE) return null;
   serverMigrationSuppressed = true;
-  const local = await readLocalMigrationWorkspace(options);
+  // The server is authoritative for secret migration rights; the caller's
+  // role-derived hint can only narrow it, never widen it.
+  const capabilities = await loadMigrationCapabilities();
+  const allowSecrets = capabilities.allowSecrets && options.allowSecrets !== false;
+  const local = await readLocalMigrationWorkspace({ includeSecrets: options.includeSecrets, allowSecrets });
   if (!local) return null;
   const [remote, journal] = await Promise.all([
     loadRemoteMigrationManifest(local.manifest),
@@ -318,8 +332,8 @@ export async function preflightLocalWorkspaceMigration(
     ...createMigrationPreflight(local.manifest, remote),
     journal: journal ?? null,
     credentials: local.credentials,
-    includeSecrets: Boolean(options.includeSecrets),
-		allowSecrets: options.allowSecrets !== false,
+    includeSecrets: Boolean(options.includeSecrets) && allowSecrets,
+    allowSecrets,
   };
 }
 
@@ -329,10 +343,12 @@ export async function migrateLocalWorkspace(
 ): Promise<ExecuteWorkspaceMigrationResult | null> {
   if (!SERVER_STORAGE) return null;
   serverMigrationSuppressed = true;
-	const local = await readLocalMigrationWorkspace({
-		includeSecrets: options.includeSecrets,
-		allowSecrets: options.allowSecrets,
-	});
+  const capabilities = await loadMigrationCapabilities();
+  const allowSecrets = capabilities.allowSecrets && options.allowSecrets !== false;
+  const local = await readLocalMigrationWorkspace({
+    includeSecrets: options.includeSecrets && allowSecrets,
+    allowSecrets,
+  });
   if (!local) return null;
   return runLocalWorkspaceMigration(local, options.onProgress, options.signal);
 }

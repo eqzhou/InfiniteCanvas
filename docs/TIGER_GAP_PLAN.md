@@ -205,7 +205,7 @@
 每个 Phase 都必须满足：
 
 - [x] TDD：先 RED，再最小 GREEN，最后重构。
-- [x] 单元、集成、关键 E2E 齐全；Bun 覆盖率 81.92% lines / 85.98% functions。
+- [x] 单元、集成、关键 E2E 齐全；Bun 覆盖率 81.88% lines / 85.96% functions。
 - [x] 所有外部输入使用 schema/边界校验；URL 禁止凭据、危险重定向和非受控内网访问。
 - [x] provider 响应设置大小、MIME、解码和超时限制。
 - [x] API Key、S3 secret、JWT、OAuth secret 不进入客户端、日志、错误和导出包。
@@ -216,7 +216,7 @@
 ### 2026-07-26 验收证据
 
 - 上游基准复核：`git ls-remote` 仍为 Tiger `main@64cb00a6da99a50017abcb2e443166a13364c6c1`、tag `v0.4.4@0bb25f0`。
-- Web：483 项 Bun 单元/集成测试通过；coverage 81.92% lines / 85.98% functions；根目录 typecheck 与 production build 通过。
+- Web：483 项 Bun 单元/集成测试通过；coverage 81.88% lines / 85.96% functions；根目录 typecheck 与 production build 通过。
 - Go：`go test ./...`、`go test -race ./...`、`go vet ./...`、server/MCP 两个 binary build 通过；真实 PostgreSQL 退款回滚/并发 exactly-once 测试通过。
 - 浏览器：production Chromium 在 production Vite build 与隔离 Go 数据目录下完整顺序复跑 99/99 通过；Tiger HEAD 关键映射、管理端、Kling、图片工具、共享渠道和存储池均包含在该套件。
 - Formal：本机 PostgreSQL/Redis 隔离 run、Redis DB 14 与临时媒体目录下 7/7 通过，测试数据库名与 Redis DB 残留检查通过。
@@ -244,18 +244,40 @@
 - 图片工具栏偏好没有 schema 版本，且会遍历未设上限的持久化数组。已加入 `version: 1`、拒绝未知/未来版本、
   限制数组长度，并补充版本迁移与超长输入的测试。
 
-同时复核判定：生成结果下载允许显式 loopback 的策略在 HEAD 中逐字节相同，属既有边界而非本轮引入，
-因此不在本次提交范围内改动，留作独立跟踪项。
+### 2026-07-26 提交后安全复审（第二轮）
 
-复核后证据：Bun 483/483、typecheck、production build、`go test ./...`、`go vet ./...` 全绿；
-production Chromium 99/99 通过；formal PostgreSQL/Redis 7/7 通过。
+对 `bd51ad0` 再做一轮独立 Go/Web 审查，两方都给出 block 结论。已修复的问题：
+
+- 生成结果下载 SSRF（既有边界，本轮 KIE/APIMart 扩大了暴露面）：provider 返回的结果 URL 是不可信输入，
+  但此前与「运营方配置的 provider 端点」共用同一校验，因而允许 `http://127.0.0.1`。新增
+  `validateGenerationResultURL(rawURL, providerBaseURL)`：只有当 provider 端点本身就是 loopback
+  （本地开发/测试）时才允许结果 URL 指向 loopback，其余一律拒绝。
+- 预签名下载 URL 经日志泄露（既有边界）：`client.Do` 的原始错误是 Go `*url.Error`，内含完整 URL 与查询串，
+  而 worker 以 `%v` 记录。现在所有结果下载失败统一返回不含 URL 的 `errGenerationDownloadFailed`。
+- APIMart 公共引用 URL 缺少内网校验（本轮引入）：`elements[].imageUrls` 会被转发给 APIMart 由其服务端抓取，
+  此前只做语法校验。现拒绝 loopback、私网、link-local、CGNAT 等字面内网地址。
+- 定时提示词同步永不执行（本轮引入的时钟耦合缺陷）：调度用注入时钟写入租约到期时间，而同步执行与 HTTP
+  变更路径都用 `time.Now()` 校验租约，导致刚认领的租约立即被判过期，任务被静默丢弃。租约到期时间改为始终
+  使用真实时钟（它本就是「实例崩溃后可被其他实例接管」的墙钟语义），注入时钟仅用于判定到期与排下一次。
+  仓库中已有的 `TestDuePromptSourceRunnerIsDeterministicAndPersistsNextRun` 此前一直是红的，被 Go 测试缓存掩盖。
+- 迁移清理不是原子的（既有边界，本轮扩展）：清理跨 4 个 IndexedDB 库执行，任一失败会把整次迁移报成 failed，
+  诱导用户从已被部分删除的本地数据重试。清理发生在服务端 manifest 校验通过之后，本地已非唯一副本，
+  因此现在改为逐库独立清理并汇总失败，迁移仍标记 complete 但携带清理错误说明。
+- `allowSecrets` 由客户端角色推导（本轮引入）：新增服务端 `GET /api/migration/capabilities`，前端只采用服务端
+  声明值（客户端提示只能收窄不能放宽），写入端点继续独立强制授权。
+
+复审后证据：Bun 483/483（coverage 81.88% lines / 85.96% functions）、typecheck、production build、
+`go test ./...`、`go test -race ./...`、`go vet ./...` 全绿；production Chromium 99/99 通过；
+formal PostgreSQL/Redis 7/7 通过；clean-room 扫描与 OSV 226 包审计通过。
 
 ## 6. 不属于 Tiger 差异、但需单独跟踪的问题
 
 - 当前没有独立音频工作台；Tiger 也没有独立音频工作台，因此不是对 Tiger 的缺口，但需修正文档误述或另立产品需求。
 - Claude Agent SDK adapter、Hosted SaaS marketplace、外部支付、组织级 SSO 是本地明确 not targeted 项，不应混入 Tiger parity。
 - Director 当前只接受受限 GLB v2；项目 ZIP 读取仅支持 STORE method 0。这些是本地互操作边界，只有在对照黑盒确认 Tiger 支持更广格式后，才升级为 Tiger 缺口。
-- 生成结果下载 (`validateGenerationDownloadURL`) 允许显式 loopback 主机，且下载传输错误按原样向上传播（Go `*url.Error` 会带上完整 URL 与查询串）。该逻辑在 HEAD 中逐字节相同，属既有边界而非 Tiger 差异；建议另立项收敛为「结果 URL 仅允许 HTTPS 且拒绝内网地址」并对下载错误做无 URL 的稳定化处理。
+- ~~生成结果下载允许显式 loopback 主机，且下载传输错误按原样向上传播。~~ 已在 2026-07-26 第二轮安全复审中收敛：
+  新增 `validateGenerationResultURL` 区分「运营方配置的 provider 端点」与「provider 返回的不可信结果 URL」，
+  并把下载失败统一为不含 URL 的稳定错误。
 - 商业发布仍受 `docs/RELEASE_AUDIT.md` 中未完成的安全、许可、来源、资产、品牌和法律审查阻断；功能 parity 完成不等于可商业发布。
 
 ## 7. Tiger 行为收敛完成定义

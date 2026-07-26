@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -160,6 +161,14 @@ func validateAPIMartPublicURL(rawURL string) error {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
 		return errors.New("invalid APIMart public reference URL")
+	}
+	// These URLs are forwarded to APIMart, which fetches them server-side, so a
+	// literal internal address would turn the provider into an SSRF proxy for
+	// this deployment's network. Reject non-public literal IP hosts.
+	if address, parseErr := netip.ParseAddr(parsed.Hostname()); parseErr == nil {
+		if isUnsafeGenerationAddress(address.Unmap()) {
+			return errors.New("APIMart public reference URL must not target an internal address")
+		}
 	}
 	return nil
 }
@@ -503,7 +512,7 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 		}
 		images := make([]generatedImage, 0, request.Count)
 		for _, rawURL := range urls[:request.Count] {
-			data, err := e.downloadImage(ctx, rawURL)
+			data, err := e.downloadImage(ctx, rawURL, request.BaseURL)
 			if err != nil {
 				return nil, err
 			}

@@ -134,7 +134,7 @@ func (e *openAIImageExecutor) generateTemplate(ctx context.Context, request imag
 		if strings.HasPrefix(rawURL, "data:") {
 			data, mimeType, err = decodeTemplateDataImage(rawURL)
 		} else {
-			data, err = e.downloadImage(ctx, rawURL)
+			data, err = e.downloadImage(ctx, rawURL, request.BaseURL)
 			if err == nil {
 				mimeType = sniffGeneratedImageMIME(data)
 			}
@@ -254,7 +254,7 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 			}
 			imageData = decoded
 		} else if item.URL != "" {
-			downloaded, err := e.downloadImage(ctx, item.URL)
+			downloaded, err := e.downloadImage(ctx, item.URL, request.BaseURL)
 			if err != nil {
 				return nil, err
 			}
@@ -399,8 +399,8 @@ func geminiImageProviderEndpoint(baseURL, model string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (e *openAIImageExecutor) downloadImage(ctx context.Context, rawURL string) ([]byte, error) {
-	if _, err := validateGenerationDownloadURL(rawURL); err != nil {
+func (e *openAIImageExecutor) downloadImage(ctx context.Context, rawURL, providerBaseURL string) ([]byte, error) {
+	if _, err := validateGenerationResultURL(rawURL, providerBaseURL); err != nil {
 		return nil, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -410,7 +410,7 @@ func (e *openAIImageExecutor) downloadImage(ctx context.Context, rawURL string) 
 	request.Header.Set("Accept", "image/png,image/jpeg,image/gif,image/webp,image/avif")
 	response, err := e.client.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, errGenerationDownloadFailed
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

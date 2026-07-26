@@ -659,6 +659,12 @@ func (s *Server) runDuePromptSources(ctx context.Context, tenantID string, now t
 		for _, item := range due {
 			claimed[item.source.ID] = item.leaseID
 		}
+		// Lease expiry is a wall-clock concept: it exists so another instance can
+		// reclaim a source after this process dies, and every other lease check
+		// (HTTP mutations, the sync runner) compares against time.Now(). Deriving
+		// it from the injected schedule clock would mark a freshly claimed lease
+		// as already expired and silently drop every scheduled sync.
+		leaseUntil := time.Now().UTC().Add(promptScheduleLeaseDuration).Format(time.RFC3339Nano)
 		for i := range c.Sources {
 			leaseID, ok := claimed[c.Sources[i].ID]
 			if !ok {
@@ -666,7 +672,7 @@ func (s *Server) runDuePromptSources(ctx context.Context, tenantID string, now t
 			}
 			c.Sources[i].ScheduleStatus = "running"
 			c.Sources[i].ScheduleLeaseID = leaseID
-			c.Sources[i].ScheduleLeaseUntil = now.Add(promptScheduleLeaseDuration).Format(time.RFC3339Nano)
+			c.Sources[i].ScheduleLeaseUntil = leaseUntil
 			c.Sources[i].NextRunAt = now.Add(time.Duration(c.Sources[i].IntervalMinutes) * time.Minute).Format(time.RFC3339Nano)
 		}
 		return nil

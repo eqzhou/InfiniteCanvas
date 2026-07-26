@@ -593,7 +593,7 @@ func (e *openAIImageExecutor) generateKIEImageResumable(ctx context.Context, req
 		}
 		images := make([]generatedImage, 0, request.Count)
 		for _, rawURL := range urls[:request.Count] {
-			data, err := e.downloadImage(ctx, rawURL)
+			data, err := e.downloadImage(ctx, rawURL, request.BaseURL)
 			if err != nil {
 				return nil, errors.New("KIE image result download failed")
 			}
