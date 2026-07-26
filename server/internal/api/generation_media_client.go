@@ -224,7 +224,20 @@ func (e *httpVideoExecutor) create(ctx context.Context, request videoGenerationR
 			if kind == "" || counts[kind] > limit {
 				continue
 			}
-			dataURL := "data:" + reference.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(reference.Data)
+			// Ark fetches reference media from its own network. Images are small
+			// enough to inline as data URLs, but video and audio must be public
+			// URLs; inlining them would silently build an oversized request that
+			// the provider cannot use.
+			var mediaURL string
+			if reference.PublicURL != "" {
+				mediaURL = reference.PublicURL
+			} else if kind == "image" {
+				mediaURL = "data:" + reference.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(reference.Data)
+			} else {
+				return nil, fmt.Errorf(
+					"Ark %s references require a publicly reachable URL; configure OPENBOARD_PUBLIC_BASE_URL so the provider can fetch them",
+					kind)
+			}
 			role := "reference_" + kind
 			if kind == "image" && frameMode == "first-last" {
 				switch counts[kind] {
@@ -234,7 +247,7 @@ func (e *httpVideoExecutor) create(ctx context.Context, request videoGenerationR
 					role = "last_frame"
 				}
 			}
-			item := map[string]any{"type": kind + "_url", kind + "_url": map[string]any{"url": dataURL}, "role": role}
+			item := map[string]any{"type": kind + "_url", kind + "_url": map[string]any{"url": mediaURL}, "role": role}
 			content = append(content, item)
 		}
 		body = map[string]any{

@@ -541,7 +541,7 @@ func (e *openAIImageExecutor) generateKIEImageResumable(ctx context.Context, req
 	} else {
 		references := make([]generatedMedia, len(request.References))
 		for index, reference := range request.References {
-			references[index] = generatedMedia(reference)
+			references[index] = generatedMedia{Data: reference.Data, MIMEType: reference.MIMEType}
 		}
 		uploadBase, err := kieReferenceUploadBaseURL(request.BaseURL, e.kieUploadBaseURL)
 		if err != nil {

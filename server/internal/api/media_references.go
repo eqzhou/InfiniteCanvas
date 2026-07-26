@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,6 +19,27 @@ const (
 	maxMediaReferenceTTL     = 24 * time.Hour
 	minMediaReferenceTTL     = time.Minute
 )
+
+// publicMediaReferenceURL mints a short-lived public URL for a tenant blob so a
+// provider that fetches media itself can reach it. It returns an empty string
+// when the deployment has no publicly reachable base URL, letting the caller
+// fail closed instead of sending an address the provider cannot resolve.
+func (s *Server) publicMediaReferenceURL(ctx context.Context, tenantID, storageKey string) string {
+	base := publicBaseURL()
+	if base == "" || s == nil || s.store == nil {
+		return ""
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || isExplicitLoopbackHost(parsed.Hostname()) {
+		// A loopback or non-HTTPS base URL is not reachable by a third party.
+		return ""
+	}
+	ref, err := s.store.CreateMediaReference(ctx, tenantID, storageKey, time.Now().UTC().Add(maxMediaReferenceTTL))
+	if err != nil {
+		return ""
+	}
+	return base + "/api/media/references/" + url.PathEscape(ref.Token)
+}
 
 type createMediaReferencesBody struct {
 	StorageKeys []string `json:"storageKeys"`

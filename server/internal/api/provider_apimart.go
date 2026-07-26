@@ -477,7 +477,7 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 	} else {
 		references := make([]generatedMedia, len(request.References))
 		for index, reference := range request.References {
-			references[index] = generatedMedia(reference)
+			references[index] = generatedMedia{Data: reference.Data, MIMEType: reference.MIMEType}
 		}
 		imageURLs, err := uploadAPIMartImages(ctx, e.client, request.BaseURL, request.APIKey, references)
 		if err != nil {

@@ -419,3 +419,74 @@ func TestHTTPVideoExecutorArkFirstLastFrameRoles(t *testing.T) {
 		t.Fatalf("roles = %#v", roles)
 	}
 }
+
+func TestArkReferenceMediaUsesPublicLinksAndFailsClosed(t *testing.T) {
+	// Ark pulls reference media from its own network, so local video/audio must
+	// travel as a public URL. Without one, inlining megabytes of base64 would
+	// silently produce an oversized request instead of a clear failure.
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	mp4 := minimalMP4()
+
+	var body map[string]any
+	var resultURL string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/contents/generations/tasks":
+			body = nil
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_, _ = io.WriteString(w, `{"id":"task-ref"}`)
+		case "/result.mp4":
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write(minimalMP4())
+		default:
+			_, _ = io.WriteString(w, `{"id":"task-ref","status":"succeeded","content":{"video_url":"`+resultURL+`"}}`)
+		}
+	}))
+	defer upstream.Close()
+	resultURL = upstream.URL + "/result.mp4"
+
+	executor := newHTTPVideoExecutor()
+	executor.client = upstream.Client()
+	executor.pollInterval = 0
+	executor.maxDuration = time.Second
+
+	base := videoGenerationRequest{
+		BaseURL: upstream.URL + "/api/v3", APIKey: "sk-video", Protocol: "ark", Model: "seedance",
+		Prompt: "with references", Seconds: 5, Ratio: "16:9", Resolution: "720p",
+	}
+
+	// Video references without a public URL must fail before any request.
+	withLocalVideo := base
+	withLocalVideo.References = []generatedMedia{{Data: mp4, MIMEType: "video/mp4"}}
+	if _, err := executor.Generate(context.Background(), withLocalVideo, nil,
+		func(videoProviderCheckpoint) error { return nil }); err == nil {
+		t.Fatal("local video reference without a public URL was accepted")
+	}
+
+	// A supplied public URL is forwarded verbatim rather than inlined.
+	withPublicVideo := base
+	withPublicVideo.References = []generatedMedia{{
+		Data: mp4, MIMEType: "video/mp4", PublicURL: "https://cdn.example/ref.mp4",
+	}}
+	if _, err := executor.Generate(context.Background(), withPublicVideo, nil,
+		func(videoProviderCheckpoint) error { return nil }); err != nil {
+		t.Fatalf("public video reference rejected: %v", err)
+	}
+	content, _ := body["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content = %#v", body["content"])
+	}
+	entry, _ := content[1].(map[string]any)
+	nested, _ := entry["video_url"].(map[string]any)
+	if url, _ := nested["url"].(string); url != "https://cdn.example/ref.mp4" {
+		t.Fatalf("reference url = %#v", entry)
+	}
+
+	// Images stay inline: Ark accepts data URLs for them and they are small.
+	withImage := base
+	withImage.References = []generatedMedia{{Data: png, MIMEType: "image/png"}}
+	if _, err := executor.Generate(context.Background(), withImage, nil,
+		func(videoProviderCheckpoint) error { return nil }); err != nil {
+		t.Fatalf("inline image reference rejected: %v", err)
+	}
+}

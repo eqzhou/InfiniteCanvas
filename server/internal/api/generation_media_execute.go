@@ -32,6 +32,10 @@ var (
 type generatedMedia struct {
 	Data     []byte
 	MIMEType string
+	// PublicURL is set when the provider must fetch the media itself. Providers
+	// such as Ark pull reference media from their own network, so local bytes
+	// are unusable there.
+	PublicURL string
 }
 
 type videoProviderCheckpoint struct {
@@ -719,7 +723,15 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 			if err != nil {
 				return resolvedMediaRequest{}, err
 			}
-			request.Video.References = append(request.Video.References, generatedMedia{Data: value.Data, MIMEType: value.Metadata.ContentType})
+			reference := generatedMedia{Data: value.Data, MIMEType: value.Metadata.ContentType}
+			// Providers that fetch reference media themselves cannot read local
+			// bytes. Mint a short-lived public token URL when the deployment
+			// advertises a reachable base URL; otherwise leave it empty so the
+			// provider adapter fails closed with an actionable message.
+			if mediaMIMEKind(reference.MIMEType) != "image" {
+				reference.PublicURL = s.publicMediaReferenceURL(ctx, tenantID, key)
+			}
+			request.Video.References = append(request.Video.References, reference)
 		}
 		request.Video.BaseURL, request.Video.APIKey, request.Video.Protocol = provider.BaseURL, apiKey, protocol
 		request.Video.Template, request.Video.Size = provider.Template, parameters.Size
