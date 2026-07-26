@@ -64,9 +64,9 @@ func (s *Server) getAICallLog(w http.ResponseWriter, r *http.Request) {
 }
 
 type deleteAICallLogsRequest struct {
-	IDs            []string `json:"ids"`
-	OlderThanDays  *int     `json:"olderThanDays"`
-	Before         string   `json:"before"`
+	IDs           []string `json:"ids"`
+	OlderThanDays *int     `json:"olderThanDays"`
+	Before        string   `json:"before"`
 }
 
 func (s *Server) deleteAICallLogs(w http.ResponseWriter, r *http.Request) {
@@ -302,17 +302,17 @@ func mediaRequestAuditPayload(request resolvedMediaRequest, kind string) map[str
 		}
 	}
 	return map[string]any{
-		"protocol":      request.Video.Protocol,
-		"baseUrl":       request.Video.BaseURL,
-		"model":         request.Video.Model,
-		"prompt":        request.Video.Prompt,
-		"size":          request.Video.Size,
-		"seconds":       request.Video.Seconds,
-		"ratio":         request.Video.Ratio,
-		"resolution":    request.Video.Resolution,
-		"generateAudio": request.Video.GenerateAudio,
-		"watermark":     request.Video.Watermark,
-		"frameMode":     request.Video.FrameMode,
+		"protocol":       request.Video.Protocol,
+		"baseUrl":        request.Video.BaseURL,
+		"model":          request.Video.Model,
+		"prompt":         request.Video.Prompt,
+		"size":           request.Video.Size,
+		"seconds":        request.Video.Seconds,
+		"ratio":          request.Video.Ratio,
+		"resolution":     request.Video.Resolution,
+		"generateAudio":  request.Video.GenerateAudio,
+		"watermark":      request.Video.Watermark,
+		"frameMode":      request.Video.FrameMode,
 		"referenceCount": len(request.Video.References),
 	}
 }

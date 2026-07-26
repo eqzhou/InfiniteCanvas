@@ -79,6 +79,7 @@ export function DirectorDialog({
   onPanoramaChange: (panoramaId: string | null) => void;
 }) {
   const captureRef = useRef<(() => Promise<DirectorRenderedCapture>) | null>(null);
+  const captureInFlightRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const modelInputRef = useRef<HTMLInputElement>(null);
@@ -423,9 +424,14 @@ export function DirectorDialog({
             current.size === captureRecords.length ? new Set() : new Set(captureRecords.map((record) => record.id))
           )}
           onCapture={() => {
+            if (captureInFlightRef.current) return;
+            captureInFlightRef.current = true;
             void (async () => {
               const capture = captureRef.current;
-              if (!capture) return;
+              if (!capture) {
+                captureInFlightRef.current = false;
+                return;
+              }
               setCaptureError(null);
               setCapturing(true);
               try {
@@ -447,6 +453,7 @@ export function DirectorDialog({
               } catch (error) {
                 setCaptureError(error instanceof Error ? error.message : "导演台截图保存失败");
               } finally {
+                captureInFlightRef.current = false;
                 setCapturing(false);
               }
             })();

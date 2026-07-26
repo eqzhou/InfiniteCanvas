@@ -22,7 +22,12 @@ import (
 const maxImageProviderResponseBytes = 40 << 20
 
 type openAIImageExecutor struct {
-	client *http.Client
+	client              *http.Client
+	apimartPollInterval time.Duration
+	apimartMaxDuration  time.Duration
+	kiePollInterval     time.Duration
+	kieMaxDuration      time.Duration
+	kieUploadBaseURL    string
 }
 
 func newOpenAIImageExecutor() *openAIImageExecutor {
@@ -43,7 +48,8 @@ func newOpenAIImageExecutor() *openAIImageExecutor {
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-	}}
+	}, apimartPollInterval: 3 * time.Second, apimartMaxDuration: 5 * time.Minute,
+		kiePollInterval: 3 * time.Second, kieMaxDuration: 15 * time.Minute}
 }
 
 func (e *openAIImageExecutor) Generate(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
@@ -57,6 +63,10 @@ func (e *openAIImageExecutor) Generate(ctx context.Context, request imageGenerat
 		return e.generateGemini(ctx, request)
 	case "template":
 		return e.generateTemplate(ctx, request)
+	case "apimart":
+		return e.generateAPIMart(ctx, request)
+	case "kie":
+		return e.generateKIEImageResumable(ctx, request, nil, func(videoProviderCheckpoint) error { return nil })
 	default:
 		return nil, errors.New("unsupported image provider protocol")
 	}

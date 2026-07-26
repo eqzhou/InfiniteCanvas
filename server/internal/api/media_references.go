@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	maxMediaReferenceKeys     = 20
-	defaultMediaReferenceTTL  = 15 * time.Minute
-	maxMediaReferenceTTL      = 24 * time.Hour
-	minMediaReferenceTTL      = time.Minute
+	maxMediaReferenceKeys    = 20
+	defaultMediaReferenceTTL = 15 * time.Minute
+	maxMediaReferenceTTL     = 24 * time.Hour
+	minMediaReferenceTTL     = time.Minute
 )
 
 type createMediaReferencesBody struct {

@@ -55,7 +55,7 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to list generation jobs", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, result)
+	writeJSON(w, publicGenerationJobPage(result))
 }
 
 func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +93,7 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 	_ = s.store.RecordUsage(r.Context(), tenantID, userIDFrom(r), "generation", 1, meta)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, job)
+	writeJSON(w, publicGenerationJob(job))
 }
 
 func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +154,7 @@ func (s *Server) getGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, job)
+	writeJSON(w, publicGenerationJob(job))
 }
 
 func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +191,7 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to update generation job", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, job)
+	writeJSON(w, publicGenerationJob(job))
 }
 
 func (s *Server) deleteGenerationJob(w http.ResponseWriter, r *http.Request) {

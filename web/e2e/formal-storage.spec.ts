@@ -28,6 +28,12 @@ let releaseTemplateVideo: (() => void) | undefined;
 let notifyTemplateVideoStarted: (() => void) | undefined;
 let blockTemplateVideo = false;
 
+function releasePendingImageRequest() {
+  const release = releaseImage;
+  releaseImage = undefined;
+  release?.();
+}
+
 test.beforeAll(async () => {
   imageUpstream = createServer(async (incoming, response) => {
 	if (incoming.method === "GET" && incoming.url === "/v1/videos/formal-video/content") {
@@ -122,7 +128,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  releaseImage?.();
+  releasePendingImageRequest();
 	releaseVideo?.();
 	releaseGemini?.();
 	releaseTemplate?.();
@@ -154,17 +160,27 @@ test("formal restricted Template image jobs survive reload", async ({ page, requ
     activeChannelId: "formal-template", systemPrompt: "formal template rule",
     imageSize: "1024x1024", imageQuality: "auto", imageCount: 1, theme: "light",
   };
+  await page.goto("/workbench/image");
+  await expect(page.getByTitle("设置")).toBeVisible();
+  // Let the initial server hydrate and any default-workspace writes settle
+  // before seeding credentials through the formal API client.
+  await page.waitForTimeout(500);
   expect((await request.put("/api/state/config", { data: config })).status()).toBe(204);
   expect((await request.put("/api/secrets/config", {
     data: { apiKeys: { "formal-template": { image: "template-formal-secret" } }, webdavPass: "" },
   })).status()).toBe(204);
+  await page.reload();
+  await expect(page.getByTitle("设置")).toBeVisible();
+  await expect.poll(async () => {
+    const response = await request.get("/api/secrets/config");
+    return response.ok() ? JSON.stringify(await response.json()).includes("template-formal-secret") : false;
+  }).toBe(true);
   templateProviderRequest = undefined;
   blockTemplate = true;
   let startedResolve: (() => void) | undefined;
   const started = new Promise<void>((resolve) => { startedResolve = resolve; });
   notifyTemplateStarted = startedResolve;
 
-  await page.goto("/workbench/image");
   await page.getByRole("combobox", { name: "分类", exact: true }).fill("正式模板");
   await page.getByPlaceholder("描述想生成的图片…").fill("durable restricted template");
   await page.getByRole("button", { name: "生成", exact: true }).click();
@@ -576,8 +592,7 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await page.reload();
   durableCard = page.locator("article").filter({ hasText: "survives a browser reload" });
   await expect(durableCard.getByText("进行中", { exact: false })).toBeVisible();
-  releaseImage?.();
-  releaseImage = undefined;
+  releasePendingImageRequest();
   await expect(durableCard.getByText("成功", { exact: false })).toBeVisible({ timeout: 15_000 });
   const durableJobs = await request.get("/api/generation-jobs?projectId=&kind=image&page=1&pageSize=20");
   await expect(durableJobs).toBeOK();
@@ -597,7 +612,10 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await expect(page.getByRole("button", { name: "拉取生图模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取视频模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取音频模型" })).toBeVisible();
-  const encryptionNotice = page.getByText("API Key 经本地服务加密后存入 PostgreSQL，数据库中不保存明文。", { exact: false });
+  const encryptionNotice = page.getByText(
+    "API Key 与对象存储密钥经本地服务加密后存入 PostgreSQL，数据库中不保存明文。",
+    { exact: false },
+  );
   await encryptionNotice.scrollIntoViewIfNeeded();
   await expect(encryptionNotice).toBeVisible();
   await page.getByRole("dialog", { name: "设置" }).getByRole("button", { name: "关闭设置" }).click();
@@ -813,14 +831,12 @@ test("formal workflow survives reload, checkpoints steps, and exposes image chil
   let secondStartedResolve: (() => void) | undefined;
   const secondStarted = new Promise<void>((resolve) => { secondStartedResolve = resolve; });
   notifyImageStarted = secondStartedResolve;
-  releaseImage?.();
-  releaseImage = undefined;
+  releasePendingImageRequest();
   await Promise.race([
     secondStarted,
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("second workflow step did not start")), 15_000)),
   ]);
-  releaseImage?.();
-  releaseImage = undefined;
+  releasePendingImageRequest();
 
   await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 15_000 });
   await expect(card.getByRole("img", { name: "工作流生成结果" })).toHaveCount(2);

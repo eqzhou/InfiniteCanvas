@@ -6,13 +6,26 @@ export type SyncDirection = "push" | "pull" | "none";
 
 export const DEFAULT_AGENT_BASE_URL = "http://127.0.0.1:8790";
 export const AGENT_TOKEN_KEY = "openboard:agent-token";
+export const AGENT_CONNECTION_CHANGE_EVENT = "openboard:agent-connection-change";
+let volatileAgentToken = "";
 
 export function readAgentToken(): string {
   try {
-    return sessionStorage.getItem(AGENT_TOKEN_KEY) ?? "";
+    return sessionStorage.getItem(AGENT_TOKEN_KEY) ?? volatileAgentToken;
   } catch {
-    return "";
+    return volatileAgentToken;
   }
+}
+
+export function saveAgentToken(token: string): void {
+  volatileAgentToken = token;
+  try {
+    if (token) sessionStorage.setItem(AGENT_TOKEN_KEY, token);
+    else sessionStorage.removeItem(AGENT_TOKEN_KEY);
+  } catch {
+    // The process-local value keeps the current tab connected when storage is unavailable.
+  }
+  window.dispatchEvent(new Event(AGENT_CONNECTION_CHANGE_EVENT));
 }
 
 export function resolveAgentBaseUrl(configured: string | undefined, token: string, pageOrigin: string): string {

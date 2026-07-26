@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { getProvider } from "@/lib/ai-config";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
@@ -16,6 +16,7 @@ import {
 } from "@/services/runtime-client";
 import {
   DEFAULT_AGENT_BASE_URL,
+  AGENT_CONNECTION_CHANGE_EVENT,
   readAgentToken,
   resolveAgentBaseUrl,
   type AgentConnection,
@@ -279,8 +280,15 @@ export function BrowserRuntime() {
   const baseUrl = useBoardStore((state) => state.config.localAgentUrl ?? DEFAULT_AGENT_BASE_URL);
   const socketRef = useRef<WebSocket | null>(null);
   const stateFrameRef = useRef<number | undefined>(undefined);
+  const [connectionRevision, setConnectionRevision] = useState(0);
 
   useEffect(() => startRuntimeOwnerLease(), []);
+
+  useEffect(() => {
+    const reconnect = () => setConnectionRevision((current) => current + 1);
+    window.addEventListener(AGENT_CONNECTION_CHANGE_EVENT, reconnect);
+    return () => window.removeEventListener(AGENT_CONNECTION_CHANGE_EVENT, reconnect);
+  }, []);
 
   useEffect(() => {
     if (!ready) return;
@@ -423,7 +431,7 @@ export function BrowserRuntime() {
       if (socketRef.current === socket) socketRef.current = null;
       setRuntimeClientId("");
     };
-  }, [baseUrl, navigate, ready]);
+  }, [baseUrl, connectionRevision, navigate, ready]);
 
   useEffect(() => {
     const state = useBoardStore.getState();

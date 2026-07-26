@@ -47,6 +47,7 @@ import {
   loadPrompts,
   rehydrateAssets,
   rehydrateProjects,
+  resetStorageScopeState,
   replaceProjects,
   saveAssets,
   saveConfig,
@@ -55,10 +56,17 @@ import {
   deleteStorageKey,
   uploadMedia,
 } from "@/services/storage";
+import { TenantConfigAdminRequiredError } from "@/services/server-storage";
+import { resetSharedChannelCatalog } from "@/services/shared-channels";
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { collectGenerationStorageKeys } from "@/services/generation-jobs";
+import {
+  loadPublicPromptCatalog,
+  mergePublicPromptCatalog,
+  stripPublicPromptCatalog,
+} from "@/services/public-prompt-catalog";
 import { LatestWrite } from "@/lib/latest-write";
 import { bindDirectorPanorama, removeEdgeAndReconcilePanorama } from "@/lib/director-panorama";
 import {
@@ -103,7 +111,9 @@ type BoardState = {
   showAssistant: boolean;
   showShortcuts: boolean;
   showLocalAgent: boolean;
-  hydrate: () => Promise<void>;
+  hydrate: (promptCatalogScope?: string) => Promise<void>;
+  prepareWorkspaceScopeChange: () => Promise<void>;
+  resetWorkspaceScopeRuntime: () => void;
   setActiveProject: (id: string | null) => void;
   createProject: (title?: string) => string;
   renameProject: (id: string, title: string) => void;
@@ -216,7 +226,8 @@ function applySnap(project: BoardProject, s: Snapshot): BoardProject {
   };
 }
 
-let hydratePromise: Promise<void> | undefined;
+let hydratePromise: { scope: string; promise: Promise<void> } | undefined;
+let activeWorkspaceScope: string | undefined;
 const projectWrites = new LatestWrite(saveProjects, (error) =>
   console.error("OpenBoard project persistence failed", error));
 const configWrites = new LatestWrite(saveConfig, (error) =>
@@ -226,6 +237,16 @@ const assetWrites = new LatestWrite(saveAssets, (error) =>
 const promptWrites = new LatestWrite(savePrompts, (error) =>
   console.error("OpenBoard prompt persistence failed", error));
 let panoramaCommitChain: Promise<void> = Promise.resolve();
+
+export async function saveWorkspaceReplacementConfig(save: () => Promise<void>): Promise<boolean> {
+	try {
+		await save();
+		return true;
+	} catch (error) {
+		if (error instanceof TenantConfigAdminRequiredError) return false;
+		throw error;
+	}
+}
 
 export const useBoardStore = create<BoardState>((set, get) => ({
   ready: false,
@@ -242,16 +263,34 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   showShortcuts: false,
   showLocalAgent: false,
 
-  hydrate: () => {
-    if (hydratePromise) return hydratePromise;
-    hydratePromise = (async () => {
+  hydrate: (promptCatalogScope = "open") => {
+    if (hydratePromise?.scope === promptCatalogScope) return hydratePromise.promise;
+    if (activeWorkspaceScope === promptCatalogScope && get().ready) return Promise.resolve();
+
+    histories.clear();
+    activeWorkspaceScope = promptCatalogScope;
+    set({
+      ready: false,
+      projects: [],
+      activeProjectId: null,
+      selectedIds: [],
+      clipboard: null,
+      config: createDefaultConfig(),
+      assets: [],
+      prompts: [],
+      connectingFrom: null,
+    });
+
+    const promise = (async () => {
       try {
-        const [rawProjects, config, rawAssets, prompts] = await Promise.all([
+        const [rawProjects, config, rawAssets, personalPrompts, publicCatalog] = await Promise.all([
           loadProjects(),
           loadConfig(),
           loadAssets(),
           loadPrompts(),
+          loadPublicPromptCatalog(promptCatalogScope),
         ]);
+        const prompts = mergePublicPromptCatalog(personalPrompts, publicCatalog.catalog);
         const [projects, assets] = await Promise.all([
           rehydrateProjects(rawProjects),
           rehydrateAssets(rawAssets),
@@ -277,9 +316,11 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         await Promise.all([
           saveProjects(nextProjects),
           saveAssets(assets),
-          savePrompts(prompts),
+          savePrompts(personalPrompts),
           // Persist merged built-in prompt sources so reloads and formal storage keep them.
-          saveConfig(hydratedConfig),
+          saveConfig(hydratedConfig).catch((error) => {
+            if (!(error instanceof TenantConfigAdminRequiredError)) throw error;
+          }),
         ]);
         set({
           ready: true,
@@ -289,6 +330,11 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           prompts,
           activeProjectId,
         });
+        if (publicCatalog.stale && publicCatalog.error && typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("openboard:prompt-source-error", {
+            detail: { message: `公共提示词库：${publicCatalog.error}` },
+          }));
+        }
       } catch (err) {
         console.error("OpenBoard hydrate failed", err);
         set({
@@ -300,8 +346,29 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           activeProjectId: null,
         });
       }
-    })();
-    return hydratePromise;
+    })().finally(() => {
+      if (hydratePromise?.promise === promise) hydratePromise = undefined;
+    });
+    hydratePromise = { scope: promptCatalogScope, promise };
+    return promise;
+  },
+
+  prepareWorkspaceScopeChange: async () => {
+    if (hydratePromise) await hydratePromise.promise;
+    await panoramaCommitChain;
+    await Promise.all([
+      projectWrites.flush(),
+      configWrites.flush(),
+      assetWrites.flush(),
+      promptWrites.flush(),
+    ]);
+    // A panorama completion may enqueue a project write just as its chain settles.
+    await projectWrites.flush();
+  },
+
+  resetWorkspaceScopeRuntime: () => {
+    resetStorageScopeState();
+    resetSharedChannelCatalog();
   },
 
   setActiveProject: (id) => set({ activeProjectId: id, selectedIds: [] }),
@@ -640,7 +707,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         .filter((node) => selected.has(node.id))
         .map((node) => node.metadata.generationJobId)
         .filter((value): value is string => Boolean(value)),
-    );
+);
+
     get().updateActive((p) => {
       const remaining = pruneGroupMembership(p.nodes, selected)
         .map((n) => {
@@ -850,7 +918,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setPrompts: (prompts) => {
     const next = structuredClone(prompts);
     set({ prompts: next });
-    promptWrites.enqueue(next);
+    promptWrites.enqueue(stripPublicPromptCatalog(next));
   },
 
   flushPrompts: () => promptWrites.flush(),
@@ -1057,16 +1125,18 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       generationJobs: await listAllGenerationJobs(),
       workflowTemplates: await loadPersonalWorkflowTemplates(),
     };
-    const persistSnapshot = async (value: WorkspaceSnapshot) => {
+    const persistSnapshot = async (value: WorkspaceSnapshot): Promise<boolean> => {
       await replaceProjects(value.projects);
       await saveAssets(value.assets);
       await savePrompts(value.prompts);
-      await saveConfig(value.config);
+		const configSaved = await saveWorkspaceReplacementConfig(() => saveConfig(value.config));
       await replaceGenerationJobs(value.generationJobs);
       await replacePersonalWorkflowTemplates(value.workflowTemplates);
+		return configSaved;
     };
+		let importedConfigSaved = true;
     try {
-      await persistSnapshot(imported);
+		importedConfigSaved = await persistSnapshot(imported);
     } catch (error) {
       try {
         await persistSnapshot(previous);
@@ -1081,7 +1151,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       activeProjectId: imported.projects[0]?.id ?? null,
       selectedIds: [],
       clipboard: null,
-      config: structuredClone(imported.config),
+		config: structuredClone(importedConfigSaved ? imported.config : previous.config),
       assets: structuredClone(imported.assets),
       prompts: structuredClone(imported.prompts),
       connectingFrom: null,

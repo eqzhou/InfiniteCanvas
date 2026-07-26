@@ -49,6 +49,20 @@ describe("application configuration", () => {
     });
   });
 
+  test("normalizes image toolbar preferences without mutating persisted input", () => {
+    const base = createDefaultConfig();
+    const imageToolbar = {
+      order: ["crop", "download", "crop"],
+      hidden: ["mask", "unknown"],
+      showLabels: true,
+    };
+    const normalized = normalizeAppConfig({ ...base, imageToolbar } as unknown as typeof base);
+    expect(imageToolbar.order).toEqual(["crop", "download", "crop"]);
+    expect(normalized.imageToolbar?.order.slice(0, 2)).toEqual(["crop", "download"]);
+    expect(normalized.imageToolbar?.hidden).toEqual(["mask"]);
+    expect(normalized.imageToolbar?.showLabels).toBe(true);
+  });
+
   test("upgrades legacy prompt source URLs to bounded declarative configs", () => {
     const base = createDefaultConfig();
     const input = {

@@ -1,19 +1,17 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+import { directDependencyNames } from "./audit-licenses-core.mjs";
+
 const root = resolve(new URL("..", import.meta.url).pathname);
 const bundledNotices = new Map([
   ["@esbuild/darwin-arm64", "third_party/licenses/@esbuild-darwin-arm64-0.28.1-MIT.txt"],
   ["@rollup/rollup-darwin-arm64", "third_party/licenses/@rollup-rollup-darwin-arm64-4.62.2-MIT.txt"],
 ]);
-const packages = [
-  "react", "react-dom", "react-router-dom", "zustand", "lucide-react",
-  "nanoid", "clsx", "html-to-image", "idb-keyval", "react-markdown",
-  "remark-gfm", "three", "@types/three",
-  "@playwright/test", "typescript", "vite",
-];
+const webManifest = JSON.parse(await readFile(resolve(root, "web", "package.json"), "utf8"));
+const packages = directDependencyNames(webManifest, ["@playwright/test", "@types/three", "typescript", "vite"]);
 const expected = new Map([
-  ["react", "MIT"], ["react-dom", "MIT"], ["react-router-dom", "MIT"],
+  ["react", "MIT"], ["react-dom", "MIT"], ["react-router", "MIT"],
   ["zustand", "MIT"], ["lucide-react", "ISC"], ["nanoid", "MIT"],
   ["clsx", "MIT"], ["html-to-image", "MIT"], ["idb-keyval", "Apache-2.0"],
   ["react-markdown", "MIT"], ["remark-gfm", "MIT"],

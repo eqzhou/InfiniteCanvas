@@ -46,6 +46,7 @@ type imageGenerationRequest struct {
 	TransparentBackground bool
 	References            []generatedImage
 	Template              *imageProviderTemplate
+	ProviderTimeout       time.Duration
 }
 
 type generatedImage struct {
@@ -55,6 +56,10 @@ type generatedImage struct {
 
 type imageExecutor interface {
 	Generate(context.Context, imageGenerationRequest) ([]generatedImage, error)
+}
+
+type resumableImageExecutor interface {
+	GenerateResumable(context.Context, imageGenerationRequest, *videoProviderCheckpoint, func(videoProviderCheckpoint) error) ([]generatedImage, error)
 }
 
 type createImageJobRequest struct {
@@ -76,16 +81,17 @@ type createImageJobParameters struct {
 }
 
 type persistedImageJobParameters struct {
-	Executor              string   `json:"executor"`
-	RequestHash           string   `json:"requestHash"`
-	Size                  string   `json:"size"`
-	Quality               string   `json:"quality,omitempty"`
-	Count                 int      `json:"count"`
-	Category              string   `json:"category,omitempty"`
-	TransparentBackground bool     `json:"transparentBackground,omitempty"`
-	ReferenceStorageKeys  []string `json:"referenceStorageKeys,omitempty"`
-	WorkflowRunID         string   `json:"workflowRunId,omitempty"`
-	WorkflowStepID        string   `json:"workflowStepId,omitempty"`
+	Executor              string                     `json:"executor"`
+	RequestHash           string                     `json:"requestHash"`
+	Size                  string                     `json:"size"`
+	Quality               string                     `json:"quality,omitempty"`
+	Count                 int                        `json:"count"`
+	Category              string                     `json:"category,omitempty"`
+	TransparentBackground bool                       `json:"transparentBackground,omitempty"`
+	ReferenceStorageKeys  []string                   `json:"referenceStorageKeys,omitempty"`
+	WorkflowRunID         string                     `json:"workflowRunId,omitempty"`
+	WorkflowStepID        string                     `json:"workflowStepId,omitempty"`
+	SharedChannel         *generationChannelSnapshot `json:"sharedChannel,omitempty"`
 }
 
 type storedImageProvider struct {
@@ -111,10 +117,10 @@ type storedImageConfig struct {
 }
 
 type storedConfigSecrets struct {
-	APIKeys                       map[string]map[string]string `json:"apiKeys"`
-	ObjectStorageAccessKeyID      string                       `json:"objectStorageAccessKeyId,omitempty"`
-	ObjectStorageSecretAccessKey  string                       `json:"objectStorageSecretAccessKey,omitempty"`
-	ObjectStorageSessionToken     string                       `json:"objectStorageSessionToken,omitempty"`
+	APIKeys                      map[string]map[string]string `json:"apiKeys"`
+	ObjectStorageAccessKeyID     string                       `json:"objectStorageAccessKeyId,omitempty"`
+	ObjectStorageSecretAccessKey string                       `json:"objectStorageSecretAccessKey,omitempty"`
+	ObjectStorageSessionToken    string                       `json:"objectStorageSessionToken,omitempty"`
 }
 
 type generationResultItem struct {
@@ -123,6 +129,11 @@ type generationResultItem struct {
 	Width      int    `json:"width"`
 	Height     int    `json:"height"`
 	Bytes      int    `json:"bytes"`
+}
+
+type serverImageJobResult struct {
+	UpstreamTask *videoProviderCheckpoint `json:"upstreamTask,omitempty"`
+	Items        []generationResultItem   `json:"items,omitempty"`
 }
 
 func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +155,24 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	input.Parameters.Category = strings.TrimSpace(input.Parameters.Category)
 
 	tenantID := tenantIDFrom(r)
+	requestHash, err := hashImageJobRequest(input)
+	if err != nil {
+		http.Error(w, "invalid image generation job", http.StatusBadRequest)
+		return
+	}
+	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID); getErr == nil && isMatchingServerImageJob(existing, requestHash) {
+		writeJSON(w, publicGenerationJob(existing))
+		return
+	}
+	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "image", input.ID, input.ProviderID, input.Model)
+	if err != nil {
+		http.Error(w, "no eligible shared image channel", http.StatusUnprocessableEntity)
+		return
+	}
+	input.ProviderID = selectedProviderID
+	if sharedSnapshot != nil {
+		input.Model = sharedSnapshot.Model
+	}
 	var referenceBytes int
 	for _, storageKey := range input.Parameters.ReferenceStorageKeys {
 		reference, err := s.readTenantImageBlobContext(r.Context(), tenantID, storageKey)
@@ -157,18 +186,13 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	requestHash, err := hashImageJobRequest(input)
-	if err != nil {
-		http.Error(w, "invalid image generation job", http.StatusBadRequest)
-		return
-	}
-
 	parameters, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, RequestHash: requestHash,
 		Size: input.Parameters.Size, Quality: input.Parameters.Quality, Count: input.Parameters.Count,
 		Category:              input.Parameters.Category,
 		TransparentBackground: input.Parameters.TransparentBackground,
 		ReferenceStorageKeys:  append([]string(nil), input.Parameters.ReferenceStorageKeys...),
+		SharedChannel:         sharedSnapshot,
 	})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job := store.GenerationJob{
@@ -181,7 +205,7 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID)
 		if getErr == nil && isMatchingServerImageJob(existing, requestHash) {
 			w.WriteHeader(http.StatusOK)
-			writeJSON(w, existing)
+			writeJSON(w, publicGenerationJob(existing))
 			return
 		}
 		http.Error(w, "generation job id already belongs to another request", http.StatusConflict)
@@ -203,7 +227,7 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	s.notifyGenerationWorkers()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	writeJSON(w, job)
+	writeJSON(w, publicGenerationJob(job))
 }
 
 func validCreateImageJob(input createImageJobRequest) bool {
@@ -346,7 +370,32 @@ func (s *Server) executeClaimedImageJob(claimed store.TenantGenerationJob) {
 		return
 	}
 	auditRequest = imageRequestAuditPayload(request)
-	images, err := s.imageExecutor.Generate(ctx, request)
+	providerCtx, providerCancel := generationProviderContext(ctx, request.ProviderTimeout)
+	defer providerCancel()
+	var checkpoint *videoProviderCheckpoint
+	if (request.Protocol == "apimart" || request.Protocol == "kie") && len(job.Result) > 0 && string(job.Result) != "{}" {
+		var previous serverImageJobResult
+		if json.Unmarshal(job.Result, &previous) != nil || previous.UpstreamTask == nil ||
+			!validVideoCheckpoint(*previous.UpstreamTask) || previous.UpstreamTask.Protocol != request.Protocol {
+			finish("failed", nil, "图片生成检查点无效")
+			return
+		}
+		checkpoint = previous.UpstreamTask
+	}
+	images, err := func() ([]generatedImage, error) {
+		resumable, ok := s.imageExecutor.(resumableImageExecutor)
+		if (request.Protocol != "apimart" && request.Protocol != "kie") || !ok {
+			return s.imageExecutor.Generate(providerCtx, request)
+		}
+		return resumable.GenerateResumable(providerCtx, request, checkpoint, func(value videoProviderCheckpoint) error {
+			if !validVideoCheckpoint(value) || value.Protocol != request.Protocol {
+				return errors.New("invalid image provider checkpoint")
+			}
+			result, _ := json.Marshal(serverImageJobResult{UpstreamTask: &value})
+			_, err := s.store.CheckpointServerGenerationJob(ctx, tenantID, job.ID, job.LeaseOwner, result, time.Now().UTC())
+			return err
+		})
+	}()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			finish("cancelled", nil, "已取消")
@@ -369,7 +418,7 @@ func (s *Server) executeClaimedImageJob(claimed store.TenantGenerationJob) {
 		}
 		return
 	}
-	result, _ := json.Marshal(map[string]any{"items": items})
+	result, _ := json.Marshal(serverImageJobResult{Items: items})
 	if !finish("succeeded", result, "") {
 		for _, storageKey := range keys {
 			_ = s.deleteTenantBlob(context.Background(), tenantID, "", storageKey)
@@ -448,7 +497,7 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 			_, _ = s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC())
 		}
 	}
-	writeJSON(w, job)
+	writeJSON(w, publicGenerationJob(job))
 }
 
 func (s *Server) authorizeServerGeneration(w http.ResponseWriter, r *http.Request) bool {
@@ -478,6 +527,10 @@ func (s *Server) authorizeServerGeneration(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID string, job store.GenerationJob) (imageGenerationRequest, error) {
+	var parameters persistedImageJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Executor != serverExecutorMarker {
+		return imageGenerationRequest{}, errors.New("invalid server job parameters")
+	}
 	configValue, err := s.store.GetState(ctx, tenantID, "config")
 	if err != nil {
 		return imageGenerationRequest{}, err
@@ -489,14 +542,6 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	if json.Unmarshal(configValue, &config) != nil || len(config.Channels) > 100 {
 		return imageGenerationRequest{}, errors.New("invalid config")
 	}
-	secretValue, err := s.decryptSecrets(ctx, tenantID)
-	if err != nil {
-		return imageGenerationRequest{}, err
-	}
-	var secrets storedConfigSecrets
-	if json.Unmarshal(secretValue, &secrets) != nil {
-		return imageGenerationRequest{}, errors.New("invalid secrets")
-	}
 	var channel *storedImageChannel
 	for index := range config.Channels {
 		if config.Channels[index].ID == job.ProviderID {
@@ -504,8 +549,44 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 			break
 		}
 	}
-	if channel == nil {
-		return imageGenerationRequest{}, errors.New("channel not found")
+	apiKey := ""
+	systemPrompt := config.SystemPrompt
+	providerTimeout := time.Duration(0)
+	if parameters.SharedChannel != nil {
+		snapshot := parameters.SharedChannel
+		if snapshot.ProviderID != job.ProviderID {
+			return imageGenerationRequest{}, errors.New("invalid generation channel snapshot")
+		}
+		apiKey, err = s.openGenerationChannelSecret(tenantID, job.ID, job.Kind, *snapshot)
+		if err != nil {
+			return imageGenerationRequest{}, err
+		}
+		providerTimeout, err = generationChannelTimeout(snapshot)
+		if err != nil {
+			return imageGenerationRequest{}, err
+		}
+		channel = &storedImageChannel{
+			ID: snapshot.ProviderID, BaseURL: snapshot.BaseURL, DefaultImageModel: snapshot.Model,
+			Providers: map[string]storedImageProvider{"image": {BaseURL: snapshot.BaseURL, Model: snapshot.Model, Protocol: snapshot.Protocol}},
+		}
+		systemPrompt = snapshot.SystemPrompt
+	} else if channel == nil {
+		shared, sharedSecret, sharedErr := s.resolveSharedChannel(ctx, tenantID, job.ProviderID)
+		if sharedErr != nil {
+			return imageGenerationRequest{}, errors.New("channel not found")
+		}
+		value := sharedChannelStoredValue(shared)
+		channel, apiKey = &value, sharedSecret
+	} else {
+		secretValue, secretErr := s.decryptSecrets(ctx, tenantID)
+		if secretErr != nil {
+			return imageGenerationRequest{}, secretErr
+		}
+		var secrets storedConfigSecrets
+		if json.Unmarshal(secretValue, &secrets) != nil {
+			return imageGenerationRequest{}, errors.New("invalid secrets")
+		}
+		apiKey = secrets.APIKeys[job.ProviderID]["image"]
 	}
 	provider, ok := channel.Providers["image"]
 	if !ok {
@@ -514,7 +595,7 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	if provider.Protocol == "" {
 		provider.Protocol = "openai"
 	}
-	if (provider.Protocol != "openai" && provider.Protocol != "gemini" && provider.Protocol != "template") || strings.TrimSpace(provider.BaseURL) == "" {
+	if (provider.Protocol != "openai" && provider.Protocol != "gemini" && provider.Protocol != "template" && provider.Protocol != "apimart" && provider.Protocol != "kie") || strings.TrimSpace(provider.BaseURL) == "" {
 		return imageGenerationRequest{}, errors.New("unsupported image provider")
 	}
 	if provider.Protocol == "template" {
@@ -525,13 +606,8 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	if len(provider.BaseURL) > 8*1024 || len(provider.Model) > 500 || len(config.SystemPrompt) > 20_000 {
 		return imageGenerationRequest{}, errors.New("image provider configuration exceeds limits")
 	}
-	apiKey := secrets.APIKeys[job.ProviderID]["image"]
 	if apiKey == "" || len(apiKey) > 64*1024 {
 		return imageGenerationRequest{}, errors.New("missing image api key")
-	}
-	var parameters persistedImageJobParameters
-	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Executor != serverExecutorMarker {
-		return imageGenerationRequest{}, errors.New("invalid server job parameters")
 	}
 	references := make([]generatedImage, 0, len(parameters.ReferenceStorageKeys))
 	var referenceBytes int
@@ -547,7 +623,7 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 		references = append(references, imageValue)
 	}
 	prompt := strings.TrimSpace(job.Prompt)
-	if systemPrompt := strings.TrimSpace(config.SystemPrompt); systemPrompt != "" {
+	if systemPrompt = strings.TrimSpace(systemPrompt); systemPrompt != "" {
 		prompt = systemPrompt + "\n\n" + prompt
 	}
 	if len(prompt) > 100_000 {
@@ -564,6 +640,7 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 		Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: apiKey, Model: model, Prompt: prompt,
 		Size: parameters.Size, Quality: parameters.Quality, Count: parameters.Count,
 		TransparentBackground: parameters.TransparentBackground, References: references, Template: provider.Template,
+		ProviderTimeout: providerTimeout,
 	}, nil
 }
 

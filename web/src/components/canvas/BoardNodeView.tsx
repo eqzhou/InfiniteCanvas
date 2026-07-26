@@ -29,6 +29,9 @@ const PanoramaNodeCard = lazy(() => import("@/components/canvas/PanoramaNodeCard
   default: module.PanoramaNodeCard,
 })));
 
+// The image action strip can wrap to two rows and normally extends above the node.
+const NODE_ACTIONS_TOP_SAFE_AREA = 180;
+
 function moveInput(order: readonly string[], index: number, offset: -1 | 1): string[] {
   const target = index + offset;
   return order.map((id, current) => {
@@ -137,6 +140,12 @@ export function BoardNodeView({
         e.stopPropagation();
         onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
         onDragStart(e);
+      }}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        if (node.type === "image" && node.metadata.content) {
+          setImagePreviewOpen(true);
+        }
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -338,8 +347,9 @@ export function BoardNodeView({
 
         {node.type === "config" ? (
           <div
-            className="flex h-full flex-col gap-2 text-xs"
+            className="flex h-full flex-col gap-2 overflow-y-auto pr-1 text-xs"
             onPointerDown={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
           >
             <label className="flex flex-col gap-1">
               模式
@@ -386,6 +396,19 @@ export function BoardNodeView({
                 onChange={(e) =>
                   updateNode(node.id, { metadata: { model: e.target.value } })
                 }
+              />
+            </label>
+            <label className="flex min-h-0 flex-1 flex-col gap-1">
+              提示词
+              <textarea
+                aria-label="配置节点提示词"
+                className="min-h-20 flex-1 resize-none rounded border border-[var(--ob-line)] bg-transparent px-2 py-1 leading-relaxed"
+                maxLength={100_000}
+                placeholder="输入或粘贴多行提示词；空行会被保留"
+                value={node.metadata.prompt ?? ""}
+                onChange={(event) => updateNode(node.id, {
+                  metadata: { prompt: event.target.value },
+                })}
               />
             </label>
             <label className="flex flex-col gap-1">
@@ -666,6 +689,9 @@ export function BoardNodeView({
       {selected && node.type !== "group" && node.type !== "plugin" && node.type !== "director" && node.type !== "panorama" ? (
         <NodeActions
           node={node}
+          avoidTopToolbarOverlap={Boolean(project && (
+            node.position.y * project.viewport.k + project.viewport.y <= NODE_ACTIONS_TOP_SAFE_AREA
+          ))}
           onEditText={node.type === "text" ? () => {
             const editor = textEditorRef.current;
             if (!editor) return;

@@ -1,0 +1,463 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/openboard/openboard/server/internal/store"
+)
+
+func sharedChannelHandler(t *testing.T) (*Server, *memoryStore, http.Handler) {
+	t.Helper()
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+	return server, backend, router
+}
+
+func putSharedChannelSecret(t *testing.T, router http.Handler, id, apiKey string) *httptest.ResponseRecorder {
+	t.Helper()
+	listed := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	var channels []adminChannelPublic
+	if listed.Code != http.StatusOK || json.Unmarshal(listed.Body.Bytes(), &channels) != nil {
+		t.Fatalf("load channel binding: %d %s", listed.Code, listed.Body.String())
+	}
+	for _, channel := range channels {
+		if channel.ID == id {
+			body, _ := json.Marshal(adminChannelSecretInput{APIKey: apiKey, SecretBindingID: channel.SecretBindingID})
+			return request(t, router, http.MethodPut, "/api/admin/channels/"+id+"/secret", body)
+		}
+	}
+	t.Fatalf("channel %q not found", id)
+	return nil
+}
+
+func TestAdminSharedChannelsEncryptSecretsAndNeverReturnThem(t *testing.T) {
+	_, backend, router := sharedChannelHandler(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer sk-shared-private" {
+			t.Fatalf("unexpected provider request: %s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-image-1"},{"id":"gpt-4.1"}]}`))
+	}))
+	defer upstream.Close()
+
+	channels, _ := json.Marshal([]adminChannelPublic{{
+		ID: "shared-main", Name: "Shared", BaseURL: upstream.URL, Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 2, TimeoutSeconds: 15, DefaultImageModel: "gpt-image-1",
+	}})
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-main", "sk-shared-private"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	stored := backend.state[tenantKey(store.DefaultTenantID, adminChannelSecretsStateKey)]
+	if len(stored) == 0 || bytes.Contains(stored, []byte("sk-shared-private")) {
+		t.Fatalf("shared secret was not encrypted: %s", stored)
+	}
+	listed := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	if listed.Code != http.StatusOK || bytes.Contains(listed.Body.Bytes(), []byte("sk-shared-private")) || !bytes.Contains(listed.Body.Bytes(), []byte(`"secretConfigured": true`)) {
+		t.Fatalf("unsafe channel list: %d %s", listed.Code, listed.Body.String())
+	}
+	safe := request(t, router, http.MethodGet, "/api/shared-channels", nil)
+	if safe.Code != http.StatusOK || bytes.Contains(safe.Body.Bytes(), []byte(upstream.URL)) || bytes.Contains(safe.Body.Bytes(), []byte("timeoutSeconds")) || !bytes.Contains(safe.Body.Bytes(), []byte("shared-auto")) {
+		t.Fatalf("unsafe public shared catalog: %d %s", safe.Code, safe.Body.String())
+	}
+	models := request(t, router, http.MethodPost, "/api/admin/channels/shared-main/models", nil)
+	if models.Code != http.StatusOK || !bytes.Contains(models.Body.Bytes(), []byte("gpt-image-1")) {
+		t.Fatalf("models: %d %s", models.Code, models.Body.String())
+	}
+	connection := request(t, router, http.MethodPost, "/api/admin/channels/shared-main/test", nil)
+	if connection.Code != http.StatusOK || !bytes.Contains(connection.Body.Bytes(), []byte(`"ok": true`)) {
+		t.Fatalf("connection: %d %s", connection.Code, connection.Body.String())
+	}
+}
+
+func TestSharedChannelGenerationFallbackPreservesPersonalPrecedence(t *testing.T) {
+	server, backend, router := sharedChannelHandler(t)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", []byte(`{"channels":[],"systemPrompt":"shared system"}`)); err != nil {
+		t.Fatal(err)
+	}
+	channels := []byte(`[{"id":"shared-main","name":"Shared","baseUrl":"https://shared.example","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"gpt-image-1"}]`)
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-main", "sk-shared"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	parameters, _ := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, Size: "1024x1024", Count: 1})
+	resolved, err := server.resolveImageGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+		ProviderID: "shared-main", Model: "", Prompt: "draw", Parameters: parameters,
+	})
+	if err != nil || resolved.APIKey != "sk-shared" || resolved.Model != "gpt-image-1" || resolved.Prompt != "shared system\n\ndraw" {
+		t.Fatalf("shared fallback = %#v, %v", resolved, err)
+	}
+
+	personal := []byte(`{"channels":[{"id":"shared-main","baseUrl":"https://personal.example","defaultImageModel":"personal-model","providers":{}}],"systemPrompt":""}`)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", personal); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := server.resolveImageGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+		ProviderID: "shared-main", Prompt: "draw", Parameters: parameters,
+	}); err == nil || resolved.APIKey == "sk-shared" {
+		t.Fatalf("personal channel must win without falling through, got %#v, %v", resolved, err)
+	}
+}
+
+func TestSharedGenerationChannelSnapshotSurvivesAdminChanges(t *testing.T) {
+	server, backend, _ := sharedChannelHandler(t)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", []byte(`{"channels":[],"systemPrompt":"original system"}`)); err != nil {
+		t.Fatal(err)
+	}
+	channelList := []adminChannelPublic{{
+		ID: "shared-main", Name: "Shared", BaseURL: "https://original.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "original-model", SecretBindingID: "original-binding",
+	}}
+	channels, _ := json.Marshal(channelList)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelsStateKey, channels); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := server.encryptAdminChannelSecrets(store.DefaultTenantID, channelList, map[string]string{"shared-main": "sk-original"})
+	if err != nil || backend.PutState(context.Background(), store.DefaultTenantID, adminChannelSecretsStateKey, envelope) != nil {
+		t.Fatal("failed to seed shared secret")
+	}
+
+	providerID, snapshot, err := server.snapshotGenerationChannel(context.Background(), store.DefaultTenantID, "image", "job-snapshot", sharedChannelAutoID, "")
+	if err != nil || providerID != "shared-main" || snapshot == nil {
+		t.Fatalf("snapshot = %q %#v, %v", providerID, snapshot, err)
+	}
+	if snapshot.Model != "original-model" || snapshot.TimeoutSeconds != 30 {
+		t.Fatalf("snapshot did not bind model and timeout: %#v", snapshot)
+	}
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", []byte(`{"channels":[],"systemPrompt":"changed system"}`)); err != nil {
+		t.Fatal(err)
+	}
+	changedList := []adminChannelPublic{{
+		ID: "shared-main", Name: "Changed", BaseURL: "https://changed.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "changed-model", SecretBindingID: "changed-binding",
+	}}
+	changed, _ := json.Marshal(changedList)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelsStateKey, changed); err != nil {
+		t.Fatal(err)
+	}
+	changedEnvelope, _ := server.encryptAdminChannelSecrets(store.DefaultTenantID, changedList, map[string]string{"shared-main": "sk-changed"})
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelSecretsStateKey, changedEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	parameters, _ := json.Marshal(persistedImageJobParameters{
+		Executor: serverExecutorMarker, Size: "1024x1024", Count: 1, SharedChannel: snapshot,
+	})
+	resolved, err := server.resolveImageGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+		ID: "job-snapshot", Kind: "image", ProviderID: providerID, Prompt: "draw", Parameters: parameters,
+	})
+	if err != nil || resolved.BaseURL != "https://original.example/v1" || resolved.APIKey != "sk-original" || resolved.Model != "original-model" || resolved.ProviderTimeout != 30*time.Second || resolved.Prompt != "original system\n\ndraw" {
+		t.Fatalf("snapshot was not immutable: %#v, %v", resolved, err)
+	}
+}
+
+func TestSharedGenerationSnapshotRejectsTimeoutOutsideAdminBounds(t *testing.T) {
+	server, backend, _ := sharedChannelHandler(t)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", []byte(`{"channels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	channel := adminChannelPublic{
+		ID: "shared-main", BaseURL: "https://shared.example/v1", Protocol: "openai", Enabled: true,
+		AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "image-model", SecretBindingID: "binding",
+	}
+	channels, _ := json.Marshal([]adminChannelPublic{channel})
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelsStateKey, channels); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := server.encryptAdminChannelSecrets(store.DefaultTenantID, []adminChannelPublic{channel}, map[string]string{"shared-main": "sk-shared"})
+	if err != nil || backend.PutState(context.Background(), store.DefaultTenantID, adminChannelSecretsStateKey, envelope) != nil {
+		t.Fatal("failed to seed shared channel")
+	}
+	_, snapshot, err := server.snapshotGenerationChannel(context.Background(), store.DefaultTenantID, "image", "job-timeout", "shared-main", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, timeout := range []int{0, 601} {
+		changed := *snapshot
+		changed.TimeoutSeconds = timeout
+		parameters, _ := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, Size: "1024x1024", Count: 1, SharedChannel: &changed})
+		_, resolveErr := server.resolveImageGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+			ID: "job-timeout", Kind: "image", ProviderID: "shared-main", Model: "image-model", Prompt: "draw", Parameters: parameters,
+		})
+		if resolveErr == nil {
+			t.Fatalf("timeout %d was accepted", timeout)
+		}
+	}
+}
+
+func TestGenerationProviderContextBoundsTheWholeProviderCall(t *testing.T) {
+	parent := context.Background()
+	personal, cancelPersonal := generationProviderContext(parent, 0)
+	cancelPersonal()
+	if personal != parent {
+		t.Fatal("personal channel context should retain the existing provider defaults")
+	}
+
+	shared, cancelShared := generationProviderContext(parent, 10*time.Millisecond)
+	defer cancelShared()
+	select {
+	case <-shared.Done():
+		if !errors.Is(shared.Err(), context.DeadlineExceeded) {
+			t.Fatalf("shared provider context ended with %v", shared.Err())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shared provider context did not enforce its timeout")
+	}
+}
+
+func TestSharedJobCreationPersistsResolvedDefaultModels(t *testing.T) {
+	server, backend, router := sharedChannelHandler(t)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", []byte(`{"channels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	channels := []byte(`[{
+		"id":"shared-main","name":"Shared","baseUrl":"https://shared.example/v1","protocol":"openai",
+		"enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,
+		"defaultImageModel":"image-default","defaultVideoModel":"video-default","defaultAudioModel":"audio-default"
+	}]`)
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-main", "sk-shared"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	cases := []struct {
+		kind, model, body string
+	}{
+		{"image", "image-default", `{"id":"shared-image","prompt":"draw","providerId":"shared-main","parameters":{"size":"1024x1024","count":1}}`},
+		{"video", "video-default", `{"id":"shared-video","prompt":"move","providerId":"shared-main","parameters":{"ratio":"16:9","resolution":"720p"}}`},
+		{"audio", "audio-default", `{"id":"shared-audio","prompt":"speak","providerId":"shared-main","parameters":{"voice":"alloy","format":"mp3"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			got := request(t, router, http.MethodPost, "/api/generation-jobs/"+tc.kind, []byte(tc.body))
+			if got.Code != http.StatusAccepted {
+				t.Fatalf("create: %d %s", got.Code, got.Body.String())
+			}
+			var job store.GenerationJob
+			if err := json.Unmarshal(got.Body.Bytes(), &job); err != nil || job.Model != tc.model {
+				t.Fatalf("persisted model = %q, decode=%v body=%s", job.Model, err, got.Body.String())
+			}
+			if bytes.Contains(job.Parameters, []byte(`"secret"`)) || bytes.Contains(got.Body.Bytes(), []byte(`"ciphertext"`)) {
+				t.Fatalf("public job exposed shared-channel secret: %s", got.Body.String())
+			}
+			backend.mu.Lock()
+			storedJob := backend.jobs[tenantKey(store.DefaultTenantID, "shared-"+tc.kind)]
+			backend.mu.Unlock()
+			var persisted struct {
+				SharedChannel *generationChannelSnapshot `json:"sharedChannel"`
+			}
+			if err := json.Unmarshal(storedJob.Parameters, &persisted); err != nil || persisted.SharedChannel == nil ||
+				persisted.SharedChannel.Model != tc.model || persisted.SharedChannel.TimeoutSeconds != 30 {
+				t.Fatalf("persisted snapshot = %#v, decode=%v", persisted.SharedChannel, err)
+			}
+			if persisted.SharedChannel.Secret.Ciphertext == "" {
+				t.Fatal("internal queued job did not retain its encrypted execution credential")
+			}
+			if tc.kind == "image" {
+				resolved, err := server.resolveImageGenerationRequest(context.Background(), store.DefaultTenantID, storedJob)
+				if err != nil || resolved.ProviderTimeout != 30*time.Second {
+					t.Fatalf("resolved image timeout = %s, err=%v", resolved.ProviderTimeout, err)
+				}
+			} else {
+				resolved, err := server.resolveMediaGenerationRequest(context.Background(), store.DefaultTenantID, storedJob)
+				if err != nil || resolved.ProviderTimeout != 30*time.Second {
+					t.Fatalf("resolved %s timeout = %s, err=%v", tc.kind, resolved.ProviderTimeout, err)
+				}
+			}
+		})
+	}
+}
+
+func TestAdminSharedChannelsRejectUnsafeConfiguration(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	cases := [][]byte{
+		[]byte(`[{"id":"bad id","name":"x","baseUrl":"https://example.com","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30}]`),
+		[]byte(`[{"id":"safe","name":"x","baseUrl":"http://example.com","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30}]`),
+		[]byte(`[{"id":"safe","name":"x","baseUrl":"https://user:pass@example.com","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30}]`),
+		[]byte(`[{"id":"safe","name":"x","baseUrl":"https://example.com","protocol":"unknown","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30}]`),
+	}
+	for _, body := range cases {
+		if got := request(t, router, http.MethodPut, "/api/admin/channels", body); got.Code != http.StatusBadRequest {
+			t.Errorf("unsafe input accepted: %d %s", got.Code, body)
+		}
+	}
+}
+
+func TestAdminSharedChannelDestinationChangeInvalidatesSecret(t *testing.T) {
+	server, _, router := sharedChannelHandler(t)
+	oldProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer oldProvider.Close()
+	newRequests := 0
+	newProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		newRequests++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer newProvider.Close()
+
+	putChannel := func(baseURL, protocol string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal([]adminChannelPublic{{
+			ID: "shared-main", Name: "Shared", BaseURL: baseURL, Protocol: protocol,
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 10, DefaultImageModel: "image-model",
+		}})
+		return request(t, router, http.MethodPut, "/api/admin/channels", body)
+	}
+	if got := putChannel(oldProvider.URL, "openai"); got.Code != http.StatusOK {
+		t.Fatalf("create channel: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-main", "sk-old-destination"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	listedBeforeRebind := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	var beforeRebind []adminChannelPublic
+	if json.Unmarshal(listedBeforeRebind.Body.Bytes(), &beforeRebind) != nil || len(beforeRebind) != 1 {
+		t.Fatalf("load old binding: %s", listedBeforeRebind.Body.String())
+	}
+	oldBinding := beforeRebind[0].SecretBindingID
+	if got := putChannel(newProvider.URL, "openai"); got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte(`"secretConfigured": false`)) {
+		t.Fatalf("destination update retained secret: %d %s", got.Code, got.Body.String())
+	}
+	staleBody, _ := json.Marshal(adminChannelSecretInput{APIKey: "sk-from-stale-page", SecretBindingID: oldBinding})
+	if got := request(t, router, http.MethodPut, "/api/admin/channels/shared-main/secret", staleBody); got.Code != http.StatusConflict {
+		t.Fatalf("stale secret binding accepted: %d %s", got.Code, got.Body.String())
+	}
+	if _, _, err := server.resolveSharedChannel(context.Background(), store.DefaultTenantID, "shared-main"); err == nil {
+		t.Fatal("changed destination resolved with the old secret")
+	}
+	if got := request(t, router, http.MethodPost, "/api/admin/channels/shared-main/models", nil); got.Code == http.StatusOK {
+		t.Fatalf("models unexpectedly used stale secret: %s", got.Body.String())
+	}
+	if newRequests != 0 {
+		t.Fatalf("old secret was sent to the new destination (%d requests)", newRequests)
+	}
+}
+
+func TestAdminSharedChannelDeleteAndRecreateDoesNotReviveSecret(t *testing.T) {
+	server, _, router := sharedChannelHandler(t)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer provider.Close()
+	body, _ := json.Marshal([]adminChannelPublic{{
+		ID: "shared-main", Name: "Shared", BaseURL: provider.URL, Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 10, DefaultImageModel: "image-model",
+	}})
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", body); got.Code != http.StatusOK {
+		t.Fatalf("create channel: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-main", "sk-deleted"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(t, router, http.MethodDelete, "/api/admin/channels/shared-main", nil); got.Code != http.StatusNoContent {
+		t.Fatalf("delete channel: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", body); got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte(`"secretConfigured": false`)) {
+		t.Fatalf("recreated channel revived secret: %d %s", got.Code, got.Body.String())
+	}
+	if _, _, err := server.resolveSharedChannel(context.Background(), store.DefaultTenantID, "shared-main"); err == nil {
+		t.Fatal("recreated channel resolved with deleted secret")
+	}
+}
+
+func TestAdminSharedChannelSecretAADRejectsChangedLifecycleAndDestination(t *testing.T) {
+	server, _, _ := sharedChannelHandler(t)
+	original := adminChannelPublic{
+		ID: "shared-main", BaseURL: "https://old.example/v1", Protocol: "openai", SecretBindingID: "lifecycle-one",
+	}
+	raw, err := server.encryptAdminChannelSecrets(store.DefaultTenantID, []adminChannelPublic{original}, map[string]string{"shared-main": "sk-bound"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, changed := range map[string]adminChannelPublic{
+		"lifecycle": {ID: original.ID, BaseURL: original.BaseURL, Protocol: original.Protocol, SecretBindingID: "lifecycle-two"},
+		"base url":  {ID: original.ID, BaseURL: "https://new.example/v1", Protocol: original.Protocol, SecretBindingID: original.SecretBindingID},
+		"protocol":  {ID: original.ID, BaseURL: original.BaseURL, Protocol: "gemini", SecretBindingID: original.SecretBindingID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			values, decryptErr := server.decryptAdminChannelSecretsRaw(store.DefaultTenantID, []adminChannelPublic{changed}, raw)
+			if decryptErr != nil {
+				t.Fatal(decryptErr)
+			}
+			if values[original.ID] != "" {
+				t.Fatalf("secret survived %s change", name)
+			}
+		})
+	}
+}
+
+func TestAdminSharedChannelUpdateUsesCAS(t *testing.T) {
+	_, backend, router := sharedChannelHandler(t)
+	original := []byte(`[{"id":"shared-main","name":"Shared","baseUrl":"https://old.example","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"old"}]`)
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", original); got.Code != http.StatusOK {
+		t.Fatalf("create channel: %d %s", got.Code, got.Body.String())
+	}
+	backend.compareAndSwapStateErr = store.ErrConflict
+	updated := []byte(`[{"id":"shared-main","name":"Shared","baseUrl":"https://new.example","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"new"}]`)
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", updated); got.Code != http.StatusConflict {
+		t.Fatalf("concurrent update was not rejected: %d %s", got.Code, got.Body.String())
+	}
+	backend.compareAndSwapStateErr = nil
+	channels, err := decodeAdminChannels(backend.state[tenantKey(store.DefaultTenantID, adminChannelsStateKey)])
+	if err != nil || len(channels) != 1 || channels[0].BaseURL != "https://old.example" {
+		t.Fatalf("conflicting update overwrote channel: %#v, %v", channels, err)
+	}
+}
+
+func TestSharedChannelWeightedSelectionIsDeterministicAndCapabilityAware(t *testing.T) {
+	server, backend, _ := sharedChannelHandler(t)
+	channels := []adminChannelPublic{
+		{ID: "image-a", Name: "A", BaseURL: "https://a.example", Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "a"},
+		{ID: "image-b", Name: "B", BaseURL: "https://b.example", Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 4, TimeoutSeconds: 30, DefaultImageModel: "b"},
+		{ID: "disabled", Name: "Off", BaseURL: "https://off.example", Protocol: "openai", Enabled: false, AllowUserUse: true, Weight: 100, TimeoutSeconds: 30, DefaultImageModel: "off"},
+		{ID: "image-only", Name: "Image", BaseURL: "https://image.example", Protocol: "gemini", Enabled: true, AllowUserUse: true, Weight: 100, TimeoutSeconds: 30, DefaultImageModel: "gemini"},
+	}
+	for index := range channels {
+		channels[index].SecretBindingID = "test-binding-" + channels[index].ID
+	}
+	raw, _ := json.Marshal(channels)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelsStateKey, raw); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := server.encryptAdminChannelSecrets(store.DefaultTenantID, channels, map[string]string{
+		"image-a": "a", "image-b": "b", "disabled": "off", "image-only": "gemini",
+	})
+	if err != nil || backend.PutState(context.Background(), store.DefaultTenantID, adminChannelSecretsStateKey, envelope) != nil {
+		t.Fatal("failed to seed encrypted shared secrets")
+	}
+	first, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", "job-stable", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		next, selectErr := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", "job-stable", "")
+		if selectErr != nil || next.ID != first.ID {
+			t.Fatalf("selection changed: %s -> %s (%v)", first.ID, next.ID, selectErr)
+		}
+	}
+	video, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "video", "job-stable", "requested-model")
+	if err != nil || video.ID == "disabled" || video.ID == "image-only" {
+		t.Fatalf("video selection ignored eligibility: %#v, %v", video, err)
+	}
+}

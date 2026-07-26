@@ -51,7 +51,7 @@ export function CropDialog({ node, open, onClose, onConfirm }: Props) {
   const scale = natural.w ? 280 / Math.max(natural.w, natural.h) : 1;
 
   return createPortal(
-    <div className="ob-overlay-canvas p-4">
+    <div className="ob-overlay-canvas p-4" onPointerDown={(event) => event.stopPropagation()}>
       <div
         role="dialog"
         aria-modal="true"

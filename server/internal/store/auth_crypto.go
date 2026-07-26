@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	bcryptCost       = bcrypt.DefaultCost
+	bcryptCost        = bcrypt.DefaultCost
 	sessionTokenBytes = 32
 )
 

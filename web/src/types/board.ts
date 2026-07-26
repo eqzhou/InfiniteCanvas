@@ -165,7 +165,7 @@ export type NodeMetadata = {
   audioDuration?: number;
   /** mask/upscale lineage */
   derivedFromId?: string;
-  transformOperation?: "upscale" | "inpaint" | "mask" | "split";
+  transformOperation?: "resize" | "ai-upscale" | "upscale" | "inpaint" | "mask" | "split";
   transformProvider?: string;
   transformModel?: string;
   transformRequestId?: string;
@@ -340,7 +340,7 @@ export type AiChannel = {
 };
 
 export type AiProviderKind = "text" | "image" | "video" | "audio";
-export type AiProtocol = "openai" | "ark" | "gemini" | "template";
+export type AiProtocol = "openai" | "ark" | "gemini" | "template" | "apimart" | "kie";
 export type AiTemplateConfig = {
   method: "POST" | "PUT";
   path: string;
@@ -377,6 +377,8 @@ export type ObjectStorageConfig = {
 export type AppConfig = {
   channels: AiChannel[];
   activeChannelId: string | null;
+  /** Safe identifier only; shared URLs and credentials are never persisted in personal config. */
+  activeSharedChannelId?: string | null;
   systemPrompt: string;
   imageSize: string;
   imageQuality: string;
@@ -394,6 +396,7 @@ export type AppConfig = {
   canvasPanelWidth?: number;
   canvasPanelCollapsed?: boolean;
   canvasPanelTab?: "projects" | "elements" | "assets" | "prompts";
+  imageToolbar?: import("@/lib/image-toolbar-preferences").ImageToolbarPreferences;
 };
 
 export type ClipboardPayload = {

@@ -13,7 +13,7 @@
     "benchmark:indexes:assert": "bun run --cwd web benchmark:indexes:assert",
     "server": "cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go run ./cmd/server",
     "mcp": "cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go run ./cmd/mcp",
-    "audit:licenses": "node scripts/audit-licenses.mjs",
+    "audit:licenses": "node --test scripts/audit-licenses-core.test.mjs && node scripts/audit-licenses.mjs",
     "audit:vulnerabilities": "node --test scripts/osv-audit-core.test.mjs && node scripts/audit-vulnerabilities.mjs",
     "audit:cleanroom": "node scripts/audit-cleanroom.mjs",
     "audit:release": "node scripts/check-release-readiness.mjs",

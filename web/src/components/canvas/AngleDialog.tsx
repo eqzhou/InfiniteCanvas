@@ -21,7 +21,7 @@ export function AngleDialog({
   useEscapeDismiss(open, onClose);
   if (!open) return null;
   return createPortal(
-    <div className="ob-overlay-canvas p-4">
+    <div className="ob-overlay-canvas p-4" onPointerDown={(event) => event.stopPropagation()}>
       <div
         role="dialog"
         aria-modal="true"

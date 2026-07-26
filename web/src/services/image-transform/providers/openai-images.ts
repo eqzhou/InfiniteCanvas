@@ -15,7 +15,6 @@ import {
 
 const JSON_LIMIT_BYTES = Math.ceil(IMAGE_TRANSFORM_LIMITS.maxOutputBytes * 4 / 3) + 1024 * 1024;
 const IMAGE_MIME_TYPES = ["image/avif", "image/jpeg", "image/png", "image/webp"] as const;
-const UNSUPPORTED_STATUSES = new Set([404, 405, 501]);
 
 interface ProviderOptions {
   fetch?: typeof fetch;
@@ -189,18 +188,7 @@ export function createOpenAIImageTransformProvider(
       form.set("model", getProvider(channel, "image").model);
       form.set("image", request.image, imageFileName(request.image, "image"));
       form.set("scale", String(request.scale));
-      let response = await postForm(fetcher, channel, "/images/upscales", form, context);
-      if (UNSUPPORTED_STATUSES.has(response.status)) {
-        await response.body?.cancel();
-        progress(0.2);
-        const fallback = editForm(
-          channel,
-          request.image,
-          `Upscale this image by ${request.scale}x while preserving its content and visual style.`,
-        );
-        fallback.set("size", `${Math.round(request.width * request.scale)}x${Math.round(request.height * request.scale)}`);
-        response = await postForm(fetcher, channel, "/images/edits", fallback, context);
-      }
+      const response = await postForm(fetcher, channel, "/images/upscales", form, context);
       await requireSuccess(response);
       progress(0.55);
       const result = await parseOutput(response, fetcher, context, progress);

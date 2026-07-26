@@ -13,11 +13,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"path"
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/openboard/openboard/server/internal/store"
@@ -51,16 +54,136 @@ type s3BlobObjectStore struct {
 	now             func() time.Time
 }
 
+// s3PutRequestTrace is allocated per PUT. A request is safe to route to a
+// different provider only when the transport failed before it acquired a
+// connection and before it reported writing any request bytes. This includes
+// DNS, dial, and TLS-handshake failures. Once a connection is acquired we stay
+// conservative: a reused connection can fail while writing without every
+// write callback being observable to the caller.
+type s3PutRequestTrace struct {
+	gotConn      atomic.Bool
+	wroteHeaders atomic.Bool
+	wroteRequest atomic.Bool
+}
+
+func (t *s3PutRequestTrace) clientTrace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		GotConn:      func(httptrace.GotConnInfo) { t.gotConn.Store(true) },
+		WroteHeaders: func() { t.wroteHeaders.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { t.wroteRequest.Store(true) },
+	}
+}
+
+func (t *s3PutRequestTrace) definitelyFailedBeforeWrite() bool {
+	return !t.gotConn.Load() && !t.wroteHeaders.Load() && !t.wroteRequest.Load()
+}
+
+var blockedS3Networks = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/128"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+}
+
+func safeS3IP(ip net.IP, allowLoopback bool) bool {
+	if ip.IsLoopback() {
+		return allowLoopback
+	}
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	address = address.Unmap()
+	for _, blocked := range blockedS3Networks {
+		if blocked.Contains(address) {
+			return false
+		}
+	}
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
+}
+
+type s3LookupIPFunc func(context.Context, string, string) ([]net.IP, error)
+type s3DialContextFunc func(context.Context, string, string) (net.Conn, error)
+
+// safeS3DialContext resolves once, validates every answer, then dials a
+// validated address directly. This prevents a second DNS lookup from rebinding
+// the endpoint after validation.
+func safeS3DialContext(loopbackOnly bool, lookupIP s3LookupIPFunc, dialContext s3DialContextFunc) s3DialContextFunc {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("invalid S3 address: %w", err)
+		}
+		addresses := []net.IP{net.ParseIP(host)}
+		if addresses[0] == nil {
+			addresses, err = lookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve S3 endpoint: %w", err)
+			}
+			if len(addresses) == 0 {
+				return nil, errors.New("S3 endpoint resolved without addresses")
+			}
+		}
+		for _, ip := range addresses {
+			if (loopbackOnly && !ip.IsLoopback()) || (!loopbackOnly && !safeS3IP(ip, false)) {
+				return nil, errors.New("S3 endpoint resolved to a blocked address")
+			}
+		}
+		var lastErr error
+		for _, ip := range addresses {
+			connection, dialErr := dialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if dialErr == nil {
+				return connection, nil
+			}
+			lastErr = dialErr
+		}
+		if lastErr == nil {
+			lastErr = errors.New("failed to connect to S3 endpoint")
+		}
+		return nil, lastErr
+	}
+}
+
 func newS3BlobObjectStore(config S3BlobStorageConfig) (*s3BlobObjectStore, error) {
 	endpoint, err := url.Parse(strings.TrimSpace(config.Endpoint))
 	if err != nil || endpoint.Host == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.User != nil ||
 		(endpoint.Scheme != "https" && endpoint.Scheme != "http") {
 		return nil, errInvalidBlobObjectConfig
 	}
-	if endpoint.Scheme == "http" {
-		host := endpoint.Hostname()
-		ip := net.ParseIP(host)
-		if !config.AllowInsecureLoopback || !(strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())) {
+	// Normalize trailing slashes so equivalent endpoints produce one stable
+	// destination fingerprint (rebind protection) and one request base path.
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
+	endpoint.RawPath = ""
+	host := endpoint.Hostname()
+	ip := net.ParseIP(host)
+	allowLoopback := endpoint.Scheme == "http" && config.AllowInsecureLoopback &&
+		(strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()))
+	if endpoint.Scheme == "http" && !allowLoopback {
+		return nil, errInvalidBlobObjectConfig
+	}
+	if endpoint.Scheme == "https" && (strings.EqualFold(host, "localhost") || (ip != nil && !safeS3IP(ip, false))) {
+		return nil, errInvalidBlobObjectConfig
+	}
+	if ip != nil && !safeS3IP(ip, allowLoopback) {
+		if !(allowLoopback && ip.IsLoopback()) {
 			return nil, errInvalidBlobObjectConfig
 		}
 	}
@@ -80,13 +203,26 @@ func newS3BlobObjectStore(config S3BlobStorageConfig) (*s3BlobObjectStore, error
 		}
 	}
 	client := &http.Client{Timeout: 70 * time.Second}
+	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
 	if config.HTTPClient != nil {
 		copy := *config.HTTPClient
 		client = &copy
 		if client.Timeout <= 0 || client.Timeout > 70*time.Second {
 			client.Timeout = 70 * time.Second
 		}
+		if client.Transport != nil {
+			transport, ok := client.Transport.(*http.Transport)
+			if !ok {
+				return nil, errInvalidBlobObjectConfig
+			}
+			baseTransport = transport.Clone()
+		}
 	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	baseTransport.Proxy = nil
+	baseTransport.DialContext = safeS3DialContext(allowLoopback, net.DefaultResolver.LookupIP, dialer.DialContext)
+	baseTransport.DialTLSContext = nil
+	client.Transport = baseTransport
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 		return errors.New("S3 redirects are disabled")
 	}
@@ -100,11 +236,19 @@ func newS3BlobObjectStore(config S3BlobStorageConfig) (*s3BlobObjectStore, error
 func (s *s3BlobObjectStore) Kind() string { return "s3" }
 
 func (s *s3BlobObjectStore) Ping(ctx context.Context) error {
-	// Startup validates the complete endpoint and credential shape. Avoid a
-	// periodic missing-object GET here: S3 returns 403 without ListBucket even
-	// when GetObject/PutObject are correctly scoped, and health probes should
-	// not require broader bucket permissions or create request cost.
+	// Standard S3 has no permission-neutral health operation. Bucket HEAD/LIST
+	// can return 403 for valid credentials intentionally scoped to object paths.
 	return ctx.Err()
+}
+
+func (s *s3BlobObjectStore) Health(context.Context) blobStorageHealthState {
+	return blobStorageHealthUnknown
+}
+
+// The S3 API has no portable bucket-capacity operation. Providers that expose
+// proprietary quota APIs can implement capacity at a higher adapter layer.
+func (s *s3BlobObjectStore) Capacity(context.Context) (blobStorageCapacity, error) {
+	return blobStorageCapacity{}, errBlobStorageCapacityUnknown
 }
 
 func (s *s3BlobObjectStore) Get(ctx context.Context, tenantID, name string, limit int64) (blobObject, error) {
@@ -160,8 +304,13 @@ func (s *s3BlobObjectStore) Put(ctx context.Context, tenantID, name string, valu
 		request.Header.Set("If-Match", expectedVersion)
 	}
 	s.sign(request, value.Data)
+	trace := &s3PutRequestTrace{}
+	request = request.WithContext(httptrace.WithClientTrace(request.Context(), trace.clientTrace()))
 	response, err := s.client.Do(request)
 	if err != nil {
+		if trace.definitelyFailedBeforeWrite() {
+			return "", fmt.Errorf("%w: %w", errBlobStorageProviderUnavailable, err)
+		}
 		return "", err
 	}
 	defer response.Body.Close()

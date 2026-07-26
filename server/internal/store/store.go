@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -9,13 +11,15 @@ import (
 )
 
 var (
-	ErrNotFound           = errors.New("not found")
-	ErrConflict           = errors.New("conflict")
-	ErrQuotaExceeded      = errors.New("quota exceeded")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrUnauthorized       = errors.New("unauthorized")
+	ErrNotFound            = errors.New("not found")
+	ErrConflict            = errors.New("conflict")
+	ErrQuotaExceeded       = errors.New("quota exceeded")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrUnauthorized        = errors.New("unauthorized")
 	ErrInsufficientCredits = errors.New("insufficient credits")
 	ErrBanned              = errors.New("user banned")
+	ErrLastOwner           = errors.New("last active owner must be preserved")
+	ErrInvalidInput        = errors.New("invalid input")
 )
 
 const DefaultTenantID = "local"
@@ -122,7 +126,6 @@ func PaginateGenerationJobs(items []GenerationJob, page, pageSize int) Generatio
 	return GenerationJobPage{Items: sorted[start:end], Page: page, PageSize: pageSize, Total: len(sorted)}
 }
 
-
 type LibraryAssetKind = string
 
 const (
@@ -161,7 +164,6 @@ type LibraryAssetPage struct {
 	Total    int            `json:"total"`
 }
 
-
 // AICallLog captures one backend AI proxy invocation for admin audit.
 type AICallLog struct {
 	ID           string          `json:"id"`
@@ -196,7 +198,6 @@ type AICallLogPage struct {
 	Total    int         `json:"total"`
 }
 
-
 type UserQuery struct {
 	Q        string
 	Page     int
@@ -215,13 +216,14 @@ type UserPatch struct {
 	Status       *string `json:"status,omitempty"`
 	DisplayName  *string `json:"displayName,omitempty"`
 	CreditsDelta *int64  `json:"creditsDelta,omitempty"`
+	ActorRole    string  `json:"-"`
 }
 
 type LinuxDoUserInput struct {
-	LinuxDoID    string
-	Email        string
-	DisplayName  string
-	Username     string
+	LinuxDoID   string
+	Email       string
+	DisplayName string
+	Username    string
 }
 
 type MediaReference struct {
@@ -236,12 +238,48 @@ type ModelCreditCost struct {
 	Credits int    `json:"credits"`
 }
 
+type ModelCreditConfig struct {
+	ModelCosts     []ModelCreditCost `json:"modelCosts"`
+	DefaultCredits int               `json:"defaultCredits"`
+}
+
+type CreditLog struct {
+	ID             int64           `json:"id"`
+	TenantID       string          `json:"-"`
+	UserID         string          `json:"userId"`
+	ActorID        string          `json:"actorId,omitempty"`
+	JobID          string          `json:"jobId,omitempty"`
+	Model          string          `json:"model,omitempty"`
+	Delta          int64           `json:"delta"`
+	BalanceAfter   int64           `json:"balanceAfter"`
+	Reason         string          `json:"reason"`
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
+	Meta           json.RawMessage `json:"meta,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+}
+
+type CreditLogQuery struct {
+	UserID   string
+	Reason   string
+	Model    string
+	Page     int
+	PageSize int
+}
+
+type CreditLogPage struct {
+	Items    []CreditLog `json:"items"`
+	Page     int         `json:"page"`
+	PageSize int         `json:"pageSize"`
+	Total    int         `json:"total"`
+}
+
 type Store interface {
 	Close()
 	Ping(context.Context) error
 	ListProjects(ctx context.Context, tenantID string) ([]ProjectSummary, error)
 	GetProject(ctx context.Context, tenantID, id string) ([]byte, error)
 	PutProject(ctx context.Context, tenantID, id string, document []byte) error
+	CompareAndSwapProject(ctx context.Context, tenantID, id string, expected, document []byte) error
 	DeleteProject(ctx context.Context, tenantID, id string) error
 	GetState(ctx context.Context, tenantID, key string) ([]byte, error)
 	PutState(ctx context.Context, tenantID, key string, value []byte) error
@@ -260,6 +298,7 @@ type Store interface {
 	DeleteGenerationJobs(ctx context.Context, tenantID string, ids []string) (int64, error)
 	DeleteGenerationJobsForProject(ctx context.Context, tenantID, projectID string) (int64, error)
 	ReplaceGenerationJobs(ctx context.Context, tenantID string, jobs []GenerationJob) error
+	CompareAndSwapGenerationJobs(ctx context.Context, tenantID, expectedVersion string, jobs []GenerationJob) error
 
 	// Server material library (tenant-scoped URL/text catalog).
 	ListLibraryAssets(ctx context.Context, tenantID string, query LibraryAssetQuery) (LibraryAssetPage, error)
@@ -290,7 +329,11 @@ type Store interface {
 	GetUser(ctx context.Context, tenantID, userID string) (AuthUser, error)
 	ListUsers(ctx context.Context, tenantID string, query UserQuery) (UserPage, error)
 	UpdateUser(ctx context.Context, tenantID string, userID string, patch UserPatch) (AuthUser, error)
+	GetModelCreditConfig(ctx context.Context, tenantID string) (ModelCreditConfig, error)
+	PutModelCreditConfig(ctx context.Context, tenantID string, config ModelCreditConfig) error
 	GetModelCreditCost(ctx context.Context, tenantID, model string) (int, error)
+	ListCreditLogs(ctx context.Context, tenantID string, query CreditLogQuery) (CreditLogPage, error)
+	AdjustCreditsIdempotent(ctx context.Context, tenantID, userID, actorID, idempotencyKey string, delta int64, reason string, meta json.RawMessage) (AuthUser, CreditLog, bool, error)
 	ReserveCredits(ctx context.Context, tenantID, userID, jobID, model string, amount int, meta json.RawMessage) error
 	RefundCredits(ctx context.Context, tenantID, userID, jobID, reason string) error
 	AdjustCredits(ctx context.Context, tenantID, userID string, delta int, reason string, meta json.RawMessage) (AuthUser, error)
@@ -298,4 +341,12 @@ type Store interface {
 	CreateMediaReference(ctx context.Context, tenantID, storageKey string, expiresAt time.Time) (MediaReference, error)
 	GetMediaReference(ctx context.Context, token string) (MediaReference, error)
 	DeleteExpiredMediaReferences(ctx context.Context, now time.Time) (int64, error)
+}
+
+func GenerationJobsVersion(jobs []GenerationJob) string {
+	ordered := append([]GenerationJob(nil), jobs...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	value, _ := json.Marshal(ordered)
+	sum := sha256.Sum256(value)
+	return "m1-" + hex.EncodeToString(sum[:])
 }

@@ -10,7 +10,7 @@ import (
 
 const blobObjectCASAttempts = 6
 
-func (s *Server) storeTenantObjectBlob(ctx context.Context, tenantID, userID, key, name, mediaType string, data []byte, objects blobObjectStore) error {
+func (s *Server) storeTenantObjectBlob(ctx context.Context, tenantID, userID, key, name, mediaType string, data []byte, objects blobObjectStore, expectedContentVersion string) error {
 	if objects == nil {
 		return errors.New("object storage is unavailable")
 	}
@@ -21,6 +21,14 @@ func (s *Server) storeTenantObjectBlob(ctx context.Context, tenantID, userID, ke
 			expectedVersion = current.Version
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
+		}
+		if expectedContentVersion == blobVersionAbsent && err == nil {
+			return errBlobObjectConflict
+		}
+		if expectedContentVersion != "" && expectedContentVersion != blobVersionAbsent {
+			if err != nil || migrationBlobVersion(current.Metadata.ContentType, current.Data) != expectedContentVersion {
+				return errBlobObjectConflict
+			}
 		}
 
 		superseded := append([]blobReservation(nil), current.Metadata.Superseded...)
@@ -41,6 +49,9 @@ func (s *Server) storeTenantObjectBlob(ctx context.Context, tenantID, userID, ke
 		version, err := objects.Put(ctx, tenantID, name, blobObject{Data: data, Metadata: pending}, expectedVersion)
 		if errors.Is(err, errBlobObjectConflict) {
 			_ = s.releaseBlobReservation(context.Background(), tenantID, userID, reservation, key)
+			if expectedContentVersion != "" {
+				return errBlobObjectConflict
+			}
 			continue
 		}
 		if err != nil {

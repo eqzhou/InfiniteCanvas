@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-23T17:43:33.399Z",
+  "generatedAt": "2026-07-26T11:25:36.532Z",
   "packages": [
     {
       "name": "@babel/code-frame",
@@ -519,6 +519,22 @@
       "license": "MIT",
       "noticeFile": "LICENSE",
       "repository": "jshttp/cookie",
+      "homepage": "UNKNOWN"
+    },
+    {
+      "name": "cookie-es",
+      "version": "3.1.1",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "unjs/cookie-es",
+      "homepage": "UNKNOWN"
+    },
+    {
+      "name": "csstype",
+      "version": "3.2.3",
+      "license": "MIT",
+      "noticeFile": "LICENSE",
+      "repository": "https://github.com/frenic/csstype",
       "homepage": "UNKNOWN"
     },
     {
@@ -1299,15 +1315,7 @@
     },
     {
       "name": "react-router",
-      "version": "7.18.1",
-      "license": "MIT",
-      "noticeFile": "LICENSE.md",
-      "repository": "https://github.com/remix-run/react-router",
-      "homepage": "UNKNOWN"
-    },
-    {
-      "name": "react-router-dom",
-      "version": "7.18.1",
+      "version": "8.3.0",
       "license": "MIT",
       "noticeFile": "LICENSE.md",
       "repository": "https://github.com/remix-run/react-router",

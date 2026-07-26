@@ -75,6 +75,45 @@ async function clickCanvasTool(page: Page, name: string) {
   await page.getByRole("toolbar", { name: "画布工具栏" }).getByRole("button", { name, exact: true }).click();
 }
 
+async function importSingleImageProject(page: Page, title: string) {
+  const now = "2026-07-26T00:00:00.000Z";
+  await page.locator('input[type="file"][accept*=".json"]').setInputFiles({
+    name: `${title}.json`,
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      id: `${title}-project`,
+      title,
+      createdAt: now,
+      updatedAt: now,
+      nodes: [{
+        id: `${title}-image`,
+        type: "image",
+        title: "图片",
+        position: { x: 220, y: 160 },
+        width: 240,
+        height: 180,
+        metadata: {
+          content: `data:image/png;base64,${pngPixelBase64}`,
+          naturalWidth: 4,
+          naturalHeight: 4,
+          mimeType: "image/png",
+          status: "success",
+        },
+      }],
+      edges: [],
+      chatSessions: [],
+      activeChatId: null,
+      backgroundMode: "dots",
+      viewport: { x: 0, y: 0, k: 1 },
+    })),
+  });
+  const node = page.locator('[data-node-type="image"]').first();
+  await expect(node).toBeVisible();
+  await node.locator("[data-node-header]").click();
+  return node;
+}
+
 
 async function openCodexPanel(page: Page) {
   await page.getByTitle("本地 Agent").click();
@@ -116,6 +155,157 @@ test("first launch creates and opens a board project", async ({ page }) => {
     await expect(page.locator("aside input[value]").first()).toBeVisible();
     await expect(page.locator("aside").getByText("节点", { exact: false }).first()).toBeVisible();
   }
+});
+
+test("admin console manages users, credit logs, and model costs through protected APIs", async ({ page }) => {
+  await page.route(/\/api\/auth\/me$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ authMode: "local", user: { id: "owner-e2e", tenantId: "tenant-e2e", email: "owner@example.test", displayName: "Owner", role: "owner" } }),
+  }));
+  await page.route(/\/api\/auth\/usage$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ storageBytes: 0, generationThisMonth: 0, storageQuotaBytes: 1000, generationQuotaMonthly: 10, plan: "test", credits: 100 }),
+  }));
+  const user = {
+    id: "user-admin-e2e",
+    tenantId: "tenant-e2e",
+    email: "member@example.test",
+    displayName: "E2E Member",
+    role: "member",
+    status: "active",
+    credits: 20,
+  };
+  let adjustment: Record<string, unknown> | null = null;
+  let savedModels: Record<string, unknown> | null = null;
+  let savedSharedSecret: Record<string, unknown> | null = null;
+  await page.route(/\/api\/admin\/users\?.*/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ items: [user], page: 1, pageSize: 100, total: 1 }),
+  }));
+  await page.route(/\/api\/admin\/users\/user-admin-e2e\/credit-adjustments$/, async (route) => {
+    adjustment = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        user: { ...user, credits: 25 },
+        log: { id: 9, userId: user.id, delta: 5, balanceAfter: 25, reason: "E2E adjustment", createdAt: new Date().toISOString() },
+        replayed: false,
+      }),
+    });
+  });
+  await page.route(/\/api\/admin\/credit-logs\?.*/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      items: [{ id: 9, userId: user.id, delta: 5, balanceAfter: 25, reason: "E2E adjustment", createdAt: "2026-07-26T00:00:00Z" }],
+      page: 1,
+      pageSize: 100,
+      total: 1,
+    }),
+  }));
+  await page.route(/\/api\/admin\/models$/, async (route) => {
+    if (route.request().method() === "PUT") {
+      savedModels = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(savedModels) });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ modelCosts: [{ model: "existing-model", credits: 2 }], defaultCredits: 1 }),
+    });
+  });
+  await page.route(/\/api\/admin\/storage-pool$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([{
+      id: "process-main", kind: "s3", weight: 3, configuredSelectable: true,
+      probeKnown: false, probeHealthy: false, capacityKnown: false,
+    }]),
+  }));
+  await page.route(/\/api\/admin\/channels$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([{
+      id: "shared-e2e", name: "Shared E2E", baseUrl: "https://shared.example/v1", protocol: "openai",
+      enabled: true, allowUserUse: true, weight: 2, timeoutSeconds: 60,
+      defaultTextModel: "", defaultImageModel: "shared-image", defaultVideoModel: "", defaultAudioModel: "",
+      secretConfigured: false, secretBindingId: "binding-e2e",
+    }]),
+  }));
+  await page.route(/\/api\/admin\/channels\/shared-e2e\/secret$/, async (route) => {
+    savedSharedSecret = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+    await route.fulfill({ status: 204 });
+  });
+  await page.route(/\/api\/admin\/prompt-catalog$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      version: 1, revision: 3,
+      categories: [{ id: "product", name: "Product", order: 1 }],
+      prompts: [{ id: "prompt-e2e", categoryId: "product", title: "Admin prompt E2E", body: "catalog body", tags: ["e2e"] }],
+      sources: [{ id: "source-e2e", name: "Prompt source E2E", url: "https://prompts.example/catalog.json", format: "json", enabled: true, scheduleEnabled: true, intervalMinutes: 30, scheduleStatus: "scheduled" }],
+      syncRuns: [],
+    }),
+  }));
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "管理后台" })).toBeVisible();
+  const row = page.getByRole("row").filter({ hasText: "member@example.test" });
+  await expect(row).toContainText("20");
+  await row.getByRole("button", { name: "调整额度" }).click();
+  const dialog = page.getByRole("dialog", { name: "调整额度" });
+  await dialog.getByLabel("变化值").fill("5");
+  await dialog.getByLabel("原因").fill("E2E adjustment");
+  await dialog.getByRole("button", { name: "确认" }).click();
+  await expect.poll(() => adjustment).toMatchObject({ delta: 5, reason: "E2E adjustment" });
+  await expect(row).toContainText("25");
+
+  await page.getByRole("tab", { name: "额度日志" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "E2E adjustment" })).toContainText("+5");
+  await page.getByRole("tab", { name: "模型成本" }).click();
+  const defaultModelCost = page.getByLabel("未知模型默认成本");
+  await expect(defaultModelCost).toHaveValue("1");
+  await defaultModelCost.fill("3");
+  await page.getByRole("button", { name: "添加模型" }).click();
+  await page.getByPlaceholder("模型 ID").last().fill("new-model");
+  await page.locator('input[type="number"]').last().fill("7");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => savedModels).toMatchObject({
+    defaultCredits: 3,
+    modelCosts: [{ model: "existing-model", credits: 2 }, { model: "new-model", credits: 7 }],
+  });
+  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "存储池" }).click();
+  await expect(page.getByRole("heading", { name: "租户存储池" })).toBeVisible();
+  const processStorage = page.locator("article").filter({ hasText: "process-main" });
+  await expect(processStorage).toContainText("未知（权限中立）");
+  await expect(processStorage).toContainText("未知（提供商未暴露）");
+  await expect(processStorage).toContainText("权重 3");
+  await page.getByRole("tab", { name: "共享渠道" }).click();
+  await expect(page.locator('input[value="Shared E2E"]')).toBeVisible();
+  await page.getByLabel(/API 密钥/).fill("shared-secret-e2e");
+  await page.getByRole("button", { name: "保存密钥" }).click();
+  await expect.poll(() => savedSharedSecret).toEqual({ apiKey: "shared-secret-e2e", secretBindingId: "binding-e2e" });
+  await expect(page.getByRole("status")).toContainText("密钥已加密保存");
+  await expect(page.getByLabel(/API 密钥/)).toHaveValue("");
+  await page.getByRole("tab", { name: "提示词", exact: true }).click();
+  await expect(page.getByText("Admin prompt E2E", { exact: true })).toBeVisible();
+  await expect(page.getByText("Prompt source E2E", { exact: true })).toBeVisible();
+});
+
+test("admin route denies authenticated members in the UI", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("openboard:session", "member-e2e-session"));
+  await page.route(/\/api\/auth\/me$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      authMode: "local",
+      user: { id: "member", tenantId: "tenant", email: "member@example.test", displayName: "Member", role: "member" },
+    }),
+  }));
+  await page.route(/\/api\/auth\/usage$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ storageBytes: 0, generationThisMonth: 0, storageQuotaBytes: 1000, generationQuotaMonthly: 10, plan: "free" }),
+  }));
+  await page.goto("/admin");
+  await expect(page.getByText("需要管理员权限。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "管理后台" })).toHaveCount(0);
+  await expect(page.locator('nav a[href="/admin"]')).toHaveCount(0);
 });
 
 test("3D director edits persist and rendered captures return to the canvas", async ({ page }) => {
@@ -166,8 +356,13 @@ test("3D director edits persist and rendered captures return to the canvas", asy
   const edgeGroups = page.getByTestId("canvas-surface").locator("svg").first().locator("g");
   const imagesBefore = await imageNodes.count();
   const edgesBefore = await edgeGroups.count();
-  await dialog.getByRole("button", { name: "拍摄当前机位" }).click();
-  await dialog.getByRole("button", { name: "拍摄当前机位" }).click();
+  const captureButton = dialog.getByRole("button", { name: "拍摄当前机位" });
+  await captureButton.click();
+  await expect(dialog.getByRole("button", { name: "拍摄中…" })).toBeDisabled();
+  await expect(captureButton).toBeEnabled();
+  await captureButton.click();
+  await expect(dialog.getByRole("button", { name: "拍摄中…" })).toBeDisabled();
+  await expect(captureButton).toBeEnabled();
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("list", { name: "本机截图列表" }).getByRole("listitem")).toHaveCount(2);
   await expect(imageNodes).toHaveCount(imagesBefore);
@@ -503,6 +698,8 @@ test("native panorama uploads, previews, persists, and lights the director envir
 
   await clickCanvasTool(page, "导演台");
   const directorNode = page.locator('[data-node-type="director"]').last();
+  await panoramaNode.getByTitle("输出端口 / 拖出连线").click();
+  await directorNode.getByTitle("输入端口").click();
   await directorNode.getByRole("button", { name: "打开导演台" }).click();
   const directorDialog = page.getByRole("dialog", { name: "3D 导演台" });
   const environmentSelect = directorDialog.getByLabel("导演台全景环境");
@@ -616,6 +813,8 @@ test("panorama generation accepts ordinary image references and commits a persis
   await clickCanvasTool(page, "导演台");
   await clickCanvasTool(page, "适应");
   const directorNode = page.locator('[data-node-type="director"]').last();
+  await generatedChild.getByTitle("输出端口 / 拖出连线").click();
+  await directorNode.getByTitle("输入端口").click();
   await directorNode.getByRole("button", { name: "打开导演台" }).click();
   const directorDialog = page.getByRole("dialog", { name: "3D 导演台" });
   await directorDialog.getByLabel("导演台全景环境").selectOption({ label: "360° 全景 2" });
@@ -870,6 +1069,8 @@ test("projects support create, rename, JSON export/import, and batch delete", as
   const archiveDownload = await archiveDownloadPromise;
   expect(archiveDownload.suggestedFilename()).toBe("可导出项目.openboard");
 
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   const now = "2026-07-18T00:00:00.000Z";
   await page.locator('input[type="file"][accept^=".json"]').setInputFiles({
     name: "imported-project.json",
@@ -889,6 +1090,7 @@ test("projects support create, rename, JSON export/import, and batch delete", as
     })),
   });
   await expect(page.locator('input[value="外部项目 (导入)"]')).toBeVisible();
+  expect(pageErrors).toEqual([]);
 
   await projectCard(page, "画布 2").getByRole("checkbox").check();
   await projectCard(page, "可导出项目").getByRole("checkbox").check();
@@ -1421,6 +1623,124 @@ test("a same-frame drag commits group membership before pointerup reconciliation
   await expect.poll(persistedGroup).toMatchObject({ childIds: ["text_a", "text_b"], width: 368 });
 });
 
+test("group shortcut, whole-group drag/resize, copy/delete, undo, and reload stay atomic", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop pointer coordinates are required.");
+  await openFreshBoard(page);
+  await clickCanvasTool(page, "文本");
+  await clickCanvasTool(page, "文本");
+  const texts = page.locator('[data-node-type="text"]');
+  await expect(texts).toHaveCount(2);
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await texts.nth(0).locator("[data-node-header]").click();
+  await texts.nth(1).locator("[data-node-header]").click({ modifiers: ["Shift"] });
+  await expect(page.locator('[data-node-type="text"][data-selected="true"]')).toHaveCount(2);
+  await page.keyboard.press(`${modifier}+g`);
+
+  const groups = page.locator('[data-node-type="group"]');
+  await expect(groups).toHaveCount(1);
+  const group = groups.first();
+  const groupBefore = await group.boundingBox();
+  const firstBefore = await texts.nth(0).boundingBox();
+  expect(groupBefore).not.toBeNull();
+  expect(firstBefore).not.toBeNull();
+  const groupHeader = group.locator("[data-node-header]");
+  const headerBox = await groupHeader.boundingBox();
+  expect(headerBox).not.toBeNull();
+  await groupHeader.dispatchEvent("pointerdown", {
+    pointerId: 91, button: 0, buttons: 1, clientX: headerBox!.x + 30, clientY: headerBox!.y + 12,
+  });
+  await page.getByTestId("canvas-surface").dispatchEvent("pointermove", {
+    pointerId: 91, button: 0, buttons: 1, clientX: headerBox!.x + 110, clientY: headerBox!.y + 52,
+  });
+  await page.getByTestId("canvas-surface").dispatchEvent("pointerup", {
+    pointerId: 91, button: 0, buttons: 0, clientX: headerBox!.x + 110, clientY: headerBox!.y + 52,
+  });
+  await expect.poll(async () => (await group.boundingBox())?.x ?? 0).toBeCloseTo(groupBefore!.x + 80, 0);
+  await expect.poll(async () => (await texts.nth(0).boundingBox())?.x ?? 0).toBeCloseTo(firstBefore!.x + 80, 0);
+
+  const movedBox = await group.boundingBox();
+  const resize = group.locator(".cursor-se-resize");
+  const resizeBox = await resize.boundingBox();
+  expect(movedBox).not.toBeNull();
+  expect(resizeBox).not.toBeNull();
+  await resize.dispatchEvent("pointerdown", {
+    pointerId: 92, button: 0, buttons: 1, clientX: resizeBox!.x + 5, clientY: resizeBox!.y + 5,
+  });
+  await page.getByTestId("canvas-surface").dispatchEvent("pointermove", {
+    pointerId: 92, button: 0, buttons: 1, clientX: resizeBox!.x + 65, clientY: resizeBox!.y + 45,
+  });
+  await page.getByTestId("canvas-surface").dispatchEvent("pointerup", {
+    pointerId: 92, button: 0, buttons: 0, clientX: resizeBox!.x + 65, clientY: resizeBox!.y + 45,
+  });
+  await expect.poll(async () => (await group.boundingBox())?.width ?? 0).toBeGreaterThan(movedBox!.width + 40);
+
+  await page.keyboard.press(`${modifier}+c`);
+  await page.keyboard.press(`${modifier}+v`);
+  await expect(groups).toHaveCount(2);
+  await expect(texts).toHaveCount(4);
+  await page.keyboard.press("Delete");
+  await expect(groups).toHaveCount(1);
+  await expect(texts).toHaveCount(2);
+  await page.keyboard.press(`${modifier}+z`);
+  await expect(groups).toHaveCount(2);
+  await expect(texts).toHaveCount(4);
+  await page.keyboard.press(`${modifier}+Shift+z`);
+  await expect(groups).toHaveCount(1);
+  await expect(texts).toHaveCount(2);
+  await expect.poll(() => page.evaluate(() => new Promise<{ groups: number; texts: number }>((resolve, reject) => {
+    const request = indexedDB.open("openboard-app");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const read = database.transaction("app_state", "readonly")
+        .objectStore("app_state").get("openboard:projects");
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const projects = Array.isArray(read.result) ? read.result : [];
+        const project = projects.find((item) => item?.title === "我的第一个画布") ?? projects[0];
+        const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
+        database.close();
+        resolve({
+          groups: nodes.filter((node: { type?: string }) => node.type === "group").length,
+          texts: nodes.filter((node: { type?: string }) => node.type === "text").length,
+        });
+      };
+    };
+  }))).toEqual({ groups: 1, texts: 2 });
+  await page.reload();
+  await expect(groups).toHaveCount(1);
+  await expect(texts).toHaveCount(2);
+});
+
+test("Escape and lost pointer capture terminate node dragging", async ({ page }) => {
+  await openFreshBoard(page);
+  await clickCanvasTool(page, "文本");
+  const node = page.locator('[data-node-type="text"]');
+  const surface = page.getByTestId("canvas-surface");
+  const header = node.locator("[data-node-header]");
+  const start = await header.boundingBox();
+  expect(start).not.toBeNull();
+
+  await header.dispatchEvent("pointerdown", { pointerId: 71, button: 0, buttons: 1, clientX: start!.x + 20, clientY: start!.y + 12 });
+  await surface.dispatchEvent("pointermove", { pointerId: 71, button: 0, buttons: 1, clientX: start!.x + 80, clientY: start!.y + 42 });
+  await page.keyboard.press("Escape");
+  const afterEscape = await node.boundingBox();
+  await surface.dispatchEvent("pointermove", { pointerId: 71, button: 0, buttons: 1, clientX: start!.x + 240, clientY: start!.y + 160 });
+  await expect.poll(async () => ({ x: (await node.boundingBox())?.x, y: (await node.boundingBox())?.y }))
+    .toEqual({ x: afterEscape?.x, y: afterEscape?.y });
+
+  const resumed = await header.boundingBox();
+  await header.dispatchEvent("pointerdown", { pointerId: 72, button: 0, buttons: 1, clientX: resumed!.x + 20, clientY: resumed!.y + 12 });
+  await surface.dispatchEvent("pointermove", { pointerId: 72, button: 0, buttons: 1, clientX: resumed!.x + 70, clientY: resumed!.y + 32 });
+  await surface.dispatchEvent("lostpointercapture", { pointerId: 72 });
+  await expect.poll(async () => ({ x: (await node.boundingBox())?.x, y: (await node.boundingBox())?.y }))
+    .toEqual({ x: (afterEscape?.x ?? 0) + 50, y: (afterEscape?.y ?? 0) + 20 });
+  const afterLoss = await node.boundingBox();
+  await surface.dispatchEvent("pointermove", { pointerId: 72, button: 0, buttons: 1, clientX: resumed!.x + 220, clientY: resumed!.y + 120 });
+  await expect.poll(async () => ({ x: (await node.boundingBox())?.x, y: (await node.boundingBox())?.y }))
+    .toEqual({ x: afterLoss?.x, y: afterLoss?.y });
+});
+
 test("a legacy v1 project upgrades to schema v2 and survives reload", async ({ page }) => {
   await openFreshBoard(page);
   const now = "2026-07-18T00:00:00.000Z";
@@ -1585,6 +1905,76 @@ test("node title, font size, and model overrides are editable and persistent", a
   await expect(page.getByLabel("文本节点模型")).toHaveValue("local-text-model");
 });
 
+test("compact node controls keep long models, multiline text, and image actions usable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFreshBoard(page, { requireProjectPanel: false });
+  await clickCanvasTool(page, "文本");
+  const textNode = page.locator('[data-node-type="text"]');
+  await textNode.getByLabel("文本节点模型").fill(`model-${"very-long-".repeat(40)}`);
+  await textNode.getByPlaceholder("写下提示词或说明…").fill("first line\n\nthird line");
+  const send = textNode.getByRole("button", { name: "发送提示词" });
+  await expect(send).toBeVisible();
+  const sendBox = await send.boundingBox();
+  expect(sendBox).not.toBeNull();
+  expect(sendBox!.x + sendBox!.width).toBeLessThanOrEqual(390);
+
+  await importSingleImageProject(page, "compact-image-toolbar");
+  await page.getByTitle("适应").click();
+  const imageNode = page.locator('[data-node-type="image"]');
+  await imageNode.locator("[data-node-header]").click();
+  const actions = imageNode.locator(".ob-chrome").first();
+  await expect(imageNode.getByTitle("下载")).toBeVisible();
+  const actionBox = await actions.boundingBox();
+  expect(actionBox).not.toBeNull();
+  expect(actionBox!.x).toBeGreaterThanOrEqual(0);
+  expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(390);
+});
+
+test("config node preserves blank-line prompts across reload and uses them for generation", async ({ page }) => {
+  let requestPrompt = "";
+  await page.route("https://config-prompt.example/v1/images/generations", async (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}") as { prompt?: string };
+    requestPrompt = body.prompt ?? "";
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data: [{ b64_json: pngPixelBase64 }] }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://config-prompt.example/v1");
+  await page.getByLabel("生图 API Key").fill("config-prompt-key");
+  await page.getByLabel("生图模型", { exact: true }).fill("config-prompt-model");
+  await closeSettings(page);
+  await clickCanvasTool(page, "配置");
+  const node = page.locator('[data-node-type="config"]');
+  const prompt = node.getByLabel("配置节点提示词");
+  await prompt.fill("first line\n\nthird line");
+  await expect(prompt).toHaveValue("first line\n\nthird line");
+  await expect.poll(() => page.evaluate(() => new Promise<string>((resolve, reject) => {
+    const request = indexedDB.open("openboard-app");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const read = database.transaction("app_state", "readonly")
+        .objectStore("app_state").get("openboard:projects");
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const projects = Array.isArray(read.result) ? read.result : [];
+        const project = projects.find((item) => item?.title === "我的第一个画布") ?? projects[0];
+        const config = project?.nodes?.find((item: { type?: string }) => item.type === "config");
+        database.close();
+        resolve(config?.metadata?.prompt ?? "");
+      };
+    };
+  }))).toBe("first line\n\nthird line");
+  await page.reload();
+  await node.locator("[data-node-header]").click();
+  await expect(node.getByLabel("配置节点提示词")).toHaveValue("first line\n\nthird line");
+  await node.getByTitle("运行生成").click();
+  await expect.poll(() => requestPrompt).toBe("first line\n\nthird line");
+});
+
 test("node titles appear only while hovered, selected, or edited", async ({ page }) => {
   await openFreshBoard(page);
   await clickCanvasTool(page, "文本");
@@ -1665,8 +2055,8 @@ test("text-to-image creates a connected config and executes immediately", async 
   await page.getByTitle("生图").click();
 
   await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
-  await expect(page.locator('[data-node-type="config"]').getByText("a red square", { exact: true }))
-    .toBeVisible();
+  await expect(page.locator('[data-node-type="config"]').getByLabel("配置节点提示词"))
+    .toHaveValue("a red square");
   await expect.poll(() => requestBody).toMatchObject({
     model: "mock-image-model",
     prompt: "Use a crisp editorial style.\n\na red square",
@@ -2099,23 +2489,25 @@ test("image workbench refuses retry when a recorded reference is missing", async
   await closeSettings(page);
 
   await page.goto("/workbench/image");
-  await page.evaluate(() => new Promise<string>((resolve, reject) => {
+  await page.evaluate(() => new Promise<{ projectId: string; providerId: string }>((resolve, reject) => {
     const open = indexedDB.open("openboard-app");
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
       const database = open.result;
-      const request = database.transaction("app_state", "readonly")
-        .objectStore("app_state")
-        .get("openboard:projects");
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const projectId = Array.isArray(request.result) ? request.result[0]?.id : undefined;
+      const transaction = database.transaction("app_state", "readonly");
+      const store = transaction.objectStore("app_state");
+      const projectsRequest = store.get("openboard:projects");
+      const configRequest = store.get("openboard:config");
+      transaction.onerror = () => reject(transaction.error);
+      transaction.oncomplete = () => {
+        const projectId = Array.isArray(projectsRequest.result) ? projectsRequest.result[0]?.id : undefined;
+        const providerId = configRequest.result?.activeChannelId;
         database.close();
-        if (typeof projectId === "string") resolve(projectId);
-        else reject(new Error("active test project is missing"));
+        if (typeof projectId === "string" && typeof providerId === "string") resolve({ projectId, providerId });
+        else reject(new Error("active test project or provider is missing"));
       };
     };
-  }).then((projectId) => new Promise<void>((resolve, reject) => {
+  }).then(({ projectId, providerId }) => new Promise<void>((resolve, reject) => {
     const open = indexedDB.open("openboard-generation-jobs");
     open.onerror = () => reject(open.error);
     open.onupgradeneeded = () => open.result.createObjectStore("jobs");
@@ -2128,7 +2520,7 @@ test("image workbench refuses retry when a recorded reference is missing", async
         kind: "image",
         status: "failed",
         prompt: "missing reference retry",
-        providerId: "default",
+        providerId,
         model: "missing-reference-image",
         parameters: { referenceStorageKeys: ["image:does-not-exist"] },
         result: {},
@@ -2182,6 +2574,36 @@ test("workbench history bulk delete removes only selected cards", async ({ page 
   await page.getByRole("button", { name: "批量删除" }).click();
   await expect(page.locator("article").filter({ hasText: "bulk delete remove me" })).toHaveCount(0);
   await expect(page.locator("article").filter({ hasText: "bulk delete keep me" })).toHaveCount(1);
+});
+
+test("Kling v3 custom shots expose dedicated controls and allow shot-only generation", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("视频协议").selectOption("apimart");
+  await page.getByLabel("视频 URL").fill("https://api.apimart.example/v1");
+  await page.getByLabel("视频 API Key").fill("apimart-e2e-key");
+  await page.getByLabel("视频模型", { exact: true }).fill("kling-v3");
+  await closeSettings(page);
+
+  await page.goto("/workbench/video");
+  const controls = page.getByRole("group", { name: "Kling 专属参数" });
+  await expect(controls).toBeVisible();
+  await expect(controls.getByLabel("生成模式").locator('option[value="4k"]')).toHaveCount(1);
+  await controls.getByLabel("多镜头").check();
+  await controls.getByLabel("镜头拆分方式").selectOption("customize");
+  await controls.getByRole("button", { name: "添加镜头" }).click();
+  await controls.getByPlaceholder("镜头 1 提示词").fill("wide establishing shot");
+  await controls.getByLabel("镜头 1 秒数").fill("5");
+
+  const generate = page.getByRole("button", { name: "生成", exact: true });
+  await expect(page.getByLabel("提示词", { exact: true })).toHaveValue("");
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect(page.getByRole("alert")).toContainText(/apimart|server|服务端|后端/i);
+
+  await page.getByLabel("模型").fill("kling-v2-6");
+  await expect(controls.getByLabel("多镜头")).toHaveCount(0);
+  await expect(controls.getByLabel("生成模式").locator('option[value="4k"]')).toHaveCount(0);
 });
 
 test("video workbench persists Ark audio and watermark settings across retry", async ({ page }) => {
@@ -2347,20 +2769,20 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   ).toHaveValue("plugin state from Playwright", { timeout: 15_000 });
 
   await page.goto("/plugins");
-  const enabled = page.getByLabel("便签 已启用");
+  const enabled = page.getByRole("switch", { name: "便签 启用状态" });
   await enabled.uncheck();
-  await expect(page.getByLabel("便签 已启用")).toBeEnabled({ timeout: 15_000 });
+  await expect(enabled).toBeEnabled({ timeout: 15_000 });
   await expect(stickyCard.getByRole("button", { name: "添加到画布" })).toBeDisabled();
   await page.goto("/");
   await expect(page.getByTestId("plugin-unavailable")).toBeVisible({ timeout: 15_000 });
   await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容")).toHaveCount(0);
 
   await page.goto("/plugins");
-  await expect(page.getByLabel("便签 已启用")).not.toBeChecked();
-  await page.getByLabel("便签 已启用").check();
+  await expect(enabled).not.toBeChecked();
+  await enabled.check();
   // Product sets busy while flushConfig runs; wait until the switch is interactive again.
-  await expect(page.getByLabel("便签 已启用")).toBeEnabled({ timeout: 15_000 });
-  await expect(page.getByLabel("便签 已启用")).toBeChecked();
+  await expect(enabled).toBeEnabled({ timeout: 15_000 });
+  await expect(enabled).toBeChecked();
   await page.goto("/");
   await expect(page.getByTestId("plugin-unavailable")).toHaveCount(0, { timeout: 15_000 });
   await expect(page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"))
@@ -2792,27 +3214,55 @@ test("node prompt media chips preserve and submit connected image references", a
   expect(String(requestBodies[1]?.input_reference)).toMatch(/^data:image\/png;base64,/);
 });
 
-test("local image upscale creates a lineage-tracked derived node", async ({ page }) => {
+test("image toolbar preferences persist ordering, visibility, and labels", async ({ page }) => {
   await openFreshBoard(page);
-  const imageInput = page.locator('input[type="file"][accept="image/*"]').first();
-  await imageInput.setInputFiles({
-    name: "pixel.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC",
-      "base64",
-    ),
-  });
+  await page.getByTitle("设置").click();
+  const settings = page.getByRole("dialog", { name: "设置" });
+  await settings.getByLabel("显示工具名称").check();
+  await settings.getByLabel("显示裁剪").uncheck();
+  await settings.getByRole("button", { name: "下移下载（必显）" }).click();
+  await closeSettings(page);
 
-  await page.getByTitle("放大").click();
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    name: "toolbar-preferences.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(pngPixelBase64, "base64"),
+  });
+  const node = page.locator('[data-node-type="image"]').first();
+  await expect(node.getByTitle("裁剪")).toHaveCount(0);
+  await expect(node.getByTitle("下载")).toContainText("下载");
+  const actionTitles = await node.locator("button[title]").evaluateAll((buttons) =>
+    buttons.map((button) => button.getAttribute("title")),
+  );
+  expect(actionTitles.indexOf("下载")).toBeGreaterThan(actionTitles.indexOf("自由缩放"));
+
+  await page.reload();
+  const reloaded = page.locator('[data-node-type="image"]').first();
+  await expect(reloaded).toBeVisible();
+  await reloaded.locator("[data-node-header]").click();
+  await expect(reloaded.getByTitle("裁剪")).toHaveCount(0);
+  await expect(reloaded.getByTitle("下载")).toContainText("下载");
+  const reloadedTitles = await reloaded.locator("button[title]").evaluateAll((buttons) =>
+    buttons.map((button) => button.getAttribute("title")),
+  );
+  expect(reloadedTitles.indexOf("下载")).toBeGreaterThan(reloadedTitles.indexOf("自由缩放"));
+});
+
+test("local image resize creates a lineage-tracked derived node", async ({ page }) => {
+  await openFreshBoard(page);
+  await importSingleImageProject(page, "resize-lineage");
+
+  await page.getByTitle("本地尺寸放大").click();
   await expect(page.getByText("浏览器 Canvas 插值，不调用云端模型。")).toBeVisible();
-  await page.getByRole("button", { name: "应用" }).click();
-  const output = page.locator('img[alt="图片 · 2x"]');
+  const dialog = page.getByRole("dialog", { name: "本地尺寸放大" });
+  await dialog.getByRole("button", { name: "应用" }).click();
+  await expect(dialog).toHaveCount(0, { timeout: 30_000 });
+  const output = page.locator('img[alt="图片 · 本地放大 2x"]');
   await expect(output).toHaveCount(1);
   await expect.poll(() => output.evaluate((image: HTMLImageElement) => ({
     width: image.naturalWidth,
     height: image.naturalHeight,
-  }))).toEqual({ width: 2, height: 2 });
+  }))).toEqual({ width: 8, height: 8 });
 
   const readLineage = () => page.evaluate(
     () => new Promise<Record<string, unknown> | null>((resolve, reject) => {
@@ -2827,7 +3277,7 @@ test("local image upscale creates a lineage-tracked derived node", async ({ page
         request.onsuccess = () => {
           const projects = Array.isArray(request.result) ? request.result : [];
           const derived = projects.flatMap((project) => project?.nodes ?? [])
-            .find((node) => node?.metadata?.transformOperation === "upscale");
+            .find((node) => node?.metadata?.transformOperation === "resize");
           database.close();
           resolve(derived?.metadata ?? null);
         };
@@ -2835,13 +3285,64 @@ test("local image upscale creates a lineage-tracked derived node", async ({ page
     }),
   );
   await expect.poll(readLineage).toMatchObject({
-    transformOperation: "upscale",
+    transformOperation: "resize",
     transformProvider: "local-canvas",
     transformModel: "browser-bicubic",
     transformParameters: { scale: 2 },
   });
   const lineage = await readLineage();
   expect(lineage?.derivedFromId).toBeTruthy();
+});
+
+test("AI upscale stays distinct from local resize and records cloud lineage", async ({ page }) => {
+  let upscaleRequests = 0;
+  await page.route("https://upscale.example/v1/images/upscales", async (route) => {
+    upscaleRequests += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ id: "upscale-e2e", data: [{ b64_json: pngPixelBase64 }] }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://upscale.example/v1");
+  await page.getByLabel("生图 API Key").fill("upscale-test-key");
+  await page.getByLabel("生图模型", { exact: true }).fill("upscale-model");
+  await closeSettings(page);
+  const node = await importSingleImageProject(page, "ai-upscale-lineage");
+  await expect(node.getByTitle("本地尺寸放大")).toBeEnabled();
+  await expect(node.getByTitle("AI 超分")).toBeEnabled();
+  await node.getByTitle("AI 超分").click();
+  const dialog = page.getByRole("dialog", { name: "AI 超分" });
+  await expect(dialog.getByText("调用当前 AI 渠道的专用超分接口；不会静默回退到图像编辑。")).toBeVisible();
+  await dialog.getByRole("button", { name: "应用" }).click();
+  await expect(dialog).toHaveCount(0, { timeout: 30_000 });
+  await expect.poll(() => upscaleRequests).toBe(1);
+  await expect(page.locator('img[alt="图片 · AI 超分 2x"]')).toHaveCount(1);
+
+  const lineage = () => page.evaluate(() => new Promise<Record<string, unknown> | null>((resolve, reject) => {
+    const open = indexedDB.open("openboard-app");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      const request = database.transaction("app_state", "readonly")
+        .objectStore("app_state").get("openboard:projects");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const projects = Array.isArray(request.result) ? request.result : [];
+        const derived = projects.flatMap((project) => project?.nodes ?? [])
+          .find((item) => item?.metadata?.transformOperation === "ai-upscale");
+        database.close();
+        resolve(derived?.metadata ?? null);
+      };
+    };
+  }));
+  await expect.poll(lineage).toMatchObject({
+    transformOperation: "ai-upscale",
+    transformProvider: "openai-compatible",
+    transformModel: "upscale-model",
+    transformParameters: { scale: 2 },
+  });
 });
 
 test("prompt details can insert their content into the active canvas", async ({ page }) => {
@@ -3024,6 +3525,7 @@ test("canvas prompt panel groups library entries by source and inserts them", as
   await editor.getByLabel("标签").fill("city");
   await editor.getByRole("button", { name: "保存提示词" }).click();
   await expect(page.getByText("侧栏夜景", { exact: true })).toBeVisible();
+  await expect(editor).toHaveCount(0);
 
   await page.goto("/");
   await openProjectPanel(page);
@@ -3950,11 +4452,12 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   });
 
   await page.getByTitle("本地 Agent").click();
-  await page.getByLabel("本地地址").fill("http://127.0.0.1:8790");
+  await page.getByLabel("本地地址").fill(agentUrl);
+  await page.getByLabel("连接令牌").fill("e2e-token");
   await page.getByRole("button", { name: "连接" }).click();
   const codexTab = page.getByRole("tab", { name: "Codex" });
   if (await codexTab.count()) await codexTab.click();
-  await page.getByRole("button", { name: "继续会话" }).click();
+  await page.getByRole("button", { name: "启动 Codex 会话" }).click();
   await expect.poll(() => sessionBodies).toHaveLength(1);
   releaseInitialSessionGet();
   await expect(page.getByText("Agent project read failed: HTTP 503", { exact: false })).toBeVisible();
@@ -3995,7 +4498,7 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     approve: true,
   });
   await page.getByTitle("关闭 Codex 会话").click();
-  await page.getByRole("button", { name: "继续会话" }).click();
+  await page.getByRole("button", { name: "启动 Codex 会话" }).click();
   await expect.poll(() => sessionBodies).toHaveLength(3);
   await expect(page.getByText("hello from Codex")).toHaveCount(0);
 });
@@ -4047,9 +4550,26 @@ test("Codex session and running state stay synchronized across browser tabs", as
     await target.route("**/api/projects/*", async (route) => route.fulfill({ status: 404, body: "not found" }));
   };
   const connectPanel = async (target: Page) => {
+    const runtimeReady = target.waitForEvent("websocket", {
+      predicate: (socket) => socket.url().includes("/api/runtime/ws"),
+      timeout: 15_000,
+    }).then((socket) => new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("browser runtime did not announce its client ID")), 15_000);
+      socket.on("framereceived", (event) => {
+        if (!String(event.payload).includes('"clientId"')) return;
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.on("close", () => {
+        clearTimeout(timer);
+        reject(new Error("browser runtime closed before announcing its client ID"));
+      });
+    }));
     await target.getByTitle("本地 Agent").click();
-    await target.getByLabel("本地地址").fill("http://127.0.0.1:8790");
+    await target.getByLabel("本地地址").fill(agentUrl);
+    await target.getByLabel("连接令牌").fill("e2e-token");
     await target.getByRole("button", { name: "连接" }).click();
+    await runtimeReady;
   };
 
   await installRoutes(page);
@@ -4057,7 +4577,7 @@ test("Codex session and running state stay synchronized across browser tabs", as
   await connectPanel(page);
   const codexTab = page.getByRole("tab", { name: "Codex" });
   if (await codexTab.count()) await codexTab.click();
-  await page.getByRole("button", { name: "继续会话" }).click();
+  await page.getByRole("button", { name: "启动 Codex 会话" }).click();
   await expect(page.getByPlaceholder("发送消息")).toBeEnabled();
 
   const second = await context.newPage();

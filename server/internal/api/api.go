@@ -33,42 +33,48 @@ const (
 var projectIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 type Server struct {
-	dataDir               string
-	mu                    sync.Mutex
-	uploads               chan struct{}
-	codex                 *codexManager
-	claude                *claudeManager
-	runtime               *runtimeHub
-	runtimeOrigins        map[string]struct{}
-	store                 store.Store
-	blobObjects           blobObjectStore
-	tenantBlobStoreMu     sync.Mutex
-	tenantBlobStores      map[string]tenantBlobStoreCacheEntry
-	secrets               cipher.AEAD
-	imageExecutor         imageExecutor
-	videoExecutor         videoExecutor
-	audioExecutor         audioExecutor
-	generationMu          sync.Mutex
-	generationCancels     map[string]context.CancelFunc
-	generationWG          sync.WaitGroup
-	generationWorkerWG    sync.WaitGroup
-	generationWorkersOnce sync.Once
-	generationRoot        context.Context
-	stopGeneration        context.CancelFunc
-	generationWake        chan struct{}
-	workflowWorkerWG      sync.WaitGroup
-	workflowWG            sync.WaitGroup
-	workflowWorkersOnce   sync.Once
-	workflowWake          chan struct{}
-	videoWorkerWG         sync.WaitGroup
-	videoWG               sync.WaitGroup
-	videoWorkersOnce      sync.Once
-	videoWake             chan struct{}
-	audioWorkerWG         sync.WaitGroup
-	audioWG               sync.WaitGroup
-	audioWorkersOnce      sync.Once
-	audioWake             chan struct{}
-	processToken          string
+	dataDir                 string
+	mu                      sync.Mutex
+	uploads                 chan struct{}
+	codex                   *codexManager
+	claude                  *claudeManager
+	runtime                 *runtimeHub
+	runtimeOrigins          map[string]struct{}
+	store                   store.Store
+	blobObjects             blobObjectStore
+	tenantBlobStoreMu       sync.Mutex
+	tenantBlobStores        map[string]tenantBlobStoreCacheEntry
+	secrets                 cipher.AEAD
+	imageExecutor           imageExecutor
+	videoExecutor           videoExecutor
+	audioExecutor           audioExecutor
+	promptCatalogFetcher    promptCatalogFetchFunc
+	promptSchedulerOnce     sync.Once
+	promptSchedulerWG       sync.WaitGroup
+	promptSchedulerRoot     context.Context
+	stopPromptScheduler     context.CancelFunc
+	promptSchedulerInterval time.Duration
+	generationMu            sync.Mutex
+	generationCancels       map[string]context.CancelFunc
+	generationWG            sync.WaitGroup
+	generationWorkerWG      sync.WaitGroup
+	generationWorkersOnce   sync.Once
+	generationRoot          context.Context
+	stopGeneration          context.CancelFunc
+	generationWake          chan struct{}
+	workflowWorkerWG        sync.WaitGroup
+	workflowWG              sync.WaitGroup
+	workflowWorkersOnce     sync.Once
+	workflowWake            chan struct{}
+	videoWorkerWG           sync.WaitGroup
+	videoWG                 sync.WaitGroup
+	videoWorkersOnce        sync.Once
+	videoWake               chan struct{}
+	audioWorkerWG           sync.WaitGroup
+	audioWG                 sync.WaitGroup
+	audioWorkersOnce        sync.Once
+	audioWake               chan struct{}
+	processToken            string
 }
 
 func Mount(r chi.Router, dataDir string) {
@@ -144,18 +150,51 @@ func Mount(r chi.Router, dataDir string) {
 		r.Get("/auth/oauth/linuxdo/callback", s.linuxDoOAuthCallback)
 		r.Get("/billing/estimate", s.estimateCredits)
 		r.Get("/admin/channels", s.getAdminChannels)
+		r.Get("/shared-channels", s.getSharedChannels)
 		r.Put("/admin/channels", s.putAdminChannels)
+		r.Delete("/admin/channels/{id}", s.deleteAdminChannel)
+		r.Put("/admin/channels/{id}/secret", s.putAdminChannelSecret)
+		r.Post("/admin/channels/{id}/test", s.testAdminChannel)
+		r.Post("/admin/channels/{id}/models", s.getAdminChannelModels)
 		r.Get("/admin/models", s.getAdminModels)
+		r.Put("/admin/models", s.putAdminModels)
 		r.Get("/admin/users", s.listAdminUsers)
 		r.Patch("/admin/users/{id}", s.patchAdminUser)
+		r.Post("/admin/users/{id}/credit-adjustments", s.createAdminCreditAdjustment)
+		r.Get("/admin/credit-logs", s.listAdminCreditLogs)
+		r.Get("/admin/storage-pool", s.getAdminStoragePool)
+		r.Put("/admin/storage-pool", s.putAdminStoragePool)
+		r.Put("/admin/storage-pool/{id}/secret", s.putAdminStoragePoolSecret)
+		r.Delete("/admin/storage-pool/{id}", s.deleteAdminStoragePoolProvider)
+		r.Get("/prompt-catalog", s.getPublicPromptCatalog)
+		r.Get("/admin/prompt-catalog", s.getAdminPromptCatalog)
+		r.Post("/admin/prompt-categories", s.createAdminPromptCategory)
+		r.Put("/admin/prompt-categories/{id}", s.putAdminPromptCategory)
+		r.Delete("/admin/prompt-categories/{id}", s.deleteAdminPromptCategory)
+		r.Post("/admin/prompts", s.createAdminPrompt)
+		r.Put("/admin/prompts/{id}", s.putAdminPrompt)
+		r.Post("/admin/prompts/bulk-delete", s.bulkDeleteAdminPrompts)
+		r.Post("/admin/prompt-sources", s.createAdminPromptSource)
+		r.Put("/admin/prompt-sources/{id}", s.putAdminPromptSource)
+		r.Delete("/admin/prompt-sources/{id}", s.deleteAdminPromptSource)
+		r.Post("/admin/prompt-sources/{id}/sync", s.syncAdminPromptSource)
+		r.Post("/admin/prompt-sources/sync-all", s.syncAllAdminPromptSources)
+		r.Post("/admin/prompt-sources/run-due", s.runDueAdminPromptSources)
 		r.Post("/media/references", s.createMediaReferences)
 		r.Get("/media/references/{token}", s.getMediaReference)
+		r.Post("/migration/versions", s.migrationVersions)
+		r.Put("/migration/projects/{id}", s.migrationPutProject)
+		r.Put("/migration/state/{key}", s.migrationPutState)
+		r.Put("/migration/secrets/config", s.migrationPutSecrets)
+		r.Put("/migration/generation-history", s.migrationPutGenerationHistory)
+		r.Put("/migration/blobs/{key}", s.migrationPutBlob)
 	})
 }
 
 func NewServer(dataDir string) *Server {
 	purgeCodexAttachmentRoot(dataDir)
 	generationRoot, stopGeneration := context.WithCancel(context.Background())
+	promptSchedulerRoot, stopPromptScheduler := context.WithCancel(context.Background())
 	return &Server{
 		dataDir: dataDir,
 		uploads: make(chan struct{}, 2),
@@ -166,16 +205,18 @@ func NewServer(dataDir string) *Server {
 			"http://localhost:5173": {},
 			"http://127.0.0.1:5173": {},
 		},
-		imageExecutor:     newOpenAIImageExecutor(),
-		videoExecutor:     newHTTPVideoExecutor(),
-		audioExecutor:     newHTTPAudioExecutor(),
-		generationCancels: make(map[string]context.CancelFunc),
-		generationRoot:    generationRoot,
-		stopGeneration:    stopGeneration,
-		generationWake:    make(chan struct{}, 1),
-		workflowWake:      make(chan struct{}, 1),
-		videoWake:         make(chan struct{}, 1),
-		audioWake:         make(chan struct{}, 1),
+		imageExecutor:       newOpenAIImageExecutor(),
+		videoExecutor:       newHTTPVideoExecutor(),
+		audioExecutor:       newHTTPAudioExecutor(),
+		generationCancels:   make(map[string]context.CancelFunc),
+		generationRoot:      generationRoot,
+		stopGeneration:      stopGeneration,
+		generationWake:      make(chan struct{}, 1),
+		promptSchedulerRoot: promptSchedulerRoot,
+		stopPromptScheduler: stopPromptScheduler,
+		workflowWake:        make(chan struct{}, 1),
+		videoWake:           make(chan struct{}, 1),
+		audioWake:           make(chan struct{}, 1),
 	}
 }
 
@@ -197,6 +238,8 @@ func NewServerWithStore(dataDir string, backend store.Store) *Server {
 }
 
 func (s *Server) setBlobObjectStore(objects blobObjectStore) {
+	s.tenantBlobStoreMu.Lock()
+	defer s.tenantBlobStoreMu.Unlock()
 	s.blobObjects = objects
 }
 
@@ -205,11 +248,32 @@ func (s *Server) ConfigureS3BlobStorage(config S3BlobStorageConfig) error {
 	if err != nil {
 		return err
 	}
+	s.tenantBlobStoreMu.Lock()
+	defer s.tenantBlobStoreMu.Unlock()
+	if s.store != nil {
+		configs := []blobStorageProviderConfig{{
+			ID: "process-default", Destination: s3BlobStorageDestination(objects),
+			Weight: 1, Health: blobStorageProviderHealthy, Store: objects,
+		}}
+		if err := persistBlobProviderRegistry(context.Background(), s.store, configs); err != nil {
+			return err
+		}
+		if current, ok := s.blobObjects.(*blobStoragePoolStore); ok {
+			return current.Update(configs)
+		}
+		pool, err := newBlobStoragePoolStore(configs, newTenantStateBlobPlacementStore(s.store))
+		if err != nil {
+			return err
+		}
+		s.blobObjects = pool
+		return nil
+	}
 	s.blobObjects = objects
 	return nil
 }
 
 func (s *Server) Close() {
+	s.stopPromptScheduler()
 	s.stopGeneration()
 	s.generationMu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(s.generationCancels))
@@ -228,6 +292,7 @@ func (s *Server) Close() {
 	s.videoWG.Wait()
 	s.audioWorkerWG.Wait()
 	s.audioWG.Wait()
+	s.promptSchedulerWG.Wait()
 }
 
 func randomGenerationOwner() string {
@@ -239,6 +304,7 @@ func randomGenerationOwner() string {
 }
 
 func MountServer(r chi.Router, s *Server) {
+	s.startPromptCatalogScheduler()
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.withSession)
 		r.Use(s.requireUserWhenNeeded)
@@ -317,12 +383,44 @@ func MountServer(r chi.Router, s *Server) {
 		r.Get("/auth/oauth/linuxdo/callback", s.linuxDoOAuthCallback)
 		r.Get("/billing/estimate", s.estimateCredits)
 		r.Get("/admin/channels", s.getAdminChannels)
+		r.Get("/shared-channels", s.getSharedChannels)
 		r.Put("/admin/channels", s.putAdminChannels)
+		r.Delete("/admin/channels/{id}", s.deleteAdminChannel)
+		r.Put("/admin/channels/{id}/secret", s.putAdminChannelSecret)
+		r.Post("/admin/channels/{id}/test", s.testAdminChannel)
+		r.Post("/admin/channels/{id}/models", s.getAdminChannelModels)
 		r.Get("/admin/models", s.getAdminModels)
+		r.Put("/admin/models", s.putAdminModels)
 		r.Get("/admin/users", s.listAdminUsers)
 		r.Patch("/admin/users/{id}", s.patchAdminUser)
+		r.Post("/admin/users/{id}/credit-adjustments", s.createAdminCreditAdjustment)
+		r.Get("/admin/credit-logs", s.listAdminCreditLogs)
+		r.Get("/admin/storage-pool", s.getAdminStoragePool)
+		r.Put("/admin/storage-pool", s.putAdminStoragePool)
+		r.Put("/admin/storage-pool/{id}/secret", s.putAdminStoragePoolSecret)
+		r.Delete("/admin/storage-pool/{id}", s.deleteAdminStoragePoolProvider)
+		r.Get("/prompt-catalog", s.getPublicPromptCatalog)
+		r.Get("/admin/prompt-catalog", s.getAdminPromptCatalog)
+		r.Post("/admin/prompt-categories", s.createAdminPromptCategory)
+		r.Put("/admin/prompt-categories/{id}", s.putAdminPromptCategory)
+		r.Delete("/admin/prompt-categories/{id}", s.deleteAdminPromptCategory)
+		r.Post("/admin/prompts", s.createAdminPrompt)
+		r.Put("/admin/prompts/{id}", s.putAdminPrompt)
+		r.Post("/admin/prompts/bulk-delete", s.bulkDeleteAdminPrompts)
+		r.Post("/admin/prompt-sources", s.createAdminPromptSource)
+		r.Put("/admin/prompt-sources/{id}", s.putAdminPromptSource)
+		r.Delete("/admin/prompt-sources/{id}", s.deleteAdminPromptSource)
+		r.Post("/admin/prompt-sources/{id}/sync", s.syncAdminPromptSource)
+		r.Post("/admin/prompt-sources/sync-all", s.syncAllAdminPromptSources)
+		r.Post("/admin/prompt-sources/run-due", s.runDueAdminPromptSources)
 		r.Post("/media/references", s.createMediaReferences)
 		r.Get("/media/references/{token}", s.getMediaReference)
+		r.Post("/migration/versions", s.migrationVersions)
+		r.Put("/migration/projects/{id}", s.migrationPutProject)
+		r.Put("/migration/state/{key}", s.migrationPutState)
+		r.Put("/migration/secrets/config", s.migrationPutSecrets)
+		r.Put("/migration/generation-history", s.migrationPutGenerationHistory)
+		r.Put("/migration/blobs/{key}", s.migrationPutBlob)
 	})
 }
 
@@ -356,11 +454,14 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	blobStorage := "filesystem"
-	if s.blobObjects != nil {
-		blobStorage = s.blobObjects.Kind()
+	s.tenantBlobStoreMu.Lock()
+	blobObjects := s.blobObjects
+	s.tenantBlobStoreMu.Unlock()
+	if blobObjects != nil {
+		blobStorage = blobObjects.Kind()
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if err := s.blobObjects.Ping(ctx); err != nil {
+		if err := blobObjects.Ping(ctx); err != nil {
 			http.Error(w, "blob storage unavailable", http.StatusServiceUnavailable)
 			return
 		}

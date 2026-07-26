@@ -15,10 +15,10 @@ const sitePolicyStateKey = "sitePolicy"
 // SitePolicy is the tenant admin-controlled policy surface from Tiger public docs:
 // registration, custom model channels, and cloud-channel generation.
 type SitePolicy struct {
-	AllowRegister       bool `json:"allowRegister"`
-	AllowCustomChannel  bool `json:"allowCustomChannel"`
-	AllowCloudChannel   bool `json:"allowCloudChannel"`
-	LinuxDoEnabled      bool `json:"linuxDoEnabled"`
+	AllowRegister      bool `json:"allowRegister"`
+	AllowCustomChannel bool `json:"allowCustomChannel"`
+	AllowCloudChannel  bool `json:"allowCloudChannel"`
+	LinuxDoEnabled     bool `json:"linuxDoEnabled"`
 }
 
 func defaultSitePolicy() SitePolicy {

@@ -1,6 +1,6 @@
 import type { BoardNode } from "@/types/board";
 import { getBlob, MEDIA_UPLOAD_LIMITS } from "@/services/storage";
-import { readBoundedResponse } from "@/services/remote-content";
+import { decodeBoundedDataUrl, readBoundedResponse } from "@/services/remote-content";
 import { normalizeExternalHttpsUrl } from "@/lib/remote-url";
 
 const IMAGE_MIME_TYPES = ["image/avif", "image/gif", "image/jpeg", "image/png", "image/webp"] as const;
@@ -28,6 +28,13 @@ async function imageDimensions(blob: Blob): Promise<{ width: number; height: num
 }
 
 async function fetchImageBlob(content: string, signal?: AbortSignal): Promise<Blob> {
+  if (/^data:/i.test(content)) {
+    const decoded = decodeBoundedDataUrl(content, {
+      maxBytes: MEDIA_UPLOAD_LIMITS.imageBytes,
+      mimeTypes: IMAGE_MIME_TYPES,
+    });
+    return new Blob([decoded.bytes], { type: decoded.mimeType });
+  }
   const url = /^https:/i.test(content) ? normalizeExternalHttpsUrl(content) : content;
   if (!/^(?:https:|blob:|data:)/i.test(url)) throw new Error("Unsupported image source URL");
   const response = await fetch(url, { redirect: "error", signal });

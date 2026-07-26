@@ -25,6 +25,10 @@ export class AuthHttpError extends Error {
   }
 }
 
+export function isAuthDisabledError(error: unknown): boolean {
+  return error instanceof AuthHttpError && error.status === 404;
+}
+
 export function getSessionToken(): string | null {
   try {
     return localStorage.getItem(SESSION_KEY);
@@ -164,4 +168,3 @@ export async function updateSitePolicy(policy: SitePolicy): Promise<SitePolicy> 
     }),
   );
 }
-

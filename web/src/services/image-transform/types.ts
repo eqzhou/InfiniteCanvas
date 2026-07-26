@@ -1,5 +1,5 @@
 export type ImageTransformCapability = "upscale" | "inpaint" | "mask";
-export type ImageTransformOperation = ImageTransformCapability;
+export type ImageTransformOperation = "resize" | "ai-upscale" | "inpaint" | "mask";
 
 export interface ImageTransformContext {
   signal?: AbortSignal;

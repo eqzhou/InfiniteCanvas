@@ -31,6 +31,7 @@ export function ImagePreviewDialog({
       tabIndex={-1}
       className="ob-overlay bg-black/80 p-3 sm:p-6"
       onPointerDown={(event) => {
+        event.stopPropagation();
         if (event.target === event.currentTarget) onClose();
       }}
     >

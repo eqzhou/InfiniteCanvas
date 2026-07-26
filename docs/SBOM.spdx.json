@@ -5,7 +5,7 @@
   "name": "OpenBoard web dependency inventory",
   "documentNamespace": "https://openboard.local/spdx/openboard-web-0.1.0",
   "creationInfo": {
-    "created": "2026-07-23T17:43:33.397Z",
+    "created": "2026-07-26T11:25:36.530Z",
     "creators": [
       "Tool: OpenBoard audit-licenses.mjs"
     ]
@@ -463,6 +463,20 @@
       "SPDXID": "SPDXRef-cookie-1.1.1",
       "name": "cookie",
       "versionInfo": "1.1.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-cookie-es-3.1.1",
+      "name": "cookie-es",
+      "versionInfo": "3.1.1",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-csstype-3.2.3",
+      "name": "csstype",
+      "versionInfo": "3.2.3",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },
@@ -1146,16 +1160,9 @@
       "downloadLocation": "NOASSERTION"
     },
     {
-      "SPDXID": "SPDXRef-react-router-7.18.1",
+      "SPDXID": "SPDXRef-react-router-8.3.0",
       "name": "react-router",
-      "versionInfo": "7.18.1",
-      "licenseConcluded": "MIT",
-      "downloadLocation": "NOASSERTION"
-    },
-    {
-      "SPDXID": "SPDXRef-react-router-dom-7.18.1",
-      "name": "react-router-dom",
-      "versionInfo": "7.18.1",
+      "versionInfo": "8.3.0",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },

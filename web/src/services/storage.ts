@@ -1,5 +1,5 @@
 import { clear, createStore, del, entries, get, set } from "idb-keyval";
-import type { AppConfig, AssetItem, AssistantSession, BoardNode, BoardProject, PromptItem } from "@/types/board";
+import type { AppConfig, AssetItem, AssistantSession, BoardNode, BoardProject, GenerationJob, PromptItem } from "@/types/board";
 import { decodeBoundedDataUrl, readBoundedResponse } from "@/services/remote-content";
 import { normalizeExternalHttpsUrl } from "@/lib/remote-url";
 import { normalizeChannel } from "@/lib/ai-config";
@@ -13,12 +13,44 @@ import {
   loadServerProjects,
   loadServerSecrets,
   loadServerState,
+  loadMigrationResourceVersions,
   putServerBlob,
   replaceServerProjects,
   saveServerProjects,
   saveServerSecrets,
   saveServerState,
+  saveMigrationBlob,
+  saveMigrationGenerationHistory,
+  saveMigrationProject,
+  saveMigrationSecrets,
+  saveMigrationState,
+  TenantConfigAdminRequiredError,
+  type MigrationResourceRef,
 } from "@/services/server-storage";
+import {
+  canonicalizeMigrationJson,
+  createMigrationPreflight,
+  createWorkspaceManifest,
+  executeWorkspaceMigration,
+  fingerprintBytes,
+  fingerprintValue,
+  type MigrationBatch,
+  type MigrationJournal,
+  type ExecuteWorkspaceMigrationResult,
+  type LocalWorkspaceMigrationPreflight,
+  type WorkspaceManifest,
+  type WorkspaceManifestEntry,
+} from "@/services/local-workspace-migration";
+import {
+  clearLocalGenerationJobsAfterMigration,
+  listAllGenerationJobs,
+  readLocalGenerationJobsForMigration,
+} from "@/services/generation-jobs";
+import {
+  optionalLocalStateResources,
+  summarizeMigrationCredentials,
+  type MigrationCredentialSummary,
+} from "@/services/local-migration-resources";
 
 const SERVER_STORAGE = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
 
@@ -34,8 +66,10 @@ const CONFIG_KEY = "openboard:config";
 const ASSETS_KEY = "openboard:assets";
 const PROMPTS_KEY = "openboard:prompts";
 const CONFIG_SECRETS_KEY = "openboard:config-secrets";
+const SERVER_MIGRATION_JOURNAL_KEY = "openboard:server-migration-journal-v1";
 
 let serverMigration: Promise<void> | undefined;
+let serverMigrationSuppressed = false;
 
 type StoredBlobRecord = {
   version: 1;
@@ -53,50 +87,287 @@ function storedValueToBlob(value: unknown): Blob | undefined {
   return new Blob([record.bytes], { type: record.mimeType });
 }
 
+type LocalMigrationPayload =
+  | { kind: "project"; value: BoardProject }
+  | { kind: "state"; id: "config"; value: AppConfig }
+  | { kind: "state"; id: "assets"; value: AssetItem[] }
+  | { kind: "state"; id: "prompts"; value: PromptItem[] }
+  | { kind: "secret"; value: ConfigSecrets }
+  | { kind: "history"; value: GenerationJob[] }
+  | { kind: "blob"; key: string; value: Blob };
+
+type LocalMigrationWorkspace = {
+  manifest: WorkspaceManifest;
+  payloads: Map<string, LocalMigrationPayload>;
+  credentials: MigrationCredentialSummary;
+};
+
+function migrationIdentity(entry: Pick<WorkspaceManifestEntry, "kind" | "id">): string {
+  return `${entry.kind}:${entry.id}`;
+}
+
+function migrationValueEntry(
+  kind: "project" | "state" | "secret",
+  id: string,
+  value: unknown,
+): WorkspaceManifestEntry {
+  const canonical = canonicalizeMigrationJson(value);
+  return {
+    kind,
+    id,
+    fingerprint: fingerprintValue(canonical),
+    bytes: new TextEncoder().encode(JSON.stringify(canonical)).byteLength,
+  };
+}
+
+async function migrationBlobEntry(id: string, blob: Blob): Promise<WorkspaceManifestEntry> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return {
+    kind: "blob",
+    id,
+    fingerprint: fingerprintValue([blob.type || "application/octet-stream", fingerprintBytes(bytes)]),
+    bytes: bytes.byteLength,
+  };
+}
+
+async function readLocalMigrationWorkspace(options: { includeSecrets?: boolean; allowSecrets?: boolean } = {}): Promise<LocalMigrationWorkspace | null> {
+  const [storedProjects, config, storedAssets, storedPrompts, history, images, media] = await Promise.all([
+    get<unknown[]>(PROJECTS_KEY, appStore),
+    get<AppConfig>(CONFIG_KEY, appStore),
+    get<AssetItem[]>(ASSETS_KEY, appStore),
+    get<PromptItem[]>(PROMPTS_KEY, appStore),
+    readLocalGenerationJobsForMigration(),
+    entries(imageStore),
+    entries(mediaStore),
+  ]);
+  const hasLegacyData = Boolean(storedProjects?.length || config || storedAssets !== undefined || storedPrompts !== undefined ||
+    history.length || images.length || media.length);
+  if (!hasLegacyData) return null;
+
+  const projects = (storedProjects ?? []).map(parseBoardProject);
+  const manifestEntries: WorkspaceManifestEntry[] = [];
+  const payloads = new Map<string, LocalMigrationPayload>();
+  const add = (entry: WorkspaceManifestEntry, payload: LocalMigrationPayload) => {
+    manifestEntries.push(entry);
+    payloads.set(migrationIdentity(entry), payload);
+  };
+
+  for (const project of projects) {
+    const entry = migrationValueEntry("project", `project:${project.id}`, project);
+    add(entry, { kind: "project", value: project });
+  }
+  let credentials: MigrationCredentialSummary = { present: false, labels: [] };
+  if (config) {
+		const publicConfig = sanitizeConfigForPersistence(config);
+		const configEntry = migrationValueEntry("state", "config", publicConfig);
+		add(configEntry, { kind: "state", id: "config", value: publicConfig });
+		if (options.allowSecrets !== false) {
+			const secrets = mergeConfigSecrets(readSessionConfigSecrets(), extractConfigSecrets(config));
+			credentials = summarizeMigrationCredentials(secrets);
+			if (options.includeSecrets && credentials.present) {
+				const secretEntry = migrationValueEntry("secret", "config", secrets);
+				add(secretEntry, { kind: "secret", value: secrets });
+			}
+		}
+  }
+  for (const resource of optionalLocalStateResources(storedAssets, storedPrompts)) {
+    const stateEntry = migrationValueEntry("state", resource.id, resource.value);
+    if (resource.id === "assets") {
+      add(stateEntry, { kind: "state", id: "assets", value: resource.value });
+    } else {
+      add(stateEntry, { kind: "state", id: "prompts", value: resource.value });
+    }
+  }
+  if (history.length) {
+    const historyEntry = migrationValueEntry("state", "generation-history", history);
+    add(historyEntry, { kind: "history", value: history });
+  }
+
+  for (const [storeKind, records] of [["image", images], ["media", media]] as const) {
+    for (const [key, value] of records) {
+      const blob = storedValueToBlob(value);
+      if (typeof key !== "string" || !blob) {
+        throw new Error("Legacy media contains an invalid record; local data was retained");
+      }
+      const entry = await migrationBlobEntry(`${storeKind}:${key}`, blob);
+      add(entry, { kind: "blob", key, value: blob });
+    }
+  }
+  return { manifest: createWorkspaceManifest(manifestEntries), payloads, credentials };
+}
+
+async function loadRemoteMigrationManifest(local: WorkspaceManifest): Promise<WorkspaceManifest> {
+  const expected = new Map(local.entries.map((entry) => [migrationIdentity(entry), entry]));
+  const entries: WorkspaceManifestEntry[] = [];
+  const projects = await loadServerProjects();
+  for (const project of projects) {
+    const identity = migrationIdentity({ kind: "project", id: `project:${project.id}` });
+    if (expected.has(identity)) entries.push(migrationValueEntry("project", `project:${project.id}`, project));
+  }
+  for (const id of ["config", "assets", "prompts"] as const) {
+    if (!expected.has(migrationIdentity({ kind: "state", id }))) continue;
+    const value = await loadServerState<AppConfig | AssetItem[] | PromptItem[]>(id);
+    if (value !== null) entries.push(migrationValueEntry("state", id, value));
+  }
+  if (expected.has(migrationIdentity({ kind: "state", id: "generation-history" }))) {
+    const history = await listAllGenerationJobs({ includeDeleted: true });
+    const sorted = [...history].sort((left, right) => left.id.localeCompare(right.id));
+    entries.push(migrationValueEntry("state", "generation-history", sorted));
+  }
+  if (expected.has(migrationIdentity({ kind: "secret", id: "config" }))) {
+    const secrets = await loadServerSecrets<ConfigSecrets>();
+    if (secrets !== null) entries.push(migrationValueEntry("secret", "config", secrets));
+  }
+  for (const localEntry of local.entries.filter((entry) => entry.kind === "blob")) {
+    const separator = localEntry.id.indexOf(":");
+    const key = separator < 0 ? "" : localEntry.id.slice(separator + 1);
+    if (!key) continue;
+    const blob = await getServerBlob(key);
+    if (blob) entries.push(await migrationBlobEntry(localEntry.id, blob));
+  }
+  const requests: Array<{ identity: string; ref: MigrationResourceRef }> = local.entries.map((entry) => {
+    if (entry.kind === "project") return { identity: migrationIdentity(entry), ref: { kind: "project", id: entry.id.replace(/^project:/, "") } };
+    if (entry.kind === "secret") return { identity: migrationIdentity(entry), ref: { kind: "secret", id: "config" } };
+    if (entry.kind === "blob") return { identity: migrationIdentity(entry), ref: { kind: "blob", id: entry.id.slice(entry.id.indexOf(":") + 1) } };
+    if (entry.id === "generation-history") return { identity: migrationIdentity(entry), ref: { kind: "generation-history", id: "all" } };
+    return { identity: migrationIdentity(entry), ref: { kind: "state", id: entry.id } };
+  });
+  const versions = await loadMigrationResourceVersions(requests.map(({ ref }) => ref));
+  const versionByIdentity = new Map(requests.map((request, index) => [request.identity, versions[index]]));
+  const contentByIdentity = new Map(entries.map((entry) => [migrationIdentity(entry), entry]));
+  const versioned: WorkspaceManifestEntry[] = [];
+  for (const localEntry of local.entries) {
+    const identity = migrationIdentity(localEntry);
+    const version = versionByIdentity.get(identity);
+    if (!version?.exists) continue;
+    const content = contentByIdentity.get(identity);
+    versioned.push(content
+      ? { ...content, version: version.version }
+      : { ...localEntry, fingerprint: `remote-version:${version.version}`, bytes: 0, version: version.version });
+  }
+  return createWorkspaceManifest(versioned);
+}
+
+async function applyLocalMigrationBatch(
+  batch: MigrationBatch,
+  payloads: ReadonlyMap<string, LocalMigrationPayload>,
+): Promise<void> {
+  for (const operation of batch.operations) {
+    const payload = payloads.get(migrationIdentity(operation.entry));
+    if (!payload) throw new Error(`Local migration payload is missing: ${operation.entry.id}`);
+    if (payload.kind === "project") await saveMigrationProject(payload.value, operation.expectedVersion);
+    else if (payload.kind === "state") await saveMigrationState(payload.id, payload.value, operation.expectedVersion);
+    else if (payload.kind === "secret") await saveMigrationSecrets(payload.value, operation.expectedVersion);
+    else if (payload.kind === "history") await saveMigrationGenerationHistory(payload.value, operation.expectedVersion);
+    else await saveMigrationBlob(payload.key, payload.value, operation.expectedVersion);
+  }
+}
+
+export type StorageMigrationPreflight = LocalWorkspaceMigrationPreflight & {
+  journal: MigrationJournal | null;
+  credentials: MigrationCredentialSummary;
+  includeSecrets: boolean;
+	allowSecrets: boolean;
+};
+
+export type StorageMigrationProgress = {
+  journal: MigrationJournal;
+  completedOperations: number;
+  totalOperations: number;
+};
+
+async function runLocalWorkspaceMigration(
+  local: LocalMigrationWorkspace,
+  onProgress?: (progress: StorageMigrationProgress) => void,
+  signal?: AbortSignal,
+): Promise<ExecuteWorkspaceMigrationResult> {
+  const storedJournal = await get<MigrationJournal>(SERVER_MIGRATION_JOURNAL_KEY, appStore);
+  return executeWorkspaceMigration({
+    localManifest: local.manifest,
+    journal: storedJournal,
+    loadRemoteManifest: () => loadRemoteMigrationManifest(local.manifest),
+    applyBatch: (batch) => applyLocalMigrationBatch(batch, local.payloads),
+    saveJournal: async (journal) => {
+      if (journal.status !== "complete") await set(SERVER_MIGRATION_JOURNAL_KEY, journal, appStore);
+      onProgress?.({
+        journal,
+        completedOperations: journal.completedOperationIds.length,
+        totalOperations: local.manifest.entries.length,
+      });
+    },
+    clearLocal: async () => {
+      await Promise.all([clear(appStore), clear(imageStore), clear(mediaStore), clearLocalGenerationJobsAfterMigration()]);
+    },
+    signal,
+  });
+}
+
+/** Read-only login preflight. It pauses legacy automatic migration until the user decides. */
+export async function preflightLocalWorkspaceMigration(
+  options: { includeSecrets?: boolean; allowSecrets?: boolean } = {},
+): Promise<StorageMigrationPreflight | null> {
+  if (!SERVER_STORAGE) return null;
+  serverMigrationSuppressed = true;
+  const local = await readLocalMigrationWorkspace(options);
+  if (!local) return null;
+  const [remote, journal] = await Promise.all([
+    loadRemoteMigrationManifest(local.manifest),
+    get<MigrationJournal>(SERVER_MIGRATION_JOURNAL_KEY, appStore),
+  ]);
+  return {
+    ...createMigrationPreflight(local.manifest, remote),
+    journal: journal ?? null,
+    credentials: local.credentials,
+    includeSecrets: Boolean(options.includeSecrets),
+		allowSecrets: options.allowSecrets !== false,
+  };
+}
+
+/** Explicit login action. Safe to call again after failure; the journal resumes completed work. */
+export async function migrateLocalWorkspace(
+  options: { includeSecrets?: boolean; allowSecrets?: boolean; onProgress?: (progress: StorageMigrationProgress) => void; signal?: AbortSignal } = {},
+): Promise<ExecuteWorkspaceMigrationResult | null> {
+  if (!SERVER_STORAGE) return null;
+  serverMigrationSuppressed = true;
+	const local = await readLocalMigrationWorkspace({
+		includeSecrets: options.includeSecrets,
+		allowSecrets: options.allowSecrets,
+	});
+  if (!local) return null;
+  return runLocalWorkspaceMigration(local, options.onProgress, options.signal);
+}
+
+/** Keep the browser-local copy untouched for this authenticated page session. */
+export function keepLocalWorkspaceForSession(): void {
+  serverMigrationSuppressed = true;
+}
+
 function ensureServerMigration(): Promise<void> {
-  if (!SERVER_STORAGE) return Promise.resolve();
+  if (!SERVER_STORAGE || serverMigrationSuppressed) return Promise.resolve();
   if (serverMigration) return serverMigration;
   serverMigration = (async () => {
-    const [remoteProjects, remoteConfig, remoteAssets, remotePrompts] = await Promise.all([
-      loadServerProjects(),
-      loadServerState<AppConfig>("config"),
-      loadServerState<AssetItem[]>("assets"),
-      loadServerState<PromptItem[]>("prompts"),
-    ]);
-    const remoteHasData = remoteProjects.length > 0 || remoteConfig !== null ||
-      remoteAssets !== null || remotePrompts !== null;
-    if (remoteHasData) return;
-
-    const [projects, config, assets, prompts, images, media] = await Promise.all([
-      get<BoardProject[]>(PROJECTS_KEY, appStore),
-      get<AppConfig>(CONFIG_KEY, appStore),
-      get<AssetItem[]>(ASSETS_KEY, appStore),
-      get<PromptItem[]>(PROMPTS_KEY, appStore),
-      entries(imageStore),
-      entries(mediaStore),
-    ]);
-    const hasLegacyData = Boolean(projects?.length || config || assets?.length || prompts?.length || images.length || media.length);
-    if (!hasLegacyData) return;
-
-    await Promise.all([
-      saveServerProjects(projects ?? []),
-      ...(config ? [
-        saveServerState("config", sanitizeConfigForPersistence(config)),
-        saveServerSecrets(extractConfigSecrets(config)),
-      ] : []),
-      saveServerState("assets", assets ?? []),
-      saveServerState("prompts", prompts ?? []),
-      ...[...images, ...media].map(([key, value]) => {
-        const blob = storedValueToBlob(value);
-        return typeof key === "string" && blob ? putServerBlob(key, blob) : Promise.resolve();
-      }),
-    ]);
-    await Promise.all([clear(appStore), clear(imageStore), clear(mediaStore)]);
+    const local = await readLocalMigrationWorkspace();
+    if (!local) return;
+    const result = await runLocalWorkspaceMigration(local);
+    if (result.status === "failed" || result.status === "verification-failed") serverMigration = undefined;
   })();
-  return serverMigration;
+  return serverMigration.catch((error) => {
+    serverMigration = undefined;
+    throw error;
+  });
 }
 
 const objectUrls = new Map<string, string>();
+
+/** Drop process-local state that belongs to the previous auth/storage scope. */
+export function resetStorageScopeState(): void {
+  serverMigration = undefined;
+  serverMigrationSuppressed = false;
+  if (typeof URL !== "undefined") {
+    for (const url of objectUrls.values()) URL.revokeObjectURL(url);
+  }
+  objectUrls.clear();
+}
 
 export const MEDIA_UPLOAD_LIMITS = {
   imageBytes: 32 * 1024 * 1024,
@@ -272,7 +543,13 @@ export async function loadConfig(): Promise<AppConfig | null> {
 
   const sanitized = sanitizeConfigForPersistence(stored);
   if (Object.values(persistedSecrets.apiKeys).some(Boolean) || persistedSecrets.webdavPass || persistedSecrets.objectStorageAccessKeyId || persistedSecrets.objectStorageSecretAccessKey || persistedSecrets.objectStorageSessionToken) {
-    if (SERVER_STORAGE) await saveServerState("config", sanitized);
+    if (SERVER_STORAGE) {
+      try {
+        await saveServerState("config", sanitized);
+      } catch (error) {
+        if (!(error instanceof TenantConfigAdminRequiredError)) throw error;
+      }
+    }
     else await set(CONFIG_KEY, sanitized, appStore);
   }
   const objectStorage = normalizeObjectStorage(sanitized.objectStorage);
@@ -296,7 +573,13 @@ export async function loadConfig(): Promise<AppConfig | null> {
 
 export async function saveConfig(config: AppConfig): Promise<void> {
   const secrets = extractConfigSecrets(config);
-  if (SERVER_STORAGE) await saveServerSecrets(secrets);
+	if (SERVER_STORAGE) {
+		try {
+			await saveServerSecrets(secrets);
+		} catch (error) {
+			if (!(error instanceof TenantConfigAdminRequiredError) || summarizeMigrationCredentials(secrets).present) throw error;
+		}
+	}
   else writeSessionConfigSecrets(secrets);
   const sanitized = sanitizeConfigForPersistence(config);
   if (SERVER_STORAGE) await saveServerState("config", sanitized);

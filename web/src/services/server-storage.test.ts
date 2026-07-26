@@ -74,3 +74,69 @@ describe("server project persistence isolation", () => {
     expect(deleted.some((url) => url.includes("/api/projects/shared"))).toBe(false);
   });
 });
+
+describe("migration compare-and-swap transport", () => {
+  const version = `m1-${"a".repeat(64)}`;
+
+  test("loads resource versions in bounded batches and preserves request ordering", async () => {
+    const batchSizes: number[] = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { resources: Array<{ kind: string; id: string }> };
+      batchSizes.push(body.resources.length);
+      return Response.json({
+        resources: body.resources.map((resource, index) => ({
+          ...resource,
+          exists: index % 2 === 0,
+          ...(index % 2 === 0 ? { version } : {}),
+        })),
+      });
+    }) as typeof fetch;
+
+    const { loadMigrationResourceVersions } = await import("./server-storage");
+    const resources = Array.from({ length: 101 }, (_, index) => ({
+      kind: "blob" as const,
+      id: `asset-${index}`,
+    }));
+    const result = await loadMigrationResourceVersions(resources);
+
+    expect(batchSizes).toEqual([100, 1]);
+    expect(result).toHaveLength(101);
+    expect(result[0]).toEqual({ ...resources[0], exists: true, version });
+    expect(result[100]).toEqual({ ...resources[100], exists: true, version });
+  });
+
+  test("rejects malformed or reordered version responses", async () => {
+    globalThis.fetch = mock(async () => Response.json({
+      resources: [{ kind: "state", id: "prompts", exists: false }],
+    })) as typeof fetch;
+
+    const { loadMigrationResourceVersions } = await import("./server-storage");
+    await expect(loadMigrationResourceVersions([{ kind: "state", id: "assets" }]))
+      .rejects.toThrow("Migration version response is invalid");
+  });
+
+  test("sends create-only and exact-version preconditions", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(init ?? {});
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    const { saveMigrationState } = await import("./server-storage");
+    await saveMigrationState("assets", [], null);
+    await saveMigrationState("prompts", [], version);
+
+    expect(new Headers(calls[0]?.headers).get("If-None-Match")).toBe("*");
+    expect(new Headers(calls[0]?.headers).has("If-Match")).toBe(false);
+    expect(new Headers(calls[1]?.headers).get("If-Match")).toBe(`"${version}"`);
+    expect(new Headers(calls[1]?.headers).has("If-None-Match")).toBe(false);
+  });
+
+  test("surfaces a stale write as a resumable migration precondition error", async () => {
+    globalThis.fetch = mock(async () => new Response(null, { status: 412 })) as typeof fetch;
+
+    const { MigrationPreconditionError, saveMigrationProject } = await import("./server-storage");
+    await expect(saveMigrationProject(project("raced"), null))
+      .rejects.toBeInstanceOf(MigrationPreconditionError);
+  });
+});

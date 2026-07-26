@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { ImagePlus, PanelBottom, PanelLeft, RefreshCw, Square, Trash2, Video } from "lucide-react";
 import type { GenerationJob } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
@@ -45,6 +45,10 @@ import {
   type WorkbenchResultItem,
 } from "@/components/workbench/WorkbenchHistoryRow";
 import { DraggableWorkflowEntry } from "@/components/workbench/DraggableWorkflowEntry";
+import { KlingVideoControls, type KlingWorkbenchOptions } from "@/components/workbench/KlingVideoControls";
+import { validateKlingVideoParameters } from "@/lib/kling-video";
+import { mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
+import { resolveWorkbenchRunChannel } from "@/lib/workbench-provider";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const config = useBoardStore((state) => state.config);
@@ -52,8 +56,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const project = useBoardStore((state) => state.getActive());
   const addNode = useBoardStore((state) => state.addNode);
   const persistNow = useBoardStore((state) => state.persistNow);
-  const [channelId, setChannelId] = useState(config.activeChannelId ?? config.channels[0]?.id ?? "");
-  const channel = config.channels.find((item) => item.id === channelId) ?? config.channels[0];
+	const sharedChannels = useSharedChannels();
+	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
+  const [channelId, setChannelId] = useState(config.activeSharedChannelId ?? config.activeChannelId ?? config.channels[0]?.id ?? "");
+  const channel = channelChoices.find((item) => item.id === channelId) ?? config.channels[0];
   const provider = channel ? getProvider(channel, kind) : undefined;
   const [model, setModel] = useState(provider?.model ?? "");
   const [prompt, setPrompt] = useState("");
@@ -68,6 +74,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const [generateAudio, setGenerateAudio] = useState(false);
   const [watermark, setWatermark] = useState(false);
   const [frameMode, setFrameMode] = useState<"references" | "first-last">("references");
+  const [klingOptions, setKlingOptions] = useState<KlingWorkbenchOptions>({
+    negativePrompt: "", mode: "std", multiShot: false, shotType: "intelligence", shots: [], elements: [],
+  });
   const [references, setReferences] = useState<File[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [category, setCategory] = useState("");
@@ -88,6 +97,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const reusableAssets = useMemo(() => workbenchImageAssets(assets), [assets]);
   const categories = useMemo(() => workbenchCategories(jobs), [jobs]);
   const visibleJobs = useMemo(() => filterWorkbenchJobs(jobs, categoryFilter), [categoryFilter, jobs]);
+  const allowsEmptyKlingPrompt = kind === "video" && provider?.protocol === "apimart" && model === "kling-v3" &&
+    klingOptions.multiShot && klingOptions.shotType === "customize" && klingOptions.shots.length > 0;
+	const allowsEmptySeedancePrompt = kind === "video" && provider?.protocol === "apimart" &&
+		["doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"].includes(model) &&
+		(references.length > 0 || selectedAssetIds.length > 0);
 
   useEffect(() => {
     setModel(provider?.model ?? "");
@@ -197,17 +211,30 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const run = async (source?: GenerationJob) => {
     const runPrompt = source?.prompt ?? prompt;
     const runModel = source?.model ?? model;
-    const runChannel = config.channels.find((item) => item.id === source?.providerId) ?? channel;
+    let runChannel;
+    try {
+      runChannel = resolveWorkbenchRunChannel(channelChoices, channel, source?.providerId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
     const runProvider = runChannel ? getProvider(runChannel, kind) : undefined;
+		const allowEmptyPrompt = (kind === "video" && runProvider?.protocol === "apimart" && runModel === "kling-v3" &&
+			Boolean(source ? source.parameters.multiShot && source.parameters.shotType === "customize" : klingOptions.multiShot && klingOptions.shotType === "customize" && klingOptions.shots.length)) ||
+			(kind === "video" && runProvider?.protocol === "apimart" &&
+				["doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"].includes(runModel) &&
+				(source ? Array.isArray(source.parameters.referenceStorageKeys) && source.parameters.referenceStorageKeys.length > 0 :
+					references.length > 0 || selectedAssetIds.length > 0));
 		const serverProtocolSupported = kind === "image"
 			? runProvider?.protocol === "openai" || runProvider?.protocol === "gemini" ||
-				(runProvider?.protocol === "template" && Boolean(runProvider.template))
+				(runProvider?.protocol === "template" && Boolean(runProvider.template)) || runProvider?.protocol === "apimart" || runProvider?.protocol === "kie"
 			: runProvider?.protocol === "openai" || runProvider?.protocol === "ark" ||
 				(runProvider?.protocol === "template" && Boolean(runProvider.template)) ||
+				runProvider?.protocol === "apimart" || runProvider?.protocol === "kie" ||
 				Boolean(runProvider?.baseUrl.includes("/api/v3") || runProvider?.baseUrl.includes("/api/plan/v3"));
 		let runOnServer = usesServerGenerationJobs() && serverProtocolSupported;
-    if (!runChannel || !runProvider?.baseUrl || !runPrompt.trim()) {
-      setError(!runProvider?.baseUrl ? "请先在设置中配置对应模型服务 URL" : "请输入提示词");
+    if (!runChannel || !runProvider?.baseUrl || (!runPrompt.trim() && !allowEmptyPrompt)) {
+			setError(!runProvider?.baseUrl ? "请先在设置中配置对应模型服务 URL" : "请输入提示词或自定义镜头");
       return;
     }
     const controller = new AbortController();
@@ -228,9 +255,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         for (const key of keys) {
           const blob = await getBlob(key.startsWith("media:") ? "media" : "image", key);
           if (blob) {
-			serverReferencesSupported = serverReferencesSupported && (kind === "image"
-				? blob.type === "image/png" || blob.type === "image/jpeg"
-				: /^(image|video|audio)\//.test(blob.type));
+            serverReferencesSupported = serverReferencesSupported && (kind === "image"
+              ? ["image/png", "image/jpeg"].includes(blob.type)
+              : runProvider?.protocol === "apimart"
+                ? ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(blob.type)
+                : /^(image|video|audio)\//.test(blob.type));
             referenceData.push(await blobToDataUrl(blob));
             referenceStorageKeys.push(key);
           }
@@ -261,8 +290,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         }
         for (const file of references) {
 			serverReferencesSupported = serverReferencesSupported && (kind === "image"
-				? file.type === "image/png" || file.type === "image/jpeg"
-				: /^(image|video|audio)\//.test(file.type));
+				? ["image/png", "image/jpeg"].includes(file.type)
+				: runProvider?.protocol === "apimart"
+					? ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)
+					: /^(image|video|audio)\//.test(file.type));
           const uploaded = await uploadMedia(file, file.type.startsWith("image/") ? "image" : "media");
           uploadedReferenceKeys.push(uploaded.storageKey);
           referenceStorageKeys.push(uploaded.storageKey);
@@ -285,11 +316,36 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             generateAudio,
             watermark,
             frameMode,
+            ...(runProvider?.protocol === "apimart" && (runModel === "kling-v2-6" || runModel === "kling-v3") ? {
+              negativePrompt: klingOptions.negativePrompt,
+              mode: klingOptions.mode,
+              multiShot: klingOptions.multiShot,
+              shotType: klingOptions.shotType,
+              shots: klingOptions.shots,
+              elements: klingOptions.elements,
+            } : {}),
             referenceStorageKeys,
           })),
         ...(ownerClientId ? { ownerClientId } : {}),
       };
 		if (runOnServer) {
+			if (kind === "video" && runProvider.protocol === "apimart" && (runModel === "kling-v2-6" || runModel === "kling-v3")) {
+				validateKlingVideoParameters({
+					model: runModel,
+					prompt: runPrompt,
+					negativePrompt: String(parameters.negativePrompt ?? ""),
+					mode: (parameters.mode ?? "std") as "std" | "pro" | "4k",
+					duration: resolveVideoDuration(Boolean(parameters.smartDuration), Number(parameters.seconds ?? seconds)) ?? seconds,
+					aspectRatio: String(parameters.ratio ?? ratio),
+					audio: Boolean(parameters.generateAudio),
+					watermark: Boolean(parameters.watermark),
+					imageUrls: referenceStorageKeys.filter((_, index) => index < 2).map((_, index) => `https://local.invalid/reference-${index + 1}.png`),
+					multiShot: Boolean(parameters.multiShot),
+					shotType: (parameters.shotType ?? "intelligence") as "intelligence" | "customize",
+					shots: Array.isArray(parameters.shots) ? parameters.shots as never[] : [],
+					elements: Array.isArray(parameters.elements) ? parameters.elements as never[] : [],
+				});
+			}
 			if (kind === "image" && runProvider.protocol === "gemini" && Boolean(parameters.transparentBackground)) {
 				throw new Error("Gemini 图片生成不支持透明背景");
 			}
@@ -323,6 +379,12 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					generateAudio: Boolean(parameters.generateAudio),
 					watermark: Boolean(parameters.watermark),
 					frameMode: normalizeVideoFrameMode(parameters.frameMode),
+					negativePrompt: String(parameters.negativePrompt ?? ""),
+					mode: (parameters.mode ?? "std") as "std" | "pro" | "4k",
+					multiShot: Boolean(parameters.multiShot),
+					shotType: (parameters.shotType ?? "intelligence") as "intelligence" | "customize",
+					shots: Array.isArray(parameters.shots) ? parameters.shots as never[] : [],
+					elements: Array.isArray(parameters.elements) ? parameters.elements as never[] : [],
 					referenceStorageKeys,
 				},
 			});
@@ -570,7 +632,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 value={channelId}
                 onChange={(event) => setChannelId(event.target.value)}
               >
-                {config.channels.map((item) => (
+                {channelChoices.map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
               </select>
@@ -692,6 +754,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     </p>
                   ) : null}
                 </label>
+                {provider?.protocol === "apimart" && (model === "kling-v2-6" || model === "kling-v3") ? (
+                  <KlingVideoControls model={model} value={klingOptions} onChange={setKlingOptions} />
+                ) : null}
               </div>
             )}
             <label className="block">
@@ -699,7 +764,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               <input
                 type="file"
                 multiple
-                accept="image/*,video/*,audio/*"
+                accept={kind === "image" ? "image/png,image/jpeg" : provider?.protocol === "apimart" ? "image/png,image/jpeg,image/webp,image/gif" : "image/*,video/*,audio/*"}
                 className="mt-1 block w-full cursor-pointer text-xs file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--ob-accent-soft)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--ob-accent)] hover:file:bg-[var(--ob-accent)] hover:file:text-white"
                 onChange={(event) => setReferences(Array.from(event.target.files ?? []))}
               />
@@ -737,7 +802,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 type="button"
                 aria-label="生成"
                 className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold"
-                disabled={!prompt.trim()}
+				disabled={!prompt.trim() && !allowsEmptyKlingPrompt && !allowsEmptySeedancePrompt}
                 onClick={() => void run()}
               >
                 {kind === "image" ? <ImagePlus size={18} /> : <Video size={18} />}

@@ -9,6 +9,7 @@ import type {
 import { nowIso, uid } from "@/lib/id";
 import { clonePresetSource, COMMUNITY_PROMPT_SOURCE_PRESETS } from "@/services/prompt-source-presets";
 import { createDefaultDirectorScene } from "@/lib/director-scene";
+import { normalizeImageToolbarPreferences } from "@/lib/image-toolbar-preferences";
 
 export const DEFAULT_NODE_SIZE: Record<NodeType, { width: number; height: number }> = {
   text: { width: 280, height: 180 },
@@ -72,6 +73,7 @@ export function createDefaultConfig(): AppConfig {
     canvasPanelWidth: 256,
     canvasPanelCollapsed: false,
     canvasPanelTab: "projects",
+    imageToolbar: normalizeImageToolbarPreferences(undefined),
   };
 }
 

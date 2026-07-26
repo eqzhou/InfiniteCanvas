@@ -43,6 +43,12 @@ import {
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
 import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
+import { isServerManagedChannel, mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
+import {
+  normalizeImageToolbarPreferences,
+  orderedVisibleImageActions,
+  type ImageToolbarAction,
+} from "@/lib/image-toolbar-preferences";
 import { CameraPromptPanel } from "@/components/canvas/CameraPromptPanel";
 import {
   BookmarkPlus,
@@ -61,7 +67,15 @@ import {
   Wand2,
 } from "lucide-react";
 
-export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?: () => void }) {
+export function NodeActions({
+  node,
+  onEditText,
+  avoidTopToolbarOverlap = false,
+}: {
+  node: BoardNode;
+  onEditText?: () => void;
+  avoidTopToolbarOverlap?: boolean;
+}) {
   const project = useBoardStore((s) => s.getActive());
   const config = useBoardStore((s) => s.config);
   const updateNode = useBoardStore((s) => s.updateNode);
@@ -74,7 +88,10 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
   const [cameraOpen, setCameraOpen] = useState(false);
   const [assetSaveState, setAssetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const cameraAnchorRef = useRef<HTMLSpanElement>(null);
+	const sharedChannels = useSharedChannels();
+	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
   const channel =
+		(config.activeSharedChannelId ? channelChoices.find((c) => c.id === config.activeSharedChannelId) : undefined) ??
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
   const cameraAvailable = node.type === "image" || node.type === "video" ||
@@ -84,10 +101,11 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
 		if (!channel || !usesServerGenerationJobs()) return false;
 		const provider = getProvider(channel, kind);
 		if (kind === "image") return provider.protocol === "openai" || provider.protocol === "gemini" ||
-			(provider.protocol === "template" && Boolean(provider.template));
+			(provider.protocol === "template" && Boolean(provider.template)) || provider.protocol === "apimart" || provider.protocol === "kie";
 		if (kind === "audio") return provider.protocol === "openai";
 		return provider.protocol === "openai" || provider.protocol === "ark" ||
 			(provider.protocol === "template" && Boolean(provider.template)) ||
+			provider.protocol === "apimart" || provider.protocol === "kie" ||
 			provider.baseUrl.includes("/api/v3") || provider.baseUrl.includes("/api/plan/v3");
 	};
 	const startServerImageGeneration = async (
@@ -142,13 +160,13 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
 	};
   const transformRegistry = useMemo(() => {
     const providers = [createLocalCanvasTransformProvider()];
-    if (channel && getProvider(channel, "image").apiKey && getProvider(channel, "image").baseUrl) {
+    if (channel && !isServerManagedChannel(channel, "image") && getProvider(channel, "image").apiKey && getProvider(channel, "image").baseUrl) {
       providers.push(createOpenAIImageTransformProvider(channel));
     }
     return new ImageTransformRegistry(providers);
   }, [channel]);
   const transformProviderOptions = useMemo(() => {
-    const capability = imageTool === "upscale" ? "upscale" : "mask";
+    const capability = imageTool === "resize" || imageTool === "ai-upscale" ? "upscale" : "mask";
     const local = transformRegistry.forCapability(capability);
     const cloud = imageTool === "mask" ? transformRegistry.forCapability("inpaint") : [];
     return [...local, ...cloud].map((provider) => ({
@@ -1031,10 +1049,49 @@ export function NodeActions({ node, onEditText }: { node: BoardNode; onEditText?
     }
   };
 
+  const imageToolbarPreferences = normalizeImageToolbarPreferences(config.imageToolbar);
+  const imageToolbarActions = orderedVisibleImageActions(imageToolbarPreferences);
+  const imageToolLabel = (label: string) => imageToolbarPreferences.showLabels ? label : undefined;
+  const renderImageToolbarAction = (action: ImageToolbarAction) => {
+    switch (action) {
+      case "generate":
+        return <IconBtn key={action} label={imageToolLabel("生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "生成/重试"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnImage())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
+      case "video":
+        return <IconBtn key={action} label={imageToolLabel("视频")} title="生成视频" onClick={() => void generateOnVideo()}><span className="text-[10px] font-semibold">视频</span></IconBtn>;
+      case "reverse":
+        return <IconBtn key={action} label={imageToolLabel("反推")} title="反推提示词" onClick={() => void reversePrompt()}><Type size={14} /></IconBtn>;
+      case "crop":
+        return <IconBtn key={action} label={imageToolLabel("裁剪")} title="裁剪" onClick={() => setCropOpen(true)}><Crop size={14} /></IconBtn>;
+      case "rotate":
+        return <IconBtn key={action} label={imageToolLabel("旋转")} title="旋转 90°" onClick={() => void (async () => {
+          try { placeRight([await makeRotatedNode(node, 90)]); }
+          catch (error) { alert(error instanceof Error ? error.message : String(error)); }
+        })()}><RotateCw size={14} /></IconBtn>;
+      case "angle":
+        return <IconBtn key={action} label={imageToolLabel("多角度")} title="多角度" onClick={() => setAngleOpen(true)}><span className="text-[10px] font-semibold">角</span></IconBtn>;
+      case "mask":
+        return <IconBtn key={action} label={imageToolLabel("遮罩")} title="遮罩/局部编辑" onClick={() => setImageTool("mask")}><span className="text-[10px] font-semibold">罩</span></IconBtn>;
+      case "resize":
+        return <IconBtn key={action} label={imageToolLabel("本地放大")} title="本地尺寸放大" onClick={() => setImageTool("resize")}><span className="text-[10px] font-semibold">尺寸</span></IconBtn>;
+      case "ai-upscale": {
+        const available = transformRegistry.forCapability("upscale").some((provider) => provider.kind === "cloud");
+        return <IconBtn key={action} label={imageToolLabel("AI 超分")} title={available ? "AI 超分" : "当前渠道不支持 AI 超分"} disabled={!available} onClick={() => setImageTool("ai-upscale")}><span className="text-[10px] font-semibold">超分</span></IconBtn>;
+      }
+      case "split":
+        return <IconBtn key={action} label={imageToolLabel("切分")} title="切分" onClick={() => setImageTool("split")}><span className="text-[10px] font-semibold">切</span></IconBtn>;
+      case "download":
+        return <IconBtn key={action} label={imageToolLabel("下载")} title="下载" onClick={() => void downloadNode()}><Download size={14} /></IconBtn>;
+      case "aspect":
+        return <IconBtn key={action} label={imageToolLabel(node.metadata.freeResize ? "自由" : "等比")} title={node.metadata.freeResize ? "锁定比例" : "自由缩放"} onClick={() => updateNode(node.id, { metadata: { freeResize: !node.metadata.freeResize } })}><span className="text-[10px] font-semibold">{node.metadata.freeResize ? "自由" : "等比"}</span></IconBtn>;
+    }
+  };
+
 return (
     <>
       <div
-        className="ob-chrome absolute bottom-full left-0 z-30 mb-8 flex max-w-[min(360px,calc(100vw-1.5rem))] flex-wrap items-center gap-0.5 overflow-hidden p-1"
+        className={`ob-chrome absolute left-0 z-30 flex w-[min(360px,calc(100vw-1.5rem))] flex-wrap items-center gap-0.5 overflow-hidden p-1 ${
+          avoidTopToolbarOverlap ? "top-12" : "bottom-full mb-8"
+        }`}
         onPointerDown={(e) => e.stopPropagation()}
       >
         {node.type === "text" ? (
@@ -1073,67 +1130,7 @@ return (
             </IconBtn>
           </>
         ) : null}
-        {node.type === "image" ? (
-          <>
-            <IconBtn
-              title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "生成/重试"}
-              onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnImage())}
-            >
-              {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
-            </IconBtn>
-            <IconBtn title="生成视频" onClick={() => void generateOnVideo()}>
-              <span className="text-[10px] font-semibold">视频</span>
-            </IconBtn>
-            <IconBtn title="反推提示词" onClick={() => void reversePrompt()}>
-              <Type size={14} />
-            </IconBtn>
-            <IconBtn title="裁剪" onClick={() => setCropOpen(true)}>
-              <Crop size={14} />
-            </IconBtn>
-            <IconBtn
-              title="旋转 90°"
-              onClick={() =>
-                void (async () => {
-                  try {
-                    const created = await makeRotatedNode(node, 90);
-                    placeRight([created]);
-                  } catch (err) {
-                    alert(err instanceof Error ? err.message : String(err));
-                  }
-                })()
-              }
-            >
-              <RotateCw size={14} />
-            </IconBtn>
-            <IconBtn title="多角度" onClick={() => setAngleOpen(true)}>
-              <span className="text-[10px] font-semibold">角</span>
-            </IconBtn>
-            <IconBtn title="遮罩" onClick={() => setImageTool("mask")}>
-              <span className="text-[10px] font-semibold">罩</span>
-            </IconBtn>
-            <IconBtn title="放大" onClick={() => setImageTool("upscale")}>
-              <span className="text-[10px] font-semibold">放</span>
-            </IconBtn>
-            <IconBtn title="切分" onClick={() => setImageTool("split")}>
-              <span className="text-[10px] font-semibold">切</span>
-            </IconBtn>
-            <IconBtn title="下载" onClick={() => void downloadNode()}>
-              <Download size={14} />
-            </IconBtn>
-            <IconBtn
-              title={node.metadata.freeResize ? "锁定比例" : "自由缩放"}
-              onClick={() =>
-                updateNode(node.id, {
-                  metadata: { freeResize: !node.metadata.freeResize },
-                })
-              }
-            >
-              <span className="text-[10px] font-semibold">
-                {node.metadata.freeResize ? "自由" : "等比"}
-              </span>
-            </IconBtn>
-          </>
-        ) : null}
+        {node.type === "image" ? imageToolbarActions.map(renderImageToolbarAction) : null}
         {node.type === "video" ? (
           <>
 			<IconBtn
@@ -1311,7 +1308,7 @@ return (
             ]);
             setImageTool(null);
           }}
-          onUpscale={async (scale, providerId, context) => {
+          onUpscale={async (scale, providerId, operation, context) => {
             const provider = transformRegistry.get(providerId);
             if (!provider?.upscale) throw new Error("所选处理方式不支持放大");
             const source = await resolveNodeImageTransformSource(node, context.signal);
@@ -1327,7 +1324,7 @@ return (
                 "image",
                 { x: node.position.x + node.width + 48, y: node.position.y },
                 {
-                  title: `${node.title} · ${scale}x`,
+                  title: `${node.title} · ${operation === "ai-upscale" ? "AI 超分" : "本地放大"} ${scale}x`,
                   metadata: {
                     content: uploaded.url,
                     storageKey: uploaded.storageKey,
@@ -1336,7 +1333,7 @@ return (
                     bytes: uploaded.bytes,
                     mimeType: uploaded.mimeType,
                     status: "success",
-                    ...createTransformLineage(node.id, "upscale", result, { scale }),
+                    ...createTransformLineage(node.id, operation, result, { scale }),
                   },
                   width: Math.min(420, uploaded.width || node.width),
                   height: Math.min(420, uploaded.height || node.height),
@@ -1358,11 +1355,13 @@ return (
 
 function IconBtn({
   title,
+  label,
   disabled = false,
   onClick,
   children,
 }: {
   title: string;
+  label?: string;
   disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
@@ -1373,11 +1372,12 @@ function IconBtn({
       title={title}
       aria-label={title}
       disabled={disabled}
-      className="ob-icon-btn h-8 w-8 rounded-md"
+      className={`ob-icon-btn h-8 rounded-md ${label ? "w-auto gap-1 px-2" : "w-8"}`}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={onClick}
     >
       {children}
+      {label ? <span className="text-[10px] font-medium">{label}</span> : null}
     </button>
   );
 }

@@ -89,13 +89,26 @@ var stateKeys = map[string]struct{}{
 	"config": {}, "assets": {}, "prompts": {},
 }
 
+func requestStateStorageKey(r *http.Request, key string) (string, bool) {
+	if key == "config" {
+		if user, ok := authUserFrom(r.Context()); ok && !isTenantAdmin(user) {
+			return "__user_config_v1:" + user.ID, false
+		}
+	}
+	return key, true
+}
+
 func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 	if _, ok := stateKeys[key]; !ok || s.store == nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	value, err := s.store.GetState(r.Context(), tenantIDFrom(r), key)
+	storageKey, tenantWide := requestStateStorageKey(r, key)
+	value, err := s.store.GetState(r.Context(), tenantIDFrom(r), storageKey)
+	if errors.Is(err, store.ErrNotFound) && key == "config" && !tenantWide {
+		value, err = s.store.GetState(r.Context(), tenantIDFrom(r), key)
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -114,6 +127,13 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// Config contains tenant-wide provider destinations. Keep it tenant scoped:
+	// otherwise a member could rebind an existing channel ID to an attacker
+	// endpoint and cause the server to send the tenant's stored credential there.
+	storageKey, tenantWide := requestStateStorageKey(r, key)
+	if key == "config" && tenantWide && !s.requireTenantAdmin(w, r, "state unavailable") {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxStateBytes)
 	value, err := io.ReadAll(r.Body)
 	if err != nil || !json.Valid(value) {
@@ -121,11 +141,20 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := tenantIDFrom(r)
-	if err := s.store.PutState(r.Context(), tenantID, key, value); err != nil {
+	if key == "config" && tenantWide {
+		if err := s.preventTenantObjectStorageRebind(r.Context(), tenantID, value); errors.Is(err, errTenantObjectStorageRebind) {
+			http.Error(w, "object storage destination requires an explicit migration", http.StatusConflict)
+			return
+		} else if err != nil {
+			http.Error(w, "invalid object storage configuration", http.StatusBadRequest)
+			return
+		}
+	}
+	if err := s.store.PutState(r.Context(), tenantID, storageKey, value); err != nil {
 		http.Error(w, "failed to store state", http.StatusInternalServerError)
 		return
 	}
-	if key == "config" {
+	if key == "config" && tenantWide {
 		s.InvalidateTenantBlobStore(tenantID)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -202,6 +231,10 @@ func (s *Server) putBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) storeTenantBlob(ctx context.Context, tenantID, userID, key, mediaType string, data []byte) error {
+	return s.storeTenantBlobConditional(ctx, tenantID, userID, key, mediaType, data, "")
+}
+
+func (s *Server) storeTenantBlobConditional(ctx context.Context, tenantID, userID, key, mediaType string, data []byte, expectedContentVersion string) error {
 	name, ok := blobFilename(key)
 	if !ok || !allowedBlobMediaType(mediaType) || len(data) > maxUploadBytes {
 		return errors.New("invalid blob")
@@ -211,7 +244,7 @@ func (s *Server) storeTenantBlob(ctx context.Context, tenantID, userID, key, med
 		return err
 	}
 	if objects != nil {
-		return s.storeTenantObjectBlob(ctx, tenantID, userID, key, name, mediaType, data, objects)
+		return s.storeTenantObjectBlob(ctx, tenantID, userID, key, name, mediaType, data, objects, expectedContentVersion)
 	}
 	dir := filepath.Join(s.dataDir, "blobs", tenantID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -224,6 +257,27 @@ func (s *Server) storeTenantBlob(ctx context.Context, tenantID, userID, key, med
 	defer unlockBlob()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	currentData, currentErr := os.ReadFile(filepath.Join(dir, name))
+	currentExists := currentErr == nil
+	if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
+		return currentErr
+	}
+	if expectedContentVersion == blobVersionAbsent && currentExists {
+		return errBlobObjectConflict
+	}
+	if expectedContentVersion != "" && expectedContentVersion != blobVersionAbsent {
+		if !currentExists {
+			return errBlobObjectConflict
+		}
+		currentMetadata := readBlobMetadata(filepath.Join(dir, name+".json"))
+		currentType := currentMetadata.ContentType
+		if currentType == "" {
+			currentType = "application/octet-stream"
+		}
+		if migrationBlobVersion(currentType, currentData) != expectedContentVersion {
+			return errBlobObjectConflict
+		}
+	}
 	storedBytes, err := directoryBytes(dir)
 	if err != nil {
 		return err

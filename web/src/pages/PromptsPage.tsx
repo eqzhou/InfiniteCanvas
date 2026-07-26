@@ -35,7 +35,7 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   PromptEditorDialog,
   type PromptEditorValues,

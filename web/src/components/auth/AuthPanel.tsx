@@ -7,9 +7,10 @@ type AuthTab = "login" | "register";
 
 type AuthPanelProps = {
   onSuccess: (user: AuthUser) => void;
+  beforeAuthenticate?: () => Promise<void>;
 };
 
-export function AuthPanel({ onSuccess }: AuthPanelProps) {
+export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
   const [tab, setTab] = useState<AuthTab>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -45,6 +46,7 @@ export function AuthPanel({ onSuccess }: AuthPanelProps) {
     setError(null);
     setBusy(true);
     try {
+      await beforeAuthenticate?.();
       const result =
         tab === "login"
           ? await login(email, password)

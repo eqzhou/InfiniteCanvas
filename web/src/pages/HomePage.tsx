@@ -354,6 +354,7 @@ export function HomePage() {
             accept=".json,.openboard,application/json,application/zip"
             className="hidden"
             onChange={async (e) => {
+              const input = e.currentTarget;
               const file = e.target.files?.[0];
               if (!file) return;
               try {
@@ -367,8 +368,9 @@ export function HomePage() {
                 importProject(data);
               } catch (error) {
                 alert(`导入失败：${error instanceof Error ? error.message : "文件格式不正确"}`);
+              } finally {
+                input.value = "";
               }
-              e.currentTarget.value = "";
             }}
           />
         </div>

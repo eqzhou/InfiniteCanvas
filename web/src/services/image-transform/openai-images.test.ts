@@ -49,20 +49,8 @@ describe("OpenAI-compatible image transform provider", () => {
     expect(result.blob.type).toBe("image/png");
   });
 
-  test("falls back from an unsupported upscale endpoint, but not from auth or rate errors", async () => {
-    const paths: string[] = [];
-    const fetcher: typeof fetch = async (input) => {
-      paths.push(new URL(String(input)).pathname);
-      if (paths.length === 1) return new Response("unsupported", { status: 404 });
-      return new Response(JSON.stringify({ data: [{ b64_json: "AQID" }] }), {
-        headers: { "content-type": "application/json" },
-      });
-    };
-    const provider = createOpenAIImageTransformProvider(channel(), { fetch: fetcher });
-    await provider.upscale!({ image, scale: 2, width: 16, height: 12 }, {});
-    expect(paths).toEqual(["/v1/images/upscales", "/v1/images/edits"]);
-
-    for (const status of [401, 429, 500]) {
+  test("never silently falls back from AI upscale to image edits", async () => {
+    for (const status of [404, 405, 501, 401, 429, 500]) {
       let count = 0;
       const failing = createOpenAIImageTransformProvider(channel(), {
         fetch: async () => { count += 1; return new Response("no", { status }); },

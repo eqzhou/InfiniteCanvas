@@ -92,6 +92,8 @@ export function BoardCanvas() {
 
   const rootRef = useRef<HTMLDivElement>(null);
   const activePointerIdRef = useRef<number | null>(null);
+  const pendingCapturePointerRef = useRef<number | null>(null);
+  const interactionActiveRef = useRef(false);
   const touchGestureRef = useRef<GestureState | null>(null);
   const viewportFrameRef = useRef<number | null>(null);
   const pendingViewportRef = useRef<ReturnType<typeof createGestureState>["viewport"] | null>(null);
@@ -179,7 +181,7 @@ export function BoardCanvas() {
     );
   }, []);
 
-  const captureCanvasPointer = useCallback((pointerId: number) => {
+  const applyCanvasPointerCapture = useCallback((pointerId: number) => {
     const surface = rootRef.current;
     if (!surface) return;
     try {
@@ -197,9 +199,19 @@ export function BoardCanvas() {
     }
   }, []);
 
+  // Pointer capture is deferred until the pointer actually moves. Capturing on
+  // pointerdown makes browsers retarget the follow-up click/dblclick to the
+  // capture element, which swallows node-level interactions such as
+  // double-clicking an image to open its preview.
+  const captureCanvasPointer = useCallback((pointerId: number) => {
+    interactionActiveRef.current = true;
+    pendingCapturePointerRef.current = pointerId;
+  }, []);
+
   const releaseCanvasPointer = useCallback((pointerId?: number) => {
     const surface = rootRef.current;
     const activeId = pointerId ?? activePointerIdRef.current;
+    pendingCapturePointerRef.current = null;
     if (!surface || activeId === null || activeId === undefined) {
       activePointerIdRef.current = null;
       return;
@@ -217,6 +229,12 @@ export function BoardCanvas() {
   }, []);
 
   const endDragInteraction = useCallback((pointerId?: number) => {
+    interactionActiveRef.current = false;
+    if (nodeFrameRef.current !== null) {
+      cancelAnimationFrame(nodeFrameRef.current);
+      nodeFrameRef.current = null;
+    }
+    pendingNodeMoveRef.current = null;
     releaseCanvasPointer(pointerId);
     setGroupHoverId(null);
     setDrag(null);
@@ -411,6 +429,12 @@ export function BoardCanvas() {
   };
 
   const onPointerMove = (e: ReactPointerEvent) => {
+    if (!interactionActiveRef.current) return;
+    if (pendingCapturePointerRef.current !== null) {
+      const pending = pendingCapturePointerRef.current;
+      pendingCapturePointerRef.current = null;
+      applyCanvasPointerCapture(pending);
+    }
     if (e.pointerType === "touch" && touchGestureRef.current) {
       const next = reduceGesture(touchGestureRef.current, {
         type: "pointermove",
@@ -494,7 +518,9 @@ export function BoardCanvas() {
         if (drag && drag.kind !== "node") {
           endDragInteraction(e.pointerId);
         } else if (!drag) {
-          releaseCanvasPointer(e.pointerId);
+          // A tap without a drag still armed the interaction, so clear the
+          // whole interaction state instead of only releasing capture.
+          endDragInteraction(e.pointerId);
         }
         return;
       }
@@ -571,13 +597,11 @@ export function BoardCanvas() {
   };
 
   const onLostPointerCapture = (e: ReactPointerEvent) => {
-    if (activePointerIdRef.current !== e.pointerId) return;
+    if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) return;
     if (drag?.kind === "node") {
       commitPendingNodeMove(drag.rootIds);
     }
-    activePointerIdRef.current = null;
-    setGroupHoverId(null);
-    setDrag(null);
+    endDragInteraction(e.pointerId);
   };
 
   const onDragOverCanvas = (e: React.DragEvent) => {
@@ -850,11 +874,12 @@ export function BoardCanvas() {
                   captureCanvasPointer(client.pointerId);
                 }
                 const p = localPoint(client);
-                const selectedForDrag = selectedIds.includes(node.id)
-                  ? selectedIds
+                const currentSelectedIds = useBoardStore.getState().selectedIds;
+                const selectedForDrag = currentSelectedIds.includes(node.id)
+                  ? currentSelectedIds
                   : [node.id];
                 const ids = expandGroupedSelection(project.nodes, selectedForDrag);
-                if (!selectedIds.includes(node.id)) setSelected([node.id]);
+                if (!currentSelectedIds.includes(node.id)) setSelected([node.id]);
                 const origins: Record<string, Point> = {};
                 for (const id of ids) {
                   const n = nodeById.get(id);

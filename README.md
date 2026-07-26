@@ -122,7 +122,7 @@ cd server && go test -race ./... && go vet ./...
 GitHub Actions runs the web tests, typecheck, production build, performance
 assertion, OSV dependency audit, cross-browser and production Playwright suites, Go race
 detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The Bun coverage report reaches 84.20% lines and 86.41% functions for covered
+pull requests. The current Bun coverage report reaches 81.92% lines and 85.98% functions for covered
 library/service modules; browser-only UI and persistence paths are validated by
 Playwright and are outside that report.
 
@@ -243,18 +243,22 @@ docker run --rm --read-only --cap-drop ALL \
 - **Web:** Vite, React 19, TypeScript, Zustand, idb-keyval, Tailwind
 - **Server:** Go 1.26.5+, chi router, pgx/PostgreSQL, go-redis, protected filesystem or S3/R2 media storage
 
-### Product boundary: local single-user mode
+### Product boundary: local deployment with optional accounts
 
-OpenBoard formal local mode is single-user and protected by the local reverse
-proxy token. It does not provide registration, login, multi-tenant permissions,
-or cross-device accounts. PostgreSQL stores projects and application metadata;
-Redis is a cache; media stays in the service-owned file volume. Provider API keys
-are encrypted with AES-GCM using `OPENBOARD_MASTER_KEY`; PostgreSQL stores only
-the nonce/ciphertext envelope, and WebDAV backups never contain those keys.
+OpenBoard remains a self-hosted/local product. Authentication can be disabled
+for a token-protected single-user installation, or enabled in optional/required
+mode for email login, Linux.do OAuth, tenant-scoped users, roles, projects,
+application state, generation jobs, blobs and usage quotas. Site administrators
+can control registration, custom channels and use of backend/cloud channels.
 
-This boundary matches the personal/local deployment target. It must not be
-described as a hosted multi-user SaaS product until accounts, memberships,
-server-side encrypted provider secrets, and tenant isolation are implemented.
+PostgreSQL stores authoritative application data, Redis is a disposable cache,
+and media stays in protected service storage or a configured private S3/R2
+backend. Provider and object-storage secrets are encrypted with AES-GCM using
+`OPENBOARD_MASTER_KEY`; PostgreSQL stores only nonce/ciphertext envelopes, and
+WebDAV backups never contain those keys.
+
+This is not a hosted SaaS marketplace: there is no external payment processor,
+organization-wide enterprise SSO or managed public hosting control plane.
 
 ## Clean-room notes
 

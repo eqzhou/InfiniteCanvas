@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Navigate, Route, Routes } from "react-router";
 import { useBoardStore } from "@/stores/use-board-store";
 import { TopNav } from "@/components/layout/TopNav";
 import { SettingsModal } from "@/components/layout/SettingsModal";
@@ -15,6 +15,7 @@ import { PromptsPage } from "@/pages/PromptsPage";
 import { PluginsPage } from "@/pages/PluginsPage";
 import { ImageWorkbenchPage } from "@/pages/ImageWorkbenchPage";
 import { VideoWorkbenchPage } from "@/pages/VideoWorkbenchPage";
+import { AdminPage } from "@/pages/AdminPage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
 import { initAnalytics } from "@/lib/analytics";
 import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
@@ -27,12 +28,15 @@ const WorkflowWorkbenchPage = lazy(async () => {
 
 export function App() {
   const hydrate = useBoardStore((s) => s.hydrate);
+  const prepareWorkspaceScopeChange = useBoardStore((s) => s.prepareWorkspaceScopeChange);
+  const resetWorkspaceScopeRuntime = useBoardStore((s) => s.resetWorkspaceScopeRuntime);
   const theme = useBoardStore((s) => s.config.theme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [urlCredentialError, setUrlCredentialError] = useState<string | null>(null);
   const [promptSourceError, setPromptSourceError] = useState<string | null>(null);
   const [urlCredentials] = useState(() =>
     consumeUrlCredentials(window.location.href));
+  const urlCredentialsAppliedRef = useRef(false);
 
   useLayoutEffect(() => {
     if (urlCredentials.hadSensitiveParams) {
@@ -44,8 +48,10 @@ export function App() {
     }
   }, [urlCredentials]);
 
-  const onAuthReady = useCallback(async () => {
-    await hydrate();
+  const onAuthReady = useCallback(async (scope: string) => {
+    await hydrate(scope);
+    if (urlCredentialsAppliedRef.current) return;
+    urlCredentialsAppliedRef.current = true;
     const { apiKey, baseUrl, provider } = urlCredentials.credentials;
     if (apiKey === undefined && baseUrl === undefined) return;
 
@@ -109,7 +115,11 @@ export function App() {
   }, [theme]);
 
   return (
-    <AuthGate onReady={onAuthReady}>
+    <AuthGate
+      onReady={onAuthReady}
+      onBeforeScopeChange={prepareWorkspaceScopeChange}
+      onScopeCredentialsChanged={resetWorkspaceScopeRuntime}
+    >
       <div className="flex h-full flex-col">
         <TopNav onOpenSettings={() => setSettingsOpen(true)} />
         {urlCredentialError ? (
@@ -136,6 +146,7 @@ export function App() {
             <Route path="/plugins" element={<PluginsPage />} />
             <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
             <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
+            <Route path="/admin" element={<AdminPage />} />
             <Route path="/workbench/workflows" element={(
               <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载工作流…</div>}>
                 <WorkflowWorkbenchPage />

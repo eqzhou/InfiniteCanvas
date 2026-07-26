@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import {
   Bookmark,
   Archive,
@@ -25,6 +25,7 @@ import { exportProjectBundle } from "@/lib/project-bundle";
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { canManageAdmin } from "@/services/admin";
 
 export function TopNav({
   onOpenSettings,
@@ -66,6 +67,7 @@ export function TopNav({
       .catch((error) => alert(error instanceof Error ? error.message : String(error)));
   };
 
+  const canManage = canManageAdmin(auth);
   const links = [
     { to: "/", label: "画布", icon: LayoutDashboard },
     { to: "/assets", label: "素材", icon: Bookmark },
@@ -74,6 +76,7 @@ export function TopNav({
     { to: "/prompts", label: "提示词", ariaLabel: "提示库页面", icon: Sparkles },
     { to: "/plugins", label: "插件", icon: Puzzle },
     { to: "/workbench/image", label: "工作台", icon: WandSparkles },
+    ...(canManage ? [{ to: "/admin", label: "管理", icon: Settings }] : []),
   ];
 
   return (

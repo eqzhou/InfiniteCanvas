@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -210,8 +211,8 @@ func TestObjectStorageConfigFromTenantRejectsUnsafeValues(t *testing.T) {
 		"endpoint credentials": func(c *storedObjectStorageConfig, _ *storedConfigSecrets) {
 			c.Endpoint = "https://user:pass@example.com"
 		},
-		"bad bucket": func(c *storedObjectStorageConfig, _ *storedConfigSecrets) { c.Bucket = "../bucket" },
-		"bad prefix": func(c *storedObjectStorageConfig, _ *storedConfigSecrets) { c.Prefix = "../openboard" },
+		"bad bucket":     func(c *storedObjectStorageConfig, _ *storedConfigSecrets) { c.Bucket = "../bucket" },
+		"bad prefix":     func(c *storedObjectStorageConfig, _ *storedConfigSecrets) { c.Prefix = "../openboard" },
 		"missing secret": func(_ *storedObjectStorageConfig, s *storedConfigSecrets) { s.ObjectStorageSecretAccessKey = "" },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -220,6 +221,30 @@ func TestObjectStorageConfigFromTenantRejectsUnsafeValues(t *testing.T) {
 			mutate(&config, &secrets)
 			if _, err := objectStorageConfigFromTenant(config, secrets); err == nil {
 				t.Fatal("unsafe configuration accepted")
+			}
+		})
+	}
+}
+
+func TestTenantObjectStorageDestinationCannotBeReboundOrDisabled(t *testing.T) {
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	current := []byte(`{"objectStorage":{"enabled":true,"endpoint":"https://storage.example.com","bucket":"user-bucket","region":"auto","prefix":"openboard"},"theme":"light"}`)
+	if err := backend.PutState(t.Context(), "tenant-a", "config", current); err != nil {
+		t.Fatal(err)
+	}
+	sameDestination := []byte(`{"objectStorage":{"enabled":true,"endpoint":"https://storage.example.com/","bucket":"user-bucket","region":"auto","prefix":"openboard"},"theme":"dark"}`)
+	if err := server.preventTenantObjectStorageRebind(t.Context(), "tenant-a", sameDestination); err != nil {
+		t.Fatalf("same destination rejected: %v", err)
+	}
+	for name, next := range map[string][]byte{
+		"rebind":  []byte(`{"objectStorage":{"enabled":true,"endpoint":"https://storage.example.com","bucket":"other-bucket","region":"auto","prefix":"openboard"}}`),
+		"disable": []byte(`{"objectStorage":{"enabled":false,"endpoint":"https://storage.example.com","bucket":"user-bucket","region":"auto","prefix":"openboard"}}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := server.preventTenantObjectStorageRebind(t.Context(), "tenant-a", next); !errors.Is(err, errTenantObjectStorageRebind) {
+				t.Fatalf("destination change error = %v", err)
 			}
 		})
 	}

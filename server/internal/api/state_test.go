@@ -35,6 +35,11 @@ type memoryStore struct {
 	authUsers              map[string]store.AuthUser
 	credits                map[string]int64
 	creditLogs             map[string]struct{}
+	creditReserveAmounts   map[string]int64
+	creditReserveUsers     map[string]string
+	creditLogItems         []store.CreditLog
+	creditAdjustments      map[string]string
+	updateUserErr          error
 	mediaRefs              map[string]store.MediaReference
 }
 
@@ -47,17 +52,20 @@ func tenantKey(tenantID, key string) string {
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		projects:      map[string][]byte{},
-		state:         map[string][]byte{},
-		jobs:          map[string]store.GenerationJob{},
-		libraryAssets: map[string]store.LibraryAsset{},
-		aiCallLogs:    map[string]store.AICallLog{},
-		releases:      map[string]struct{}{},
-		reservations:  map[string]struct{}{},
-		authUsers:     map[string]store.AuthUser{},
-		credits:       map[string]int64{},
-		creditLogs:    map[string]struct{}{},
-		mediaRefs:     map[string]store.MediaReference{},
+		projects:             map[string][]byte{},
+		state:                map[string][]byte{},
+		jobs:                 map[string]store.GenerationJob{},
+		libraryAssets:        map[string]store.LibraryAsset{},
+		aiCallLogs:           map[string]store.AICallLog{},
+		releases:             map[string]struct{}{},
+		reservations:         map[string]struct{}{},
+		authUsers:            map[string]store.AuthUser{},
+		credits:              map[string]int64{},
+		creditLogs:           map[string]struct{}{},
+		creditReserveAmounts: map[string]int64{},
+		creditReserveUsers:   map[string]string{},
+		creditAdjustments:    map[string]string{},
+		mediaRefs:            map[string]store.MediaReference{},
 	}
 }
 
@@ -92,6 +100,17 @@ func (m *memoryStore) PutProject(_ context.Context, tenantID, id string, value [
 	m.projects[tenantKey(tenantID, id)] = append([]byte(nil), value...)
 	return nil
 }
+func (m *memoryStore) CompareAndSwapProject(_ context.Context, tenantID, id string, expected, value []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantKey(tenantID, id)
+	current, exists := m.projects[key]
+	if (!exists && expected != nil) || (exists && (expected == nil || !bytes.Equal(current, expected))) {
+		return store.ErrConflict
+	}
+	m.projects[key] = append([]byte(nil), value...)
+	return nil
+}
 func (m *memoryStore) DeleteProject(_ context.Context, tenantID, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -106,6 +125,24 @@ func (m *memoryStore) GetState(_ context.Context, tenantID, key string) ([]byte,
 		return nil, store.ErrNotFound
 	}
 	return append([]byte(nil), value...), nil
+}
+
+func (m *memoryStore) ListStateTenants(_ context.Context, key string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	suffix := "\x00" + key
+	seen := map[string]struct{}{}
+	for storageKey := range m.state {
+		if strings.HasSuffix(storageKey, suffix) {
+			seen[strings.TrimSuffix(storageKey, suffix)] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for tenantID := range seen {
+		out = append(out, tenantID)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 func (m *memoryStore) PutState(_ context.Context, tenantID, key string, value []byte) error {
 	if !json.Valid(value) {
@@ -258,6 +295,7 @@ func (m *memoryStore) CompleteServerGenerationJob(_ context.Context, tenantID, i
 	job.Status = status
 	job.Result = append(json.RawMessage(nil), result...)
 	job.Error = errorMessage
+	job.Parameters = stripGenerationChannelSecret(job.Parameters)
 	job.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
 	job.LeaseOwner = ""
 	job.LeaseExpiresAt = ""
@@ -279,6 +317,7 @@ func (m *memoryStore) CancelServerGenerationJob(_ context.Context, tenantID, id 
 	if job.Status == "queued" || job.Status == "running" {
 		job.Status = "cancelled"
 		job.Error = "已取消"
+		job.Parameters = stripGenerationChannelSecret(job.Parameters)
 		if job.Kind == "workflow" {
 			var result workflowRunResult
 			if json.Unmarshal(job.Result, &result) == nil {
@@ -386,6 +425,31 @@ func (m *memoryStore) ReplaceGenerationJobs(_ context.Context, tenantID string, 
 	return nil
 }
 
+func (m *memoryStore) CompareAndSwapGenerationJobs(_ context.Context, tenantID, expectedVersion string, jobs []store.GenerationJob) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prefix := tenantKey(tenantID, "")
+	current := make([]store.GenerationJob, 0)
+	for key, job := range m.jobs {
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			current = append(current, job)
+		}
+	}
+	if store.GenerationJobsVersion(current) != expectedVersion {
+		return store.ErrConflict
+	}
+	next := make(map[string]store.GenerationJob, len(m.jobs)+len(jobs))
+	for key, job := range m.jobs {
+		if len(key) < len(prefix) || key[:len(prefix)] != prefix {
+			next[key] = job
+		}
+	}
+	for _, job := range jobs {
+		next[tenantKey(tenantID, job.ID)] = job
+	}
+	m.jobs = next
+	return nil
+}
 
 func cloneLibraryAsset(asset store.LibraryAsset) store.LibraryAsset {
 	out := asset
@@ -558,7 +622,6 @@ func (m *memoryStore) DeleteLibraryAsset(_ context.Context, tenantID, id string)
 	delete(m.libraryAssets, key)
 	return nil
 }
-
 
 func cloneAICallLog(entry store.AICallLog) store.AICallLog {
 	out := entry
@@ -796,7 +859,6 @@ func persistentHandler(t *testing.T) http.Handler {
 	return r
 }
 
-
 func (m *memoryStore) GetUser(_ context.Context, tenantID, userID string) (store.AuthUser, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -839,17 +901,38 @@ func (m *memoryStore) ListUsers(_ context.Context, tenantID string, query store.
 func (m *memoryStore) UpdateUser(_ context.Context, tenantID, userID string, patch store.UserPatch) (store.AuthUser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.updateUserErr != nil {
+		return store.AuthUser{}, m.updateUserErr
+	}
 	key := tenantKey(tenantID, userID)
 	user, ok := m.authUsers[key]
 	if !ok {
 		return store.AuthUser{}, store.ErrNotFound
 	}
+	if !strings.EqualFold(strings.TrimSpace(patch.ActorRole), "owner") && user.Role == "owner" && (patch.Role != nil || patch.Status != nil) {
+		return store.AuthUser{}, store.ErrUnauthorized
+	}
+	wasActiveOwner := user.Role == "owner" && user.Status == "active"
+	nextRole, nextStatus := user.Role, user.Status
 	if patch.Role != nil {
-		user.Role = *patch.Role
+		nextRole = strings.ToLower(strings.TrimSpace(*patch.Role))
 	}
 	if patch.Status != nil {
-		user.Status = *patch.Status
+		nextStatus = strings.ToLower(strings.TrimSpace(*patch.Status))
 	}
+	if wasActiveOwner && (nextRole != "owner" || nextStatus != "active") {
+		activeOwners := 0
+		prefix := tenantKey(tenantID, "")
+		for existingKey, existing := range m.authUsers {
+			if strings.HasPrefix(existingKey, prefix) && existing.Role == "owner" && existing.Status == "active" {
+				activeOwners++
+			}
+		}
+		if activeOwners <= 1 {
+			return store.AuthUser{}, store.ErrLastOwner
+		}
+	}
+	user.Role, user.Status = nextRole, nextStatus
 	if patch.DisplayName != nil {
 		user.DisplayName = *patch.DisplayName
 	}
@@ -859,6 +942,32 @@ func (m *memoryStore) UpdateUser(_ context.Context, tenantID, userID string, pat
 	user.Credits = m.credits[key]
 	m.authUsers[key] = user
 	return user, nil
+}
+func (m *memoryStore) GetModelCreditConfig(_ context.Context, tenantID string) (store.ModelCreditConfig, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	raw, ok := m.state[tenantKey(tenantID, "adminBilling")]
+	if !ok {
+		return store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}}, nil
+	}
+	var config store.ModelCreditConfig
+	if json.Unmarshal(raw, &config) != nil {
+		return store.ModelCreditConfig{}, store.ErrInvalidInput
+	}
+	if config.ModelCosts == nil {
+		config.ModelCosts = []store.ModelCreditCost{}
+	}
+	return config, nil
+}
+func (m *memoryStore) PutModelCreditConfig(_ context.Context, tenantID string, config store.ModelCreditConfig) error {
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.state[tenantKey(tenantID, "adminBilling")] = raw
+	return nil
 }
 func (m *memoryStore) GetModelCreditCost(_ context.Context, tenantID, model string) (int, error) {
 	m.mu.RLock()
@@ -879,6 +988,73 @@ func (m *memoryStore) GetModelCreditCost(_ context.Context, tenantID, model stri
 	}
 	return cfg.DefaultCredits, nil
 }
+func (m *memoryStore) ListCreditLogs(_ context.Context, tenantID string, query store.CreditLogQuery) (store.CreditLogPage, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	items := make([]store.CreditLog, 0, len(m.creditLogItems))
+	for index := len(m.creditLogItems) - 1; index >= 0; index-- {
+		item := m.creditLogItems[index]
+		if item.Meta == nil || string(item.Meta) == "" {
+			item.Meta = json.RawMessage(`{}`)
+		}
+		if item.TenantID != tenantID {
+			continue
+		}
+		if query.UserID != "" && item.UserID != query.UserID || query.Reason != "" && item.Reason != query.Reason || query.Model != "" && item.Model != query.Model {
+			continue
+		}
+		items = append(items, item)
+	}
+	page, pageSize := query.Page, query.PageSize
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	if start > len(items) {
+		start = len(items)
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return store.CreditLogPage{Items: append([]store.CreditLog(nil), items[start:end]...), Page: page, PageSize: pageSize, Total: len(items)}, nil
+}
+func (m *memoryStore) AdjustCreditsIdempotent(_ context.Context, tenantID, userID, actorID, idempotencyKey string, delta int64, reason string, meta json.RawMessage) (store.AuthUser, store.CreditLog, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantKey(tenantID, userID)
+	user, ok := m.authUsers[key]
+	if !ok {
+		return store.AuthUser{}, store.CreditLog{}, false, store.ErrNotFound
+	}
+	signature := strings.Join([]string{userID, actorID, strconv.FormatInt(delta, 10), reason}, "\x1f")
+	idempotencyStorageKey := tenantKey(tenantID, idempotencyKey)
+	if previous, exists := m.creditAdjustments[idempotencyStorageKey]; exists {
+		if previous != signature {
+			return store.AuthUser{}, store.CreditLog{}, false, store.ErrConflict
+		}
+		for _, item := range m.creditLogItems {
+			if item.TenantID == tenantID && item.IdempotencyKey == idempotencyKey && item.UserID == userID {
+				user.Credits = m.credits[key]
+				return user, item, true, nil
+			}
+		}
+	}
+	next := m.credits[key] + delta
+	if next < 0 {
+		return store.AuthUser{}, store.CreditLog{}, false, store.ErrInsufficientCredits
+	}
+	m.credits[key] = next
+	user.Credits = next
+	m.authUsers[key] = user
+	item := store.CreditLog{ID: int64(len(m.creditLogItems) + 1), TenantID: tenantID, UserID: userID, ActorID: actorID, Delta: delta, BalanceAfter: next, Reason: reason, IdempotencyKey: idempotencyKey, Meta: append(json.RawMessage(nil), meta...), CreatedAt: time.Now().UTC()}
+	m.creditLogItems = append(m.creditLogItems, item)
+	m.creditAdjustments[idempotencyStorageKey] = signature
+	return user, item, false, nil
+}
 func (m *memoryStore) ReserveCredits(_ context.Context, tenantID, userID, jobID, model string, amount int, _ json.RawMessage) error {
 	if amount <= 0 || userID == "" {
 		return nil
@@ -895,12 +1071,21 @@ func (m *memoryStore) ReserveCredits(_ context.Context, tenantID, userID, jobID,
 	}
 	m.credits[key] -= int64(amount)
 	m.creditLogs[logKey] = struct{}{}
-	m.creditLogs[tenantKey(tenantID, jobID+":amount")] = struct{}{}
+	m.creditReserveAmounts[tenantKey(tenantID, jobID)] = int64(amount)
+	m.creditReserveUsers[tenantKey(tenantID, jobID)] = userID
+	m.creditLogItems = append(m.creditLogItems, store.CreditLog{
+		ID: int64(len(m.creditLogItems) + 1), TenantID: tenantID, UserID: userID, JobID: jobID,
+		Model: model, Delta: -int64(amount), BalanceAfter: m.credits[key], Reason: "reserve",
+		Meta: json.RawMessage(`{}`), CreatedAt: time.Now().UTC(),
+	})
 	return nil
 }
 func (m *memoryStore) RefundCredits(_ context.Context, tenantID, userID, jobID, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if reason == "" {
+		reason = "refund"
+	}
 	refundKey := tenantKey(tenantID, jobID+":refund")
 	if _, ok := m.creditLogs[refundKey]; ok {
 		return nil
@@ -909,13 +1094,21 @@ func (m *memoryStore) RefundCredits(_ context.Context, tenantID, userID, jobID, 
 	if _, ok := m.creditLogs[reserveKey]; !ok {
 		return nil
 	}
-	// memory store does not track exact amount; no-op restore path for unit tests
+	amount := m.creditReserveAmounts[tenantKey(tenantID, jobID)]
+	if userID == "" {
+		userID = m.creditReserveUsers[tenantKey(tenantID, jobID)]
+	}
+	userKey := tenantKey(tenantID, userID)
+	m.credits[userKey] += amount
 	m.creditLogs[refundKey] = struct{}{}
-	_ = userID
-	_ = reason
+	m.creditLogItems = append(m.creditLogItems, store.CreditLog{
+		ID: int64(len(m.creditLogItems) + 1), TenantID: tenantID, UserID: userID, JobID: jobID,
+		Delta: amount, BalanceAfter: m.credits[userKey], Reason: reason,
+		Meta: json.RawMessage(`{}`), CreatedAt: time.Now().UTC(),
+	})
 	return nil
 }
-func (m *memoryStore) AdjustCredits(_ context.Context, tenantID, userID string, delta int, _ string, _ json.RawMessage) (store.AuthUser, error) {
+func (m *memoryStore) AdjustCredits(_ context.Context, tenantID, userID string, delta int, reason string, _ json.RawMessage) (store.AuthUser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := tenantKey(tenantID, userID)
@@ -930,6 +1123,10 @@ func (m *memoryStore) AdjustCredits(_ context.Context, tenantID, userID string, 
 	m.credits[key] = next
 	user.Credits = next
 	m.authUsers[key] = user
+	m.creditLogItems = append(m.creditLogItems, store.CreditLog{
+		ID: int64(len(m.creditLogItems) + 1), TenantID: tenantID, UserID: userID,
+		Delta: int64(delta), BalanceAfter: next, Reason: reason, Meta: json.RawMessage(`{}`), CreatedAt: time.Now().UTC(),
+	})
 	return user, nil
 }
 func (*memoryStore) UpsertLinuxDoUser(context.Context, store.LinuxDoUserInput) (store.AuthUser, string, error) {
@@ -982,6 +1179,70 @@ func TestPersistentProjectAndStateLifecycle(t *testing.T) {
 	}
 	if got := request(t, handler, http.MethodPut, "/api/state/unknown", []byte(`{}`)); got.Code != http.StatusNotFound {
 		t.Fatalf("unknown state: %d", got.Code)
+	}
+}
+
+func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
+	admin := store.AuthUser{ID: "admin-1", TenantID: member.TenantID, Role: "admin", Status: "active"}
+	safeConfig := []byte(`{"channels":[{"id":"primary","name":"Primary","baseUrl":"https://safe.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://safe.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"safe"}`)
+	if err := backend.PutState(t.Context(), member.TenantID, "config", safeConfig); err != nil {
+		t.Fatal(err)
+	}
+	secretBody := []byte(`{"apiKeys":{"primary":{"image":"sk-tenant-private"}},"webdavPass":""}`)
+	if got := request(t, withMigrationActor(router, admin), http.MethodPut, "/api/secrets/config", secretBody); got.Code != http.StatusNoContent {
+		t.Fatalf("seed secret = %d %s", got.Code, got.Body.String())
+	}
+
+	memberHandler := withMigrationActor(router, member)
+	if got := request(t, memberHandler, http.MethodGet, "/api/state/config", nil); got.Code != http.StatusOK {
+		t.Fatalf("member config read = %d %s", got.Code, got.Body.String())
+	}
+	attackerConfig := []byte(`{"channels":[{"id":"primary","name":"Primary","baseUrl":"https://attacker.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://attacker.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"stolen"}`)
+	if got := request(t, memberHandler, http.MethodPut, "/api/state/config", attackerConfig); got.Code != http.StatusNoContent {
+		t.Fatalf("member config write = %d %s", got.Code, got.Body.String())
+	}
+	memberConfig := request(t, memberHandler, http.MethodGet, "/api/state/config", nil)
+	if memberConfig.Code != http.StatusOK || !bytes.Equal(memberConfig.Body.Bytes(), attackerConfig) {
+		t.Fatalf("member-scoped config = %d %s", memberConfig.Code, memberConfig.Body.String())
+	}
+	migratedConfig := []byte(`{"theme":"dark","channels":[{"id":"primary","baseUrl":"https://another-attacker.example/v1"}]}`)
+	version := migrationVersion(attackerConfig)
+	if got := migrationRequest(t, memberHandler, http.MethodPut, "/api/migration/state/config", migratedConfig, map[string]string{
+		"If-Match": `"` + version + `"`,
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("member migration config write = %d %s", got.Code, got.Body.String())
+	}
+	tenantConfig, err := backend.GetState(t.Context(), member.TenantID, "config")
+	if err != nil || !bytes.Equal(tenantConfig, safeConfig) {
+		t.Fatalf("tenant config was changed by member: %s, %v", tenantConfig, err)
+	}
+
+	parameters, _ := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, Size: "1024x1024", Count: 1})
+	resolved, err := server.resolveImageGenerationRequest(t.Context(), member.TenantID, store.GenerationJob{
+		ID: "job-safe-binding", Kind: "image", ProviderID: "primary", Model: "gpt-image-1", Prompt: "draw", Parameters: parameters,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.BaseURL != "https://safe.example/v1" || resolved.APIKey != "sk-tenant-private" || resolved.BaseURL == "https://attacker.example/v1" {
+		t.Fatalf("stored key rebound to untrusted destination: %#v", resolved)
+	}
+
+	adminConfig := []byte(`{"channels":[{"id":"primary","name":"Primary","baseUrl":"https://safe.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://safe.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"admin update"}`)
+	if got := request(t, withMigrationActor(router, admin), http.MethodPut, "/api/state/config", adminConfig); got.Code != http.StatusNoContent {
+		t.Fatalf("admin config write = %d %s", got.Code, got.Body.String())
 	}
 }
 
@@ -1183,9 +1444,6 @@ func TestGenerationJobPaginatedCRUD(t *testing.T) {
 		t.Fatalf("delete job: %d", got.Code)
 	}
 }
-
-
-
 
 func TestGenerationHistorySoftDelete(t *testing.T) {
 	handler := persistentHandler(t)

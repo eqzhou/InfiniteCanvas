@@ -20,9 +20,54 @@ const (
 )
 
 var (
-	objectStorageBucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
-	objectStoragePrefixSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	objectStorageBucketPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	objectStoragePrefixSegment   = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	errTenantObjectStorageRebind = errors.New("tenant object storage destination cannot be rebound")
 )
+
+func tenantObjectStorageBinding(raw []byte) (string, bool, error) {
+	var config storedAppConfigObjectStorage
+	if json.Unmarshal(raw, &config) != nil {
+		return "", false, store.ErrInvalidInput
+	}
+	if config.ObjectStorage == nil || !config.ObjectStorage.Enabled {
+		return "", false, nil
+	}
+	storageConfig, err := objectStorageConfigFromTenant(*config.ObjectStorage, storedConfigSecrets{
+		ObjectStorageAccessKeyID:     "binding-check",
+		ObjectStorageSecretAccessKey: "binding-check",
+	})
+	if err != nil {
+		return "", false, err
+	}
+	objects, err := newS3BlobObjectStore(storageConfig)
+	if err != nil {
+		return "", false, err
+	}
+	return s3BlobStorageDestination(objects), true, nil
+}
+
+func (s *Server) preventTenantObjectStorageRebind(ctx context.Context, tenantID string, next []byte) error {
+	current, err := s.store.GetState(ctx, tenantID, "config")
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	currentBinding, currentEnabled, currentErr := tenantObjectStorageBinding(current)
+	if currentErr != nil || !currentEnabled {
+		return nil
+	}
+	nextBinding, nextEnabled, nextErr := tenantObjectStorageBinding(next)
+	if nextErr != nil {
+		return nextErr
+	}
+	if !nextEnabled || nextBinding != currentBinding {
+		return errTenantObjectStorageRebind
+	}
+	return nil
+}
 
 // storedObjectStorageConfig is the non-secret object-storage preference that
 // clients persist under state/config. Credentials live only in encrypted secrets.
@@ -47,8 +92,8 @@ type tenantBlobStoreCacheEntry struct {
 
 // resolveBlobObjectStore chooses the protected media backend for a tenant.
 // Precedence matches the public Tiger behavior: a valid, enabled user S3/R2
-// preference wins; otherwise the process-level OPENBOARD_S3_* backend is used;
-// otherwise the shared filesystem under OPENBOARD_DATA is used.
+// preference wins; otherwise the tenant administrator's weighted pool is used;
+// otherwise the process-level OPENBOARD_S3_* backend or shared filesystem is used.
 func (s *Server) resolveBlobObjectStore(ctx context.Context, tenantID string) (blobObjectStore, error) {
 	if s.store != nil && s.secrets != nil {
 		userStore, err := s.tenantObjectStorage(ctx, tenantID)
@@ -58,8 +103,18 @@ func (s *Server) resolveBlobObjectStore(ctx context.Context, tenantID string) (b
 		if userStore != nil {
 			return userStore, nil
 		}
+		tenantPool, err := s.tenantStoragePool(ctx, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if tenantPool != nil {
+			return tenantPool, nil
+		}
 	}
-	return s.blobObjects, nil
+	s.tenantBlobStoreMu.Lock()
+	objects := s.blobObjects
+	s.tenantBlobStoreMu.Unlock()
+	return objects, nil
 }
 
 func (s *Server) tenantObjectStorage(ctx context.Context, tenantID string) (blobObjectStore, error) {

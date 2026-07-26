@@ -116,6 +116,7 @@ type TextGenerationOptions = {
 };
 
 export async function generateText(options: TextGenerationOptions): Promise<string> {
+	assertNotManagedBrowserProvider(options.channel, "text");
   return runTrackedGeneration({
     kind: "text",
     prompt: options.prompt,
@@ -215,6 +216,7 @@ type ImageGenerationOptions = {
 };
 
 export async function generateImages(options: ImageGenerationOptions): Promise<string[]> {
+	assertNotManagedBrowserProvider(options.channel, "image");
   return runTrackedGeneration({
     id: options.activityId,
     kind: "image",
@@ -249,6 +251,9 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
   }
   const effectivePrompt = applySystemPrompt(systemPrompt, prompt);
   const provider = getProvider(channel, "image");
+  if (provider.protocol === "apimart" || provider.protocol === "kie") {
+    throw new Error(`${provider.protocol} image generation requires the protected server runtime`);
+  }
   const encodedBlobReferences = async () => Promise.all(referenceBlobs.map((blob) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
@@ -526,6 +531,7 @@ async function readJson(response: Response, label: string): Promise<unknown> {
 export async function generateVideo(
   options: VideoGenOptions,
 ): Promise<VideoResult> {
+	assertNotManagedBrowserProvider(options.channel, "video");
   return runTrackedGeneration({
     id: options.activityId,
     kind: "video",
@@ -597,6 +603,9 @@ async function generateVideoRequest(
     }
     if (provider.protocol === "gemini") {
       throw new Error("Gemini does not support video generation in OpenBoard");
+    }
+    if (provider.protocol === "apimart" || provider.protocol === "kie") {
+      throw new Error(`${provider.protocol} video generation requires the protected server runtime`);
     }
     if (arkProtocol) {
       return await generateArkVideo({
@@ -791,12 +800,19 @@ type SpeechGenerationOptions = {
 };
 
 export async function generateSpeech(options: SpeechGenerationOptions): Promise<{ url: string; mimeType: string; blob: Blob }> {
+	assertNotManagedBrowserProvider(options.channel, "audio");
   return runTrackedGeneration({
     kind: "audio",
     prompt: options.input,
     model: options.model,
     providerId: options.channel.id,
   }, () => generateSpeechRequest(options));
+}
+
+function assertNotManagedBrowserProvider(channel: AiChannel, kind: AiProviderKind): void {
+	if (getProvider(channel, kind).apiKey === "server-managed") {
+		throw new Error("共享渠道只能通过受保护的服务端生成任务使用");
+	}
 }
 
 async function generateSpeechRequest(options: SpeechGenerationOptions): Promise<{ url: string; mimeType: string; blob: Blob }> {

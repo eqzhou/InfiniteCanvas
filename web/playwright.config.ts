@@ -2,8 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 const production = process.env.OPENBOARD_E2E_PRODUCTION === "1";
 const formal = process.env.OPENBOARD_E2E_FORMAL === "1";
-const webPort = formal ? 5175 : production ? 5174 : 5173;
-const agentPort = formal ? 8793 : production ? 8792 : 8791;
+const defaultWebPort = formal ? 5175 : production ? 5174 : 5173;
+const defaultAgentPort = formal ? 8793 : production ? 8792 : 8791;
+const webPort = Number(process.env.OPENBOARD_E2E_WEB_PORT ?? defaultWebPort);
+const agentPort = Number(process.env.OPENBOARD_E2E_AGENT_PORT ?? defaultAgentPort);
 const origin = `http://127.0.0.1:${webPort}`;
 const chromiumExecutable = process.env.OPENBOARD_CHROMIUM_EXECUTABLE;
 const dataDir = production

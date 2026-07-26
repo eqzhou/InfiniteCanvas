@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -323,6 +324,10 @@ func TestS3BlobStoreRejectsUnsafeOrIncompleteConfiguration(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*S3BlobStorageConfig){
 		"http remote endpoint": func(value *S3BlobStorageConfig) { value.Endpoint = "http://example.com" },
+		"https loopback ip":    func(value *S3BlobStorageConfig) { value.Endpoint = "https://127.0.0.1" },
+		"https private ip":     func(value *S3BlobStorageConfig) { value.Endpoint = "https://10.0.0.1" },
+		"https link local ip":  func(value *S3BlobStorageConfig) { value.Endpoint = "https://169.254.169.254" },
+		"https cgnat ip":       func(value *S3BlobStorageConfig) { value.Endpoint = "https://100.64.0.1" },
 		"endpoint credentials": func(value *S3BlobStorageConfig) { value.Endpoint = "https://user:pass@example.com" },
 		"missing bucket":       func(value *S3BlobStorageConfig) { value.Bucket = "" },
 		"invalid bucket":       func(value *S3BlobStorageConfig) { value.Bucket = "../bucket" },
@@ -337,7 +342,68 @@ func TestS3BlobStoreRejectsUnsafeOrIncompleteConfiguration(t *testing.T) {
 			}
 		})
 	}
+	loopback := valid
+	loopback.Endpoint = "http://127.0.0.1:9000"
+	loopback.AllowInsecureLoopback = true
+	if _, err := newS3BlobObjectStore(loopback); err != nil {
+		t.Fatalf("explicit insecure loopback rejected: %v", err)
+	}
+	localhost := valid
+	localhost.Endpoint = "http://localhost:9000"
+	localhost.AllowInsecureLoopback = true
+	if _, err := newS3BlobObjectStore(localhost); err != nil {
+		t.Fatalf("explicit insecure localhost rejected: %v", err)
+	}
 	if _, err := newS3BlobObjectStore(valid); err != nil && !errors.Is(err, errInvalidBlobObjectConfig) {
 		t.Fatalf("valid configuration: %v", err)
+	}
+}
+
+func TestS3SafeDialRejectsDNSPrivateAndCGNATAnswers(t *testing.T) {
+	for name, answer := range map[string]net.IP{
+		"private":    net.ParseIP("10.1.2.3"),
+		"loopback":   net.ParseIP("127.0.0.1"),
+		"link-local": net.ParseIP("169.254.169.254"),
+		"cgnat":      net.ParseIP("100.64.1.2"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dial := safeS3DialContext(false, func(context.Context, string, string) ([]net.IP, error) {
+				return []net.IP{answer}, nil
+			}, (&net.Dialer{}).DialContext)
+			if _, err := dial(context.Background(), "tcp", "storage.example:443"); err == nil {
+				t.Fatal("unsafe DNS answer accepted")
+			}
+		})
+	}
+	dial := safeS3DialContext(true, func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	}, (&net.Dialer{}).DialContext)
+	if _, err := dial(context.Background(), "tcp", "localhost:9000"); err == nil {
+		t.Fatal("insecure localhost mode accepted a non-loopback DNS answer")
+	}
+}
+
+func TestS3BlobStoreDisablesRedirects(t *testing.T) {
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	objectStore, err := newS3BlobObjectStore(S3BlobStorageConfig{
+		Endpoint: redirect.URL, Bucket: "bucket", Region: "auto", AccessKeyID: "access", SecretAccessKey: "secret", AllowInsecureLoopback: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := objectStore.Get(context.Background(), "tenant", "image:test", 1024); err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+		t.Fatalf("redirect error = %v", err)
+	}
+	if targetCalled {
+		t.Fatal("S3 client followed redirect")
 	}
 }

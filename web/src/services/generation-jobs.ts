@@ -56,6 +56,12 @@ export type ServerVideoGenerationInput = {
 		generateAudio?: boolean;
 		watermark?: boolean;
 		frameMode?: "references" | "first-last";
+		negativePrompt?: string;
+		mode?: "std" | "pro" | "4k";
+		multiShot?: boolean;
+		shotType?: "intelligence" | "customize";
+		shots?: Array<{ index: number; prompt: string; duration: number }>;
+		elements?: Array<{ name: string; description: string; imageUrls: string[] }>;
 		referenceStorageKeys?: string[];
 	};
 };
@@ -434,6 +440,20 @@ export async function replaceGenerationJobs(jobs: GenerationJob[]): Promise<void
   }
   await clear(jobStore);
   await setMany(validated.map((job) => [job.id, job] as [IDBValidKey, GenerationJob]), jobStore);
+}
+
+/** Browser-local history access reserved for the explicit account migration flow. */
+export async function readLocalGenerationJobsForMigration(): Promise<GenerationJob[]> {
+  const values = (await entries<string, GenerationJob>(jobStore))
+    .map(([, job]) => validateGenerationJob(job))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (values.length > 10_000) throw new Error("generation history exceeds 10000 items");
+  return values;
+}
+
+/** Called only after the server migration manifest verifies the complete history. */
+export async function clearLocalGenerationJobsAfterMigration(): Promise<void> {
+  await clear(jobStore);
 }
 
 export function collectGenerationStorageKeysFromJobs(

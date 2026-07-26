@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Box, Download, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   comparePluginVersions,
   fetchPluginRegistry,
@@ -53,7 +53,7 @@ function PluginCard({
             type="button"
             role="switch"
             aria-checked={enabled}
-            aria-label={`${manifest.name}${enabled ? " 已启用" : " 已停用"}`}
+            aria-label={`${manifest.name} 启用状态`}
             disabled={disabled}
             className="ob-switch"
             data-checked={enabled ? "true" : "false"}

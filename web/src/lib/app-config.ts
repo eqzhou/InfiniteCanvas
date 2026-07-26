@@ -5,6 +5,7 @@ import {
   clonePresetSource,
   COMMUNITY_PROMPT_SOURCE_PRESETS,
 } from "@/services/prompt-source-presets";
+import { normalizeImageToolbarPreferences } from "@/lib/image-toolbar-preferences";
 
 export const SYSTEM_PROMPT_MAX_LENGTH = 20_000;
 
@@ -47,11 +48,14 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
   const rawPanelWidth = (config as AppConfig & { canvasPanelWidth?: unknown }).canvasPanelWidth;
   const rawPanelTab = (config as AppConfig & { canvasPanelTab?: unknown }).canvasPanelTab;
   const rawDisabled = (config as AppConfig & { disabledPluginIds?: unknown }).disabledPluginIds;
+	const rawSharedChannelID = (config as AppConfig & { activeSharedChannelId?: unknown }).activeSharedChannelId;
   const disabledPluginIds = Array.isArray(rawDisabled)
     ? [...new Set(rawDisabled.filter((id): id is string => typeof id === "string" && id.length > 0))]
     : [];
   return {
     ...config,
+		activeSharedChannelId: typeof rawSharedChannelID === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(rawSharedChannelID)
+			? rawSharedChannelID : null,
     systemPrompt: typeof rawSystemPrompt === "string"
       ? rawSystemPrompt.slice(0, SYSTEM_PROMPT_MAX_LENGTH)
       : "",
@@ -66,5 +70,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
     objectStorage: normalizeObjectStorage((config as AppConfig & { objectStorage?: unknown }).objectStorage),
     promptSources: mergeBuiltinPromptSources(normalizePromptSourceConfigs(
       (config as AppConfig & { promptSources?: unknown }).promptSources)),
+    imageToolbar: normalizeImageToolbarPreferences(
+      (config as AppConfig & { imageToolbar?: unknown }).imageToolbar),
   };
 }

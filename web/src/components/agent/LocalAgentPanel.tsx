@@ -3,9 +3,9 @@ import { useBoardStore } from "@/stores/use-board-store";
 import { Bot, Link2, LoaderCircle, RefreshCw, Unplug } from "lucide-react";
 import {
   DEFAULT_AGENT_BASE_URL,
-  AGENT_TOKEN_KEY,
   fetchAgentStatus,
   normalizeAgentBaseUrl,
+  saveAgentToken,
   syncProjectWithAgent,
   type AgentStatus,
   readAgentToken,
@@ -85,12 +85,7 @@ export function LocalAgentPanel() {
     setBaseUrl(normalized);
     const current = useBoardStore.getState().config;
     setConfig({ ...current, localAgentUrl: normalized });
-    try {
-      if (token) sessionStorage.setItem(AGENT_TOKEN_KEY, token);
-      else sessionStorage.removeItem(AGENT_TOKEN_KEY);
-    } catch {
-      // Private browsing may deny session storage; the in-memory token still works.
-    }
+    saveAgentToken(token);
   };
 
   useEffect(() => {

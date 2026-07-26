@@ -21,6 +21,8 @@ import { createDefaultObjectStorage, normalizeObjectStorage, validateObjectStora
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
 import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
+import { ImageToolbarPreferencesEditor } from "@/components/layout/ImageToolbarPreferencesEditor";
+import { useSharedChannels } from "@/services/shared-channels";
 import {
   AudioLines,
   CloudDownload,
@@ -56,6 +58,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const [sitePolicyLoaded, setSitePolicyLoaded] = useState(false);
   const [sitePolicyBusy, setSitePolicyBusy] = useState(false);
+	const sharedChannels = useSharedChannels();
 
   useEffect(() => {
     if (!open) return;
@@ -172,12 +175,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <select
                   className="ob-field"
                   aria-label="当前渠道"
-                  value={config.activeChannelId ?? ""}
-                  onChange={(e) => setConfig({ ...config, activeChannelId: e.target.value })}
+                  value={config.activeSharedChannelId ? `shared:${config.activeSharedChannelId}` : `personal:${config.activeChannelId ?? ""}`}
+                  onChange={(e) => {
+							const [scope, id] = e.target.value.split(":", 2);
+							setConfig(scope === "shared" ? { ...config, activeChannelId: null, activeSharedChannelId: id } : { ...config, activeChannelId: id, activeSharedChannelId: null });
+						}}
                 >
                   {config.channels.map((item) => (
-                    <option key={item.id} value={item.id}>{item.name}</option>
+							<option key={item.id} value={`personal:${item.id}`}>{item.name}（个人）</option>
                   ))}
+						{sharedChannels.filter((item) => !config.channels.some((personal) => personal.id === item.id)).map((item) => (
+							<option key={item.id} value={`shared:${item.id}`}>{item.name}（共享）</option>
+						))}
                 </select>
               </Field>
               <Field label="渠道名称">
@@ -203,6 +212,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     ...config,
                     channels: [...config.channels, next],
                     activeChannelId: next.id,
+									activeSharedChannelId: null,
                   });
                 }}
               >
@@ -318,6 +328,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               ) : null}
             </section>
           ) : null}
+
+          <section className="mb-6">
+            <SectionTitle title="图片节点快捷工具" />
+            <p className="mb-3 text-xs text-[var(--ob-muted)]">
+              调整图片节点悬浮工具的显示和顺序；下载操作始终保留。
+            </p>
+            <ImageToolbarPreferencesEditor
+              value={config.imageToolbar}
+              onChange={(imageToolbar) => setConfig({ ...config, imageToolbar })}
+            />
+          </section>
 
           <section className="mb-6">
             <SectionTitle title="对象存储 (S3/R2)" />
@@ -579,7 +600,10 @@ function ProviderRow({
             <option value="openai">OpenAI</option>
             <option value="ark">Ark / Seedance</option>
             <option value="gemini">Gemini</option>
+            <option value="apimart">APIMart（仅服务端）</option>
+            <option value="kie">KIE Market（仅服务端）</option>
             <option value="template">Template</option>
+            <option value="apimart">APIMart</option>
           </select>
         </CompactField>
         <CompactField label="服务 URL">

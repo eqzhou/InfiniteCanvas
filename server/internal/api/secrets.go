@@ -104,6 +104,13 @@ func (s *Server) decryptSecrets(ctx context.Context, tenantID string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
+	return s.decryptSecretEnvelope(value)
+}
+
+func (s *Server) decryptSecretEnvelope(value []byte) ([]byte, error) {
+	if s.secrets == nil {
+		return nil, store.ErrNotFound
+	}
 	var envelope secretEnvelope
 	if json.Unmarshal(value, &envelope) != nil {
 		return nil, errors.New("invalid encrypted secrets")

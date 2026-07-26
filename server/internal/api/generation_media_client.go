@@ -18,9 +18,10 @@ import (
 const maxMediaProviderJSONBytes = 2 << 20
 
 type httpVideoExecutor struct {
-	client       *http.Client
-	pollInterval time.Duration
-	maxDuration  time.Duration
+	client           *http.Client
+	pollInterval     time.Duration
+	maxDuration      time.Duration
+	kieUploadBaseURL string
 }
 
 type httpAudioExecutor struct {
@@ -47,6 +48,11 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 		}
 		return e.generateTemplate(ctx, request)
 	}
+	if request.Protocol == "apimart" {
+		if err := validateAPIMartVideoRequest(request); err != nil {
+			return generatedMedia{}, err
+		}
+	}
 	checkpoint := existing
 	var immediate map[string]any
 	if checkpoint == nil {
@@ -55,6 +61,11 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 			return generatedMedia{}, err
 		}
 		taskID := mediaString(created, "id", "task_id", "taskId")
+		if request.Protocol == "apimart" {
+			taskID = apimartTaskID(created)
+		} else if request.Protocol == "kie" {
+			taskID = kieCreatedTaskID(created)
+		}
 		if taskID == "" {
 			if data := mediaMap(created["data"]); data != nil {
 				taskID = mediaString(data, "id", "task_id", "taskId")
@@ -82,14 +93,33 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 	if interval < 0 {
 		return generatedMedia{}, errors.New("invalid video poll interval")
 	}
+	kieConsecutiveRetries := 0
 	for {
 		if err := waitContext(ctx, interval); err != nil {
 			return generatedMedia{}, err
 		}
 		payload, err := e.poll(ctx, request, *checkpoint)
 		if err != nil {
+			if request.Protocol == "apimart" {
+				if delay, retry := retryAPIMartPoll(err, interval); retry {
+					if waitErr := waitContext(ctx, delay); waitErr != nil {
+						return generatedMedia{}, waitErr
+					}
+					continue
+				}
+			}
+			if request.Protocol == "kie" {
+				if delay, retry := retryKIEPoll(err, interval); retry && kieConsecutiveRetries < kieMaxConsecutivePollRetries {
+					kieConsecutiveRetries++
+					if waitErr := waitContext(ctx, delay); waitErr != nil {
+						return generatedMedia{}, waitErr
+					}
+					continue
+				}
+			}
 			return generatedMedia{}, err
 		}
+		kieConsecutiveRetries = 0
 		if media, done, err := e.completed(ctx, request, *checkpoint, payload); done || err != nil {
 			return media, err
 		}
@@ -170,6 +200,12 @@ func (e *httpVideoExecutor) generateTemplate(ctx context.Context, request videoG
 }
 
 func (e *httpVideoExecutor) create(ctx context.Context, request videoGenerationRequest) (map[string]any, error) {
+	if request.Protocol == "apimart" {
+		return e.createAPIMartVideo(ctx, request)
+	}
+	if request.Protocol == "kie" {
+		return e.createKIEVideo(ctx, request)
+	}
 	body := map[string]any{"model": request.Model}
 	endpoint := "/videos"
 	if request.Protocol == "ark" {
@@ -223,6 +259,14 @@ func (e *httpVideoExecutor) create(ctx context.Context, request videoGenerationR
 }
 
 func (e *httpVideoExecutor) poll(ctx context.Context, request videoGenerationRequest, checkpoint videoProviderCheckpoint) (map[string]any, error) {
+	if checkpoint.Protocol == "apimart" {
+		return apimartJSONRequest(ctx, e.client, request.BaseURL, request.APIKey, http.MethodGet,
+			"/tasks/"+url.PathEscape(checkpoint.TaskID), nil)
+	}
+	if checkpoint.Protocol == "kie" {
+		return kieJSONRequest(ctx, e.client, request.BaseURL, request.APIKey, http.MethodGet,
+			"/jobs/recordInfo?taskId="+url.QueryEscape(checkpoint.TaskID), nil)
+	}
 	endpoint := "/videos/" + url.PathEscape(checkpoint.TaskID)
 	if checkpoint.Protocol == "ark" {
 		endpoint = "/contents/generations/tasks/" + url.PathEscape(checkpoint.TaskID)
@@ -231,6 +275,23 @@ func (e *httpVideoExecutor) poll(ctx context.Context, request videoGenerationReq
 }
 
 func (e *httpVideoExecutor) completed(ctx context.Context, request videoGenerationRequest, checkpoint videoProviderCheckpoint, payload map[string]any) (generatedMedia, bool, error) {
+	if checkpoint.Protocol == "kie" {
+		status, urls, err := normalizeKIETask(payload)
+		if err != nil {
+			return generatedMedia{}, true, err
+		}
+		if status == kieTaskPending {
+			return generatedMedia{}, false, nil
+		}
+		if status != kieTaskSucceeded || len(urls) == 0 {
+			return generatedMedia{}, true, errors.New("KIE video task completed without a result")
+		}
+		media, err := e.download(ctx, urls[0], maxGeneratedVideoBytes)
+		if err != nil {
+			return generatedMedia{}, true, errors.New("KIE video result download failed")
+		}
+		return media, true, nil
+	}
 	status := strings.ToLower(mediaNestedString(payload,
 		[]string{"status"}, []string{"task_status"}, []string{"taskStatus"}, []string{"state"},
 		[]string{"data", "status"}, []string{"data", "task_status"}, []string{"data", "state"},
@@ -239,6 +300,9 @@ func (e *httpVideoExecutor) completed(ctx context.Context, request videoGenerati
 		return generatedMedia{}, true, errors.New("video provider reported terminal failure")
 	}
 	outputURL := mediaVideoURL(payload)
+	if checkpoint.Protocol == "apimart" {
+		outputURL = apimartVideoResultURL(payload)
+	}
 	if outputURL != "" {
 		media, err := e.download(ctx, outputURL, maxGeneratedVideoBytes)
 		return media, true, err
@@ -246,6 +310,9 @@ func (e *httpVideoExecutor) completed(ctx context.Context, request videoGenerati
 	if mediaSuccessfulStatus(status) {
 		if checkpoint.Protocol == "ark" {
 			return generatedMedia{}, true, errors.New("video provider completed without an output URL")
+		}
+		if checkpoint.Protocol == "apimart" {
+			return generatedMedia{}, true, errors.New("APIMart video provider completed without an output URL")
 		}
 		endpoint, err := generationProviderEndpoint(request.BaseURL, "/videos/"+url.PathEscape(checkpoint.TaskID)+"/content")
 		if err != nil {

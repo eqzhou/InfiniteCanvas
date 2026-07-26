@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -84,7 +85,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 10
+const currentSchemaVersion = 12
 
 const defaultStorageQuotaBytes int64 = 1 << 30
 const defaultGenerationQuotaMonthly int64 = 1000
@@ -196,11 +197,40 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 11 {
+		if err := migrateV11(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
+	if version < 12 {
+		if err := migrateV12(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
+func migrateV12(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 12, `
+UPDATE openboard_generation_jobs
+SET parameters = parameters #- '{sharedChannel,secret}'
+WHERE status IN ('succeeded','failed','cancelled','deleted')
+  AND parameters #> '{sharedChannel,secret}' IS NOT NULL;
+`)
+}
 
-
+func migrateV11(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 11, `
+ALTER TABLE openboard_credit_logs
+  ADD COLUMN IF NOT EXISTS actor_id text NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS openboard_credit_logs_tenant_idempotency_uidx
+  ON openboard_credit_logs (tenant_id, idempotency_key)
+  WHERE idempotency_key <> '';
+CREATE INDEX IF NOT EXISTS openboard_credit_logs_tenant_reason_created_idx
+  ON openboard_credit_logs (tenant_id, reason, created_at DESC, id DESC);
+`)
+}
 
 func migrateV10(ctx context.Context, connection *pgxpool.Conn) error {
 	tx, err := connection.Begin(ctx)
@@ -760,6 +790,36 @@ func (s *PostgresStore) PutProject(ctx context.Context, tenantID, id string, doc
 	return err
 }
 
+func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id string, expected, document []byte) error {
+	tenantID = normalizeTenantID(tenantID)
+	var metadata struct{ Title, UpdatedAt string }
+	if err := json.Unmarshal(document, &metadata); err != nil {
+		return err
+	}
+	updated, err := time.Parse(time.RFC3339Nano, metadata.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("invalid updatedAt: %w", err)
+	}
+	var result pgconn.CommandTag
+	if expected == nil {
+		result, err = s.pool.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
+			VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id,id) DO NOTHING`, tenantID, id, metadata.Title, updated, document)
+	} else {
+		result, err = s.pool.Exec(ctx, `UPDATE openboard_projects SET title=$4,updated_at=$5,document=$6
+			WHERE tenant_id=$1 AND id=$2 AND document=$3::jsonb`, tenantID, id, string(expected), metadata.Title, updated, document)
+	}
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrConflict
+	}
+	if s.redis != nil {
+		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()
+	}
+	return nil
+}
+
 func (s *PostgresStore) DeleteProject(ctx context.Context, tenantID, id string) error {
 	tenantID = normalizeTenantID(tenantID)
 	_, err := s.pool.Exec(ctx, `DELETE FROM openboard_projects WHERE tenant_id=$1 AND id=$2`, tenantID, id)
@@ -780,6 +840,26 @@ func (s *PostgresStore) GetState(ctx context.Context, tenantID, key string) ([]b
 		return nil, err
 	}
 	return value, nil
+}
+
+func (s *PostgresStore) ListStateTenants(ctx context.Context, key string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT tenant_id FROM openboard_state WHERE key=$1 ORDER BY tenant_id`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tenantIDs := make([]string, 0)
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return nil, err
+		}
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tenantIDs, nil
 }
 
 func (s *PostgresStore) PutState(ctx context.Context, tenantID, key string, value []byte) error {
@@ -1101,33 +1181,68 @@ func (s *PostgresStore) CompleteServerGenerationJob(ctx context.Context, tenantI
 	if status != "succeeded" && status != "failed" && status != "cancelled" {
 		return GenerationJob{}, errors.New("invalid server generation terminal status")
 	}
-	row := s.pool.QueryRow(ctx, `UPDATE openboard_generation_jobs SET
-		status=$4, result=$5, error=$6, updated_at=$7, lease_owner='', lease_expires_at=NULL
+	var lastErr error
+	for range 3 {
+		job, err := s.completeServerGenerationJobOnce(ctx, tenantID, id, owner, status, result, errorMessage, now)
+		if !isSerializationFailure(err) {
+			return job, err
+		}
+		lastErr = err
+	}
+	return GenerationJob{}, lastErr
+}
+
+func (s *PostgresStore) completeServerGenerationJobOnce(ctx context.Context, tenantID, id, owner, status string, result json.RawMessage, errorMessage string, now time.Time) (GenerationJob, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return GenerationJob{}, err
+	}
+	defer tx.Rollback(ctx)
+	job, err := scanGenerationJob(tx.QueryRow(ctx, `UPDATE openboard_generation_jobs SET
+		status=$4, result=$5, error=$6, updated_at=$7, lease_owner='', lease_expires_at=NULL,
+		parameters=parameters #- '{sharedChannel,secret}'
 		WHERE tenant_id=$1 AND id=$2 AND lease_owner=$3 AND status='running'
 		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
-		parameters, result, error, created_at, updated_at`, tenantID, id, owner, status, result, errorMessage, now)
-	var job GenerationJob
-	var created, updated time.Time
-	err := row.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
-		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated)
+		parameters, result, error, created_at, updated_at`, tenantID, id, owner, status, result, errorMessage, now))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GenerationJob{}, ErrConflict
 	}
 	if err != nil {
 		return GenerationJob{}, err
 	}
-	job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
-	job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
 	if status == "failed" || status == "cancelled" {
-		_ = s.RefundCredits(ctx, tenantID, "", id, status)
+		if err := s.refundCreditsTx(ctx, tx, tenantID, "", id, status); err != nil {
+			return GenerationJob{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return GenerationJob{}, err
 	}
 	return job, nil
 }
 
 func (s *PostgresStore) CancelServerGenerationJob(ctx context.Context, tenantID, id string, now time.Time) (GenerationJob, error) {
 	tenantID = normalizeTenantID(tenantID)
-	row := s.pool.QueryRow(ctx, `UPDATE openboard_generation_jobs SET
+	var lastErr error
+	for range 3 {
+		job, err := s.cancelServerGenerationJobOnce(ctx, tenantID, id, now)
+		if !isSerializationFailure(err) {
+			return job, err
+		}
+		lastErr = err
+	}
+	return GenerationJob{}, lastErr
+}
+
+func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenantID, id string, now time.Time) (GenerationJob, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return GenerationJob{}, err
+	}
+	defer tx.Rollback(ctx)
+	job, err := scanGenerationJob(tx.QueryRow(ctx, `UPDATE openboard_generation_jobs SET
 		status='cancelled', error='已取消', updated_at=$3, lease_owner='', lease_expires_at=NULL,
+		parameters=parameters #- '{sharedChannel,secret}',
 		result=CASE WHEN kind='workflow' THEN jsonb_set(result, '{steps}', COALESCE((
 		  SELECT jsonb_object_agg(step.key, CASE
 		    WHEN step.value->>'status' IN ('pending','queued','running')
@@ -1139,27 +1254,47 @@ func (s *PostgresStore) CancelServerGenerationJob(ctx context.Context, tenantID,
 		  ((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR
 		   (kind='workflow' AND parameters->>'executor'='workflow'))
 		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
-		parameters, result, error, created_at, updated_at`, tenantID, id, now)
-	var job GenerationJob
-	var created, updated time.Time
-	err := row.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
-		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated)
+		parameters, result, error, created_at, updated_at`, tenantID, id, now))
 	if errors.Is(err, pgx.ErrNoRows) {
-		job, getErr := s.GetGenerationJob(ctx, tenantID, id)
+		job, getErr := scanGenerationJob(tx.QueryRow(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+			provider_id, model, parameters, result, error, created_at, updated_at
+			FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`, tenantID, id))
+		if errors.Is(getErr, pgx.ErrNoRows) {
+			return GenerationJob{}, ErrNotFound
+		}
 		if getErr != nil {
 			return GenerationJob{}, getErr
 		}
 		if !serverOwnedGenerationJob(job) {
 			return GenerationJob{}, ErrConflict
 		}
+		if err := tx.Commit(ctx); err != nil {
+			return GenerationJob{}, err
+		}
 		return job, nil
 	}
 	if err != nil {
 		return GenerationJob{}, err
 	}
+	if err := s.refundCreditsTx(ctx, tx, tenantID, "", id, "cancelled"); err != nil {
+		return GenerationJob{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return GenerationJob{}, err
+	}
+	return job, nil
+}
+
+func scanGenerationJob(row pgx.Row) (GenerationJob, error) {
+	var job GenerationJob
+	var created, updated time.Time
+	err := row.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
+		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated)
+	if err != nil {
+		return GenerationJob{}, err
+	}
 	job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
 	job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
-	_ = s.RefundCredits(ctx, tenantID, "", id, "cancelled")
 	return job, nil
 }
 
@@ -1326,6 +1461,70 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 	return tx.Commit(ctx)
 }
 
+func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenantID, expectedVersion string, jobs []GenerationJob) error {
+	tenantID = normalizeTenantID(tenantID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+		provider_id, model, parameters, result, error, created_at, updated_at
+		FROM openboard_generation_jobs WHERE tenant_id=$1 ORDER BY id`, tenantID)
+	if err != nil {
+		return err
+	}
+	current := make([]GenerationJob, 0)
+	for rows.Next() {
+		var job GenerationJob
+		var created, updated time.Time
+		if err := rows.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID, &job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+		job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+		current = append(current, job)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if GenerationJobsVersion(current) != expectedVersion {
+		return ErrConflict
+	}
+	var active int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs WHERE tenant_id=$1 AND status IN ('queued','running') AND
+		((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR (kind='workflow' AND parameters->>'executor'='workflow'))`, tenantID).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1`, tenantID); err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
+		if err != nil {
+			return err
+		}
+		updated, err := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
+			(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+			VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, tenantID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error, created, updated); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
 
 // --- Server material library ---
 
@@ -1568,7 +1767,6 @@ func (s *PostgresStore) DeleteLibraryAsset(ctx context.Context, tenantID, id str
 	}
 	return nil
 }
-
 
 // --- AI call logs ---
 
@@ -2152,13 +2350,7 @@ func (s *PostgresStore) ReleaseStorageUsage(ctx context.Context, tenantID, userI
 	return tx.Commit(ctx)
 }
 
-
 const adminBillingStateKey = "adminBilling"
-
-type adminBillingConfig struct {
-	ModelCosts     []ModelCreditCost `json:"modelCosts"`
-	DefaultCredits int               `json:"defaultCredits"`
-}
 
 func scanAuthUser(row pgx.Row) (AuthUser, error) {
 	var user AuthUser
@@ -2234,7 +2426,24 @@ ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`, tenantID, like, pageSize,
 	return UserPage{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
+func isSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
 func (s *PostgresStore) UpdateUser(ctx context.Context, tenantID, userID string, patch UserPatch) (AuthUser, error) {
+	var lastErr error
+	for range 3 {
+		user, err := s.updateUserOnce(ctx, tenantID, userID, patch)
+		if !isSerializationFailure(err) {
+			return user, err
+		}
+		lastErr = err
+	}
+	return AuthUser{}, lastErr
+}
+
+func (s *PostgresStore) updateUserOnce(ctx context.Context, tenantID, userID string, patch UserPatch) (AuthUser, error) {
 	tenantID = normalizeTenantID(tenantID)
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -2250,30 +2459,34 @@ FROM openboard_users WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, userID)
 	if err != nil {
 		return AuthUser{}, err
 	}
+	if !strings.EqualFold(strings.TrimSpace(patch.ActorRole), "owner") && strings.EqualFold(user.Role, "owner") && (patch.Role != nil || patch.Status != nil) {
+		return AuthUser{}, ErrUnauthorized
+	}
+	wasActiveOwner := strings.EqualFold(user.Role, "owner") && strings.EqualFold(user.Status, "active")
 	if patch.Role != nil {
 		role := strings.ToLower(strings.TrimSpace(*patch.Role))
 		switch role {
 		case "owner", "admin", "member":
-			if user.Role == "owner" && role != "owner" {
-				var owners int
-				if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_users WHERE tenant_id=$1 AND role='owner'`, tenantID).Scan(&owners); err != nil {
-					return AuthUser{}, err
-				}
-				if owners <= 1 {
-					return AuthUser{}, fmt.Errorf("cannot demote the last owner")
-				}
-			}
 			user.Role = role
 		default:
-			return AuthUser{}, fmt.Errorf("invalid role")
+			return AuthUser{}, ErrInvalidInput
 		}
 	}
 	if patch.Status != nil {
 		status := strings.ToLower(strings.TrimSpace(*patch.Status))
 		if status != "active" && status != "ban" {
-			return AuthUser{}, fmt.Errorf("invalid status")
+			return AuthUser{}, ErrInvalidInput
 		}
 		user.Status = status
+	}
+	if wasActiveOwner && (!strings.EqualFold(user.Role, "owner") || !strings.EqualFold(user.Status, "active")) {
+		var activeOwners int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_users WHERE tenant_id=$1 AND role='owner' AND status='active'`, tenantID).Scan(&activeOwners); err != nil {
+			return AuthUser{}, err
+		}
+		if activeOwners <= 1 {
+			return AuthUser{}, ErrLastOwner
+		}
 	}
 	if patch.DisplayName != nil {
 		name := strings.TrimSpace(*patch.DisplayName)
@@ -2287,8 +2500,7 @@ FROM openboard_users WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, userID)
 		return AuthUser{}, err
 	}
 	if patch.CreditsDelta != nil && *patch.CreditsDelta != 0 {
-		delta := int(*patch.CreditsDelta)
-		user, err = s.adjustCreditsTx(ctx, tx, tenantID, userID, delta, "admin_adjust", json.RawMessage(`{}`))
+		user, err = s.adjustCreditsTx(ctx, tx, tenantID, userID, *patch.CreditsDelta, "admin_adjust", json.RawMessage(`{}`))
 		if err != nil {
 			return AuthUser{}, err
 		}
@@ -2306,8 +2518,9 @@ FROM openboard_users WHERE tenant_id=$1 AND id=$2`, tenantID, userID))
 	return user, nil
 }
 
-func (s *PostgresStore) loadAdminBilling(ctx context.Context, tenantID string) (adminBillingConfig, error) {
-	cfg := adminBillingConfig{}
+func (s *PostgresStore) GetModelCreditConfig(ctx context.Context, tenantID string) (ModelCreditConfig, error) {
+	tenantID = normalizeTenantID(tenantID)
+	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}}
 	raw, err := s.GetState(ctx, tenantID, adminBillingStateKey)
 	if errors.Is(err, ErrNotFound) || len(raw) == 0 {
 		return cfg, nil
@@ -2315,13 +2528,27 @@ func (s *PostgresStore) loadAdminBilling(ctx context.Context, tenantID string) (
 	if err != nil {
 		return cfg, err
 	}
-	_ = json.Unmarshal(raw, &cfg)
+	if json.Unmarshal(raw, &cfg) != nil {
+		return ModelCreditConfig{}, ErrInvalidInput
+	}
+	if cfg.ModelCosts == nil {
+		cfg.ModelCosts = []ModelCreditCost{}
+	}
 	return cfg, nil
+}
+
+func (s *PostgresStore) PutModelCreditConfig(ctx context.Context, tenantID string, config ModelCreditConfig) error {
+	tenantID = normalizeTenantID(tenantID)
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	return s.PutState(ctx, tenantID, adminBillingStateKey, raw)
 }
 
 func (s *PostgresStore) GetModelCreditCost(ctx context.Context, tenantID, model string) (int, error) {
 	tenantID = normalizeTenantID(tenantID)
-	cfg, err := s.loadAdminBilling(ctx, tenantID)
+	cfg, err := s.GetModelCreditConfig(ctx, tenantID)
 	if err != nil {
 		return 0, err
 	}
@@ -2341,8 +2568,168 @@ func (s *PostgresStore) GetModelCreditCost(ctx context.Context, tenantID, model 
 }
 
 func (s *PostgresStore) modelCreditCostTx(ctx context.Context, tx pgx.Tx, tenantID, model string) (int, error) {
-	// Prefer reading state outside tx lock if needed; use same pool state table.
-	return s.GetModelCreditCost(ctx, tenantID, model)
+	var raw []byte
+	err := tx.QueryRow(ctx, `SELECT value FROM openboard_state WHERE tenant_id=$1 AND key=$2`,
+		normalizeTenantID(tenantID), adminBillingStateKey).Scan(&raw)
+	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return 0, err
+	}
+	if err == nil && len(raw) > 0 && json.Unmarshal(raw, &cfg) != nil {
+		return 0, ErrInvalidInput
+	}
+	model = strings.TrimSpace(model)
+	for _, item := range cfg.ModelCosts {
+		if strings.EqualFold(strings.TrimSpace(item.Model), model) {
+			if item.Credits < 0 {
+				return 0, nil
+			}
+			return item.Credits, nil
+		}
+	}
+	if cfg.DefaultCredits < 0 {
+		return 0, nil
+	}
+	return cfg.DefaultCredits, nil
+}
+
+func scanCreditLog(row pgx.Row) (CreditLog, error) {
+	var item CreditLog
+	err := row.Scan(&item.ID, &item.UserID, &item.ActorID, &item.JobID, &item.Model, &item.Delta,
+		&item.BalanceAfter, &item.Reason, &item.IdempotencyKey, &item.Meta, &item.CreatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) ListCreditLogs(ctx context.Context, tenantID string, query CreditLogQuery) (CreditLogPage, error) {
+	tenantID = normalizeTenantID(tenantID)
+	page, pageSize := query.Page, query.PageSize
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	args := []any{tenantID}
+	where := []string{"tenant_id=$1"}
+	add := func(column, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		args = append(args, value)
+		where = append(where, fmt.Sprintf("%s=$%d", column, len(args)))
+	}
+	add("user_id", query.UserID)
+	add("reason", query.Reason)
+	add("model", query.Model)
+	clause := strings.Join(where, " AND ")
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM openboard_credit_logs WHERE "+clause, args...).Scan(&total); err != nil {
+		return CreditLogPage{}, err
+	}
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.pool.Query(ctx, `SELECT id,user_id,actor_id,job_id,model,delta,balance_after,reason,idempotency_key,meta,created_at
+FROM openboard_credit_logs WHERE `+clause+fmt.Sprintf(" ORDER BY created_at DESC,id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args)), args...)
+	if err != nil {
+		return CreditLogPage{}, err
+	}
+	defer rows.Close()
+	items := make([]CreditLog, 0, pageSize)
+	for rows.Next() {
+		item, err := scanCreditLog(rows)
+		if err != nil {
+			return CreditLogPage{}, err
+		}
+		item.TenantID = tenantID
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return CreditLogPage{}, err
+	}
+	return CreditLogPage{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+func (s *PostgresStore) AdjustCreditsIdempotent(ctx context.Context, tenantID, userID, actorID, idempotencyKey string, delta int64, reason string, meta json.RawMessage) (AuthUser, CreditLog, bool, error) {
+	var lastErr error
+	for range 3 {
+		user, logEntry, replayed, err := s.adjustCreditsIdempotentOnce(ctx, tenantID, userID, actorID, idempotencyKey, delta, reason, meta)
+		if !isSerializationFailure(err) {
+			return user, logEntry, replayed, err
+		}
+		lastErr = err
+	}
+	return AuthUser{}, CreditLog{}, false, lastErr
+}
+
+func (s *PostgresStore) adjustCreditsIdempotentOnce(ctx context.Context, tenantID, userID, actorID, idempotencyKey string, delta int64, reason string, meta json.RawMessage) (AuthUser, CreditLog, bool, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if userID == "" || actorID == "" || idempotencyKey == "" || delta == 0 || reason == "" {
+		return AuthUser{}, CreditLog{}, false, ErrInvalidInput
+	}
+	if len(meta) == 0 {
+		meta = json.RawMessage(`{}`)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	lockKey := "credit-adjust:" + tenantID + ":" + idempotencyKey
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	existing, err := scanCreditLog(tx.QueryRow(ctx, `SELECT id,user_id,actor_id,job_id,model,delta,balance_after,reason,idempotency_key,meta,created_at
+FROM openboard_credit_logs WHERE tenant_id=$1 AND idempotency_key=$2`, tenantID, idempotencyKey))
+	if err == nil {
+		existing.TenantID = tenantID
+		if existing.UserID != userID || existing.ActorID != actorID || existing.Delta != delta || existing.Reason != reason {
+			return AuthUser{}, CreditLog{}, false, ErrConflict
+		}
+		user, err := scanAuthUser(tx.QueryRow(ctx, `SELECT id,tenant_id,email,display_name,role,COALESCE(credits,0),COALESCE(status,'active'),COALESCE(linux_do_id,'') FROM openboard_users WHERE tenant_id=$1 AND id=$2`, tenantID, userID))
+		if err != nil {
+			return AuthUser{}, CreditLog{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return AuthUser{}, CreditLog{}, false, err
+		}
+		return user, existing, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	var balance int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(credits,0) FROM openboard_users WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, userID).Scan(&balance); errors.Is(err, pgx.ErrNoRows) {
+		return AuthUser{}, CreditLog{}, false, ErrNotFound
+	} else if err != nil {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	next := balance + delta
+	if next < 0 {
+		return AuthUser{}, CreditLog{}, false, ErrInsufficientCredits
+	}
+	if (delta > 0 && next < balance) || (delta < 0 && next > balance) {
+		return AuthUser{}, CreditLog{}, false, ErrInvalidInput
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_users SET credits=$3 WHERE tenant_id=$1 AND id=$2`, tenantID, userID, next); err != nil {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	created, err := scanCreditLog(tx.QueryRow(ctx, `INSERT INTO openboard_credit_logs
+(tenant_id,user_id,actor_id,job_id,model,delta,balance_after,reason,idempotency_key,meta)
+VALUES ($1,$2,$3,'','',$4,$5,$6,$7,$8)
+RETURNING id,user_id,actor_id,job_id,model,delta,balance_after,reason,idempotency_key,meta,created_at`,
+		tenantID, userID, actorID, delta, next, reason, idempotencyKey, meta))
+	if err != nil {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	created.TenantID = tenantID
+	user, err := scanAuthUser(tx.QueryRow(ctx, `SELECT id,tenant_id,email,display_name,role,COALESCE(credits,0),COALESCE(status,'active'),COALESCE(linux_do_id,'') FROM openboard_users WHERE tenant_id=$1 AND id=$2`, tenantID, userID))
+	if err != nil {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AuthUser{}, CreditLog{}, false, err
+	}
+	return user, created, false, nil
 }
 
 func (s *PostgresStore) reserveCreditsTx(ctx context.Context, tx pgx.Tx, tenantID, userID, jobID, model string, amount int, meta json.RawMessage) error {
@@ -2407,26 +2794,49 @@ func (s *PostgresStore) RefundCredits(ctx context.Context, tenantID, userID, job
 	if jobID == "" {
 		return nil
 	}
+	reason = strings.ToLower(strings.TrimSpace(reason))
 	if reason == "" {
 		reason = "refund"
 	}
+	if reason != "refund" && reason != "failed" && reason != "cancelled" {
+		return ErrInvalidInput
+	}
+	var lastErr error
+	for range 3 {
+		err := s.refundCreditsOnce(ctx, tenantID, userID, jobID, reason)
+		if !isSerializationFailure(err) {
+			return err
+		}
+		lastErr = err
+	}
+	return lastErr
+}
+
+func (s *PostgresStore) refundCreditsOnce(ctx context.Context, tenantID, userID, jobID, reason string) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := s.refundCreditsTx(ctx, tx, tenantID, userID, jobID, reason); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) refundCreditsTx(ctx context.Context, tx pgx.Tx, tenantID, userID, jobID, reason string) error {
 	var refunded bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM openboard_credit_logs WHERE tenant_id=$1 AND job_id=$2 AND reason IN ('refund','failed','cancelled'))`, tenantID, jobID).Scan(&refunded); err != nil {
 		return err
 	}
 	if refunded {
-		return tx.Commit(ctx)
+		return nil
 	}
 	var reservedUser string
 	var amount int64
-	err = tx.QueryRow(ctx, `SELECT user_id, ABS(delta) FROM openboard_credit_logs WHERE tenant_id=$1 AND job_id=$2 AND reason='reserve' ORDER BY id ASC LIMIT 1`, tenantID, jobID).Scan(&reservedUser, &amount)
+	err := tx.QueryRow(ctx, `SELECT user_id, ABS(delta) FROM openboard_credit_logs WHERE tenant_id=$1 AND job_id=$2 AND reason='reserve' ORDER BY id ASC LIMIT 1`, tenantID, jobID).Scan(&reservedUser, &amount)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return tx.Commit(ctx)
+		return nil
 	}
 	if err != nil {
 		return err
@@ -2437,22 +2847,25 @@ func (s *PostgresStore) RefundCredits(ctx context.Context, tenantID, userID, job
 	var balance int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(credits,0) FROM openboard_users WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, userID).Scan(&balance); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return tx.Commit(ctx)
+			return ErrNotFound
 		}
 		return err
 	}
-	balance += amount
-	if _, err := tx.Exec(ctx, `UPDATE openboard_users SET credits=$3 WHERE tenant_id=$1 AND id=$2`, tenantID, userID, balance); err != nil {
+	next := balance + amount
+	if amount < 0 || next < balance {
+		return ErrInvalidInput
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_users SET credits=$3 WHERE tenant_id=$1 AND id=$2`, tenantID, userID, next); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO openboard_credit_logs (tenant_id,user_id,job_id,model,delta,balance_after,reason,meta)
-		VALUES ($1,$2,$3,'',$4,$5,$6,'{}'::jsonb)`, tenantID, userID, jobID, amount, balance, reason); err != nil {
+		VALUES ($1,$2,$3,'',$4,$5,$6,'{}'::jsonb)`, tenantID, userID, jobID, amount, next, reason); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
-func (s *PostgresStore) adjustCreditsTx(ctx context.Context, tx pgx.Tx, tenantID, userID string, delta int, reason string, meta json.RawMessage) (AuthUser, error) {
+func (s *PostgresStore) adjustCreditsTx(ctx context.Context, tx pgx.Tx, tenantID, userID string, delta int64, reason string, meta json.RawMessage) (AuthUser, error) {
 	if len(meta) == 0 {
 		meta = json.RawMessage(`{}`)
 	}
@@ -2463,15 +2876,18 @@ func (s *PostgresStore) adjustCreditsTx(ctx context.Context, tx pgx.Tx, tenantID
 		}
 		return AuthUser{}, err
 	}
-	next := balance + int64(delta)
+	next := balance + delta
 	if next < 0 {
 		return AuthUser{}, ErrInsufficientCredits
+	}
+	if (delta > 0 && next < balance) || (delta < 0 && next > balance) {
+		return AuthUser{}, ErrInvalidInput
 	}
 	if _, err := tx.Exec(ctx, `UPDATE openboard_users SET credits=$3 WHERE tenant_id=$1 AND id=$2`, tenantID, userID, next); err != nil {
 		return AuthUser{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO openboard_credit_logs (tenant_id,user_id,job_id,model,delta,balance_after,reason,meta)
-		VALUES ($1,$2,'','',$3,$4,$5,$6)`, tenantID, userID, int64(delta), next, reason, meta); err != nil {
+		VALUES ($1,$2,'','',$3,$4,$5,$6)`, tenantID, userID, delta, next, reason, meta); err != nil {
 		return AuthUser{}, err
 	}
 	return scanAuthUser(tx.QueryRow(ctx, `
@@ -2492,7 +2908,7 @@ func (s *PostgresStore) AdjustCredits(ctx context.Context, tenantID, userID stri
 		return AuthUser{}, err
 	}
 	defer tx.Rollback(ctx)
-	user, err := s.adjustCreditsTx(ctx, tx, tenantID, userID, delta, reason, meta)
+	user, err := s.adjustCreditsTx(ctx, tx, tenantID, userID, int64(delta), reason, meta)
 	if err != nil {
 		return AuthUser{}, err
 	}

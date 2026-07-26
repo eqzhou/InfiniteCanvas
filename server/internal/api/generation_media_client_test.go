@@ -322,4 +322,3 @@ func TestHTTPVideoExecutorArkFirstLastFrameRoles(t *testing.T) {
 		t.Fatalf("roles = %#v", roles)
 	}
 }
-

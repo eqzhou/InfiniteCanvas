@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { BoardNode } from "@/types/board";
 import type { ImageTransformContext } from "@/services/image-transform/types";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 
-export type ImageToolMode = "mask" | "upscale" | "split";
+export type ImageToolMode = "mask" | "resize" | "ai-upscale" | "split";
 export type ImageToolProviderOption = {
   id: string;
   label: string;
@@ -33,7 +33,7 @@ export function ImageToolsDialog({
     prompt: string,
     context: ImageTransformContext,
   ) => Promise<void>;
-  onUpscale: (scale: number, providerId: string, context: ImageTransformContext) => Promise<void>;
+  onUpscale: (scale: number, providerId: string, operation: "resize" | "ai-upscale", context: ImageTransformContext) => Promise<void>;
   onSplit: (vertical: number[], horizontal: number[]) => Promise<void>;
   providers: ImageToolProviderOption[];
 }) {
@@ -46,7 +46,10 @@ export function ImageToolsDialog({
   const [vertical, setVertical] = useState([0.5]);
   const [horizontal, setHorizontal] = useState([0.5]);
   const [selectedGuide, setSelectedGuide] = useState<{ axis: "vertical" | "horizontal"; index: number } | null>(null);
-  const [providerId, setProviderId] = useState(providers[0]?.id ?? "local-canvas");
+  const compatibleProviders = useMemo(() => providers.filter((provider) =>
+    mode === "resize" ? provider.kind === "local" : mode === "ai-upscale" ? provider.kind === "cloud" : true),
+  [mode, providers]);
+  const [providerId, setProviderId] = useState(compatibleProviders[0]?.id ?? "");
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -61,10 +64,10 @@ export function ImageToolsDialog({
   });
 
   useEffect(() => {
-    if (!providers.some((provider) => provider.id === providerId)) {
-      setProviderId(providers[0]?.id ?? "local-canvas");
+    if (!compatibleProviders.some((provider) => provider.id === providerId)) {
+      setProviderId(compatibleProviders[0]?.id ?? "");
     }
-  }, [providerId, providers]);
+  }, [compatibleProviders, providerId]);
 
   // Always keep a valid guide selected in split mode so delete/reset actions work
   // after drag (pointer capture can swallow click) or when adding lines.
@@ -83,9 +86,9 @@ export function ImageToolsDialog({
   }, [mode, vertical.length, horizontal.length]);
 
   if (!open) return null;
-  const title =
-    mode === "mask" ? "遮罩编辑" : mode === "upscale" ? "图像放大" : "网格切分";
-  const selectedProvider = providers.find((provider) => provider.id === providerId);
+  const title = mode === "mask" ? "遮罩编辑" : mode === "resize" ? "本地尺寸放大" :
+    mode === "ai-upscale" ? "AI 超分" : "网格切分";
+  const selectedProvider = compatibleProviders.find((provider) => provider.id === providerId);
 
   const execute = async () => {
     const controller = new AbortController();
@@ -99,10 +102,18 @@ export function ImageToolsDialog({
     };
     try {
       if (mode === "mask") await onMask({ x, y, w, h }, keep, providerId, prompt, context);
-      else if (mode === "upscale") await onUpscale(scale, providerId, context);
+      else if (mode === "resize" || mode === "ai-upscale") {
+        if (!selectedProvider) throw new Error(mode === "ai-upscale" ? "当前渠道不支持 AI 超分" : "本地放大不可用");
+        await onUpscale(scale, providerId, mode, context);
+      }
       else await onSplit(vertical, horizontal);
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+      if (!controller.signal.aborted) {
+        const detail = cause instanceof Error
+          ? cause.message.trim() || cause.name.trim() || "图像处理失败"
+          : String(cause).trim() || "图像处理失败";
+        setError(detail);
+      }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       setRunning(false);
@@ -146,7 +157,7 @@ export function ImageToolsDialog({
   }
 
   return createPortal(
-    <div className="ob-overlay-canvas p-4">
+    <div className="ob-overlay-canvas p-4" onPointerDown={(event) => event.stopPropagation()}>
       <div
         role="dialog"
         aria-modal="true"
@@ -268,7 +279,7 @@ export function ImageToolsDialog({
           </div>
         ) : null}
 
-        {(mode === "mask" || mode === "upscale") && providers.length > 0 ? (
+        {(mode === "mask" || mode === "resize" || mode === "ai-upscale") && compatibleProviders.length > 0 ? (
           <label className="mt-3 flex flex-col gap-1 text-sm">
             处理方式
             <select
@@ -277,14 +288,14 @@ export function ImageToolsDialog({
               disabled={running}
               onChange={(event) => setProviderId(event.target.value)}
             >
-              {providers.map((provider) => (
+              {compatibleProviders.map((provider) => (
                 <option key={provider.id} value={provider.id}>{provider.label}</option>
               ))}
             </select>
           </label>
         ) : null}
 
-        {mode === "upscale" ? (
+        {mode === "resize" || mode === "ai-upscale" ? (
           <label className="flex flex-col gap-1 text-sm">
             放大倍数
             <select
@@ -298,8 +309,8 @@ export function ImageToolsDialog({
               <option value={4}>4x</option>
             </select>
             <span className="ob-label">
-              {selectedProvider?.kind === "cloud"
-                ? "调用当前 AI 渠道的超分接口；不支持时仅回退到该渠道的图像编辑接口。"
+              {mode === "ai-upscale"
+                ? "调用当前 AI 渠道的专用超分接口；不会静默回退到图像编辑。"
                 : "浏览器 Canvas 插值，不调用云端模型。"}
             </span>
           </label>
@@ -375,7 +386,7 @@ export function ImageToolsDialog({
           <button
             type="button"
             className="ob-btn-primary"
-            disabled={running || ((mode === "mask" || mode === "upscale") && !selectedProvider) ||
+            disabled={running || ((mode === "mask" || mode === "resize" || mode === "ai-upscale") && !selectedProvider) ||
               (mode === "mask" && selectedProvider?.kind === "cloud" && !prompt.trim())}
             onClick={() => void execute()}
           >

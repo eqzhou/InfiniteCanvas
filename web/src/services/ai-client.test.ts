@@ -9,6 +9,7 @@ import {
   resolveNodeImageDataUrl,
 } from "@/services/ai-client";
 import type { AiChannel } from "@/types/board";
+import { sharedChannelAsAI } from "@/services/shared-channels";
 
 const originalFetch = globalThis.fetch;
 const fixtureCredential = ["test", "credential"].join("-");
@@ -43,6 +44,30 @@ test("rejects an excessive image batch before contacting a provider", async () =
     prompt: "scene",
     n: 9,
   })).rejects.toThrow("between 1 and 8");
+  expect(calls).toBe(0);
+});
+
+test("rejects APIMart browser image execution before contacting the provider", async () => {
+  let calls = 0;
+  globalThis.fetch = mock(async () => {
+    calls += 1;
+    return json({});
+  }) as typeof fetch;
+  const c = channel("https://api.apimart.ai");
+  c.providers = {
+    ...defaultProvidersForTest(c),
+    image: { baseUrl: "https://api.apimart.ai", apiKey: fixtureCredential, model: "gpt-image-1-official", protocol: "apimart" },
+  };
+  await expect(generateImages({ channel: c, model: "gpt-image-1-official", prompt: "draw" }))
+    .rejects.toThrow("requires the protected server runtime");
+  expect(calls).toBe(0);
+});
+
+test("never sends a server-managed shared credential to a browser provider", async () => {
+  let calls = 0;
+  globalThis.fetch = mock(async () => { calls += 1; return json({}); }) as typeof fetch;
+  const managed = sharedChannelAsAI({ id: "shared", name: "Shared", protocol: "openai", defaultImageModel: "image" });
+  await expect(generateImages({ channel: managed, model: "image", prompt: "draw" })).rejects.toThrow("受保护的服务端");
   expect(calls).toBe(0);
 });
 
