@@ -41,7 +41,43 @@ type AuthContextValue = {
   refreshUsage: () => Promise<void>;
   logout: () => Promise<void>;
   localAdmin: boolean;
+  /** True when a guest should be offered a way back to the sign-in form. */
+  canLogin: boolean;
+  /** Shows the sign-in form. No-op unless `canLogin` is true. */
+  requestLogin: () => void;
 };
+
+/**
+ * Whether an identity is the synthesized guest rather than a real account.
+ *
+ * In `optional` mode the server answers `/api/auth/me` with 200 and a
+ * `role: "guest"` placeholder instead of 401, so the UI can stay open for
+ * reading. Taking that at face value makes the app believe someone is signed
+ * in: it offers "sign out" and hides the way to actually sign in, while every
+ * write still fails with 401.
+ */
+export function isGuestIdentity(user: (AuthUser & { guest?: boolean }) | null): boolean {
+  if (!user) return true;
+  return user.guest === true || user.role === "guest" || user.id === "";
+}
+
+/**
+ * Whether to expose a sign-in entry point.
+ *
+ * In `optional` mode a guest may read the shared catalog but every write is
+ * refused, so without an entry point the session is a dead end: the sign-in
+ * form is otherwise only reachable by arriving with an expired session token.
+ * Authentication being disabled (`localAdmin`) grants full local access with no
+ * account to sign into, and a signed-in user has no use for the prompt.
+ */
+export function shouldOfferLogin(
+  status: AuthStatus,
+  user: AuthUser | null,
+  localAdmin: boolean,
+): boolean {
+  if (localAdmin || status === "loading" || status === "login_required") return false;
+  return isGuestIdentity(user);
+}
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -332,6 +368,14 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
     setStatus("open");
   }, [finishReady, onBeforeScopeChange, onScopeCredentialsChanged]);
 
+  /**
+   * Shows the sign-in form to a guest. Guarded by the same rule the entry point
+   * uses so a stray call cannot strand a signed-in user on the login wall.
+   */
+  const requestLogin = useCallback(() => {
+    setStatus((current) => (shouldOfferLogin(current, user, localAdmin) ? "login_required" : current));
+  }, [localAdmin, user]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
@@ -341,8 +385,10 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
       refreshUsage: loadUsage,
       logout,
       localAdmin,
+      canLogin: shouldOfferLogin(status, user, localAdmin),
+      requestLogin,
     }),
-    [loadUsage, localAdmin, logout, status, usageSnapshot, user],
+    [loadUsage, localAdmin, logout, requestLogin, status, usageSnapshot, user],
   );
 
   if (status === "loading") {

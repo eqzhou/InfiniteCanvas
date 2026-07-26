@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { createMigrationPreflight, createWorkspaceManifest } from "@/services/local-workspace-migration";
 import {
   createScopeReadyCoordinator,
+  isGuestIdentity,
   prepareAuthenticatedWorkspace,
   releaseAuthenticatedWorkspace,
+  shouldOfferLogin,
   transitionWorkspaceIdentity,
 } from "./AuthGate";
 
@@ -81,5 +83,54 @@ describe("AuthGate login migration interactions", () => {
       () => { kept += 1; },
     );
     expect({ hydrated, kept }).toEqual({ hydrated: 2, kept: 1 });
+  });
+});
+
+const signedInAccount = {
+  id: "u1", tenantId: "t1", email: "a@b.c", displayName: "A",
+  role: "owner", credits: 0, status: "active",
+};
+// `optional` mode synthesizes this instead of answering 401.
+const guestAccount = {
+  id: "", tenantId: "local", email: "", displayName: "访客",
+  role: "guest", credits: 0, status: "active",
+};
+
+describe("guest identity", () => {
+  test("treats the synthesized guest as not signed in", () => {
+    // The server answers /api/auth/me with 200 and a guest user in optional
+    // mode. Taking that at face value makes the UI believe someone is signed
+    // in, so it offers "sign out" and hides the way to actually sign in.
+    expect(isGuestIdentity(guestAccount)).toBe(true);
+    expect(isGuestIdentity({ ...guestAccount, guest: true })).toBe(true);
+    expect(isGuestIdentity(null)).toBe(true);
+  });
+
+  test("treats a real account as signed in", () => {
+    expect(isGuestIdentity(signedInAccount)).toBe(false);
+  });
+});
+
+describe("login entry point availability", () => {
+  test("offers login to a guest while accounts are enabled", () => {
+    // A guest may read but every write is refused, so the way back to the
+    // sign-in form must stay reachable.
+    expect(shouldOfferLogin("open", null, false)).toBe(true);
+    expect(shouldOfferLogin("open", guestAccount, false)).toBe(true);
+  });
+
+  test("hides login once a real user is signed in", () => {
+    expect(shouldOfferLogin("authenticated", signedInAccount, false)).toBe(false);
+    expect(shouldOfferLogin("open", signedInAccount, false)).toBe(false);
+  });
+
+  test("hides login when authentication is disabled entirely", () => {
+    // auth_mode=off grants local admin; there is no account to sign into.
+    expect(shouldOfferLogin("open", null, true)).toBe(false);
+  });
+
+  test("hides login while the gate is deciding or already showing the form", () => {
+    expect(shouldOfferLogin("loading", null, false)).toBe(false);
+    expect(shouldOfferLogin("login_required", null, false)).toBe(false);
   });
 });

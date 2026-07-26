@@ -14,6 +14,7 @@ import {
   Puzzle,
   Settings,
   LogOut,
+  LogIn,
   UserRound,
   Sun,
   Sparkles,
@@ -23,7 +24,7 @@ import {
 import { cn } from "@/lib/cn";
 import { exportProjectBundle } from "@/lib/project-bundle";
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
-import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { isGuestIdentity, useOptionalAuth } from "@/components/auth/AuthGate";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { canManageAdmin } from "@/services/admin";
 
@@ -45,6 +46,9 @@ export function TopNav({
     s.projects.find((project) => project.id === s.activeProjectId) ?? null);
   const [compactMenuOpen, setCompactMenuOpen] = useState(false);
   const auth = useOptionalAuth();
+  // The server synthesizes a guest identity in optional mode, so a non-null
+  // user does not mean somebody is actually signed in.
+  const signedInUser = auth?.user && !isGuestIdentity(auth.user) ? auth.user : null;
   useEscapeDismiss(compactMenuOpen, () => setCompactMenuOpen(false), 40);
 
   const toggleTheme = () => {
@@ -236,13 +240,13 @@ export function TopNav({
                 <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
                   <VersionReleaseModal menuItem onClose={() => setCompactMenuOpen(false)} />
                 </div>
-                {auth?.user ? (
+                {signedInUser ? (
                   <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
                     <div className="px-3 py-1.5 text-xs text-[var(--ob-muted)]">
-                      <div className="truncate font-medium text-[var(--ob-ink)]" title={auth.user.email}>
-                        {auth.user.displayName || auth.user.email}
+                      <div className="truncate font-medium text-[var(--ob-ink)]" title={signedInUser.email}>
+                        {signedInUser.displayName || signedInUser.email}
                       </div>
-                      {auth.usageLabel ? (
+                      {auth?.usageLabel ? (
                         <div className="mt-0.5 truncate" title={auth.usageLabel}>{auth.usageLabel}</div>
                       ) : null}
                     </div>
@@ -252,7 +256,7 @@ export function TopNav({
                       className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
                       onClick={() => {
                         setCompactMenuOpen(false);
-                        void auth.logout();
+                        void auth?.logout();
                       }}
                     >
                       <LogOut size={16} />
@@ -264,19 +268,32 @@ export function TopNav({
             </>
           ) : null}
         </div>
-        {auth?.user ? (
+        {signedInUser ? (
           <div className="hidden items-center gap-1.5 lg:flex">
-            <span className="ob-chip max-w-[10rem] truncate" title={auth.user.email}>
+            <span className="ob-chip max-w-[10rem] truncate" title={signedInUser.email}>
               <UserRound size={12} className="mr-1 inline" />
-              {auth.user.displayName || auth.user.email}
+              {signedInUser.displayName || signedInUser.email}
             </span>
-            {auth.usageLabel ? (
+            {auth?.usageLabel ? (
               <span className="ob-chip max-w-[11rem] truncate" title={auth.usageLabel}>{auth.usageLabel}</span>
             ) : null}
-            <button type="button" className="ob-icon-btn" title="退出登录" onClick={() => void auth.logout()}>
+            <button type="button" className="ob-icon-btn" title="退出登录" onClick={() => void auth?.logout()}>
               <LogOut size={16} />
             </button>
           </div>
+        ) : null}
+        {auth?.canLogin ? (
+          // A guest may read the shared catalog but cannot save anything, so the
+          // way back to the sign-in form has to stay visible.
+          <button
+            type="button"
+            className="ob-btn"
+            title="登录"
+            onClick={auth.requestLogin}
+          >
+            <LogIn size={16} className="mr-1 inline" />
+            登录
+          </button>
         ) : null}
         <button
           type="button"
