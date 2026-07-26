@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIImageTransformProvider } from "./providers/openai-images";
+import {
+  createOpenAIImageTransformProvider,
+  supportsOpenAIImageTransforms,
+} from "./providers/openai-images";
+import type { AiProtocol } from "@/types/board";
 
 const image = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
 
@@ -99,6 +103,50 @@ describe("OpenAI-compatible image transform provider", () => {
     });
     await expect(provider.upscale!({ image, scale: 0.5, width: 10, height: 10 }, {})).rejects.toThrow("scale");
     await expect(provider.upscale!({ image, scale: 4, width: 10_000, height: 10_000 }, {})).rejects.toThrow("pixel limit");
+    expect(calls).toBe(0);
+  });
+
+  test("only claims support for protocols that actually expose the edit endpoints", () => {
+    // /images/edits and /images/upscales are OpenAI-compatible endpoints. Other
+    // protocols do not implement them, so offering the action would hand the
+    // user a button that can only fail.
+    const withProtocol = (protocol: AiProtocol) => ({
+      ...channel(),
+      providers: {
+        text: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "text", protocol: "openai" as AiProtocol },
+        image: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "image-model", protocol },
+        video: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "video", protocol: "openai" as AiProtocol },
+        audio: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "audio", protocol: "openai" as AiProtocol },
+      },
+    });
+
+    expect(supportsOpenAIImageTransforms(withProtocol("openai"))).toBe(true);
+    for (const protocol of ["gemini", "apimart", "kie", "ark", "template"] as const) {
+      expect(supportsOpenAIImageTransforms(withProtocol(protocol))).toBe(false);
+    }
+  });
+
+  test("refuses to run edits against a protocol that cannot serve them", async () => {
+    let calls = 0;
+    const geminiChannel = {
+      ...channel(),
+      providers: {
+        text: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "text", protocol: "openai" as AiProtocol },
+        image: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "image-model", protocol: "gemini" as AiProtocol },
+        video: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "video", protocol: "openai" as AiProtocol },
+        audio: { baseUrl: "https://images.example/v1", apiKey: "secret", model: "audio", protocol: "openai" as AiProtocol },
+      },
+    };
+    const provider = createOpenAIImageTransformProvider(geminiChannel, {
+      fetch: async () => { calls += 1; return new Response(); },
+    });
+    // Capabilities must be honest, and the call must fail before any request.
+    expect(provider.capabilities.inpaint).toBe(false);
+    expect(provider.capabilities.upscale).toBe(false);
+    await expect(provider.inpaint!({ image, mask: image, prompt: "x", width: 8, height: 8 }, {}))
+      .rejects.toThrow();
+    await expect(provider.upscale!({ image, scale: 2, width: 8, height: 8 }, {}))
+      .rejects.toThrow();
     expect(calls).toBe(0);
   });
 });

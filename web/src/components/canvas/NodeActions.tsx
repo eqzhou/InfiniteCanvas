@@ -28,7 +28,10 @@ import { ImageToolsDialog, type ImageToolMode } from "@/components/canvas/ImageT
 import { splitImageByGuides } from "@/lib/image-advanced";
 import { ImageTransformRegistry } from "@/services/image-transform/registry";
 import { createLocalCanvasTransformProvider } from "@/services/image-transform/providers/local-canvas";
-import { createOpenAIImageTransformProvider } from "@/services/image-transform/providers/openai-images";
+import {
+  createOpenAIImageTransformProvider,
+  supportsOpenAIImageTransforms,
+} from "@/services/image-transform/providers/openai-images";
 import { createRectEditMaskBlob } from "@/services/image-transform/mask-raster";
 import { resolveNodeImageTransformSource } from "@/services/image-transform/source";
 import { createTransformLineage } from "@/services/image-transform/lineage";
@@ -163,7 +166,11 @@ export function NodeActions({
 	};
   const transformRegistry = useMemo(() => {
     const providers = [createLocalCanvasTransformProvider()];
-    if (channel && !isServerManagedChannel(channel, "image") && getProvider(channel, "image").apiKey && getProvider(channel, "image").baseUrl) {
+    // Only register the cloud provider when the channel protocol actually
+    // serves the OpenAI edit/upscale endpoints; otherwise the action would be
+    // offered and then fail at request time.
+    if (channel && !isServerManagedChannel(channel, "image") && supportsOpenAIImageTransforms(channel) &&
+      getProvider(channel, "image").apiKey && getProvider(channel, "image").baseUrl) {
       providers.push(createOpenAIImageTransformProvider(channel));
     }
     return new ImageTransformRegistry(providers);

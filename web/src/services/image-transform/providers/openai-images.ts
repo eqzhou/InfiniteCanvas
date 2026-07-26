@@ -20,6 +20,17 @@ interface ProviderOptions {
   fetch?: typeof fetch;
 }
 
+/**
+ * `/images/edits` and `/images/upscales` are OpenAI-compatible endpoints. Other
+ * protocols (Gemini, APIMart, KIE, Ark, Template) do not implement them, so a
+ * channel using one of those must not advertise cloud edit or upscale support:
+ * offering the action would hand the user a button that can only fail.
+ */
+export function supportsOpenAIImageTransforms(channel: AiChannel): boolean {
+  const protocol = getProvider(channel, "image").protocol;
+  return protocol === undefined || protocol === "openai";
+}
+
 function endpoint(baseUrl: string, path: string): string {
   let base: URL;
   try {
@@ -162,12 +173,23 @@ export function createOpenAIImageTransformProvider(
   options: ProviderOptions = {},
 ): ImageTransformProvider {
   const fetcher = options.fetch ?? fetch;
+  const supported = supportsOpenAIImageTransforms(channel);
+  const requireSupportedProtocol = () => {
+    if (!supported) {
+      throw new Error(
+        `当前图片渠道协议（${getProvider(channel, "image").protocol}）不提供 /images/edits 与 /images/upscales，无法进行云端局部重绘或超分。`,
+      );
+    }
+  };
   return {
     id: "openai-compatible",
     label: `${channel.name} · 云端`,
     kind: "cloud",
-    capabilities: { upscale: true, inpaint: true, mask: false },
+    // Capabilities must reflect what the protocol can actually serve so the UI
+    // disables the action instead of failing at request time.
+    capabilities: { upscale: supported, inpaint: supported, mask: false },
     async inpaint(request, context) {
+      requireSupportedProtocol();
       validateImageInput(request.image, request.width, request.height);
       validateImageInput(request.mask, request.width, request.height);
       const prompt = request.prompt.trim();
@@ -181,6 +203,7 @@ export function createOpenAIImageTransformProvider(
       return { ...result, model: getProvider(channel, "image").model };
     },
     async upscale(request, context) {
+      requireSupportedProtocol();
       validateUpscaleRequest(request);
       const progress = progressReporter(context.onProgress);
       progress(0);
