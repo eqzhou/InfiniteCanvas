@@ -261,6 +261,32 @@ describe("generateVideo provider contracts", () => {
     ]);
     expect(requests.map((r) => r.auth)).toEqual(["Bearer text-key", "Bearer image-key", "Bearer audio-key"]);
   });
+
+  test("forwards audio speed and instructions and rejects out-of-range speed", async () => {
+    const bodies: string[] = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      bodies.push(String(init?.body ?? ""));
+      return new Response(new Blob(["audio"], { type: "audio/mpeg" }));
+    }) as typeof fetch;
+    const c = channel("https://audio.example/v1");
+
+    await generateSpeech({ channel: c, model: "audio", input: "hello", voice: "verse", format: "wav", speed: 1.5, instructions: "轻快地朗读" });
+    expect(JSON.parse(bodies[0]!)).toMatchObject({
+      model: "audio", input: "hello", voice: "verse", response_format: "wav",
+      speed: 1.5, instructions: "轻快地朗读",
+    });
+
+    // Omitted optional parameters must not appear at all, so provider defaults win.
+    await generateSpeech({ channel: c, model: "audio", input: "hello" });
+    const plain = JSON.parse(bodies[1]!) as Record<string, unknown>;
+    expect("speed" in plain).toBe(false);
+    expect("instructions" in plain).toBe(false);
+
+    for (const speed of [0.2, 4.5, Number.NaN]) {
+      await expect(generateSpeech({ channel: c, model: "audio", input: "hello", speed }))
+        .rejects.toThrow();
+    }
+  });
   test("recognizes the standard Ark /api/v3 endpoint and parses nested task output", async () => {
     const requests: Array<{ url: string; body?: string }> = [];
     globalThis.fetch = mock(async (input, init) => {

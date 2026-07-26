@@ -4805,3 +4805,48 @@ test("touch pointer gestures update the canvas viewport without horizontal overf
   }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
 });
+
+test("all four node corners resize while the opposite corner stays anchored", async ({ page }) => {
+  await openFreshBoard(page);
+  await importSingleImageProject(page, "corner-resize");
+  const node = page.locator('[data-node-type="image"]');
+  await node.locator("[data-node-header]").click();
+
+  const before = (await node.boundingBox())!;
+  // Dragging the north-west corner must keep the south-east corner in place.
+  const handle = node.locator('[data-resize-corner="nw"]');
+  await handle.hover({ force: true });
+  await page.mouse.down();
+  await page.mouse.move(before.x - 40, before.y - 30, { steps: 8 });
+  await page.mouse.up();
+
+  const after = (await node.boundingBox())!;
+  expect(after.width).toBeGreaterThan(before.width);
+  expect(after.x + after.width).toBeCloseTo(before.x + before.width, 0);
+  expect(after.y + after.height).toBeCloseTo(before.y + before.height, 0);
+
+  for (const corner of ["ne", "sw", "se"]) {
+    await expect(node.locator(`[data-resize-corner="${corner}"]`)).toHaveCount(1);
+  }
+});
+
+test("node info dialog shows a readable summary and the raw document", async ({ page }) => {
+  await openFreshBoard(page);
+  await importSingleImageProject(page, "node-info");
+  const node = page.locator('[data-node-type="image"]');
+  await node.locator("[data-node-header]").click();
+  await page.getByTitle("节点信息").click();
+
+  const dialog = page.getByRole("dialog", { name: "节点信息" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("类型", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("图片", { exact: true }).first()).toBeVisible();
+
+  await dialog.getByRole("button", { name: "查看 JSON" }).click();
+  await expect(dialog.getByText('"metadata"', { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "基础信息" }).click();
+  await expect(dialog.getByText("尺寸", { exact: true })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});

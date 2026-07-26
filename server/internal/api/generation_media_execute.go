@@ -81,6 +81,10 @@ type audioGenerationRequest struct {
 	Prompt  string
 	Voice   string
 	Format  string
+	// Speed is the OpenAI-compatible playback rate. Zero means "unset" and is
+	// omitted from the provider request so the provider default applies.
+	Speed        float64
+	Instructions string
 }
 
 type videoExecutor interface {
@@ -129,6 +133,9 @@ type createAudioJobRequest struct {
 type createAudioJobParameters struct {
 	Voice  string `json:"voice"`
 	Format string `json:"format"`
+	// Speed 0 means unset; the provider default applies.
+	Speed        float64 `json:"speed,omitempty"`
+	Instructions string  `json:"instructions,omitempty"`
 }
 
 type persistedMediaJobParameters struct {
@@ -150,6 +157,8 @@ type persistedMediaJobParameters struct {
 	ReferenceStorageKeys []string                   `json:"referenceStorageKeys,omitempty"`
 	Voice                string                     `json:"voice,omitempty"`
 	Format               string                     `json:"format,omitempty"`
+	Speed                float64                    `json:"speed,omitempty"`
+	Instructions         string                     `json:"instructions,omitempty"`
 	SharedChannel        *generationChannelSnapshot `json:"sharedChannel,omitempty"`
 }
 
@@ -254,6 +263,7 @@ func (s *Server) createServerAudioJob(w http.ResponseWriter, r *http.Request) {
 	parameters, _ := json.Marshal(persistedMediaJobParameters{
 		Executor: serverExecutorMarker, RequestHash: hash,
 		Voice: input.Parameters.Voice, Format: input.Parameters.Format,
+		Speed: input.Parameters.Speed, Instructions: input.Parameters.Instructions,
 		SharedChannel: sharedSnapshot,
 	})
 	s.createServerMediaJob(w, r, store.GenerationJob{
@@ -734,7 +744,11 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 		}
 		request.Checkpoint = result.UpstreamTask
 	} else {
-		request.Audio = audioGenerationRequest{BaseURL: provider.BaseURL, APIKey: apiKey, Model: model, Prompt: prompt, Voice: parameters.Voice, Format: parameters.Format}
+		request.Audio = audioGenerationRequest{
+			BaseURL: provider.BaseURL, APIKey: apiKey, Model: model, Prompt: prompt,
+			Voice: parameters.Voice, Format: parameters.Format,
+			Speed: parameters.Speed, Instructions: parameters.Instructions,
+		}
 	}
 	return request, nil
 }

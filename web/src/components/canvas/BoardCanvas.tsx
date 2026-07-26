@@ -39,6 +39,7 @@ import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { findOpenNodePosition } from "@/lib/node-placement";
 import { useCanvasGenerationRecovery } from "@/components/canvas/useCanvasGenerationRecovery";
 import { OPENBOARD_ASSET_DRAG_MIME, readOpenBoardAssetDrag } from "@/lib/asset-drag";
+import { resizeFromCorner, type NodeRect, type NodeResizeCorner } from "@/lib/node-resize";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -48,8 +49,8 @@ type DragMode =
       kind: "resize";
       id: string;
       start: Point;
-      originW: number;
-      originH: number;
+      origin: NodeRect;
+      corner: NodeResizeCorner;
       free: boolean;
     }
   | { kind: "connect"; from: string; current: Point };
@@ -489,17 +490,13 @@ export function BoardCanvas() {
     } else if (drag.kind === "resize") {
       const worldStart = screenToWorld(drag.start, project.viewport);
       const worldNow = screenToWorld(p, project.viewport);
-      let w = drag.originW + (worldNow.x - worldStart.x);
-      let h = drag.originH + (worldNow.y - worldStart.y);
-      if (!drag.free) {
-        const ratio = drag.originW / Math.max(1, drag.originH);
-        if (Math.abs(worldNow.x - worldStart.x) > Math.abs(worldNow.y - worldStart.y)) {
-          h = w / ratio;
-        } else {
-          w = h * ratio;
-        }
-      }
-      resizeNode(drag.id, w, h);
+      const next = resizeFromCorner(
+        drag.origin,
+        drag.corner,
+        { x: worldNow.x - worldStart.x, y: worldNow.y - worldStart.y },
+        drag.free,
+      );
+      resizeNode(drag.id, next.width, next.height, { x: next.x, y: next.y });
     } else if (drag.kind === "connect") {
       setDrag({ ...drag, current: p });
     }
@@ -888,7 +885,7 @@ export function BoardCanvas() {
                 captureHistory();
                 setDrag({ kind: "node", ids, rootIds: selectedForDrag, start: p, origins });
               }}
-              onResizeStart={(client, free) => {
+              onResizeStart={(client, free, corner) => {
                 if ("pointerId" in client && typeof client.pointerId === "number") {
                   captureCanvasPointer(client.pointerId);
                 }
@@ -898,8 +895,8 @@ export function BoardCanvas() {
                   kind: "resize",
                   id: node.id,
                   start: p,
-                  originW: node.width,
-                  originH: node.height,
+                  origin: { x: node.position.x, y: node.position.y, width: node.width, height: node.height },
+                  corner,
                   free,
                 });
               }}

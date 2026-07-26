@@ -17,6 +17,7 @@ import type { AiProviderKind } from "@/types/board";
 import type { AiTemplateConfig } from "@/types/board";
 import { validateProviderTemplate } from "@/lib/provider-template";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
+import { resolveSelectableModels } from "@/lib/model-catalog";
 import { createDefaultObjectStorage, normalizeObjectStorage, validateObjectStorageConfig } from "@/lib/object-storage";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
@@ -79,7 +80,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     };
   }, [open]);
 
-  const toggleSitePolicy = async (key: keyof SitePolicy) => {
+  // Only the boolean switches are toggleable; model-catalog fields are edited
+  // through their own control and must not be flipped by this helper.
+  const toggleSitePolicy = async (key: "allowRegister" | "allowCustomChannel" | "allowCloudChannel") => {
     if (!canManageSitePolicy || sitePolicyBusy) return;
     const next = { ...sitePolicy, [key]: !sitePolicy[key] };
     setSitePolicyBusy(true);
@@ -89,6 +92,19 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setSitePolicy(saved);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "站点策略保存失败");
+    } finally {
+      setSitePolicyBusy(false);
+    }
+  };
+
+  const saveModelCatalog = async (patch: Partial<SitePolicy>) => {
+    if (!canManageSitePolicy || sitePolicyBusy) return;
+    setSitePolicyBusy(true);
+    setError(null);
+    try {
+      setSitePolicy(await updateSitePolicy({ ...sitePolicy, ...patch }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "模型目录保存失败");
     } finally {
       setSitePolicyBusy(false);
     }
@@ -232,7 +248,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   key={kind}
                   kind={kind}
                   provider={getProvider(channel, kind)}
-                  models={models[kind] ?? []}
+                  models={resolveSelectableModels(sitePolicy, models[kind] ?? [])}
                   busy={busyKind === kind}
                   disabled={busyKind !== null}
                   onPull={() => void pullModels(kind)}
@@ -325,6 +341,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               ) : null}
               {!sitePolicy.allowCloudChannel ? (
                 <p className="mt-2 text-xs text-[var(--ob-muted)]">后端代理/云端生成已关闭；客户端直连渠道不受此开关影响。</p>
+              ) : null}
+              {sitePolicyLoaded ? (
+                <ModelCatalogEditor
+                  policy={sitePolicy}
+                  busy={sitePolicyBusy}
+                  onSave={(patch) => void saveModelCatalog(patch)}
+                />
               ) : null}
             </section>
           ) : null}
@@ -644,6 +667,83 @@ function SectionTitle({ title }: { title: string }) {
       <span className="h-px w-3 bg-[color-mix(in_srgb,var(--ob-accent)_55%,transparent)]" aria-hidden />
       {title}
     </h3>
+  );
+}
+
+/**
+ * Tenant model governance. The allow list narrows what ordinary users may pick;
+ * leaving it empty means "no restriction" so a misconfiguration cannot strand
+ * users with zero models. Defaults must name a model inside a non-empty list,
+ * which the server enforces independently.
+ */
+function ModelCatalogEditor({
+  policy,
+  busy,
+  onSave,
+}: {
+  policy: SitePolicy;
+  busy: boolean;
+  onSave: (patch: Partial<SitePolicy>) => void;
+}) {
+  const [draft, setDraft] = useState(() => (policy.availableModels ?? []).join("\n"));
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (!dirty) setDraft((policy.availableModels ?? []).join("\n"));
+  }, [policy.availableModels, dirty]);
+
+  const defaults: Array<{ key: keyof SitePolicy; label: string }> = [
+    { key: "defaultTextModel", label: "默认文本模型" },
+    { key: "defaultImageModel", label: "默认图片模型" },
+    { key: "defaultVideoModel", label: "默认视频模型" },
+    { key: "defaultAudioModel", label: "默认音频模型" },
+  ];
+  const allowList = (policy.availableModels ?? []);
+
+  return (
+    <div className="mt-4 rounded-xl border border-[var(--ob-line)] p-3">
+      <p className="mb-2 text-xs text-[var(--ob-muted)]">
+        可用模型白名单（每行一个）。留空表示不限制，前台仍按已启用渠道的模型展示。
+      </p>
+      <textarea
+        aria-label="可用模型白名单"
+        className="ob-field min-h-20 w-full resize-y font-mono text-xs"
+        placeholder="gpt-image-2&#10;gpt-5.5"
+        value={draft}
+        disabled={busy}
+        onChange={(event) => { setDraft(event.target.value); setDirty(true); }}
+      />
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {defaults.map(({ key, label }) => (
+          <label key={key} className="grid gap-1">
+            <span className="text-xs text-[var(--ob-muted)]">{label}</span>
+            <select
+              className="ob-field"
+              aria-label={label}
+              value={(policy[key] as string | undefined) ?? ""}
+              disabled={busy}
+              onChange={(event) => onSave({ [key]: event.target.value } as Partial<SitePolicy>)}
+            >
+              <option value="">未设置（按类型自动选择）</option>
+              {allowList.map((model) => <option key={model} value={model}>{model}</option>)}
+            </select>
+          </label>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="ob-btn mt-2"
+        disabled={busy || !dirty}
+        onClick={() => {
+          const availableModels = [...new Set(
+            draft.split("\n").map((line) => line.trim()).filter(Boolean),
+          )];
+          setDirty(false);
+          onSave({ availableModels });
+        }}
+      >
+        保存模型白名单
+      </button>
+    </div>
   );
 }
 

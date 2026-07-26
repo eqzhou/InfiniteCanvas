@@ -58,6 +58,7 @@ import {
 } from "@/services/storage";
 import { TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
+import type { GenerationDefaults } from "@/lib/generation-defaults";
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
@@ -160,7 +161,7 @@ type BoardState = {
   toggleSelect: (id: string, additive?: boolean) => void;
   selectAll: () => void;
   moveNodes: (ids: string[], dx: number, dy: number) => void;
-  resizeNode: (id: string, width: number, height: number) => void;
+  resizeNode: (id: string, width: number, height: number, position?: Point) => void;
   connect: (from: string, to: string) => void;
   setConnectingFrom: (id: string | null) => void;
   deleteEdge: (id: string) => void;
@@ -246,6 +247,36 @@ export async function saveWorkspaceReplacementConfig(save: () => Promise<void>):
 		if (error instanceof TenantConfigAdminRequiredError) return false;
 		throw error;
 	}
+}
+
+/**
+ * Seeds a freshly created video/audio node from the tenant generation defaults.
+ * Values the caller already supplied always win, and the input node is never
+ * mutated in place.
+ */
+export function applyGenerationDefaultsToNode(
+  node: BoardNode,
+  defaults: GenerationDefaults | undefined,
+): BoardNode {
+  if (!defaults) return node;
+  if (node.type !== "video" && node.type !== "audio") return node;
+  const seeded: Record<string, unknown> = node.type === "video"
+    ? {
+        videoRatio: defaults.videoRatio,
+        resolution: defaults.videoResolution,
+        seconds: defaults.videoSeconds,
+        generateAudio: defaults.videoGenerateAudio,
+        watermark: defaults.videoWatermark,
+      }
+    : { voice: defaults.audioVoice };
+  const metadata = { ...node.metadata } as Record<string, unknown>;
+  let changed = false;
+  for (const [key, value] of Object.entries(seeded)) {
+    if (metadata[key] !== undefined) continue;
+    metadata[key] = value;
+    changed = true;
+  }
+  return changed ? { ...node, metadata: metadata as BoardNode["metadata"] } : node;
 }
 
 export const useBoardStore = create<BoardState>((set, get) => ({
@@ -472,14 +503,16 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   addNode: (type, position, partial) => {
-    const node = createNode(type, position, partial);
+    const node = applyGenerationDefaultsToNode(
+      createNode(type, position, partial), get().config.generationDefaults);
     get().updateActive((p) => ({ ...p, nodes: [...p.nodes, node] }));
     set({ selectedIds: [node.id] });
     return node.id;
   },
 
   addConnectedNode: (from, type, position, partial) => {
-    const node = createNode(type, position, partial);
+    const node = applyGenerationDefaultsToNode(
+      createNode(type, position, partial), get().config.generationDefaults);
     let added = false;
     get().updateActive((project) => {
       if (!project.nodes.some((candidate) => candidate.id === from)) return project;
@@ -775,13 +808,20 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     );
   },
 
-  resizeNode: (id, width, height) => {
+  resizeNode: (id, width, height, position) => {
     get().updateActive(
       (p) => ({
         ...p,
         nodes: p.nodes.map((n) =>
           n.id === id
-            ? { ...n, width: Math.max(120, width), height: Math.max(80, height) }
+            ? {
+                ...n,
+                width: Math.max(120, width),
+                height: Math.max(80, height),
+                // Corner drags anchor the opposite corner, so the position moves
+                // with the size. Omitted position keeps the node in place.
+                ...(position ? { position: { ...position } } : {}),
+              }
             : n,
         ),
       }),

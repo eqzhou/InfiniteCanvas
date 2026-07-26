@@ -9,6 +9,7 @@ import { PluginNodeFrame } from "@/components/canvas/PluginNodeFrame";
 import { ImagePreviewDialog } from "@/components/canvas/ImagePreviewDialog";
 import { createDefaultDirectorScene, getDirectorPopulation } from "@/lib/director-scene";
 import { createNode } from "@/lib/defaults";
+import { NODE_RESIZE_CORNERS, type NodeResizeCorner } from "@/lib/node-resize";
 import { findPluginManifest } from "@/plugins/builtins";
 import { deleteBlob, uploadMedia } from "@/services/storage";
 import {
@@ -48,7 +49,11 @@ type Props = {
   groupHighlighted?: boolean;
   onSelect: (additive: boolean) => void;
   onDragStart: (e: { clientX: number; clientY: number; pointerId?: number }) => void;
-  onResizeStart: (e: { clientX: number; clientY: number; pointerId?: number }, free: boolean) => void;
+  onResizeStart: (
+    e: { clientX: number; clientY: number; pointerId?: number },
+    free: boolean,
+    corner: NodeResizeCorner,
+  ) => void;
   onStartConnect: (e?: { pointerId?: number }) => void;
   onCompleteConnect: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -873,13 +878,29 @@ export function BoardNodeView({
         </Suspense>
       ) : null}
 
-      <div
-        className="absolute bottom-0 right-0 h-3.5 w-3.5 cursor-se-resize bg-[linear-gradient(135deg,transparent_50%,var(--ob-muted)_50%)]"
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          onResizeStart(e, Boolean(node.metadata.freeResize) || node.type !== "image");
-        }}
-      />
+      {NODE_RESIZE_CORNERS.map((corner) => (
+        <div
+          key={corner}
+          role="presentation"
+          data-resize-corner={corner}
+          className={cn(
+            "absolute h-3.5 w-3.5",
+            corner === "nw" ? "left-0 top-0 cursor-nw-resize" :
+            corner === "ne" ? "right-0 top-0 cursor-ne-resize" :
+            corner === "sw" ? "bottom-0 left-0 cursor-sw-resize" :
+            "bottom-0 right-0 cursor-se-resize",
+            // Only the south-east corner keeps the classic visual notch so the
+            // node chrome stays quiet until the pointer is over a corner.
+            corner === "se"
+              ? "bg-[linear-gradient(135deg,transparent_50%,var(--ob-muted)_50%)]"
+              : "opacity-0 group-hover/node:opacity-100",
+          )}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onResizeStart(e, Boolean(node.metadata.freeResize) || node.type !== "image", corner);
+          }}
+        />
+      ))}
     </div>
   );
 }

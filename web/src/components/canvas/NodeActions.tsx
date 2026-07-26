@@ -43,6 +43,8 @@ import {
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
 import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
+import { audioJobParameters, audioSpeechOptions } from "@/lib/audio-generation";
+import { NodeInfoDialog } from "@/components/canvas/NodeInfoDialog";
 import { isServerManagedChannel, mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
 import {
   normalizeImageToolbarPreferences,
@@ -86,6 +88,7 @@ export function NodeActions({
   const [angleOpen, setAngleOpen] = useState(false);
   const [imageTool, setImageTool] = useState<ImageToolMode | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [assetSaveState, setAssetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const cameraAnchorRef = useRef<HTMLSpanElement>(null);
 	const sharedChannels = useSharedChannels();
@@ -954,23 +957,7 @@ export function NodeActions({
     }
   };
 
-  const inspect = () => {
-    alert(
-      JSON.stringify(
-        {
-          id: node.id,
-          type: node.type,
-          title: node.title,
-          size: { width: node.width, height: node.height },
-          position: node.position,
-          metadata: node.metadata,
-        },
-        null,
-        2,
-      ),
-    );
-  };
-
+  const inspect = () => setInfoOpen(true);
 
   const generateOnAudio = async () => {
     if (!channel || !getProvider(channel, "audio").apiKey) {
@@ -989,7 +976,7 @@ export function NodeActions({
 				prompt,
 				providerId: channel.id,
 				model: node.metadata.model || getProvider(channel, "audio").model,
-				parameters: { voice: node.metadata.voice || "alloy", format: "mp3" },
+				parameters: audioJobParameters(node.metadata.voice, config.generationDefaults),
 			});
 			if (!node.metadata.content) {
 				updateNode(node.id, { metadata: { status: "loading", prompt, generationJobId: job.id } });
@@ -1007,7 +994,7 @@ export function NodeActions({
         channel,
         model: node.metadata.model || getProvider(channel, "audio").model,
         input: prompt,
-        voice: node.metadata.voice || "alloy",
+        ...audioSpeechOptions(node.metadata.voice, config.generationDefaults),
       });
       const uploaded = await uploadMedia(speech.blob, "media");
       if (!node.metadata.content) {
@@ -1200,7 +1187,7 @@ return (
             {assetSaveState === "saved" ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
           </IconBtn>
         )}
-        <IconBtn title="查看 JSON" onClick={inspect}>
+        <IconBtn title="节点信息" onClick={inspect}>
           <Info size={14} />
         </IconBtn>
       </div>
@@ -1213,6 +1200,8 @@ return (
           onChange={(cameraPrompt) => updateNode(node.id, { metadata: { cameraPrompt } })}
         />
       ) : null}
+
+      <NodeInfoDialog open={infoOpen} node={node} onClose={() => setInfoOpen(false)} />
 
       {node.type === "image" ? (
         <CropDialog

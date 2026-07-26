@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
+import { audioJobParameters, audioSpeechOptions } from "@/lib/audio-generation";
 import {
   generateImages,
   generateSpeech,
@@ -281,7 +282,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
             prompt: rawPrompt,
             providerId: channel.id,
             model: node.metadata.model || audioProvider.model,
-            parameters: { voice: node.metadata.voice || "alloy", format: "mp3" },
+            parameters: audioJobParameters(node.metadata.voice, config.generationDefaults),
           });
           try {
             if (!node.metadata.content) {
@@ -303,7 +304,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           channel,
           model: node.metadata.model || getProvider(channel, "audio").model,
           input: text.trim(),
-          voice: node.metadata.voice || "alloy",
+          ...audioSpeechOptions(node.metadata.voice, config.generationDefaults),
         });
         const uploaded = await uploadMedia(speech.blob, "media");
         const metadata = {

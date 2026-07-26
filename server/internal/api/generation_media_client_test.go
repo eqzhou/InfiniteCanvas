@@ -254,6 +254,53 @@ func TestHTTPAudioExecutorSpeechRequestAndBoundedResult(t *testing.T) {
 	}
 }
 
+func TestHTTPAudioExecutorForwardsSpeedAndInstructions(t *testing.T) {
+	var body map[string]any
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body = nil
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0})
+	}))
+	defer upstream.Close()
+	executor := newHTTPAudioExecutor()
+	executor.client = upstream.Client()
+
+	if _, err := executor.Generate(context.Background(), audioGenerationRequest{
+		BaseURL: upstream.URL + "/v1", APIKey: "sk-audio", Model: "tts", Prompt: "hello",
+		Voice: "verse", Format: "wav", Speed: 1.5, Instructions: "read briskly",
+	}); err != nil {
+		t.Fatalf("speech with speed/instructions failed: %v", err)
+	}
+	if body["speed"] != 1.5 || body["instructions"] != "read briskly" {
+		t.Fatalf("body = %#v", body)
+	}
+
+	// Unset optional fields must be omitted so provider defaults apply.
+	if _, err := executor.Generate(context.Background(), audioGenerationRequest{
+		BaseURL: upstream.URL + "/v1", APIKey: "sk-audio", Model: "tts", Prompt: "hello",
+		Voice: "alloy", Format: "mp3",
+	}); err != nil {
+		t.Fatalf("plain speech failed: %v", err)
+	}
+	if _, ok := body["speed"]; ok {
+		t.Fatalf("speed must be omitted when unset: %#v", body)
+	}
+	if _, ok := body["instructions"]; ok {
+		t.Fatalf("instructions must be omitted when unset: %#v", body)
+	}
+
+	// Out-of-range speed must fail before any provider request.
+	for _, speed := range []float64{0.2, 4.5} {
+		if _, err := executor.Generate(context.Background(), audioGenerationRequest{
+			BaseURL: upstream.URL + "/v1", APIKey: "sk-audio", Model: "tts", Prompt: "hello",
+			Voice: "alloy", Format: "mp3", Speed: speed,
+		}); err == nil {
+			t.Fatalf("speed %v accepted", speed)
+		}
+	}
+}
+
 func TestMediaExecutorsRejectUnsafeURLsAndProviderRedirects(t *testing.T) {
 	video := newHTTPVideoExecutor()
 	video.pollInterval = 0

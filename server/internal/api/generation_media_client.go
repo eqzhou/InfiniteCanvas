@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"path"
@@ -403,9 +404,20 @@ func (e *httpAudioExecutor) Generate(ctx context.Context, request audioGeneratio
 	if err != nil {
 		return generatedMedia{}, err
 	}
-	body, _ := json.Marshal(map[string]any{
+	if request.Speed != 0 && (math.IsNaN(request.Speed) || request.Speed < 0.25 || request.Speed > 4) {
+		return generatedMedia{}, errors.New("audio speed must be between 0.25 and 4.0")
+	}
+	payload := map[string]any{
 		"model": request.Model, "input": request.Prompt, "voice": request.Voice, "response_format": request.Format,
-	})
+	}
+	// Omit unset optional fields so the provider default applies.
+	if request.Speed != 0 {
+		payload["speed"] = request.Speed
+	}
+	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
+		payload["instructions"] = instructions
+	}
+	body, _ := json.Marshal(payload)
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return generatedMedia{}, err

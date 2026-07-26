@@ -397,6 +397,7 @@ export type AppConfig = {
   canvasPanelCollapsed?: boolean;
   canvasPanelTab?: "projects" | "elements" | "assets" | "prompts";
   imageToolbar?: import("@/lib/image-toolbar-preferences").ImageToolbarPreferences;
+  generationDefaults?: import("@/lib/generation-defaults").GenerationDefaults;
 };
 
 export type ClipboardPayload = {

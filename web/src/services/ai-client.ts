@@ -797,6 +797,10 @@ type SpeechGenerationOptions = {
   input: string;
   voice?: string;
   format?: string;
+  /** OpenAI-compatible playback rate. Omitted entirely when not set. */
+  speed?: number;
+  /** Optional delivery instruction for models that accept one. */
+  instructions?: string;
 };
 
 export async function generateSpeech(options: SpeechGenerationOptions): Promise<{ url: string; mimeType: string; blob: Blob }> {
@@ -822,10 +826,15 @@ async function generateSpeechRequest(options: SpeechGenerationOptions): Promise<
     input,
     voice = "alloy",
     format = "mp3",
+    speed,
+    instructions,
   } = options;
   const provider = getProvider(channel, "audio");
   if (provider.protocol !== "openai") {
     throw new Error(`${provider.protocol} does not support audio generation`);
+  }
+  if (speed !== undefined && (!Number.isFinite(speed) || speed < 0.25 || speed > 4)) {
+    throw new Error("语速需要在 0.25 到 4.0 之间");
   }
 
   const res = await authFetch(channel, "/audio/speech", {
@@ -835,6 +844,9 @@ async function generateSpeechRequest(options: SpeechGenerationOptions): Promise<
       input,
       voice,
       response_format: format,
+      // Omit optional fields entirely so provider defaults apply.
+      ...(speed === undefined ? {} : { speed }),
+      ...(instructions?.trim() ? { instructions: instructions.trim() } : {}),
     }),
   }, "audio");
   const blob = await res.blob();

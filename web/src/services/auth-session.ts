@@ -1,3 +1,5 @@
+import { normalizeModelCatalog } from "@/lib/model-catalog";
+
 export type AuthUser = {
   id: string;
   tenantId: string;
@@ -137,6 +139,13 @@ export type SitePolicy = {
   allowRegister: boolean;
   allowCustomChannel: boolean;
   allowCloudChannel: boolean;
+  /** Tenant model governance. Empty availableModels means "no restriction". */
+  availableModels?: string[];
+  defaultModel?: string;
+  defaultTextModel?: string;
+  defaultImageModel?: string;
+  defaultVideoModel?: string;
+  defaultAudioModel?: string;
 };
 
 export const DEFAULT_SITE_POLICY: SitePolicy = {
@@ -154,6 +163,7 @@ export async function getSitePolicy(): Promise<SitePolicy> {
       allowRegister: data.allowRegister !== false,
       allowCustomChannel: data.allowCustomChannel !== false,
       allowCloudChannel: data.allowCloudChannel !== false,
+      ...normalizeModelCatalog(data),
     };
   } catch {
     return { ...DEFAULT_SITE_POLICY };

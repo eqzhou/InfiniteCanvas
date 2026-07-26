@@ -20,6 +20,61 @@ describe("application configuration", () => {
     expect(applySystemPrompt("", "replace the sky")).toBe("replace the sky");
   });
 
+  test("bounds persisted generation defaults for video and audio", () => {
+    const base = createDefaultConfig();
+    const normalized = normalizeAppConfig({
+      ...base,
+      generationDefaults: {
+        videoRatio: "21:9",
+        videoResolution: "1080p",
+        videoSeconds: 9,
+        videoGenerateAudio: true,
+        videoWatermark: true,
+        audioVoice: "verse",
+        audioFormat: "wav",
+        audioSpeed: 1.5,
+        audioInstructions: "  轻快地朗读  ",
+      },
+    } as unknown as ReturnType<typeof createDefaultConfig>);
+    expect(normalized.generationDefaults).toMatchObject({
+      videoRatio: "21:9",
+      videoResolution: "1080p",
+      videoSeconds: 9,
+      videoGenerateAudio: true,
+      videoWatermark: true,
+      audioVoice: "verse",
+      audioFormat: "wav",
+      audioSpeed: 1.5,
+      audioInstructions: "轻快地朗读",
+    });
+
+    // Hostile or out-of-range values fall back to safe defaults.
+    const hostile = normalizeAppConfig({
+      ...base,
+      generationDefaults: {
+        videoRatio: "9999:1",
+        videoResolution: "16k",
+        videoSeconds: 900,
+        audioFormat: "exe",
+        audioSpeed: 99,
+        audioVoice: "x".repeat(500),
+        audioInstructions: 42,
+      },
+    } as unknown as ReturnType<typeof createDefaultConfig>);
+    expect(hostile.generationDefaults).toEqual({
+      videoRatio: "16:9",
+      videoResolution: "720p",
+      videoSeconds: 5,
+      videoGenerateAudio: false,
+      videoWatermark: false,
+      audioVoice: "alloy",
+      audioFormat: "mp3",
+      audioSpeed: 0,
+      audioInstructions: "",
+    });
+    expect(normalizeAppConfig(base).generationDefaults?.videoRatio).toBe("16:9");
+  });
+
   test("bounds persisted canvas panel preferences", () => {
     const base = createDefaultConfig();
     expect(normalizeAppConfig({

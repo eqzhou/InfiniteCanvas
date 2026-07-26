@@ -58,6 +58,71 @@ func TestSitePolicyGetDefaultsAndAdminUpdate(t *testing.T) {
 	}
 }
 
+func TestSitePolicyModelCatalogIsAdminOnlyAndBounded(t *testing.T) {
+	storeMem := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	defer srv.Close()
+	r := chi.NewRouter()
+	MountServer(r, srv)
+
+	updated := request(t, r, http.MethodPut, "/api/site-policy", []byte(`{
+		"allowRegister": true,
+		"allowCustomChannel": true,
+		"allowCloudChannel": true,
+		"availableModels": ["gpt-image-2", "gpt-image-2", "  ", "gpt-5.5"],
+		"defaultImageModel": "gpt-image-2",
+		"defaultTextModel": "gpt-5.5"
+	}`))
+	if updated.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	var after SitePolicy
+	if err := json.Unmarshal(updated.Body.Bytes(), &after); err != nil {
+		t.Fatalf("decode put: %v", err)
+	}
+	// Duplicates and blanks are dropped; order is preserved.
+	if len(after.AvailableModels) != 2 || after.AvailableModels[0] != "gpt-image-2" || after.AvailableModels[1] != "gpt-5.5" {
+		t.Fatalf("availableModels = %#v", after.AvailableModels)
+	}
+	if after.DefaultImageModel != "gpt-image-2" || after.DefaultTextModel != "gpt-5.5" {
+		t.Fatalf("defaults = %+v", after)
+	}
+
+	// The catalog is readable by ordinary users so the picker can narrow itself.
+	got := request(t, r, http.MethodGet, "/api/site-policy", nil)
+	var readback SitePolicy
+	if err := json.Unmarshal(got.Body.Bytes(), &readback); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if len(readback.AvailableModels) != 2 {
+		t.Fatalf("readback = %#v", readback.AvailableModels)
+	}
+
+	// A default naming a model outside the allow list is rejected before storage.
+	bad := request(t, r, http.MethodPut, "/api/site-policy", []byte(`{
+		"allowRegister": true, "allowCustomChannel": true, "allowCloudChannel": true,
+		"availableModels": ["only-this"],
+		"defaultImageModel": "not-in-list"
+	}`))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("out-of-list default status=%d body=%s", bad.Code, bad.Body.String())
+	}
+
+	// Oversized catalogs are rejected rather than silently truncated.
+	models := make([]string, 0, maxSitePolicyModels+1)
+	for i := range maxSitePolicyModels + 1 {
+		models = append(models, "m"+string(rune('a'+i%26))+string(rune('a'+i/26)))
+	}
+	encoded, _ := json.Marshal(map[string]any{
+		"allowRegister": true, "allowCustomChannel": true, "allowCloudChannel": true,
+		"availableModels": models,
+	})
+	tooMany := request(t, r, http.MethodPut, "/api/site-policy", encoded)
+	if tooMany.Code != http.StatusBadRequest {
+		t.Fatalf("oversized catalog status=%d", tooMany.Code)
+	}
+}
+
 func TestSitePolicyBlocksRegistration(t *testing.T) {
 	storeMem := newMemoryStore()
 	srv := NewServerWithStore(t.TempDir(), storeMem)

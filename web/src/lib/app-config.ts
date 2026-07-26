@@ -6,6 +6,7 @@ import {
   COMMUNITY_PROMPT_SOURCE_PRESETS,
 } from "@/services/prompt-source-presets";
 import { normalizeImageToolbarPreferences } from "@/lib/image-toolbar-preferences";
+import { normalizeGenerationDefaults } from "@/lib/generation-defaults";
 
 export const SYSTEM_PROMPT_MAX_LENGTH = 20_000;
 
@@ -72,5 +73,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
       (config as AppConfig & { promptSources?: unknown }).promptSources)),
     imageToolbar: normalizeImageToolbarPreferences(
       (config as AppConfig & { imageToolbar?: unknown }).imageToolbar),
+    generationDefaults: normalizeGenerationDefaults(
+      (config as AppConfig & { generationDefaults?: unknown }).generationDefaults),
   };
 }
