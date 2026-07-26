@@ -8,9 +8,12 @@
  *
  * UI:  http://127.0.0.1:5173/
  * API: http://127.0.0.1:8790/api/health  (Authorization: Bearer $OPENBOARD_TOKEN)
+ *
+ * `.env` outranks the shell environment on purpose: see scripts/pm2-env-core.cjs.
  */
 const fs = require("node:fs");
 const path = require("node:path");
+const { missingRequiredKeys, resolveDeploymentEnv } = require("./scripts/pm2-env-core.cjs");
 
 const root = __dirname;
 
@@ -42,31 +45,12 @@ const required = [
   "OPENBOARD_REDIS_URL",
   "OPENBOARD_MASTER_KEY",
 ];
-for (const key of required) {
-  if (!fileEnv[key] && !process.env[key]) {
-    throw new Error(`${key} is required in ${path.join(root, ".env")}`);
-  }
+const missing = missingRequiredKeys(fileEnv, process.env, required);
+if (missing.length) {
+  throw new Error(`${missing.join(", ")} is required in ${path.join(root, ".env")}`);
 }
 
-const token = process.env.OPENBOARD_TOKEN || fileEnv.OPENBOARD_TOKEN;
-const origins = process.env.OPENBOARD_ORIGINS
-  || fileEnv.OPENBOARD_ORIGINS
-  || "http://localhost:5173,http://127.0.0.1:5173";
-const dataDir = process.env.OPENBOARD_DATA
-  || fileEnv.OPENBOARD_DATA
-  || path.join(root, "server/data");
-
-const sharedEnv = {
-  ...fileEnv,
-  OPENBOARD_TOKEN: token,
-  OPENBOARD_ORIGINS: origins,
-  OPENBOARD_ADDR: process.env.OPENBOARD_ADDR || "127.0.0.1:8790",
-  OPENBOARD_DATA: dataDir,
-  OPENBOARD_API_TARGET: process.env.OPENBOARD_API_TARGET || "http://127.0.0.1:8790",
-  OPENBOARD_WEB_OUT_DIR: "dist-local",
-  OPENBOARD_AUTH_MODE: process.env.OPENBOARD_AUTH_MODE || fileEnv.OPENBOARD_AUTH_MODE || "optional",
-  FORCE_COLOR: "0",
-};
+const sharedEnv = resolveDeploymentEnv(fileEnv, process.env, { root });
 
 module.exports = {
   apps: [

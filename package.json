@@ -19,7 +19,7 @@
     "audit:release": "node scripts/check-release-readiness.mjs",
     "test:e2e:formal": "bun run --cwd web test:e2e:formal",
     "pm2:build": "bun run build:local && cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go build -trimpath -o ./bin/openboard-server ./cmd/server",
-    "pm2:start": "pm2 startOrReload ecosystem.config.cjs --update-env && pm2 save",
+    "pm2:start": "node --test scripts/pm2-env-core.test.mjs && pm2 startOrReload ecosystem.config.cjs --update-env && pm2 save",
     "pm2:stop": "pm2 stop openboard-api openboard-web",
     "pm2:logs": "pm2 logs openboard-api openboard-web --lines 50"
   }
