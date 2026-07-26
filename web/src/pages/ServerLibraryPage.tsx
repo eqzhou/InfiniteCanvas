@@ -40,6 +40,7 @@ export function ServerLibraryPage() {
   const flushAssets = useBoardStore((s) => s.flushAssets);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | LibraryAssetKind>("all");
+  const [tag, setTag] = useState("");
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<LibraryAsset[]>([]);
   const [total, setTotal] = useState(0);
@@ -59,7 +60,7 @@ export function ServerLibraryPage() {
     setLoading(true);
     setError(null);
     try {
-      const result = await listLibraryAssets({ q, kind, page, pageSize });
+      const result = await listLibraryAssets({ q, kind, tag, page, pageSize });
       setItems(result.items);
       setTotal(result.total);
     } catch (cause) {
@@ -69,7 +70,7 @@ export function ServerLibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, [q, kind, page]);
+  }, [q, kind, tag, page]);
 
   useEffect(() => {
     void load();
@@ -272,6 +273,13 @@ export function ServerLibraryPage() {
           <option value="audio">音频</option>
           <option value="text">文本</option>
         </select>
+        <input
+          className="ob-input w-auto min-w-[8rem]"
+          aria-label="按标签筛选"
+          placeholder="标签筛选"
+          value={tag}
+          onChange={(event) => { setTag(event.target.value); setPage(1); }}
+        />
         <button type="button" className="ob-btn" onClick={() => void load()}>
           刷新
         </button>

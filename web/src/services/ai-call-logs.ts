@@ -70,3 +70,19 @@ export async function deleteAICallLogs(body: {
     }),
   );
 }
+
+/** Server-declared automatic pruning policy. Retention is opt-in. */
+export type AICallLogRetention = { enabled: boolean; retentionDays: number };
+
+export async function getAICallLogRetention(): Promise<AICallLogRetention> {
+  return readJSON<AICallLogRetention>(await authFetch("ai-call-logs/retention"));
+}
+
+export async function putAICallLogRetention(policy: AICallLogRetention): Promise<AICallLogRetention> {
+  return readJSON<AICallLogRetention>(
+    await authFetch("ai-call-logs/retention", {
+      method: "PUT",
+      body: JSON.stringify(policy),
+    }),
+  );
+}

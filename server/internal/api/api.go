@@ -50,6 +50,8 @@ type Server struct {
 	audioExecutor           audioExecutor
 	promptCatalogFetcher    promptCatalogFetchFunc
 	promptSchedulerOnce     sync.Once
+	logRetentionOnce        sync.Once
+	logRetentionInterval    time.Duration
 	promptSchedulerWG       sync.WaitGroup
 	promptSchedulerRoot     context.Context
 	stopPromptScheduler     context.CancelFunc
@@ -144,6 +146,8 @@ func Mount(r chi.Router, dataDir string) {
 		r.Get("/ai-call-logs", s.listAICallLogs)
 		r.Get("/ai-call-logs/{id}", s.getAICallLog)
 		r.Post("/ai-call-logs/delete", s.deleteAICallLogs)
+		r.Get("/ai-call-logs/retention", s.getAICallLogRetention)
+		r.Put("/ai-call-logs/retention", s.putAICallLogRetention)
 		r.Get("/site-policy", s.getSitePolicy)
 		r.Put("/site-policy", s.putSitePolicy)
 		r.Get("/auth/oauth/linuxdo/start", s.linuxDoOAuthStart)
@@ -306,6 +310,7 @@ func randomGenerationOwner() string {
 
 func MountServer(r chi.Router, s *Server) {
 	s.startPromptCatalogScheduler()
+	s.startAICallLogRetentionScheduler()
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.withSession)
 		r.Use(s.requireUserWhenNeeded)
@@ -378,6 +383,8 @@ func MountServer(r chi.Router, s *Server) {
 		r.Get("/ai-call-logs", s.listAICallLogs)
 		r.Get("/ai-call-logs/{id}", s.getAICallLog)
 		r.Post("/ai-call-logs/delete", s.deleteAICallLogs)
+		r.Get("/ai-call-logs/retention", s.getAICallLogRetention)
+		r.Put("/ai-call-logs/retention", s.putAICallLogRetention)
 		r.Get("/site-policy", s.getSitePolicy)
 		r.Put("/site-policy", s.putSitePolicy)
 		r.Get("/auth/oauth/linuxdo/start", s.linuxDoOAuthStart)

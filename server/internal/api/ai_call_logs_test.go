@@ -112,3 +112,73 @@ func TestAICallLogSanitizeRedactsSecrets(t *testing.T) {
 		t.Fatalf("binary-ish data not omitted: %s", string(raw))
 	}
 }
+
+func TestAICallLogRetentionPolicyIsAdminOnlyAndBounded(t *testing.T) {
+	storeMem := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	defer srv.Close()
+	r := chi.NewRouter()
+	MountServer(r, srv)
+
+	// Retention is disabled by default so no deployment silently loses audit rows.
+	got := request(t, r, http.MethodGet, "/api/ai-call-logs/retention", nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s", got.Code, got.Body.String())
+	}
+	var policy aiCallLogRetentionPolicy
+	if err := json.Unmarshal(got.Body.Bytes(), &policy); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if policy.Enabled || policy.RetentionDays != 0 {
+		t.Fatalf("expected retention disabled by default, got %+v", policy)
+	}
+
+	saved := request(t, r, http.MethodPut, "/api/ai-call-logs/retention", []byte(`{"enabled":true,"retentionDays":30}`))
+	if saved.Code != http.StatusOK {
+		t.Fatalf("PUT status=%d body=%s", saved.Code, saved.Body.String())
+	}
+	if err := json.Unmarshal(saved.Body.Bytes(), &policy); err != nil {
+		t.Fatalf("decode put: %v", err)
+	}
+	if !policy.Enabled || policy.RetentionDays != 30 {
+		t.Fatalf("policy = %+v", policy)
+	}
+
+	for _, body := range []string{`{"enabled":true,"retentionDays":0}`, `{"enabled":true,"retentionDays":4000}`} {
+		bad := request(t, r, http.MethodPut, "/api/ai-call-logs/retention", []byte(body))
+		if bad.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status=%d", body, bad.Code)
+		}
+	}
+}
+
+func TestAICallLogRetentionSweepDeletesOnlyExpiredRows(t *testing.T) {
+	storeMem := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	defer srv.Close()
+
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	// A disabled policy must never delete anything.
+	if deleted := srv.sweepAICallLogRetention(t.Context(), store.DefaultTenantID, now); deleted != 0 {
+		t.Fatalf("disabled policy deleted %d rows", deleted)
+	}
+
+	if err := srv.saveAICallLogRetention(t.Context(), store.DefaultTenantID,
+		aiCallLogRetentionPolicy{Enabled: true, RetentionDays: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storeMem.CreateAICallLog(t.Context(), store.DefaultTenantID, store.AICallLog{
+		Kind: "image", Status: "succeeded", Model: "demo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A row created now is inside the window and must survive the sweep.
+	if deleted := srv.sweepAICallLogRetention(t.Context(), store.DefaultTenantID, now); deleted != 0 {
+		t.Fatalf("in-window row deleted: %d", deleted)
+	}
+	// Advancing past the retention window makes the same row expire.
+	if deleted := srv.sweepAICallLogRetention(t.Context(), store.DefaultTenantID, now.AddDate(0, 0, 30)); deleted != 1 {
+		t.Fatalf("expired row not deleted: %d", deleted)
+	}
+}

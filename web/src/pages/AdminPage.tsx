@@ -3,6 +3,7 @@ import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { AdminPromptCatalogPanel } from "@/components/admin/AdminPromptCatalogPanel";
 import { AdminChannelsPanel } from "@/components/admin/AdminChannelsPanel";
 import { AdminStoragePoolPanel } from "@/components/admin/AdminStoragePoolPanel";
+import { AdminLibraryPanel } from "@/components/admin/AdminLibraryPanel";
 import {
   adjustAdminCredits,
   getAdminModelCosts,
@@ -16,7 +17,7 @@ import {
   type AdminUser,
 } from "@/services/admin";
 
-type Tab = "users" | "credits" | "models" | "channels" | "prompts" | "storage";
+type Tab = "users" | "credits" | "models" | "channels" | "prompts" | "library" | "storage";
 
 export function AdminPage() {
   const auth = useOptionalAuth();
@@ -30,14 +31,14 @@ export function AdminPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h1 className="text-2xl font-semibold">管理后台</h1><p className="text-sm text-[var(--ob-muted)]">用户、额度审计和模型成本。</p></div>
         <div className="ob-segment" role="tablist" aria-label="管理后台栏目">
-          {(["users", "credits", "models", "channels", "prompts", "storage"] as const).map((item) => (
+          {(["users", "credits", "models", "channels", "prompts", "library", "storage"] as const).map((item) => (
             <button key={item} type="button" role="tab" aria-selected={tab === item} className="ob-segment-item" data-active={tab === item} onClick={() => setTab(item)}>
-              {item === "users" ? "用户" : item === "credits" ? "额度日志" : item === "models" ? "模型成本" : item === "channels" ? "共享渠道" : item === "prompts" ? "提示词" : "存储池"}
+              {item === "users" ? "用户" : item === "credits" ? "额度日志" : item === "models" ? "模型成本" : item === "channels" ? "共享渠道" : item === "prompts" ? "提示词" : item === "library" ? "素材库" : "存储池"}
             </button>
           ))}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">{tab === "users" ? <UsersAdmin actorRole={role} /> : tab === "credits" ? <CreditsAdmin /> : tab === "models" ? <ModelsAdmin /> : tab === "channels" ? <AdminChannelsPanel /> : tab === "prompts" ? <AdminPromptCatalogPanel /> : <AdminStoragePoolPanel />}</div>
+      <div className="min-h-0 flex-1 overflow-auto">{tab === "users" ? <UsersAdmin actorRole={role} /> : tab === "credits" ? <CreditsAdmin /> : tab === "models" ? <ModelsAdmin /> : tab === "channels" ? <AdminChannelsPanel /> : tab === "prompts" ? <AdminPromptCatalogPanel /> : tab === "library" ? <AdminLibraryPanel /> : <AdminStoragePoolPanel />}</div>
     </div>
   );
 }

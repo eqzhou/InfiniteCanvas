@@ -3,8 +3,11 @@ import { useOptionalAuth } from "@/components/auth/AuthGate";
 import {
   deleteAICallLogs,
   getAICallLog,
+  getAICallLogRetention,
   listAICallLogs,
+  putAICallLogRetention,
   type AICallLog,
+  type AICallLogRetention,
 } from "@/services/ai-call-logs";
 
 function isAdminRole(role: string | undefined | null): boolean {
@@ -38,6 +41,7 @@ export function AICallLogsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [retention, setRetention] = useState<AICallLogRetention>({ enabled: false, retentionDays: 30 });
   const [detail, setDetail] = useState<AICallLog | null>(null);
   const [busy, setBusy] = useState(false);
   const [cleanupDays, setCleanupDays] = useState(30);
@@ -71,6 +75,15 @@ export function AICallLogsPage() {
     if (!canManage) return;
     void load();
   }, [load, canManage]);
+
+  useEffect(() => {
+    if (!canManage) return;
+    let cancelled = false;
+    void getAICallLogRetention()
+      .then((policy) => { if (!cancelled) setRetention(policy); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [canManage]);
 
   useEffect(() => {
     setPage(1);
@@ -174,6 +187,25 @@ export function AICallLogsPage() {
           <button type="button" className="ob-btn" disabled={busy} onClick={() => void cleanupOld()}>
             清理过期
           </button>
+          <label className="inline-flex items-center gap-2 text-sm text-[var(--ob-muted)]">
+            <input
+              type="checkbox"
+              aria-label="自动清理日志"
+              checked={retention.enabled}
+              disabled={busy}
+              onChange={(event) => {
+                const next = {
+                  enabled: event.target.checked,
+                  retentionDays: Math.max(1, Math.min(3650, Math.floor(cleanupDays) || 30)),
+                };
+                setRetention(next);
+                void putAICallLogRetention(next)
+                  .then(setRetention)
+                  .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+              }}
+            />
+            自动清理{retention.enabled ? `（每 ${retention.retentionDays} 天）` : ""}
+          </label>
           <button
             type="button"
             className="ob-btn"
