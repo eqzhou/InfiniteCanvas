@@ -42,6 +42,21 @@ describe("tenant model catalog", () => {
     expect(resolveDefaultModel({}, "text", selectable)).toBe("chat-pro");
   });
 
+  test("never falls back to a speech model for text generation", () => {
+    // A TTS model contains none of the image/video keywords, so an exclusion
+    // list that forgets audio would hand text generation a speech model.
+    expect(resolveDefaultModel({}, "text", ["gpt-4o-mini-tts", "gpt-4o"])).toBe("gpt-4o");
+    expect(resolveDefaultModel({}, "text", ["tts-1", "whisper-audio", "chat-pro"])).toBe("chat-pro");
+    // Audio itself must still resolve to the speech model.
+    expect(resolveDefaultModel({}, "audio", ["gpt-4o", "gpt-4o-mini-tts"])).toBe("gpt-4o-mini-tts");
+  });
+
+  test("still returns a text model when only speech models are selectable", () => {
+    // Excluding audio must narrow the preference, not strand the user: with no
+    // better candidate the first selectable model is still returned.
+    expect(resolveDefaultModel({}, "text", ["tts-1"])).toBe("tts-1");
+  });
+
   test("returns an empty default rather than inventing a model", () => {
     expect(resolveDefaultModel({}, "image", [])).toBe("");
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { filterAdminPrompts, syncRunSummary } from "./AdminPromptCatalogPanel";
+import { filterAdminPrompts, retainVisibleSelection, syncRunSummary } from "./AdminPromptCatalogPanel";
 
 describe("AdminPromptCatalogPanel", () => {
   test("shows persisted sync status and bounded safe error text", () => {
@@ -16,6 +16,21 @@ describe("AdminPromptCatalogPanel", () => {
   test("returns every prompt when no filter is active", () => {
     expect(filterAdminPrompts(prompts, { query: "", categoryId: "", tag: "" }).map((item) => item.id))
       .toEqual(["a", "b", "c"]);
+  });
+
+  test("drops selected prompts the active filter hides", () => {
+    // Bulk delete submits the selection, so anything the admin can no longer
+    // see must not stay selected: it would be deleted unseen.
+    expect(retainVisibleSelection(["a", "b"], [{ id: "b" }])).toEqual(["b"]);
+    expect(retainVisibleSelection(["a"], [])).toEqual([]);
+  });
+
+  test("returns the same selection array when nothing is hidden", () => {
+    // Preserving identity keeps the state update a no-op and avoids a re-render loop.
+    const selection = ["a", "b"];
+    expect(retainVisibleSelection(selection, [{ id: "a" }, { id: "b" }])).toBe(selection);
+    const empty: string[] = [];
+    expect(retainVisibleSelection(empty, [{ id: "a" }])).toBe(empty);
   });
 
   test("matches the query against title, body and tags case-insensitively", () => {

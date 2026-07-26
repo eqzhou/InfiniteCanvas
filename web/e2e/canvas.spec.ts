@@ -4825,8 +4825,32 @@ test("all four node corners resize while the opposite corner stays anchored", as
   expect(after.x + after.width).toBeCloseTo(before.x + before.width, 0);
   expect(after.y + after.height).toBeCloseTo(before.y + before.height, 0);
 
-  for (const corner of ["ne", "sw", "se"]) {
-    await expect(node.locator(`[data-resize-corner="${corner}"]`)).toHaveCount(1);
+  // Each remaining corner must actually resize while pinning the opposite one.
+  // Asserting only that the handle exists would miss a swapped dx/dy sign.
+  const corners = [
+    { corner: "ne", dx: 30, dy: -20, anchorX: "left", anchorY: "bottom" },
+    { corner: "sw", dx: -30, dy: 20, anchorX: "right", anchorY: "top" },
+    { corner: "se", dx: 30, dy: 20, anchorX: "left", anchorY: "top" },
+  ] as const;
+  for (const { corner, dx, dy, anchorX, anchorY } of corners) {
+    const start = (await node.boundingBox())!;
+    const handle = node.locator(`[data-resize-corner="${corner}"]`);
+    await handle.hover({ force: true });
+    await page.mouse.down();
+    const grip = (await handle.boundingBox())!;
+    await page.mouse.move(grip.x + grip.width / 2 + dx, grip.y + grip.height / 2 + dy, { steps: 8 });
+    await page.mouse.up();
+
+    const moved = (await node.boundingBox())!;
+    expect(moved.width).toBeGreaterThan(start.width);
+    expect(moved.height).toBeGreaterThan(start.height);
+    // The diagonally opposite corner is the anchor and must not move.
+    const expectedX = anchorX === "left" ? start.x : start.x + start.width;
+    const actualX = anchorX === "left" ? moved.x : moved.x + moved.width;
+    const expectedY = anchorY === "top" ? start.y : start.y + start.height;
+    const actualY = anchorY === "top" ? moved.y : moved.y + moved.height;
+    expect(actualX).toBeCloseTo(expectedX, 0);
+    expect(actualY).toBeCloseTo(expectedY, 0);
   }
 });
 

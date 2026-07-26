@@ -22,6 +22,11 @@ function cornerDirection(corner: NodeResizeCorner): { dx: -1 | 1; dy: -1 | 1 } {
   };
 }
 
+/** A pointer delta that is not a finite number contributes no movement. */
+function finiteDelta(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 export function resizeFromCorner(
   origin: NodeRect,
   corner: NodeResizeCorner,
@@ -29,18 +34,26 @@ export function resizeFromCorner(
   free: boolean,
 ): NodeRect {
   const { dx, dy } = cornerDirection(corner);
-  let width = origin.width + dx * delta.x;
-  let height = origin.height + dy * delta.y;
+  const deltaX = finiteDelta(delta.x);
+  const deltaY = finiteDelta(delta.y);
+  let width = origin.width + dx * deltaX;
+  let height = origin.height + dy * deltaY;
 
   if (!free) {
     const ratio = origin.width / Math.max(1, origin.height);
     // Follow whichever axis the pointer moved further along, matching the
     // single-handle behavior users already know.
-    if (Math.abs(delta.x) > Math.abs(delta.y)) {
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
       height = width / ratio;
     } else {
       width = height * ratio;
     }
+    // Clamping each axis on its own would silently break the ratio the user
+    // locked. The smallest rectangle that keeps the ratio and honors both
+    // minimums is derived from width alone, which also absorbs a drag pulled
+    // past the anchor into negative territory.
+    width = Math.max(NODE_MIN_WIDTH, NODE_MIN_HEIGHT * ratio, width);
+    height = width / ratio;
   }
 
   width = Math.max(NODE_MIN_WIDTH, width);

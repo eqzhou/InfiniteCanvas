@@ -132,6 +132,9 @@ func (s *Server) startAICallLogRetentionScheduler() {
 					return
 				case now := <-ticker.C:
 					s.sweepAllAICallLogRetention(s.promptSchedulerRoot, now.UTC())
+					// Expired provider-facing media tokens are otherwise only
+					// dropped lazily when someone happens to read them.
+					s.sweepExpiredMediaReferences(s.promptSchedulerRoot, now.UTC())
 				}
 			}
 		}()

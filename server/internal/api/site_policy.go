@@ -174,7 +174,9 @@ func (s *Server) putSitePolicy(w http.ResponseWriter, r *http.Request) {
 	var body SitePolicy
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&body); err != nil {
+	// Decode stops at the first value, so a second document riding along would
+	// otherwise be accepted and silently ignored.
+	if err := dec.Decode(&body); err != nil || ensureJSONEOF(dec) != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
@@ -216,13 +218,6 @@ func sitePolicyTenantForRegister(r *http.Request) string {
 	return store.DefaultTenantID
 }
 
-func boolPtrTrue(v bool) *bool { return &v }
-
 // ensure register path can cite a stable forbidden message
 const registrationDisabledMessage = "registration disabled by admin"
 const cloudChannelDisabledMessage = "cloud channel generation disabled by admin"
-const customChannelDisabledMessage = "custom model channels disabled by admin"
-
-func stringsEqualFoldTrim(a, b string) bool {
-	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
-}

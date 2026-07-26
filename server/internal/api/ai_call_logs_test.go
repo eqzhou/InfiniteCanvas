@@ -182,3 +182,51 @@ func TestAICallLogRetentionSweepDeletesOnlyExpiredRows(t *testing.T) {
 		t.Fatalf("expired row not deleted: %d", deleted)
 	}
 }
+
+func TestRetentionSchedulerSweepsLogsAndExpiredMediaReferences(t *testing.T) {
+	backend := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), backend)
+	// The interval field exists so the sweep can be exercised; leaving it unset
+	// would mean the scheduler goroutine is never covered by a test.
+	srv.logRetentionInterval = 10 * time.Millisecond
+	if err := srv.saveAICallLogRetention(t.Context(), store.DefaultTenantID,
+		aiCallLogRetentionPolicy{Enabled: true, RetentionDays: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.CreateMediaReference(t.Context(), store.DefaultTenantID,
+		"media/stale.mp4", time.Now().UTC().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	srv.startAICallLogRetentionScheduler()
+	t.Cleanup(srv.Close)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		backend.mu.RLock()
+		remaining := len(backend.mediaRefs)
+		backend.mu.RUnlock()
+		if remaining == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("scheduler never swept the expired media reference")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestAICallLogRetentionRejectsTrailingGarbageAndNonAdmins(t *testing.T) {
+	storeMem := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	defer srv.Close()
+	r := chi.NewRouter()
+	MountServer(r, srv)
+
+	// A body with trailing content must not be silently accepted.
+	bad := request(t, r, http.MethodPut, "/api/ai-call-logs/retention",
+		[]byte(`{"enabled":true,"retentionDays":30} {"enabled":false}`))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("trailing garbage status=%d body=%s", bad.Code, bad.Body.String())
+	}
+}

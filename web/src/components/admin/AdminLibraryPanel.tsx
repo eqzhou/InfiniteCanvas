@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createLibraryAsset,
   deleteLibraryAsset,
@@ -31,21 +31,34 @@ export function AdminLibraryPanel() {
   const [error, setError] = useState("");
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [editing, setEditing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  // Monotonic request id: a slow earlier response must never overwrite the
+  // result of a newer filter.
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
     try {
       setError("");
       const page = await listLibraryAssets({ q, kind, tag, pageSize: 100 });
+      if (requestId !== requestIdRef.current) return;
       setItems(page.items);
       setTotal(page.total);
     } catch (cause) {
+      if (requestId !== requestIdRef.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
       setItems([]);
       setTotal(0);
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }, [q, kind, tag]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // A filter change invalidates whatever is still in flight.
+  useEffect(() => () => { requestIdRef.current += 1; }, []);
 
   const perform = async (action: () => Promise<unknown>) => {
     try {
@@ -133,7 +146,9 @@ export function AdminLibraryPanel() {
             }}>删除</button>
           </div>
         ))}
-        {items.length ? null : <p className="text-sm text-[var(--ob-muted)]">没有匹配的素材。</p>}
+        {loading
+          ? <p className="text-sm text-[var(--ob-muted)]">加载中…</p>
+          : items.length ? null : <p className="text-sm text-[var(--ob-muted)]">没有匹配的素材。</p>}
       </div>
     </div>
   );

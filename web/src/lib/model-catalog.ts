@@ -95,8 +95,9 @@ function configuredDefault(catalog: ModelCatalog | null | undefined, kind: Model
 function matchesKind(model: string, kind: ModelCatalogKind): boolean {
   const lowered = model.toLowerCase();
   if (kind === "text") {
-    // A text model is one that is not clearly an image or video model.
-    return ![...KIND_KEYWORDS.image, ...KIND_KEYWORDS.video]
+    // A text model is one that is not clearly an image, video or speech model.
+    // Omitting audio here would let a TTS model become the text default.
+    return ![...KIND_KEYWORDS.image, ...KIND_KEYWORDS.video, ...KIND_KEYWORDS.audio]
       .some((keyword) => lowered.includes(keyword));
   }
   return KIND_KEYWORDS[kind].some((keyword) => lowered.includes(keyword));

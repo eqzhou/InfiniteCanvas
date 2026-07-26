@@ -125,33 +125,31 @@ func TestSitePolicyModelCatalogIsAdminOnlyAndBounded(t *testing.T) {
 
 func TestSitePolicyBlocksRegistration(t *testing.T) {
 	storeMem := newMemoryStore()
+	// Pin the auth mode so the assertion is exact: accepting either 403 or 404
+	// would pass even if the policy check were removed entirely.
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)
 
-	// Disable registration
-	put := request(t, r, http.MethodPut, "/api/site-policy", []byte(`{
-		"allowRegister": false,
-		"allowCustomChannel": true,
-		"allowCloudChannel": true
-	}`))
-	if put.Code != http.StatusOK {
-		t.Fatalf("PUT status=%d body=%s", put.Code, put.Body.String())
+	// Persist the policy directly: writing it over HTTP needs an admin session,
+	// which is a different boundary from the one under test here.
+	if err := srv.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{
+		AllowRegister: false, AllowCustomChannel: true, AllowCloudChannel: true,
+	}); err != nil {
+		t.Fatal(err)
 	}
 
-	// Force auth mode optional/required path: register handler itself checks policy.
-	// OPENBOARD_AUTH_MODE may be optional by default.
 	blocked := request(t, r, http.MethodPost, "/api/auth/register", []byte(`{
 		"email":"blocked@example.com",
 		"password":"password123",
 		"displayName":"Blocked"
 	}`))
-	// When auth is off in env, register returns 404; when on, expect 403.
-	if blocked.Code != http.StatusForbidden && blocked.Code != http.StatusNotFound {
-		t.Fatalf("expected 403 or 404, got %d body=%s", blocked.Code, blocked.Body.String())
+	if blocked.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", blocked.Code, blocked.Body.String())
 	}
-	if blocked.Code == http.StatusForbidden && !containsString(blocked.Body.String(), "registration disabled") {
+	if !containsString(blocked.Body.String(), "registration disabled") {
 		t.Fatalf("unexpected body: %s", blocked.Body.String())
 	}
 }
@@ -166,4 +164,44 @@ func containsString(haystack, needle string) bool {
 			}
 			return false
 		})()))
+}
+
+func TestSitePolicyRejectsTrailingGarbageAfterTheBody(t *testing.T) {
+	storeMem := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	defer srv.Close()
+	r := chi.NewRouter()
+	MountServer(r, srv)
+
+	// Decode alone stops at the first value, so a second document riding along
+	// would be accepted and silently ignored.
+	got := request(t, r, http.MethodPut, "/api/site-policy",
+		[]byte(`{"allowRegister":true,"allowCustomChannel":true,"allowCloudChannel":true} {"allowRegister":false}`))
+	if got.Code != http.StatusBadRequest {
+		t.Fatalf("trailing garbage status=%d body=%s", got.Code, got.Body.String())
+	}
+}
+
+func TestRetentionAndSitePolicyWritesRequireATenantAdmin(t *testing.T) {
+	backend := newMemoryStore()
+	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
+	seedAdminUser(backend, member)
+	handler := tenantAdminHandler(t, backend, member)
+
+	// Both consoles govern tenant-wide behaviour, so an ordinary member must be
+	// refused rather than merely hidden in the UI.
+	for _, item := range []struct {
+		method string
+		path   string
+		body   []byte
+	}{
+		{http.MethodPut, "/api/site-policy", []byte(`{"allowRegister":false,"allowCustomChannel":true,"allowCloudChannel":true}`)},
+		{http.MethodGet, "/api/ai-call-logs/retention", nil},
+		{http.MethodPut, "/api/ai-call-logs/retention", []byte(`{"enabled":true,"retentionDays":30}`)},
+	} {
+		got := request(t, handler, item.method, item.path, item.body)
+		if got.Code != http.StatusForbidden {
+			t.Fatalf("%s %s = %d %q", item.method, item.path, got.Code, got.Body.String())
+		}
+	}
 }

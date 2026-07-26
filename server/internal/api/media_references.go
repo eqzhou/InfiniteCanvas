@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,11 +21,34 @@ const (
 	minMediaReferenceTTL     = time.Minute
 )
 
+// providerFetchesReferenceMedia reports whether a protocol pulls reference
+// media from its own network. Only those protocols read
+// `generatedMedia.PublicURL`, so minting a token for any other one would
+// publish tenant media to an anonymous URL that nothing ever requests.
+func providerFetchesReferenceMedia(protocol string) bool {
+	return protocol == "ark"
+}
+
+// referenceMediaTTL bounds how long a provider-facing token stays valid. The
+// token only has to outlive the provider call, so it tracks the provider
+// timeout with a floor for clock skew and retries instead of using the 24h
+// ceiling that admin-minted references may request.
+func referenceMediaTTL(providerTimeout time.Duration) time.Duration {
+	ttl := providerTimeout * 2
+	if ttl < defaultMediaReferenceTTL {
+		ttl = defaultMediaReferenceTTL
+	}
+	if ttl > maxMediaReferenceTTL {
+		ttl = maxMediaReferenceTTL
+	}
+	return ttl
+}
+
 // publicMediaReferenceURL mints a short-lived public URL for a tenant blob so a
 // provider that fetches media itself can reach it. It returns an empty string
 // when the deployment has no publicly reachable base URL, letting the caller
 // fail closed instead of sending an address the provider cannot resolve.
-func (s *Server) publicMediaReferenceURL(ctx context.Context, tenantID, storageKey string) string {
+func (s *Server) publicMediaReferenceURL(ctx context.Context, tenantID, storageKey string, ttl time.Duration) string {
 	base := publicBaseURL()
 	if base == "" || s == nil || s.store == nil {
 		return ""
@@ -34,11 +58,30 @@ func (s *Server) publicMediaReferenceURL(ctx context.Context, tenantID, storageK
 		// A loopback or non-HTTPS base URL is not reachable by a third party.
 		return ""
 	}
-	ref, err := s.store.CreateMediaReference(ctx, tenantID, storageKey, time.Now().UTC().Add(maxMediaReferenceTTL))
+	if ttl <= 0 {
+		ttl = defaultMediaReferenceTTL
+	}
+	ref, err := s.store.CreateMediaReference(ctx, tenantID, storageKey, time.Now().UTC().Add(ttl))
 	if err != nil {
+		log.Printf("media reference minting failed for tenant %s: %v", tenantID, err)
 		return ""
 	}
 	return base + "/api/media/references/" + url.PathEscape(ref.Token)
+}
+
+// sweepExpiredMediaReferences removes reference rows whose lifetime has passed.
+// Reads already ignore expired tokens, but a token nobody fetches would
+// otherwise stay in the table forever.
+func (s *Server) sweepExpiredMediaReferences(ctx context.Context, now time.Time) int64 {
+	if s == nil || s.store == nil {
+		return 0
+	}
+	deleted, err := s.store.DeleteExpiredMediaReferences(ctx, now.UTC())
+	if err != nil {
+		log.Printf("expired media reference sweep failed: %v", err)
+		return 0
+	}
+	return deleted
 }
 
 type createMediaReferencesBody struct {

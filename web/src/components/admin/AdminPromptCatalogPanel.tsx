@@ -58,6 +58,22 @@ export function filterAdminPrompts<T extends FilterablePrompt>(
   });
 }
 
+/**
+ * Keeps only the selected ids the admin can currently see. Bulk delete submits
+ * the whole selection, so a prompt hidden by the active filter would otherwise
+ * be deleted without ever being shown. The input array is returned unchanged
+ * when nothing is hidden, so the caller's state update stays a no-op.
+ */
+export function retainVisibleSelection(
+  selected: readonly string[],
+  visible: readonly { id: string }[],
+): string[] {
+  if (!selected.length) return selected as string[];
+  const visibleIds = new Set(visible.map((item) => item.id));
+  const retained = selected.filter((id) => visibleIds.has(id));
+  return retained.length === selected.length ? (selected as string[]) : retained;
+}
+
 export function AdminPromptCatalogPanel() {
   const [catalog, setCatalog] = useState(EMPTY);
   const [error, setError] = useState("");
@@ -72,6 +88,12 @@ export function AdminPromptCatalogPanel() {
   useEffect(() => { void load(); }, []);
   const perform = async (action: () => Promise<unknown>) => { try { await action(); await load(); } catch (cause) { setError(message(cause)); } };
   const visiblePrompts = filterAdminPrompts(catalog.prompts, filter);
+
+  // Bulk delete submits the whole selection, so drop anything the active
+  // filter (or a catalog reload) hides before the admin can act on it.
+  useEffect(() => {
+    setSelected((current) => retainVisibleSelection(current, visiblePrompts));
+  }, [visiblePrompts]);
 
   return <div className="space-y-5">
     {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}

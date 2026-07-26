@@ -728,8 +728,10 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 			// bytes. Mint a short-lived public token URL when the deployment
 			// advertises a reachable base URL; otherwise leave it empty so the
 			// provider adapter fails closed with an actionable message.
-			if mediaMIMEKind(reference.MIMEType) != "image" {
-				reference.PublicURL = s.publicMediaReferenceURL(ctx, tenantID, key)
+			// Only mint for protocols that actually read PublicURL: any other
+			// one would publish tenant media to an anonymous URL for nothing.
+			if mediaMIMEKind(reference.MIMEType) != "image" && providerFetchesReferenceMedia(protocol) {
+				reference.PublicURL = s.publicMediaReferenceURL(ctx, tenantID, key, referenceMediaTTL(providerTimeout))
 			}
 			request.Video.References = append(request.Video.References, reference)
 		}

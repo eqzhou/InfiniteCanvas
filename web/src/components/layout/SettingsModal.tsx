@@ -635,7 +635,6 @@ function ProviderRow({
             <option value="apimart">APIMart（仅服务端）</option>
             <option value="kie">KIE Market（仅服务端）</option>
             <option value="template">Template</option>
-            <option value="apimart">APIMart</option>
           </select>
         </CompactField>
         <CompactField label="服务 URL">
@@ -707,6 +706,12 @@ function ModelCatalogEditor({
     { key: "defaultAudioModel", label: "默认音频模型" },
   ];
   const allowList = (policy.availableModels ?? []);
+  // The select must be able to display whatever is currently stored. An empty
+  // allow list means "no restriction", and a default configured before the
+  // list was narrowed is still the effective value, so both cases need an
+  // option or the control would silently read back as "未设置".
+  const optionsFor = (current: string): string[] =>
+    current && !allowList.includes(current) ? [...allowList, current] : allowList;
 
   return (
     <div className="mt-4 rounded-xl border border-[var(--ob-line)] p-3">
@@ -733,7 +738,8 @@ function ModelCatalogEditor({
               onChange={(event) => onSave({ [key]: event.target.value } as Partial<SitePolicy>)}
             >
               <option value="">未设置（按类型自动选择）</option>
-              {allowList.map((model) => <option key={model} value={model}>{model}</option>)}
+              {optionsFor((policy[key] as string | undefined) ?? "")
+                .map((model) => <option key={model} value={model}>{model}</option>)}
             </select>
           </label>
         ))}
