@@ -4874,3 +4874,33 @@ test("node info dialog shows a readable summary and the raw document", async ({ 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 });
+
+test("global generation defaults are editable and seed new nodes", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  const settings = page.getByRole("dialog", { name: "设置" });
+
+  // The tenant defaults must be reachable from the settings dialog; without an
+  // editor they are frozen at the built-in values and the feature is inert.
+  await settings.getByLabel("默认视频比例").selectOption("9:16");
+  await settings.getByLabel("默认清晰度").selectOption("1080p");
+  await settings.getByLabel("默认声音").fill("verse");
+  await closeSettings(page);
+
+  // A newly created node inherits them.
+  await page.getByRole("toolbar", { name: "画布工具栏" })
+    .getByRole("button", { name: "视频", exact: true }).click();
+  const video = page.locator('[data-node-type="video"]');
+  await video.locator("[data-node-header]").click();
+  await page.getByTitle("节点信息").click();
+  const info = page.getByRole("dialog", { name: "节点信息" });
+  await expect(info.getByText("9:16", { exact: true })).toBeVisible();
+  await expect(info.getByText("1080p", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // The choice survives a reload rather than living only in component state.
+  await page.reload();
+  await page.getByTitle("设置").click();
+  await expect(page.getByRole("dialog", { name: "设置" }).getByLabel("默认视频比例"))
+    .toHaveValue("9:16");
+});

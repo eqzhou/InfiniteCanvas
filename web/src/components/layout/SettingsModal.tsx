@@ -18,6 +18,13 @@ import type { AiTemplateConfig } from "@/types/board";
 import { validateProviderTemplate } from "@/lib/provider-template";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
 import { reconcileProviderModel, resolveSelectableModels } from "@/lib/model-catalog";
+import {
+  AUDIO_FORMATS,
+  DEFAULT_GENERATION_DEFAULTS,
+  VIDEO_RATIOS,
+  VIDEO_RESOLUTIONS,
+  type GenerationDefaults,
+} from "@/lib/generation-defaults";
 import { createDefaultObjectStorage, normalizeObjectStorage, validateObjectStorageConfig } from "@/lib/object-storage";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
@@ -304,6 +311,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
           </section>
 
+
+          <section className="mb-6">
+            <SectionTitle title="生成默认值" />
+            <p className="mb-3 text-xs text-[var(--ob-muted)]">
+              新建的视频与音频节点会继承这些值；节点上已显式设置的值不会被覆盖。
+            </p>
+            <GenerationDefaultsEditor
+              value={config.generationDefaults ?? DEFAULT_GENERATION_DEFAULTS}
+              onChange={(generationDefaults) => setConfig({ ...config, generationDefaults })}
+            />
+          </section>
 
           {canManageSitePolicy ? (
             <section className="mb-6">
@@ -825,6 +843,134 @@ function TemplateEditor({
         </button>
         {message ? <span className="text-xs text-[var(--ob-muted)]">{message}</span> : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Editor for the tenant generation defaults new video and audio nodes inherit.
+ * Each control writes the whole normalized object so a partial value can never
+ * be persisted, and the input is never mutated in place.
+ */
+function GenerationDefaultsEditor({
+  value,
+  onChange,
+}: {
+  value: GenerationDefaults;
+  onChange: (next: GenerationDefaults) => void;
+}) {
+  const update = (patch: Partial<GenerationDefaults>) => onChange({ ...value, ...patch });
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Field label="默认视频比例">
+        <select
+          className="ob-field"
+          aria-label="默认视频比例"
+          value={value.videoRatio}
+          onChange={(event) => update({ videoRatio: event.target.value })}
+        >
+          {VIDEO_RATIOS.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
+        </select>
+      </Field>
+      <Field label="默认清晰度">
+        <select
+          className="ob-field"
+          aria-label="默认清晰度"
+          value={value.videoResolution}
+          onChange={(event) => update({ videoResolution: event.target.value })}
+        >
+          {VIDEO_RESOLUTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+      </Field>
+      <Field label="默认时长（秒）">
+        <input
+          className="ob-field"
+          aria-label="默认时长（秒）"
+          type="number"
+          min={4}
+          max={15}
+          value={value.videoSeconds}
+          onChange={(event) => update({
+            videoSeconds: Math.min(15, Math.max(4, Math.round(Number(event.target.value)) ||
+              DEFAULT_GENERATION_DEFAULTS.videoSeconds)),
+          })}
+        />
+      </Field>
+      <Field label="默认音频格式">
+        <select
+          className="ob-field"
+          aria-label="默认音频格式"
+          value={value.audioFormat}
+          onChange={(event) => update({ audioFormat: event.target.value })}
+        >
+          {AUDIO_FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}
+        </select>
+      </Field>
+      <Field label="默认声音">
+        <input
+          className="ob-field"
+          aria-label="默认声音"
+          maxLength={64}
+          value={value.audioVoice}
+          onChange={(event) => update({ audioVoice: event.target.value })}
+          placeholder={DEFAULT_GENERATION_DEFAULTS.audioVoice}
+        />
+      </Field>
+      <Field label="默认语速">
+        <input
+          className="ob-field"
+          aria-label="默认语速"
+          type="number"
+          min={0}
+          max={4}
+          step={0.05}
+          value={value.audioSpeed}
+          onChange={(event) => {
+            // 0 means "unset" so the provider default applies; anything else is
+            // clamped into the range the provider accepts.
+            const parsed = Number(event.target.value);
+            const speed = !Number.isFinite(parsed) || parsed <= 0
+              ? 0
+              : Math.min(4, Math.max(0.25, parsed));
+            update({ audioSpeed: speed });
+          }}
+          placeholder="0 表示使用服务商默认"
+        />
+      </Field>
+      <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={value.videoGenerateAudio}
+          aria-label="默认生成声音"
+          className="ob-switch"
+          data-checked={value.videoGenerateAudio ? "true" : "false"}
+          onClick={() => update({ videoGenerateAudio: !value.videoGenerateAudio })}
+        />
+        <span className="text-sm text-[var(--ob-ink)]">默认生成声音</span>
+      </label>
+      <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={value.videoWatermark}
+          aria-label="默认添加水印"
+          className="ob-switch"
+          data-checked={value.videoWatermark ? "true" : "false"}
+          onClick={() => update({ videoWatermark: !value.videoWatermark })}
+        />
+        <span className="text-sm text-[var(--ob-ink)]">默认添加水印</span>
+      </label>
+      <Field label="默认语音指令">
+        <input
+          className="ob-field"
+          aria-label="默认语音指令"
+          maxLength={2_000}
+          value={value.audioInstructions}
+          onChange={(event) => update({ audioInstructions: event.target.value })}
+          placeholder="留空则不发送"
+        />
+      </Field>
     </div>
   );
 }
