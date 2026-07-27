@@ -9,6 +9,7 @@ export function PromptDetailDialog({
   onCopy,
   onAddAsset,
   onInsert,
+  onPreviewImage,
 }: {
   prompt: PromptItem | null;
   open: boolean;
@@ -16,6 +17,7 @@ export function PromptDetailDialog({
   onCopy: () => void;
   onAddAsset: () => void;
   onInsert?: () => void;
+  onPreviewImage?: (src: string, alt: string) => void;
 }) {
   useEscapeDismiss(open && Boolean(prompt), onClose);
   if (!open || !prompt) return null;
@@ -37,25 +39,41 @@ export function PromptDetailDialog({
           </button>
         </div>
         {prompt.coverUrl ? (
-          <img
-            src={prompt.coverUrl}
-            alt=""
-            crossOrigin="anonymous"
-            referrerPolicy="no-referrer"
-            className="mb-3 max-h-56 w-full rounded-md object-contain bg-[var(--ob-canvas)]"
-          />
+          <button
+            type="button"
+            className="mb-3 block w-full overflow-hidden rounded-md bg-[var(--ob-canvas)]"
+            title="查看封面"
+            aria-label={`查看封面：${prompt.title}`}
+            onClick={() => onPreviewImage?.(prompt.coverUrl!, prompt.title)}
+          >
+            <img
+              src={prompt.coverUrl}
+              alt=""
+              crossOrigin="anonymous"
+              referrerPolicy="no-referrer"
+              className="max-h-56 w-full object-contain"
+            />
+          </button>
         ) : null}
         {prompt.resultUrls?.length ? (
           <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
             {prompt.resultUrls.map((url, index) => (
-              <img
+              <button
                 key={url}
-                src={url}
-                alt={`结果图 ${index + 1}`}
-                crossOrigin="anonymous"
-                referrerPolicy="no-referrer"
-                className="aspect-square w-full rounded-md bg-[var(--ob-canvas)] object-contain"
-              />
+                type="button"
+                className="overflow-hidden rounded-md bg-[var(--ob-canvas)]"
+                title={`查看结果图 ${index + 1}`}
+                aria-label={`查看结果图 ${index + 1}`}
+                onClick={() => onPreviewImage?.(url, `${prompt.title} · 结果图 ${index + 1}`)}
+              >
+                <img
+                  src={url}
+                  alt={`结果图 ${index + 1}`}
+                  crossOrigin="anonymous"
+                  referrerPolicy="no-referrer"
+                  className="aspect-square w-full object-contain"
+                />
+              </button>
             ))}
           </div>
         ) : null}

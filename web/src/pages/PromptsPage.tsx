@@ -20,6 +20,7 @@ import {
   COMMUNITY_PROMPT_SOURCE_PRESETS,
 } from "@/services/prompt-source-presets";
 import { PromptDetailDialog } from "@/components/prompts/PromptDetailDialog";
+import { ImagePreviewDialog } from "@/components/canvas/ImagePreviewDialog";
 import {
   ChevronDown,
   ChevronRight,
@@ -93,6 +94,7 @@ export function PromptsPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<PromptItem | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<PromptItem | null>(null);
   const [editorMode, setEditorMode] = useState<"create" | "edit" | null>(null);
   const [creatingPromptId, setCreatingPromptId] = useState("");
@@ -787,8 +789,14 @@ export function PromptsPage() {
                     className="ob-card group flex min-h-[14.5rem] flex-col overflow-hidden p-0 rounded-2xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-[var(--ob-accent)]/5 hover:border-[var(--ob-accent-soft)]"
                   >
                     {p.coverUrl ? (
-                      <div className="relative h-32 overflow-hidden border-b border-[var(--ob-line)]/50 bg-[var(--ob-canvas)]">
-                        <div className="absolute inset-0 bg-black/5 group-hover:bg-transparent transition-colors z-10 pointer-events-none" />
+                      <button
+                        type="button"
+                        className="relative h-32 w-full overflow-hidden border-b border-[var(--ob-line)]/50 bg-[var(--ob-canvas)] text-left"
+                        title="查看封面"
+                        aria-label={`查看封面：${p.title}`}
+                        onClick={() => setPreviewImage({ src: p.coverUrl!, alt: p.title })}
+                      >
+                        <div className="absolute inset-0 z-10 bg-black/5 transition-colors pointer-events-none group-hover:bg-transparent" />
                         <img
                           src={p.coverUrl}
                           alt=""
@@ -796,7 +804,10 @@ export function PromptsPage() {
                           referrerPolicy="no-referrer"
                           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                         />
-                      </div>
+                        <span className="pointer-events-none absolute bottom-2 right-2 z-20 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
+                          点击查看
+                        </span>
+                      </button>
                     ) : null}
                     <div className="flex min-h-0 flex-1 flex-col p-4 sm:p-5 relative">
                       <div className="mb-2 flex items-start gap-2">
@@ -967,6 +978,7 @@ export function PromptsPage() {
         prompt={selectedPrompt}
         open={selectedPrompt !== null}
         onClose={() => setSelectedPrompt(null)}
+        onPreviewImage={(src, alt) => setPreviewImage({ src, alt })}
         onCopy={() => {
           if (selectedPrompt) void writeTextWithFallback(selectedPrompt.body).catch(() => undefined);
         }}
@@ -980,6 +992,12 @@ export function PromptsPage() {
           setSelectedPrompt(null);
           navigate("/");
         }}
+      />
+      <ImagePreviewDialog
+        open={previewImage !== null}
+        src={previewImage?.src ?? ""}
+        alt={previewImage?.alt ?? "图片预览"}
+        onClose={() => setPreviewImage(null)}
       />
       <PromptEditorDialog
         open={editorMode !== null}
