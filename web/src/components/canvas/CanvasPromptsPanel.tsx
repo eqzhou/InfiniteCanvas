@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, SendToBack } from "lucide-react";
 import type { PromptItem } from "@/types/board";
+import { writeTextWithFallback } from "@/lib/clipboard";
 import { useBoardStore } from "@/stores/use-board-store";
 
 function sourceLabel(prompt: PromptItem): string {
@@ -132,7 +133,7 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
                                 title="复制提示词"
                                 aria-label={`复制提示词 ${prompt.title}`}
                                 className="grid h-7 w-7 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] transition-colors"
-                                onClick={() => void navigator.clipboard.writeText(prompt.body)}
+                                onClick={() => void writeTextWithFallback(prompt.body).catch(() => undefined)}
                               >
                                 <Copy size={14} />
                               </button>

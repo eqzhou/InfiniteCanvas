@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { AssetItem } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
+import { writeTextWithFallback } from "@/lib/clipboard";
 import { downloadStorageKey, uploadMedia } from "@/services/storage";
 import { filenameForMimeType } from "@/lib/download-filename";
 import { AssetEditorDialog, type AssetEditorValues } from "@/components/assets/AssetEditorDialog";
@@ -266,7 +267,7 @@ export function AssetsPage() {
                 <button
                   type="button"
                   className="ob-btn"
-                  onClick={() => void navigator.clipboard.writeText(a.content ?? "")}
+                  onClick={() => void writeTextWithFallback(a.content ?? "").catch(() => undefined)}
                 >
                   复制
                 </button>

@@ -840,18 +840,36 @@ func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id 
 	}
 	var result pgconn.CommandTag
 	if expected == nil {
+		// Create-only. A live row or a tombstone both collide; distinguish them so a
+		// migration that hits a deleted project can stop instead of retrying forever.
 		result, err = s.pool.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
 			VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id,id) DO NOTHING`, tenantID, id, metadata.Title, updated, document)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() == 0 {
+			var deletedAt *time.Time
+			lookupErr := s.pool.QueryRow(ctx,
+				`SELECT deleted_at FROM openboard_projects WHERE tenant_id=$1 AND id=$2`,
+				tenantID, id).Scan(&deletedAt)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if deletedAt != nil {
+				return ErrGone
+			}
+			return ErrConflict
+		}
 	} else {
 		result, err = s.pool.Exec(ctx, `UPDATE openboard_projects SET title=$4,updated_at=$5,document=$6
 			WHERE tenant_id=$1 AND id=$2 AND document=$3::jsonb AND deleted_at IS NULL`,
 			tenantID, id, string(expected), metadata.Title, updated, document)
-	}
-	if err != nil {
-		return err
-	}
-	if result.RowsAffected() == 0 {
-		return ErrConflict
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() == 0 {
+			return ErrConflict
+		}
 	}
 	if s.redis != nil {
 		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()

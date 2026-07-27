@@ -376,7 +376,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
                 : [],
             })
           : defaults;
-        await Promise.all([
+        const [gone] = await Promise.all([
           saveProjects(nextProjects),
           saveAssets(assets),
           savePrompts(personalPrompts),
@@ -385,6 +385,16 @@ export const useBoardStore = create<BoardState>((set, get) => ({
             if (!(error instanceof TenantConfigAdminRequiredError)) throw error;
           }),
         ]);
+        // A tombstone is authoritative. Drop those ids before the first paint so a
+        // tab that still held the pre-delete document does not resurrect them in UI.
+        if (gone.length) {
+          const tombstoned = new Set(gone);
+          nextProjects = nextProjects.filter((project) => !tombstoned.has(project.id));
+          if (activeProjectId && tombstoned.has(activeProjectId)) {
+            activeProjectId = nextProjects[0]?.id ?? null;
+          }
+          for (const id of gone) histories.delete(id);
+        }
         set({
           ready: true,
           projects: nextProjects,

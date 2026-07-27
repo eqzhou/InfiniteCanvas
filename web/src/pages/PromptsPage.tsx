@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { PromptItem, PromptSourceConfig } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
+import { writeTextWithFallback } from "@/lib/clipboard";
 import {
   fetchPromptSource,
   mergePromptSourceItems,
@@ -849,7 +850,7 @@ export function PromptsPage() {
                           title="复制提示词"
                           aria-label="复制提示词"
                           className="ob-icon-btn ob-icon-btn-sm bg-[var(--ob-canvas)] h-7 w-7"
-                          onClick={() => void navigator.clipboard.writeText(p.body)}
+                          onClick={() => void writeTextWithFallback(p.body).catch(() => undefined)}
                         >
                           <Copy size={13} />
                         </button>
@@ -967,7 +968,7 @@ export function PromptsPage() {
         open={selectedPrompt !== null}
         onClose={() => setSelectedPrompt(null)}
         onCopy={() => {
-          if (selectedPrompt) void navigator.clipboard.writeText(selectedPrompt.body);
+          if (selectedPrompt) void writeTextWithFallback(selectedPrompt.body).catch(() => undefined);
         }}
         onAddAsset={() => {
           if (selectedPrompt) void addPromptAsset(selectedPrompt).catch((cause) =>

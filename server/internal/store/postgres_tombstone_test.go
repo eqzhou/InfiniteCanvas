@@ -108,8 +108,10 @@ func TestDeletedProjectResistsCompareAndSwapRecreate(t *testing.T) {
 
 	err := backend.CompareAndSwapProject(ctx, tenantID, projectID, nil,
 		tombstoneProjectDocument(t, "CAS 复活", now.Add(time.Second)))
-	if !errors.Is(err, ErrGone) && !errors.Is(err, ErrConflict) {
-		t.Fatalf("CAS create over a tombstone should fail, got %v", err)
+	// ErrGone, not ErrConflict: the project is gone, so the client must stop rather
+	// than treat this as a version race and retry the write.
+	if !errors.Is(err, ErrGone) {
+		t.Fatalf("CAS create over a tombstone should return ErrGone, got %v", err)
 	}
 	if _, err := backend.GetProject(ctx, tenantID, projectID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted project must stay unreadable, got %v", err)

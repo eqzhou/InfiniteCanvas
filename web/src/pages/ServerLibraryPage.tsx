@@ -14,6 +14,7 @@ import { findOpenNodePosition } from "@/lib/node-placement";
 import { LibraryAssetDetailDialog } from "@/components/library/LibraryAssetDetailDialog";
 import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { nowIso, uid } from "@/lib/id";
+import { writeTextWithFallback } from "@/lib/clipboard";
 import type { AssetItem } from "@/types/board";
 
 function isAdminRole(role: string | undefined | null): boolean {
@@ -168,7 +169,7 @@ export function ServerLibraryPage() {
       return;
     }
     try {
-      await navigator.clipboard.writeText(value);
+      await writeTextWithFallback(value);
     } catch (cause) {
       window.alert(cause instanceof Error ? cause.message : "复制失败");
     }

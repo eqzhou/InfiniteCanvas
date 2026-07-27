@@ -6,6 +6,9 @@ export type AuthUser = {
   email: string;
   displayName: string;
   role: string;
+  /** Remaining compute credits. Present once the session is authenticated. */
+  credits?: number;
+  status?: string;
 };
 
 export type UsageSnapshot = {
@@ -14,6 +17,8 @@ export type UsageSnapshot = {
   storageQuotaBytes: number;
   generationQuotaMonthly: number;
   plan: string;
+  /** Remaining compute credits mirrored from the session user. */
+  credits?: number;
 };
 
 const SESSION_KEY = "openboard:session";
@@ -132,7 +137,13 @@ export function formatUsageChip(snapshot: UsageSnapshot): string {
   const plan = snapshot.plan || "free";
   const used = snapshot.generationThisMonth ?? 0;
   const quota = snapshot.generationQuotaMonthly ?? 0;
-  return `${plan} · 本月生成 ${used}/${quota}`;
+  const base = `${plan} · 本月生成 ${used}/${quota}`;
+  // Credits are the balance that actually gates generation (402). Surface them
+  // next to the monthly quota so users see a low balance before they click run.
+  if (typeof snapshot.credits === "number" && Number.isFinite(snapshot.credits)) {
+    return `${base} · 算力 ${snapshot.credits}`;
+  }
+  return base;
 }
 
 export type SitePolicy = {
