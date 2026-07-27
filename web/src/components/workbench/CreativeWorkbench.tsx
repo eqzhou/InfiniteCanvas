@@ -52,6 +52,11 @@ import { KlingVideoControls, type KlingWorkbenchOptions } from "@/components/wor
 import { validateKlingVideoParameters } from "@/lib/kling-video";
 import { mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
 import { resolveWorkbenchRunChannel } from "@/lib/workbench-provider";
+import {
+  estimateCredits,
+  formatEstimateSuffix,
+  type CreditEstimate,
+} from "@/services/auth-session";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const config = useBoardStore((state) => state.config);
@@ -95,6 +100,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
   const [error, setError] = useState("");
+  const [creditEstimate, setCreditEstimate] = useState<CreditEstimate | null>(null);
   const controllersRef = useRef(new Map<string, AbortController>());
   const activeServerJobIdsRef = useRef(new Map<string, string>());
   const reusableAssets = useMemo(() => workbenchImageAssets(assets), [assets]);
@@ -105,10 +111,35 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	const allowsEmptySeedancePrompt = kind === "video" && provider?.protocol === "apimart" &&
 		["doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"].includes(model) &&
 		(references.length > 0 || selectedAssetIds.length > 0);
+  const estimateUnits = kind === "image" ? Math.max(1, Math.min(100, count || 1)) : 1;
 
   useEffect(() => {
     setModel(provider?.model ?? "");
   }, [provider?.model]);
+
+  // Refresh the pre-flight cost whenever the model or unit count changes so the
+  // primary button can show "预计 N 算力" without an extra click.
+  useEffect(() => {
+    let cancelled = false;
+    const requestedModel = model.trim();
+    if (!requestedModel) {
+      setCreditEstimate(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void estimateCredits(requestedModel, estimateUnits)
+        .then((estimate) => {
+          if (!cancelled) setCreditEstimate(estimate);
+        })
+        .catch(() => {
+          if (!cancelled) setCreditEstimate(null);
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [estimateUnits, model]);
 
   /**
    * Puts a past record back on the form so it can be adjusted before running
@@ -830,26 +861,35 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 <p className="mt-2 text-xs text-[var(--ob-muted)]">已选 {selectedAssetIds.length} 个素材</p>
               </fieldset>
             ) : null}
-            <div className="flex gap-2 pt-1">
-              <button
-                type="button"
-                aria-label="生成"
-                className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold"
-				disabled={!prompt.trim() && !allowsEmptyKlingPrompt && !allowsEmptySeedancePrompt}
-                onClick={() => void run()}
-              >
-                {kind === "image" ? <ImagePlus size={18} /> : <Video size={18} />}
-                {activeRuns ? `继续生成（${activeRuns} 个进行中）` : "开始生成"}
-              </button>
-              <button
-                type="button"
-                title="停止"
-                className="ob-btn-danger rounded-xl p-3"
-                disabled={!activeRuns}
-				onClick={() => void stopActiveJobs()}
-              >
-                <Square size={18} />
-              </button>
+            <div className="space-y-2 pt-1">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  aria-label="生成"
+                  className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold"
+                  disabled={!prompt.trim() && !allowsEmptyKlingPrompt && !allowsEmptySeedancePrompt}
+                  onClick={() => void run()}
+                >
+                  {kind === "image" ? <ImagePlus size={18} /> : <Video size={18} />}
+                  {activeRuns
+                    ? `继续生成（${activeRuns} 个进行中）`
+                    : `开始生成${formatEstimateSuffix(creditEstimate)}`}
+                </button>
+                <button
+                  type="button"
+                  title="停止"
+                  className="ob-btn-danger rounded-xl p-3"
+                  disabled={!activeRuns}
+                  onClick={() => void stopActiveJobs()}
+                >
+                  <Square size={18} />
+                </button>
+              </div>
+              {creditEstimate && !creditEstimate.sufficient ? (
+                <p role="status" className="text-xs text-[var(--ob-danger)]">
+                  算力不足：余额 {creditEstimate.balance}，本次预计 {creditEstimate.totalCredits}
+                </p>
+              ) : null}
             </div>
             {error ? (
               <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-3 py-2 text-sm text-[var(--ob-danger)]">

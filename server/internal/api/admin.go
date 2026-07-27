@@ -16,20 +16,23 @@ const adminChannelsStateKey = "adminChannels"
 
 // adminChannelPublic is a tenant-shared channel template without secrets.
 type adminChannelPublic struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	BaseURL           string `json:"baseUrl"`
-	Protocol          string `json:"protocol"`
-	Enabled           bool   `json:"enabled"`
-	AllowUserUse      bool   `json:"allowUserUse"`
-	Weight            int    `json:"weight"`
-	TimeoutSeconds    int    `json:"timeoutSeconds"`
-	DefaultTextModel  string `json:"defaultTextModel"`
-	DefaultImageModel string `json:"defaultImageModel"`
-	DefaultVideoModel string `json:"defaultVideoModel"`
-	DefaultAudioModel string `json:"defaultAudioModel,omitempty"`
-	SecretConfigured  bool   `json:"secretConfigured"`
-	SecretBindingID   string `json:"secretBindingId,omitempty"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	BaseURL           string   `json:"baseUrl"`
+	Protocol          string   `json:"protocol"`
+	Enabled           bool     `json:"enabled"`
+	AllowUserUse      bool     `json:"allowUserUse"`
+	Weight            int      `json:"weight"`
+	TimeoutSeconds    int      `json:"timeoutSeconds"`
+	// Models is the optional per-channel allow list used by shared-auto routing.
+	// Empty means "no model restriction" and only protocol capability applies.
+	Models            []string `json:"models,omitempty"`
+	DefaultTextModel  string   `json:"defaultTextModel"`
+	DefaultImageModel string   `json:"defaultImageModel"`
+	DefaultVideoModel string   `json:"defaultVideoModel"`
+	DefaultAudioModel string   `json:"defaultAudioModel,omitempty"`
+	SecretConfigured  bool     `json:"secretConfigured"`
+	SecretBindingID   string   `json:"secretBindingId,omitempty"`
 }
 
 var adminIdempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$`)

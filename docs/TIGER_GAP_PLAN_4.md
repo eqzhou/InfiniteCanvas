@@ -38,7 +38,7 @@
 |---|---|---|---|---|
 | T4-01 | 删除画布后，持有旧文档的标签页一次自动保存就能把它整个复活 | backend-database `canvas_projects`：软删除 + 延迟 7 天物理清理 | ✅ 已修复 | 见 §3 |
 | T4-02 | 生成记录「删除」后成果 JSON 仍留在库里，且墓碑永不清理 | backend-database `*_generation_logs`：删除时清空 `payload_json`，墓碑保留 7 天 | ✅ 已修复 | 见 §3 |
-| T4-03 | 共享渠道无 per-channel 模型列表，按模型路由会选中不提供该模型的渠道 | system-settings `private.channels[].models` | ⏳ 待实现 | `sharedChannelSupports` 收了 `requestedModel` 却只判空，随后仅按 protocol+kind 返回（`admin_channels.go:165`）；加权选择不校验模型（`:203`）。`fetchAdminChannelModels`（`:686`）是实时拉取供 UI 展示，不参与路由。后果：请求 `gpt-image-2` 可能被路由到没有该模型的渠道，失败发生在上游调用时而非路由时 |
+| T4-03 | 共享渠道无 per-channel 模型列表，按模型路由会选中不提供该模型的渠道 | system-settings `private.channels[].models` | ✅ 已修复 | `adminChannelPublic.Models` + `cleanAdminChannelModels`/`channelModelsAllow`；`sharedChannelSupports` 在 protocol 判断前按 allow list 过滤。管理后台「可用模型」textarea + 拉取模型写入列表；保存后 `putAdminChannels` 序列化。测试：`TestSharedChannelRoutingHonorsPerChannelModelList`、`cleanAdminChannelModels` |
 | T4-04 | 节点下方对话框没有模型下拉 | canvas-node-manual「用下方对话框生成或修改文本」 | ⏳ 待实现 | 拉取到的模型列表存在 `SettingsModal` 组件内 `useState`（`SettingsModal.tsx:60`），从未持久化或进 store，画布侧拿不到；`NodePromptBar` 无任何模型 UI，模型只靠 `node.metadata.model \|\| provider.model` 兜底 |
 | T4-05 | 对话框内 `@` 唤起的是媒体引用而非提示词库 | canvas-node-manual：对话框输入「可手写，也可从提示词库选择」 | ⏳ 待实现 | 提示词库下拉只在文本节点正文（`BoardNodeView.tsx:228`），且选中会覆写 `metadata.content` 而非填入对话框 |
 | T4-06 | 普通图片连到导演台会被当成球形全景渲染 | features 全景图：「普通图片仍按普通背景显示」 | ⏳ 待实现 | `isUsablePanoramaEnvironment` 的严格 2:1 校验对 image 节点不生效（`director-panorama.ts:34` 直接 `return true`）；`DirectorViewport.tsx:628` 无条件贴到 `BackSide` 球体，无按类型分流的分支；`panoramaProjection` 只有写入方无读取方。后果：16:9 照片被拉伸成 360° 天空盒 |
@@ -54,8 +54,8 @@
 | ~~T4-16~~ | ~~管理后台无素材库面板~~ | features 账号和后台 | ⛔ 误报，已撤销 | `AdminPage.tsx:20` 的 Tab 联合类型含 `library`，`:41` 挂载 `AdminLibraryPanel`，面板本身在 `web/src/components/admin/AdminLibraryPanel.tsx` |
 | T4-21 | 普通成员无法把直连渠道密钥与用户 S3/R2 凭据同步到账号 | features 账号和后台：登录用户可以同步本地直连模型渠道、画布偏好和用户 S3/R2 存储配置 | ⏳ 待实现（本轮最高优先级） | 写密钥的唯一路径 `PUT /secrets/config` 要求 `isTenantAdmin`（`auth.go:97`、`secrets.go:45`），member 直接 403；前端仅在「完全没有凭据」时吞掉该 403，真填了密钥就重新抛出（`storage.ts:598`）。后果：普通登录用户填好 API Key 点保存，保存流程抛错中断，换设备必须重填。非密钥字段则能正常落到 `__user_config_v1:<userID>`（`state.go:95`） |
 | T4-22 | 系统提示词输入框对普通成员可见但保存无效 | features 账号和后台：管理后台支持系统提示词配置 | ⏳ 待实现 | 服务端读租户级 `config`（`generation_channel_snapshot.go:98`），但成员写入被重定向到 `__user_config_v1:`（`state.go:95`）。输入框未像站点策略那样用权限收起（对比 `SettingsModal.tsx:326`），成员修改后保存成功、无提示、服务端生成完全不受影响 |
-| T4-23 | 渠道模型无「新获取／已有」分组选择器 | features 账号和后台 | ⏳ 待实现 | 模型为纯文本输入，「拉取模型」结果只 `slice(0,20)` 拼成一句提示文案后即弃，组件无 state 保存（`AdminChannelsPanel.tsx:80`、`:102`）。条目后半句「API Key 留空沿用已保存密钥」本地成立（`admin_channels.go:432`） |
-| T4-24 | 算力点余额与生成前预计消耗对用户完全不可见 | CHANGELOG v0.0.8：画布右上角展示算力点余额，生成按钮展示预计消耗 | 🔶 部分修复 | 余额：`UsageSnapshot.credits` 已从 `/api/auth/usage` 回传，顶栏 chip 现展示「算力 N」。生成前预计消耗（`/api/billing/estimate` 前端调用）仍未接，按钮上仍看不到本次花费 |
+| T4-23 | 渠道模型无「新获取／已有」分组选择器 | features 账号和后台 | 🔶 部分修复 | 拉取模型现写入渠道 `models` 列表（可编辑 textarea，保存后参与路由）。仍无「新获取／已有」分组选择器 UI。API Key 留空沿用已保存密钥本地成立 |
+| T4-24 | 算力点余额与生成前预计消耗对用户完全不可见 | CHANGELOG v0.0.8：画布右上角展示算力点余额，生成按钮展示预计消耗 | ✅ 已修复 | 余额：顶栏 chip 展示「算力 N」。生成前：`estimateCredits` 调 `GET /api/billing/estimate`；`CreativeWorkbench` 主按钮展示「开始生成 · 预计 N 算力」，余额不足时提示。其余生成面可按需复用同一 helper |
 | T4-25 | 非安全上下文下复制文本静默失败 | CHANGELOG v0.0.4：修复局域网 IP 访问时文本复制失败 | ✅ 已修复 | 新增 `writeTextWithFallback`：优先 `navigator.clipboard.writeText`，失败或不可用时回退 `document.execCommand("copy")`。五处复制入口均已改走该助手 |
 | T4-26 | 四个模型无能力声明与参数转译 | CHANGELOG v0.3.13 Seedream 5 Pro、v0.3.11 Nano Banana 2 Lite、v0.3.7 Kling 3.0 Turbo / HappyHorse 1.1 | ⏳ 待实现 | 能力表只有 kling-v3 而无 turbo 变体；其余三个零命中。模型名是自由文本，用户仍可手填走通用协议，但没有能力声明、参数转译与校验（对比 Seedance 2.0 Mini 有完整能力表）。后果：专属参数不被正确转译，失败信息不友好 |
 | T4-27 | 产品内无用户文档入口 | CHANGELOG v0.2.1：新增文档站点页面 | 🔶 待决策 | 换 7 种命名检索均零命中，路由无 docs 项，顶栏 HelpCircle 指向快捷键弹窗。仓库 `docs/` 是内部审计文档，不对外 |

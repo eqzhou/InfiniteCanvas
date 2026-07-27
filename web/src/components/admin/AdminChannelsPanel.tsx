@@ -24,12 +24,24 @@ export function emptyAdminChannel(index: number): AdminChannel {
     allowUserUse: true,
     weight: 1,
     timeoutSeconds: 60,
+    models: [],
     defaultTextModel: "",
     defaultImageModel: "",
     defaultVideoModel: "",
     defaultAudioModel: "",
     secretConfigured: false,
   };
+}
+
+function modelsText(channel: AdminChannel): string {
+  return (channel.models ?? []).join("\n");
+}
+
+function parseModelsText(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 export function AdminChannelsPanel() {
@@ -68,7 +80,7 @@ export function AdminChannelsPanel() {
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface)] p-4 text-sm text-[var(--ob-muted)]">
-        启用且允许用户使用的渠道可由服务端执行图片、视频或音频任务；请求渠道 <code>shared-auto</code> 时按权重确定性选择并将具体渠道写入任务快照。共享密钥只可覆盖写入，不会返回浏览器。模型拉取目前支持 OpenAI/APIMart 兼容接口。
+        启用且允许用户使用的渠道可由服务端执行图片、视频或音频任务；请求渠道 <code>shared-auto</code> 时按权重确定性选择并将具体渠道写入任务快照。填写「可用模型」后，自动路由只会选中列表内包含请求模型的渠道；留空表示不限制。共享密钥只可覆盖写入，不会返回浏览器。模型拉取目前支持 OpenAI/APIMart 兼容接口。
       </div>
       {channels.map((channel) => (
         <section key={channel.id} className="space-y-3 rounded-xl border border-[var(--ob-line)] p-4">
@@ -84,6 +96,14 @@ export function AdminChannelsPanel() {
               <Field label="权重"><input className="ob-field" type="number" min={1} max={100} value={channel.weight} onChange={(event) => update(channel.id, { weight: Number(event.target.value) })} /></Field>
               <Field label="超时（秒）"><input className="ob-field" type="number" min={1} max={600} value={channel.timeoutSeconds} onChange={(event) => update(channel.id, { timeoutSeconds: Number(event.target.value) })} /></Field>
             </div>
+            <Field label="可用模型（每行一个；留空不限制）">
+              <textarea
+                className="ob-field min-h-24 font-mono text-xs"
+                value={modelsText(channel)}
+                placeholder={"gpt-image-1\ngpt-image-2\nseedream-4"}
+                onChange={(event) => update(channel.id, { models: parseModelsText(event.target.value) })}
+              />
+            </Field>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={channel.enabled} onChange={(event) => update(channel.id, { enabled: event.target.checked })} />启用</label>
@@ -100,7 +120,13 @@ export function AdminChannelsPanel() {
               const result = await testAdminChannel(channel.id); return `连接成功，发现 ${result.modelCount} 个模型`;
             })}>测试连接</button>
             <button type="button" className="ob-btn" disabled={busy !== "" || !channel.secretConfigured || !["openai", "apimart"].includes(channel.protocol)} onClick={() => void run(`models:${channel.id}`, async () => {
-              const models = await fetchAdminChannelModels(channel.id); return models.length ? `模型：${models.slice(0, 20).join("、")}` : "连接成功，未返回模型";
+              // Persist the fetched catalog on the channel so routing can use it.
+              // Previously the result was only rendered as a transient notice.
+              const models = await fetchAdminChannelModels(channel.id);
+              update(channel.id, { models });
+              return models.length
+                ? `已写入 ${models.length} 个模型（保存全部后生效）：${models.slice(0, 20).join("、")}`
+                : "连接成功，未返回模型";
             })}>拉取模型</button>
             <button type="button" className="ob-btn" disabled={busy !== ""} onClick={() => void run(`delete:${channel.id}`, async () => {
               const persisted = shouldDeleteAdminChannel(persistedIdsRef.current, channel.id);

@@ -461,3 +461,83 @@ func TestSharedChannelWeightedSelectionIsDeterministicAndCapabilityAware(t *test
 		t.Fatalf("video selection ignored eligibility: %#v, %v", video, err)
 	}
 }
+
+// A non-empty models list is a hard filter: shared-auto must not route a request
+// to a channel that the administrator said does not offer that model.
+func TestSharedChannelRoutingHonorsPerChannelModelList(t *testing.T) {
+	server, backend, _ := sharedChannelHandler(t)
+	channels := []adminChannelPublic{
+		{
+			ID: "only-gpt", Name: "GPT", BaseURL: "https://gpt.example", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 100, TimeoutSeconds: 30,
+			DefaultImageModel: "gpt-image-1", Models: []string{"gpt-image-1", "gpt-image-1.5"},
+		},
+		{
+			ID: "only-seedream", Name: "Seedream", BaseURL: "https://seedream.example", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+			DefaultImageModel: "seedream-4", Models: []string{"seedream-4", "gpt-image-2"},
+		},
+		{
+			ID: "unrestricted", Name: "Open", BaseURL: "https://open.example", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+			DefaultImageModel: "anything",
+		},
+	}
+	for index := range channels {
+		channels[index].SecretBindingID = "test-binding-" + channels[index].ID
+	}
+	raw, _ := json.Marshal(channels)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelsStateKey, raw); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := server.encryptAdminChannelSecrets(store.DefaultTenantID, channels, map[string]string{
+		"only-gpt": "a", "only-seedream": "b", "unrestricted": "c",
+	})
+	if err != nil || backend.PutState(context.Background(), store.DefaultTenantID, adminChannelSecretsStateKey, envelope) != nil {
+		t.Fatal("failed to seed encrypted shared secrets")
+	}
+
+	// Requested model is only on the seedream channel's list, so the high-weight
+	// GPT channel must be skipped even though its protocol can do images.
+	picked, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", "job-model", "gpt-image-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if picked.ID != "only-seedream" {
+		t.Fatalf("expected only-seedream for gpt-image-2, got %#v", picked)
+	}
+
+	// Empty model list means no restriction, so unrestricted stays eligible for
+	// a model neither of the filtered channels advertise.
+	open, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", "job-open", "brand-new-model")
+	if err != nil || open.ID != "unrestricted" {
+		t.Fatalf("empty models list should stay eligible: %#v, %v", open, err)
+	}
+
+	// No channel advertises this model and the unrestricted one is disabled by
+	// zeroing its weight via removal — leave it enabled but filter by list only.
+	if !sharedChannelSupports(channels[0], "image", "gpt-image-1") {
+		t.Fatal("gpt-image-1 should be allowed on only-gpt")
+	}
+	if sharedChannelSupports(channels[0], "image", "gpt-image-2") {
+		t.Fatal("gpt-image-2 must not be allowed on only-gpt")
+	}
+	if !sharedChannelSupports(channels[2], "image", "anything-goes") {
+		t.Fatal("empty models list must not filter")
+	}
+}
+
+func TestNormalizeAdminChannelCleansModels(t *testing.T) {
+	channel, message := normalizeAdminChannel(adminChannelPublic{
+		ID: "shared-main", Name: "Shared", BaseURL: "https://api.example.com/v1",
+		Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultImageModel: "gpt-image-1",
+		Models:            []string{" gpt-image-2 ", "", "GPT-image-2", "seedream-4"},
+	})
+	if message != "" {
+		t.Fatalf("normalize failed: %s", message)
+	}
+	if len(channel.Models) != 2 || channel.Models[0] != "gpt-image-2" || channel.Models[1] != "seedream-4" {
+		t.Fatalf("models not cleaned: %#v", channel.Models)
+	}
+}

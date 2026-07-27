@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   canManageAdmin,
   adjustAdminCredits,
+  cleanAdminChannelModels,
   fetchAdminChannelModels,
   getAdminStoragePoolStatus,
   listAdminCreditLogs,
@@ -98,6 +99,7 @@ describe("admin client", () => {
     const channel = {
       id: "shared-main", name: " Shared ", baseUrl: "https://api.example.com/v1/", protocol: "openai" as const,
       enabled: true, allowUserUse: true, weight: 2, timeoutSeconds: 30,
+      models: [" gpt-image-1 ", "", "GPT-image-1", "seedream-4"],
       defaultTextModel: "gpt-4.1", defaultImageModel: "gpt-image-1", defaultVideoModel: "", defaultAudioModel: "",
 		secretConfigured: true, secretBindingId: "binding-1",
     };
@@ -108,9 +110,18 @@ describe("admin client", () => {
     const saved = JSON.parse(String(requests[0]?.init?.body));
     expect(saved[0].name).toBe("Shared");
     expect(saved[0].baseUrl).toBe("https://api.example.com/v1");
+    expect(saved[0].models).toEqual(["gpt-image-1", "seedream-4"]);
     expect(saved[0].secretConfigured).toBeUndefined();
 	expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({ apiKey: "sk-private", secretBindingId: "binding-1" });
     expect(requests[1]?.url).toContain("shared%2Fmain/secret");
+  });
+
+  test("cleanAdminChannelModels trims blanks and case-insensitive dedupes", () => {
+    expect(cleanAdminChannelModels([" gpt-image-1 ", "", "GPT-image-1", "seedream-4"])).toEqual([
+      "gpt-image-1",
+      "seedream-4",
+    ]);
+    expect(cleanAdminChannelModels(undefined)).toEqual([]);
   });
 
   test("loads bounded read-only storage pool status", async () => {

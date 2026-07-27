@@ -59,6 +59,12 @@ export type AdminChannel = {
   allowUserUse: boolean;
   weight: number;
   timeoutSeconds: number;
+  /**
+   * Optional per-channel model allow list. Empty means no restriction.
+   * Shared-auto routing only picks channels whose list contains the requested
+   * model (or whose list is empty).
+   */
+  models?: string[];
   defaultTextModel: string;
   defaultImageModel: string;
   defaultVideoModel: string;
@@ -70,7 +76,26 @@ export type AdminChannel = {
 const channelIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const channelProtocols = new Set<AdminChannelProtocol>(["openai", "gemini", "apimart", "kie"]);
 
+/** Trim, drop blanks, and keep first-seen order (case-insensitive dedupe). */
+export function cleanAdminChannelModels(values: readonly string[] | undefined): string[] {
+  if (!values?.length) return [];
+  const seen = new Set<string>();
+  const clean: string[] = [];
+  for (const raw of values) {
+    const model = raw.trim();
+    if (!model) continue;
+    const key = model.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    clean.push(model);
+  }
+  return clean;
+}
+
 function normalizeAdminChannel(channel: AdminChannel): Omit<AdminChannel, "secretConfigured"> {
+  const models = cleanAdminChannelModels(channel.models);
+  if (models.length > 200) throw new Error("共享渠道模型数量不能超过 200");
+  if (models.some((model) => model.length > 500)) throw new Error("共享渠道模型无效");
   const value = {
     id: channel.id.trim(),
     name: channel.name.trim() || channel.id.trim(),
@@ -80,6 +105,7 @@ function normalizeAdminChannel(channel: AdminChannel): Omit<AdminChannel, "secre
     allowUserUse: Boolean(channel.allowUserUse),
     weight: channel.weight,
     timeoutSeconds: channel.timeoutSeconds,
+    ...(models.length ? { models } : {}),
     defaultTextModel: channel.defaultTextModel.trim(),
     defaultImageModel: channel.defaultImageModel.trim(),
     defaultVideoModel: channel.defaultVideoModel.trim(),

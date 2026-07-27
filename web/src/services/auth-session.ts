@@ -133,6 +133,35 @@ export async function usage(): Promise<UsageSnapshot> {
   return parseJSON(await authFetch("auth/usage"));
 }
 
+export type CreditEstimate = {
+  model: string;
+  units: number;
+  creditsPerUnit: number;
+  totalCredits: number;
+  balance: number;
+  sufficient: boolean;
+};
+
+/**
+ * Pre-flight cost for a generation. Mirrors GET /api/billing/estimate so the
+ * generate button can show "预计消耗 N 算力" before the request is submitted.
+ */
+export async function estimateCredits(model: string, units = 1): Promise<CreditEstimate> {
+  const cleanModel = model.trim();
+  const cleanUnits = Number.isSafeInteger(units) && units >= 1 && units <= 100 ? units : 1;
+  const params = new URLSearchParams();
+  if (cleanModel) params.set("model", cleanModel);
+  params.set("units", String(cleanUnits));
+  return parseJSON(await authFetch(`billing/estimate?${params.toString()}`));
+}
+
+/** Compact button label fragment, e.g. " · 预计 3 算力". Empty when free/unknown. */
+export function formatEstimateSuffix(estimate: CreditEstimate | null | undefined): string {
+  if (!estimate) return "";
+  if (!Number.isFinite(estimate.totalCredits) || estimate.totalCredits <= 0) return "";
+  return ` · 预计 ${estimate.totalCredits} 算力`;
+}
+
 export function formatUsageChip(snapshot: UsageSnapshot): string {
   const plan = snapshot.plan || "free";
   const used = snapshot.generationThisMonth ?? 0;

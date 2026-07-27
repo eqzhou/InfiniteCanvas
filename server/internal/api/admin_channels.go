@@ -81,6 +81,8 @@ func (s *Server) getSharedChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+const maxAdminChannelModels = 200
+
 func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string) {
 	item.ID = strings.TrimSpace(item.ID)
 	item.Name = strings.TrimSpace(item.Name)
@@ -92,6 +94,7 @@ func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string)
 	item.DefaultAudioModel = strings.TrimSpace(item.DefaultAudioModel)
 	item.SecretBindingID = strings.TrimSpace(item.SecretBindingID)
 	item.SecretConfigured = false
+	item.Models = cleanAdminChannelModels(item.Models)
 	if !projectIDPattern.MatchString(item.ID) {
 		return adminChannelPublic{}, "invalid channel id"
 	}
@@ -112,12 +115,64 @@ func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string)
 	if item.Weight < 1 || item.Weight > 100 || item.TimeoutSeconds < 1 || item.TimeoutSeconds > 600 {
 		return adminChannelPublic{}, "invalid channel routing settings"
 	}
+	if len(item.Models) > maxAdminChannelModels {
+		return adminChannelPublic{}, "too many channel models"
+	}
 	for _, model := range []string{item.DefaultTextModel, item.DefaultImageModel, item.DefaultVideoModel, item.DefaultAudioModel} {
 		if len(model) > 500 {
 			return adminChannelPublic{}, "invalid channel model"
 		}
 	}
+	for _, model := range item.Models {
+		if len(model) > 500 {
+			return adminChannelPublic{}, "invalid channel model"
+		}
+	}
 	return item, ""
+}
+
+// cleanAdminChannelModels trims blanks and keeps first-seen order so routing and
+// the admin UI see a stable list rather than whatever the browser typed.
+func cleanAdminChannelModels(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	clean := make([]string, 0, len(values))
+	for _, raw := range values {
+		model := strings.TrimSpace(raw)
+		if model == "" {
+			continue
+		}
+		key := strings.ToLower(model)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		clean = append(clean, model)
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	return clean
+}
+
+// channelModelsAllow reports whether a requested model is on the channel's
+// optional allow list. An empty list means "no restriction".
+func channelModelsAllow(models []string, requestedModel string) bool {
+	if len(models) == 0 {
+		return true
+	}
+	requested := strings.TrimSpace(requestedModel)
+	if requested == "" {
+		return false
+	}
+	for _, model := range models {
+		if strings.EqualFold(model, requested) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) loadAdminChannels(ctx context.Context, tenantID string) ([]adminChannelPublic, error) {
@@ -172,7 +227,7 @@ func sharedChannelSupports(channel adminChannelPublic, kind, requestedModel stri
 	if !channel.Enabled || !channel.AllowUserUse {
 		return false
 	}
-	model := requestedModel
+	model := strings.TrimSpace(requestedModel)
 	if model == "" {
 		switch kind {
 		case "image":
@@ -186,6 +241,11 @@ func sharedChannelSupports(channel adminChannelPublic, kind, requestedModel stri
 		}
 	}
 	if strings.TrimSpace(model) == "" {
+		return false
+	}
+	// Per-channel model lists gate routing so shared-auto never picks a channel
+	// that the administrator marked as not offering this model.
+	if !channelModelsAllow(channel.Models, model) {
 		return false
 	}
 	switch kind {
