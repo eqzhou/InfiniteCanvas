@@ -49,9 +49,20 @@
 | T4-11 | 本地直连日志上报无上报通道与管理员开关 | features AI 生成：管理员可配置本地直连日志上报 | ⏳ 待实现 | `recordAICallLog` 两个非测试调用方都在服务端执行器；前端 `ai-call-logs.ts` 只有读/删接口，无 POST 上报。查过 11 个命名变体均零命中 |
 | T4-12 | 图片比例无独立配置项 | features AI 生成可配置项：「图片比例」与「图片质量」并列 | 🔶 待决策 | 本地只有自由文本 `imageSize`（默认 `1024x1024`），无比例枚举。能力可达，仅交互形态不同：用户需自行记忆并手输像素串表达 16:9 |
 | T4-13 | 提示词与提示词分组无独立数据表 | features 后端能力：数据库保存用户、提示词分组、提示词和服务器素材 | 🔶 待决策 | 用户与素材都有独立表，提示词目录整体序列化进 `openboard_state` KV。是否算缺陷取决于「手写迁移」这条既有决策的边界如何划 |
-| T4-14 | 后台提示词无关键词查询、无分组/标签筛选 | features 后台提示词管理 | ⏳ 待实现 | 面板仅整表罗列，服务端 catalog 接口不接收筛选参数 |
-| T4-15 | 服务器素材库按标签筛选接好一半 | features 素材 | ⏳ 待实现 | 后端与 service 层 tag 参数齐备，页面未传参也无控件 |
-| T4-16 | 管理后台无素材库面板 | features 账号和后台：管理员后台包含提示词管理和素材库管理 | ⏳ 待实现 | CRUD 能力挂在前台素材库页的管理员分支上，`AdminPage.tsx` 无素材库入口 |
+| ~~T4-14~~ | ~~后台提示词无关键词查询、无分组/标签筛选~~ | features 后台提示词管理 | ⛔ 误报，已撤销 | 三者都在：搜索框 `AdminPromptCatalogPanel.tsx:118`、分类下拉 `:119`、标签下拉 `:124`，过滤逻辑 `filterAdminPrompts`（`:90`）。`retainVisibleSelection`（`:95`）也已处理「筛选后批量删除误删隐藏项」 |
+| ~~T4-15~~ | ~~服务器素材库按标签筛选接好一半~~ | features 素材 | ⛔ 误报，已撤销 | 前台有标签筛选输入并传参（`ServerLibraryPage.tsx:282`、查询 `:65`）；后台面板同样有（`AdminLibraryPanel.tsx:99`、`:44`） |
+| ~~T4-16~~ | ~~管理后台无素材库面板~~ | features 账号和后台 | ⛔ 误报，已撤销 | `AdminPage.tsx:20` 的 Tab 联合类型含 `library`，`:41` 挂载 `AdminLibraryPanel`，面板本身在 `web/src/components/admin/AdminLibraryPanel.tsx` |
+| T4-21 | 普通成员无法把直连渠道密钥与用户 S3/R2 凭据同步到账号 | features 账号和后台：登录用户可以同步本地直连模型渠道、画布偏好和用户 S3/R2 存储配置 | ⏳ 待实现（本轮最高优先级） | 写密钥的唯一路径 `PUT /secrets/config` 要求 `isTenantAdmin`（`auth.go:97`、`secrets.go:45`），member 直接 403；前端仅在「完全没有凭据」时吞掉该 403，真填了密钥就重新抛出（`storage.ts:598`）。后果：普通登录用户填好 API Key 点保存，保存流程抛错中断，换设备必须重填。非密钥字段则能正常落到 `__user_config_v1:<userID>`（`state.go:95`） |
+| T4-22 | 系统提示词输入框对普通成员可见但保存无效 | features 账号和后台：管理后台支持系统提示词配置 | ⏳ 待实现 | 服务端读租户级 `config`（`generation_channel_snapshot.go:98`），但成员写入被重定向到 `__user_config_v1:`（`state.go:95`）。输入框未像站点策略那样用权限收起（对比 `SettingsModal.tsx:326`），成员修改后保存成功、无提示、服务端生成完全不受影响 |
+| T4-23 | 渠道模型无「新获取／已有」分组选择器 | features 账号和后台 | ⏳ 待实现 | 模型为纯文本输入，「拉取模型」结果只 `slice(0,20)` 拼成一句提示文案后即弃，组件无 state 保存（`AdminChannelsPanel.tsx:80`、`:102`）。条目后半句「API Key 留空沿用已保存密钥」本地成立（`admin_channels.go:432`） |
+| T4-24 | 算力点余额与生成前预计消耗对用户完全不可见 | CHANGELOG v0.0.8：画布右上角展示算力点余额，生成按钮展示预计消耗 | ⏳ 待实现（P0） | 后端计费链完整：`/api/billing/estimate` 路由（`api.go:155`）+ handler（`auth.go:320`），扣费与退还都在事务内。但**前端全仓对 `billing` 的引用数为 0**（已排除测试与 e2e，亲自复核）；`AuthUser` 类型无 credits 字段（`auth-session.ts:3`）；顶栏 chip 显示的是 `usageLabel`「本月生成 x/y」而非算力余额（`TopNav.tsx:277`）。后果：用户看不到余额、也看不到本次要花多少，只能在点击生成后收到 402 才知道不够 |
+| T4-25 | 非安全上下文下复制文本静默失败 | CHANGELOG v0.0.4：修复局域网 IP 访问时文本复制失败 | ⏳ 待实现 | 5 处复制全部裸调 `navigator.clipboard.writeText`，全仓无 `execCommand` / `isSecureContext` 回退（亲自复核）。`ServerLibraryPage.tsx:171` 尚有 catch 提示，`PromptsPage.tsx:852`、`:970`、`AssetsPage.tsx:269`、`CanvasPromptsPanel.tsx:135` 完全静默。后果：经 `http://局域网IP` 访问时点「复制」无反应且无错误提示。恒用 HTTPS/localhost 部署则不触发 |
+| T4-26 | 四个模型无能力声明与参数转译 | CHANGELOG v0.3.13 Seedream 5 Pro、v0.3.11 Nano Banana 2 Lite、v0.3.7 Kling 3.0 Turbo / HappyHorse 1.1 | ⏳ 待实现 | 能力表只有 kling-v3 而无 turbo 变体；其余三个零命中。模型名是自由文本，用户仍可手填走通用协议，但没有能力声明、参数转译与校验（对比 Seedance 2.0 Mini 有完整能力表）。后果：专属参数不被正确转译，失败信息不友好 |
+| T4-27 | 产品内无用户文档入口 | CHANGELOG v0.2.1：新增文档站点页面 | 🔶 待决策 | 换 7 种命名检索均零命中，路由无 docs 项，顶栏 HelpCircle 指向快捷键弹窗。仓库 `docs/` 是内部审计文档，不对外 |
+| T4-28 | 模型选择不记住用户偏好 | CHANGELOG v0.2.1：优化模型选择用户偏好 | ⏳ 待实现 | 渠道偏好已持久化（`board.ts:379`），但模型输入框不回写，切换渠道即被重置为该渠道默认模型。查 `lastModel`/`preferredModel`/`rememberedModel` 均零命中 |
+| T4-29 | 版本弹窗不检查最新版本 | CHANGELOG v0.0.5：展示当前版本、最新版本和时间线 | ⛔ 有意不同 | `checkLatest` 直接把 latest 设为 `APP_VERSION`，`hasNew` 恒 false（`VersionReleaseModal.tsx:44`）。代码注释写明「Self-hosted: prefer local VERSION/CHANGELOG assets first; no remote required」，是自托管不外联的有意取舍。时间线与当前版本展示均正常 |
+| T4-30 | WebDAV 同步 | CHANGELOG v0.2.5 新增 → v0.3.7 上游自行移除 | ⛔ 本地超集 | 本地保留 `webdav.ts` 且有生产引用。上游最终态是删除，本地属「多一个功能」而非缺失，不跟进移除 |
+| T4-31 | Apimart 兼容协议的模型覆盖面 | CHANGELOG v0.3.1 / v0.3.5：「全部」图片/视频模型 | 🔶 未做结论 | 协议骨架完整，图片 2 个、视频 3 系。上游模型清单在 clean-room 约束下不可见，无法量化差多少，不猜 |
 | T4-17 | 工作流 Agent 系统提示词不可配置 | features 提示词库首条：管理员未填写时才用默认 | ⏳ 待实现 | 默认提示词是硬编码常量（`WorkflowWorkbench.tsx:33`），缺「可配置 + 未填写回落默认」这层 |
 | T4-18 | 群众阵列人数有硬上限 | features 导演台：「想多少人就可以多少人」 | ⛔ 有意不同 | 单阵列 ≤1024、场景 ≤4096、渲染批次 ≤128，是浏览器性能保护 |
 | T4-19 | 导演台截图在 server 存储模式下会跨设备同步 | features 导演台：「仅保存在当前浏览器…不随账号跨设备同步」 | ⛔ 有意不同（本地更强） | 默认部署为纯 IndexedDB，符合上游；仅 `VITE_OPENBOARD_STORAGE=server` 时切到服务端存储，属本地额外能力 |
@@ -97,11 +108,35 @@ API 层把 `ErrGone` 映射成 HTTP 410 而不是 500——这个区别很重要
 
 验收：5 个 store 层测试覆盖陈旧写回被拒、CAS 复活被拒、单条与批量删除都清空成果、墓碑在保留期内不清理且过期后物理消失；2 个前端测试分别覆盖 410 结算与 500 仍报错。
 
-## 5. 质量门禁
+## 5. 本轮覆盖记录（供下一轮度量用）
+
+按 §1 的教训，覆盖度必须可被后续轮次复算。本轮实际逐条走过的范围如下，**未列入差异总表 = 已核对且无缺口**，不是「没审」：
+
+| 范围 | 条目数 | 结论 |
+|---|---|---|
+| `features.md` / AI 生成 | 18 条 + 6 段正文 | 逐条追到生产调用链，缺口见 T4-10、T4-11、T4-12 |
+| `features.md` / 图片工作流 | 15 | 缺口见 T4-06、T4-07；其余 13 条已实现 |
+| `features.md` / 全景图 | 5 | 全部已实现 |
+| `features.md` / 导演台 | 12 + 节首正文 | 缺口见 T4-08、T4-09、T4-18、T4-19；含「8 种人物/20 种姿势」精确吻合 |
+| `features.md` / 账号和后台 | 11 | 缺口见 T4-21、T4-22、T4-23 |
+| `features.md` / 当前限制 | 6 | 5 条一致，1 条本地更严格（T4-21 的副作用） |
+| `features.md` / 后端能力 | 6 | 均为既有决策，另见 T4-13 |
+| `canvas-node-manual.md` | 6 小节 | 缺口见 T4-04、T4-05 |
+| `backend-database.md` | 11 张表 | 缺口见 T4-01、T4-02；另有 progress 字段等中低度差异 |
+| `system-settings.md` | 22 个字段 | 缺口见 T4-03 |
+| `api-response.md` | 全文 | 见 T4-20，随既有 envelope 决策一并有意不同 |
+| `CHANGELOG` v0.0.1–v0.3.13 | 30 组 76 条 | 缺口见 T4-24 至 T4-31。其余条目分三类：已实现、本地不存在该 bug、或纯样式/未描述可观察行为而未做结论 |
+
+**度量陷阱提醒**：本轮收尾复算时，`v0.0.2`、`v0.3.4` 等 22 个版本号在计划文档里搜不到，看起来像盲区——实际它们都已逐条审过，只是无缺口所以没被写进差异表。**「文档里搜不到版本号」不等于「没审过」**。下一轮如要复算覆盖度，请以本表为准，不要重复用 grep 版本号的方式判断。
+
+`CHANGELOG` 未做结论的条目及原因已在审计中逐条记录，主要是三类：条目未描述具体 bug 表现（v0.3.11、v0.2.5）、纯视觉样式在 clean-room 下不可判等价（v0.3.2、v0.0.7、v0.0.2 移动端）、以及属结构性选择而非缺口（v0.0.6 代理路径形态）。
+
+## 6. 质量门禁
 
 沿用前三轮，并把第三轮新增的「已实现判定必须追完整调用链」保留为固定动作。本轮再加两条：
 
 1. **覆盖度用上游自己的目录结构度量**，统计单位下沉到章节与条目，在每轮**开头和结尾各做一次**。自选关键词的命中率不构成覆盖度证据。
 2. **新增的清理/维护函数必须当场接上调度或调用方**，并在同一次提交里给出「它确实会被执行」的证据。本轮 `DeleteExpiredMediaReferences` 的历史教训表明，「写了但没接」与「没写」对用户是等价的。
+3. **判「缺失」要以当前工作树为准，不能沿用上一轮的结论**。本轮初稿的 T4-14/15/16 三条全是误报：后台提示词的搜索框与分类、标签下拉，前台与后台素材库的标签筛选，管理后台的素材库页签，代码里全都存在，其中一部分正是上一轮自己加的（`1d61da0 feat: add admin catalog filters, library console...`）。误报的成因是把上一轮的旧结论当成了已知前提直接转述，而没有重新读代码——这与 §1 的循环论证是同一类错误，只是把「自选关键词」换成了「自选的历史结论」。
 
 验证基线：`bun run typecheck`、`bun test src`（538 pass）、`go test ./...`、`go vet ./...`、Playwright chromium（104/104）、`audit:cleanroom`、`audit:vulnerabilities`、`audit:deployment-env` 全部通过。store 层的墓碑测试需要 PostgreSQL，通过 `OPENBOARD_TEST_DATABASE_URL` 提供，未设置时按既有约定跳过（CI 中缺失即失败）。
