@@ -114,54 +114,71 @@ export function TopNav({
         })}
       </nav>
       <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
-        {location.pathname === "/" ? (
+        <div className="hidden items-center gap-1 border-r border-[var(--ob-line)] pr-1.5 lg:flex" role="group" aria-label="全局工具">
+          {location.pathname === "/" ? (
+            <button
+              type="button"
+              className="ob-icon-btn disabled:opacity-40"
+              title="导出当前画布包"
+              aria-label="导出当前画布包"
+              disabled={!activeProject}
+              onClick={downloadActiveProject}
+            >
+              <Archive size={18} />
+            </button>
+          ) : null}
           <button
             type="button"
-            className="ob-icon-btn hidden disabled:opacity-40 lg:grid"
-            title="导出当前画布包"
-            disabled={!activeProject}
-            onClick={downloadActiveProject}
+            className={cn("ob-icon-btn", showAssistant && "is-active")}
+            title="助手面板"
+            aria-label="助手面板"
+            aria-controls="canvas-assistant"
+            aria-expanded={showAssistant}
+            onClick={() => setShowAssistant(!showAssistant)}
           >
-            <Archive size={18} />
+            <MessageSquare size={18} />
           </button>
-        ) : null}
+          <button
+            type="button"
+            className={cn("ob-icon-btn", showLocalAgent && "is-active")}
+            title="本地 Agent"
+            aria-label="本地 Agent"
+            onClick={() => setShowLocalAgent(!showLocalAgent)}
+          >
+            <Bot size={18} />
+          </button>
+          <button
+            type="button"
+            className="ob-icon-btn"
+            title="快捷键"
+            aria-label="快捷键"
+            onClick={() => setShowShortcuts(true)}
+          >
+            <HelpCircle size={18} />
+          </button>
+          <button
+            type="button"
+            className="ob-icon-btn"
+            title="主题"
+            aria-label="切换主题"
+            onClick={toggleTheme}
+          >
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+          <VersionReleaseModal />
+        </div>
+        {/* Mobile still needs assistant quick access */}
         <button
           type="button"
-          className={cn("ob-icon-btn", showAssistant && "is-active")}
+          className={cn("ob-icon-btn lg:hidden", showAssistant && "is-active")}
           title="助手面板"
+          aria-label="助手面板"
           aria-controls="canvas-assistant"
           aria-expanded={showAssistant}
           onClick={() => setShowAssistant(!showAssistant)}
         >
           <MessageSquare size={18} />
         </button>
-        <button
-          type="button"
-          className={cn("ob-icon-btn hidden lg:grid", showLocalAgent && "is-active")}
-          title="本地 Agent"
-          onClick={() => setShowLocalAgent(!showLocalAgent)}
-        >
-          <Bot size={18} />
-        </button>
-        <button
-          type="button"
-          className="ob-icon-btn hidden lg:grid"
-          title="快捷键"
-          onClick={() => setShowShortcuts(true)}
-        >
-          <HelpCircle size={18} />
-        </button>
-        <button
-          type="button"
-          className="ob-icon-btn hidden lg:grid"
-          title="主题"
-          onClick={toggleTheme}
-        >
-          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-        </button>
-        <div className="hidden lg:block">
-          <VersionReleaseModal />
-        </div>
         <div className="lg:hidden">
           <button
             type="button"
@@ -263,46 +280,68 @@ export function TopNav({
                       退出登录
                     </button>
                   </div>
+                ) : auth?.canLogin ? (
+                  <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
+                      onClick={() => {
+                        setCompactMenuOpen(false);
+                        auth.requestLogin();
+                      }}
+                    >
+                      <LogIn size={16} />
+                      登录
+                    </button>
+                  </div>
                 ) : null}
               </div>
             </>
           ) : null}
         </div>
-        {signedInUser ? (
-          <div className="hidden items-center gap-1.5 lg:flex">
-            <span className="ob-chip max-w-[10rem] truncate" title={signedInUser.email}>
-              <UserRound size={12} className="mr-1 inline" />
-              {signedInUser.displayName || signedInUser.email}
-            </span>
-            {auth?.usageLabel ? (
-              <span className="ob-chip max-w-[11rem] truncate" title={auth.usageLabel}>{auth.usageLabel}</span>
-            ) : null}
-            <button type="button" className="ob-icon-btn" title="退出登录" onClick={() => void auth?.logout()}>
-              <LogOut size={16} />
+        <div className="flex items-center gap-1 sm:gap-1.5" role="group" aria-label="账号与设置">
+          {signedInUser ? (
+            <div className="hidden items-center gap-1.5 lg:flex">
+              <span className="ob-chip max-w-[10rem] truncate" title={signedInUser.email}>
+                <UserRound size={12} className="mr-1 inline" />
+                {signedInUser.displayName || signedInUser.email}
+              </span>
+              {auth?.usageLabel ? (
+                <span className="ob-chip max-w-[11rem] truncate" title={auth.usageLabel}>{auth.usageLabel}</span>
+              ) : null}
+              <button
+                type="button"
+                className="ob-icon-btn"
+                title="退出登录"
+                aria-label="退出登录"
+                onClick={() => void auth?.logout()}
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
+          ) : auth?.canLogin ? (
+            <button
+              type="button"
+              className="ob-btn"
+              title="登录"
+              aria-label="登录"
+              onClick={auth.requestLogin}
+            >
+              <LogIn size={16} className="mr-1 inline" />
+              登录
             </button>
-          </div>
-        ) : null}
-        {auth?.canLogin ? (
-          // A guest may read the shared catalog but cannot save anything, so the
-          // way back to the sign-in form has to stay visible.
+          ) : null}
           <button
             type="button"
-            className="ob-btn"
-            title="登录"
-            onClick={auth.requestLogin}
+            className="ob-icon-btn"
+            title="设置"
+            aria-label="打开设置"
+            onClick={onOpenSettings}
           >
-            <LogIn size={16} className="mr-1 inline" />
-            登录
+            <Settings size={18} />
           </button>
-        ) : null}
-        <button
-          type="button"
-          className="ob-icon-btn"
-          title="设置"
-          onClick={onOpenSettings}
-        >
-          <Settings size={18} />
-        </button>
+        </div>
       </div>
     </header>
   );

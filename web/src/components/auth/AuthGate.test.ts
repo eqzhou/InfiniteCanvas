@@ -5,6 +5,7 @@ import {
   isGuestIdentity,
   prepareAuthenticatedWorkspace,
   releaseAuthenticatedWorkspace,
+  requiresLoginWall,
   shouldOfferLogin,
   transitionWorkspaceIdentity,
 } from "./AuthGate";
@@ -143,3 +144,18 @@ describe("guest bootstrap status", () => {
   });
 });
 
+
+
+describe("login wall enforcement", () => {
+  test("requires a login wall for guests when accounts are enabled", () => {
+    expect(requiresLoginWall("open", null, false)).toBe(true);
+    expect(requiresLoginWall("open", guestAccount, false)).toBe(true);
+    expect(requiresLoginWall("login_required", null, false)).toBe(true);
+  });
+
+  test("does not wall off signed-in users or auth-off local admins", () => {
+    expect(requiresLoginWall("authenticated", signedInAccount, false)).toBe(false);
+    expect(requiresLoginWall("open", null, true)).toBe(false);
+    expect(requiresLoginWall("loading", null, false)).toBe(false);
+  });
+});

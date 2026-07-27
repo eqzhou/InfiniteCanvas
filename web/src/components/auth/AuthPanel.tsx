@@ -77,7 +77,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
             OpenBoard 账号
           </h1>
           <p className="mt-1 text-sm text-[var(--ob-muted)]">
-            登录后同步画布、素材与生成历史
+            登录后同步画布、素材与生成历史，并返回刚才打开的页面
           </p>
         </div>
 

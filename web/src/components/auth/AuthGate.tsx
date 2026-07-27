@@ -79,6 +79,23 @@ export function shouldOfferLogin(
   return isGuestIdentity(user);
 }
 
+/**
+ * When authentication is enabled (not localAdmin/auth-off), unsigned visitors
+ * must hit the login wall. The current browser URL is left alone so a deep link
+ * like /prompts is restored after a successful sign-in.
+ */
+export function requiresLoginWall(
+  status: AuthStatus,
+  user: AuthUser | null,
+  localAdmin: boolean,
+): boolean {
+  if (localAdmin) return false;
+  if (status === "loading" || status === "authenticated") return false;
+  if (status === "login_required") return true;
+  // open status with a guest/null identity still needs the wall.
+  return isGuestIdentity(user);
+}
+
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function useAuth(): AuthContextValue {
@@ -207,12 +224,13 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
         // browse identity, not a signed-in account — treat it as open so the
         // login entry stays visible and secrets stay gated.
         if (result.guest === true || isGuestIdentity(result.user)) {
+          // Auth is enabled: guests may not browse app surfaces. Keep the current
+          // URL so login returns the user to the page they tried to open.
           setUser(result.user);
           readyScopeRef.current = "open";
           setLocalAdmin(false);
           setUsageSnapshot(null);
-          setStatus("open");
-          await finishReady();
+          setStatus("login_required");
           return;
         }
         setMigrationChecking(true);
@@ -232,13 +250,10 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
           readyScopeRef.current = "open";
           setLocalAdmin(false);
           setUsageSnapshot(null);
-          if (hadSession) {
-            clearSessionToken();
-            setStatus("login_required");
-            return;
-          }
-          setStatus("open");
-          await finishReady();
+          if (hadSession) clearSessionToken();
+          // Auth-enabled deployments always land on the sign-in wall so deep
+          // links like /prompts cannot be used anonymously.
+          setStatus("login_required");
           return;
         }
         // 404 (auth off) / network error → open / backward-compatible mode
@@ -377,7 +392,7 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
       },
       finishReady,
     );
-    setStatus("open");
+    setStatus("login_required");
   }, [finishReady, onBeforeScopeChange, onScopeCredentialsChanged]);
 
   /**
@@ -414,10 +429,23 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
   if (status === "login_required") {
     return (
       <AuthContext.Provider value={value}>
-        <AuthPanel
-          beforeAuthenticate={onBeforeScopeChange}
-          onSuccess={(next) => void handleAuthSuccess(next)}
-        />
+        <div className="flex h-full flex-col">
+          <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 shadow-[var(--ob-elev-1)] backdrop-blur-md">
+            <span className="inline-grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent)] text-sm font-bold tracking-tight text-white shadow-[0_2px_8px_color-mix(in_srgb,var(--ob-accent)_40%,transparent)]">
+              OB
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-[var(--ob-ink)]">OpenBoard</p>
+              <p className="truncate text-xs text-[var(--ob-muted)]">登录后继续使用画布与工作台</p>
+            </div>
+          </header>
+          <div className="min-h-0 flex-1">
+            <AuthPanel
+              beforeAuthenticate={onBeforeScopeChange}
+              onSuccess={(next) => void handleAuthSuccess(next)}
+            />
+          </div>
+        </div>
       </AuthContext.Provider>
     );
   }
