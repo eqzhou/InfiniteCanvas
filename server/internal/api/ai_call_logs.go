@@ -316,3 +316,158 @@ func mediaRequestAuditPayload(request resolvedMediaRequest, kind string) map[str
 		"referenceCount": len(request.Video.References),
 	}
 }
+
+
+type clientAICallLogReport struct {
+	Kind        string          `json:"kind"`
+	Status      string          `json:"status"`
+	ChannelID   string          `json:"channelId,omitempty"`
+	ChannelName string          `json:"channelName,omitempty"`
+	Model       string          `json:"model,omitempty"`
+	Protocol    string          `json:"protocol,omitempty"`
+	DurationMs  int64           `json:"durationMs"`
+	Error       string          `json:"error,omitempty"`
+	Request     json.RawMessage `json:"request,omitempty"`
+	Response    json.RawMessage `json:"response,omitempty"`
+}
+
+// reportClientAICallLog accepts a sanitized browser direct-connect audit row.
+// Uploads are rejected unless an administrator enabled client reporting.
+func (s *Server) reportClientAICallLog(w http.ResponseWriter, r *http.Request) {
+	if s == nil || s.store == nil {
+		http.Error(w, "ai call logs unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	// Mirror requireTenantAdmin bootstrap for the local test harness and
+	// zero-user optional installs: process token when auth is off, any active
+	// session when auth is on, and open bootstrap only while no users exist.
+	if authMode() == "off" {
+		if !s.authorizeProcessToken(r) {
+			http.Error(w, "invalid access token", http.StatusUnauthorized)
+			return
+		}
+	} else if user, ok := authUserFrom(r.Context()); ok {
+		if strings.EqualFold(strings.TrimSpace(user.Status), "ban") {
+			http.Error(w, "account disabled", http.StatusForbidden)
+			return
+		}
+	} else if authMode() == "required" {
+		http.Error(w, "login required", http.StatusUnauthorized)
+		return
+	} else {
+		count, err := s.store.CountUsers(r.Context())
+		if err != nil {
+			http.Error(w, "failed to verify report access", http.StatusServiceUnavailable)
+			return
+		}
+		if count != 0 {
+			http.Error(w, "login required", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	policy, err := s.loadAICallLogClientReport(r.Context(), tenantIDFrom(r))
+	if err != nil {
+		http.Error(w, "failed to load client report policy", http.StatusInternalServerError)
+		return
+	}
+	if !policy.Enabled {
+		http.Error(w, "client ai call log reporting is disabled", http.StatusForbidden)
+		return
+	}
+
+	var body clientAICallLogReport
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 96<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil || ensureJSONEOF(dec) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(body.Kind))
+	status := strings.ToLower(strings.TrimSpace(body.Status))
+	switch kind {
+	case "text", "image", "video", "audio":
+	default:
+		http.Error(w, "kind must be text, image, video, or audio", http.StatusBadRequest)
+		return
+	}
+	switch status {
+	case "succeeded", "failed", "cancelled":
+	default:
+		http.Error(w, "status must be succeeded, failed, or cancelled", http.StatusBadRequest)
+		return
+	}
+	if body.DurationMs < 0 {
+		body.DurationMs = 0
+	}
+	if body.DurationMs > 24*60*60*1000 {
+		body.DurationMs = 24 * 60 * 60 * 1000
+	}
+
+	reqJSON, err := sanitizeAICallLogJSON(json.RawMessage(body.Request))
+	if err != nil || len(body.Request) == 0 {
+		reqJSON = json.RawMessage(`{}`)
+	}
+	resJSON, err := sanitizeAICallLogJSON(json.RawMessage(body.Response))
+	if err != nil || len(body.Response) == 0 {
+		resJSON = json.RawMessage(`{}`)
+	}
+
+	// Force source marker into request so admins can tell proxy vs browser logs.
+	var reqMap map[string]any
+	if json.Unmarshal(reqJSON, &reqMap) != nil || reqMap == nil {
+		reqMap = map[string]any{}
+	}
+	reqMap["source"] = "client-direct"
+	if protocol := strings.TrimSpace(body.Protocol); protocol != "" && reqMap["protocol"] == nil {
+		reqMap["protocol"] = protocol
+	}
+	if model := strings.TrimSpace(body.Model); model != "" && reqMap["model"] == nil {
+		reqMap["model"] = model
+	}
+	if rebuilt, err := json.Marshal(reqMap); err == nil {
+		if sanitized, err := sanitizeAICallLogJSON(json.RawMessage(rebuilt)); err == nil {
+			reqJSON = sanitized
+		}
+	}
+
+	entry := store.AICallLog{
+		UserID:       userIDFrom(r),
+		Kind:         kind,
+		ChannelID:    strings.TrimSpace(body.ChannelID),
+		ChannelName:  strings.TrimSpace(body.ChannelName),
+		Model:        strings.TrimSpace(body.Model),
+		Protocol:     strings.TrimSpace(body.Protocol),
+		Status:       status,
+		DurationMs:   body.DurationMs,
+		Error:        strings.TrimSpace(body.Error),
+		RequestJSON:  reqJSON,
+		ResponseJSON: resJSON,
+	}
+	if entry.ChannelName == "" {
+		entry.ChannelName = entry.ChannelID
+	}
+	if len(entry.Error) > 2000 {
+		entry.Error = entry.Error[:2000]
+	}
+	if len(entry.Model) > 500 {
+		entry.Model = entry.Model[:500]
+	}
+	if len(entry.ChannelID) > 128 {
+		entry.ChannelID = entry.ChannelID[:128]
+	}
+	if len(entry.ChannelName) > 200 {
+		entry.ChannelName = entry.ChannelName[:200]
+	}
+	if len(entry.Protocol) > 64 {
+		entry.Protocol = entry.Protocol[:64]
+	}
+
+	created, err := s.store.CreateAICallLog(r.Context(), tenantIDFrom(r), entry)
+	if err != nil {
+		http.Error(w, "failed to record ai call log", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, created)
+}

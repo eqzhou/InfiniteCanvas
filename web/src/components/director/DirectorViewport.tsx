@@ -157,6 +157,8 @@ type DirectorRuntime = {
   disposed: boolean;
   grid: THREE.GridHelper;
   environmentSphere: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  environmentPlane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  environmentMode: "none" | "spherical" | "flat";
   environmentReady: boolean;
   environmentError: boolean;
   environmentUrl?: string;
@@ -197,6 +199,7 @@ function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 export function DirectorViewport({
   scene: document,
   environmentUrl,
+  environmentMode = "spherical",
   captureRef,
   onSelect,
   onViewChange,
@@ -207,6 +210,8 @@ export function DirectorViewport({
 }: {
   scene: DirectorScene;
   environmentUrl?: string;
+  /** spherical = equirect skybox; flat = ordinary photo backdrop. */
+  environmentMode?: "spherical" | "flat";
   captureRef: React.MutableRefObject<(() => Promise<DirectorRenderedCapture>) | null>;
   onSelect: (id: string | null) => void;
   onViewChange: (
@@ -283,6 +288,11 @@ export function DirectorViewport({
     const environmentMaterial = new THREE.MeshBasicMaterial({ side: THREE.BackSide, visible: false });
     const environmentSphere = new THREE.Mesh(environmentGeometry, environmentMaterial);
     scene.add(environmentSphere);
+    const environmentPlaneMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false, transparent: false });
+    const environmentPlane = new THREE.Mesh(new THREE.PlaneGeometry(40, 20), environmentPlaneMaterial);
+    environmentPlane.position.set(0, 8, -18);
+    environmentPlane.visible = false;
+    scene.add(environmentPlane);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(initialPose.target.x, initialPose.target.y, initialPose.target.z);
@@ -446,6 +456,8 @@ export function DirectorViewport({
       disposed: false,
       grid,
       environmentSphere,
+      environmentPlane,
+      environmentMode: "none" as const,
       environmentReady: true,
       environmentError: false,
       environmentLoadToken: 0,
@@ -473,6 +485,7 @@ export function DirectorViewport({
       transformControls.dispose();
       controls.dispose();
       environmentMaterial.map?.dispose();
+      environmentPlaneMaterial.map?.dispose();
       disposeObjectTree(scene);
       scene.clear();
       renderer.renderLists.dispose();
@@ -497,6 +510,7 @@ export function DirectorViewport({
     runtime.grid.visible = document.showGroundGrid;
     runtime.environmentSphere.rotation.y = THREE.MathUtils.degToRad(document.environment.rotationY);
     runtime.environmentSphere.material.color.setScalar(document.environment.intensity);
+    runtime.environmentPlane.material.color.setScalar(document.environment.intensity);
     const activeIds = new Set(document.objects.map((object) => object.id));
     for (const [id, instance] of runtime.instances) {
       if (activeIds.has(id)) continue;
@@ -614,17 +628,24 @@ export function DirectorViewport({
     if (!runtime) return;
     const token = ++runtime.environmentLoadToken;
     runtime.environmentUrl = environmentUrl;
+    runtime.environmentMode = environmentUrl ? environmentMode : "none";
     runtime.environmentSphere.material.map?.dispose();
     runtime.environmentSphere.material.map = null;
     runtime.environmentSphere.material.visible = false;
+    runtime.environmentPlane.material.map?.dispose();
+    runtime.environmentPlane.material.map = null;
+    runtime.environmentPlane.material.visible = false;
+    runtime.environmentPlane.visible = false;
     runtime.environmentError = false;
     runtime.renderer.domElement.dataset.environmentLoaded = environmentUrl ? "false" : "fallback";
+    runtime.renderer.domElement.dataset.environmentMode = runtime.environmentMode;
     if (!environmentUrl) {
       runtime.environmentReady = true;
       runtime.environmentError = false;
       return;
     }
     runtime.environmentReady = false;
+    const mode = environmentMode;
     new THREE.TextureLoader().load(environmentUrl, (texture) => {
       if (runtimeRef.current !== runtime || token !== runtime.environmentLoadToken) return texture.dispose();
       const image = texture.image as { width?: number; height?: number } | undefined;
@@ -637,21 +658,38 @@ export function DirectorViewport({
         return;
       }
       texture.colorSpace = THREE.SRGBColorSpace;
-      runtime.environmentSphere.material.map = texture;
-      runtime.environmentSphere.material.visible = true;
-      runtime.environmentSphere.material.needsUpdate = true;
+      if (mode === "flat") {
+        const width = Math.max(1, image?.width ?? 2);
+        const height = Math.max(1, image?.height ?? 1);
+        const aspect = width / height;
+        const planeHeight = 18;
+        const planeWidth = planeHeight * aspect;
+        runtime.environmentPlane.geometry.dispose();
+        runtime.environmentPlane.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+        runtime.environmentPlane.material.map = texture;
+        runtime.environmentPlane.material.visible = true;
+        runtime.environmentPlane.material.needsUpdate = true;
+        runtime.environmentPlane.visible = true;
+        runtime.environmentSphere.material.visible = false;
+      } else {
+        runtime.environmentSphere.material.map = texture;
+        runtime.environmentSphere.material.visible = true;
+        runtime.environmentSphere.material.needsUpdate = true;
+        runtime.environmentPlane.visible = false;
+      }
       runtime.environmentReady = true;
       runtime.environmentError = false;
       runtime.renderer.domElement.dataset.environmentLoaded = "true";
+      runtime.renderer.domElement.dataset.environmentMode = mode;
     }, undefined, () => {
       if (runtimeRef.current !== runtime || token !== runtime.environmentLoadToken) return;
-      if (runtime.environmentSphere.material.map) return;
+      if (runtime.environmentSphere.material.map || runtime.environmentPlane.material.map) return;
       runtime.environmentReady = true;
       runtime.environmentError = true;
       runtime.renderer.domElement.dataset.environmentLoaded = "error";
     });
     return () => { runtime.environmentLoadToken += 1; };
-  }, [environmentUrl]);
+  }, [environmentUrl, environmentMode]);
 
   return (
     <div

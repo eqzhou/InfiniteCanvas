@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { audioJobParameters, audioSpeechOptions } from "@/lib/audio-generation";
@@ -14,7 +14,7 @@ import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import { Send } from "lucide-react";
 import { getProvider } from "@/lib/ai-config";
-import { isNodePromptType, nodePromptKind, nodePromptPlaceholder } from "@/lib/node-prompt";
+import { isNodePromptType, nodePromptKind, nodePromptPlaceholder, type NodePromptType } from "@/lib/node-prompt";
 import {
   activePromptReferences,
   buildPromptReferences,
@@ -34,22 +34,50 @@ import {
   createServerVideoGenerationJob,
   usesServerGenerationJobs,
 } from "@/services/generation-jobs";
+import { DEFAULT_SITE_POLICY, getSitePolicy, type SitePolicy } from "@/services/auth-session";
+import {
+  resolveNodePromptModels,
+  resolveNodePromptSelectedModel,
+} from "@/lib/node-prompt-models";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
   const config = useBoardStore((s) => s.config);
+  const prompts = useBoardStore((s) => s.prompts);
   const project = useBoardStore((s) => s.getActive());
   const updateNode = useBoardStore((s) => s.updateNode);
   const updateActive = useBoardStore((s) => s.updateActive);
   const persistNow = useBoardStore((s) => s.persistNow);
   const [text, setText] = useState(node.metadata.prompt ?? "");
   const [busy, setBusy] = useState(false);
+  const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const channel =
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
   const references = buildPromptReferences(project, node.id);
 
-  if (!isNodePromptType(node.type)) return null;
-  const promptType = node.type;
+  const promptable = isNodePromptType(node.type);
+  const promptType: NodePromptType = isNodePromptType(node.type) ? node.type : "text";
+  const modelOptions = useMemo(
+    () => (promptable ? resolveNodePromptModels(channel, promptType, sitePolicy) : []),
+    [channel, promptable, promptType, sitePolicy],
+  );
+  const selectedModel = promptable ? resolveNodePromptSelectedModel(node, channel) : "";
+
+  useEffect(() => {
+    let cancelled = false;
+    void getSitePolicy()
+      .then((policy) => {
+        if (!cancelled) setSitePolicy(policy);
+      })
+      .catch(() => {
+        if (!cancelled) setSitePolicy(DEFAULT_SITE_POLICY);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!promptable) return null;
 
   const placeRight = (created: BoardNode[]) => {
     updateActive((p) => ({
@@ -342,37 +370,87 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   };
 
   const placeholder = nodePromptPlaceholder(promptType, Boolean(node.metadata.content));
+  const defaultModelLabel = selectedModel || "继承渠道默认模型";
+
+  const appendPromptLibrary = (promptId: string) => {
+    const prompt = prompts.find((item) => item.id === promptId);
+    if (!prompt) return;
+    const body = prompt.body.trim();
+    if (!body) return;
+    const next = text.trim() ? `${text.trim()}
+
+${body}` : body;
+    setText(next);
+    updateNode(node.id, { metadata: { prompt: next } }, { history: false });
+  };
 
   return (
     <div
-      className="ob-composer node-prompt absolute left-0 top-full z-20 mt-2 flex w-[min(360px,calc(100vw-1.5rem))] max-w-full items-end gap-2 p-2"
+      className="ob-composer node-prompt absolute left-0 top-full z-20 mt-2 flex w-[min(420px,calc(100vw-1.5rem))] max-w-full flex-col gap-2 p-2"
       onPointerDown={(e) => e.stopPropagation()}
       role="group"
       aria-label="节点提示词"
     >
-      <div className="min-w-0 flex-1">
-        <PromptChipInput
-          placeholder={placeholder}
-          value={text}
-          references={references}
-          onChange={(value) => {
-            setText(value);
-            updateNode(node.id, { metadata: { prompt: value } }, { history: false });
+      <div className="flex min-w-0 items-center gap-1.5">
+        <select
+          aria-label="节点生成模型"
+          className="min-w-0 flex-1 truncate rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
+          value={node.metadata.model ?? ""}
+          title={defaultModelLabel}
+          onChange={(event) => {
+            const model = event.target.value.trim();
+            updateNode(node.id, { metadata: { model: model || undefined } });
           }}
-          onSubmit={() => void send()}
-        />
+        >
+          <option value="">{defaultModelLabel}</option>
+          {modelOptions.map((model) => (
+            <option key={model} value={model}>{model}</option>
+          ))}
+          {node.metadata.model && !modelOptions.includes(node.metadata.model) ? (
+            <option value={node.metadata.model}>{node.metadata.model}</option>
+          ) : null}
+        </select>
+        <select
+          aria-label="提示词库"
+          className="w-[42%] min-w-[6rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-1 text-[11px]"
+          value=""
+          onChange={(event) => {
+            const id = event.target.value;
+            event.currentTarget.value = "";
+            if (id) appendPromptLibrary(id);
+          }}
+        >
+          <option value="">提示词库</option>
+          {prompts.map((prompt) => (
+            <option key={prompt.id} value={prompt.id}>{prompt.title}</option>
+          ))}
+        </select>
       </div>
-      <button
-        type="button"
-        className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
-        aria-busy={busy}
-        aria-label={busy ? "生成中" : "发送提示词"}
-        disabled={busy || !text.trim()}
-        onClick={() => void send()}
-        title="发送 (Ctrl/Cmd+Enter)"
-      >
-        <Send size={14} />
-      </button>
+      <div className="flex min-w-0 items-end gap-2">
+        <div className="min-w-0 flex-1">
+          <PromptChipInput
+            placeholder={placeholder}
+            value={text}
+            references={references}
+            onChange={(value) => {
+              setText(value);
+              updateNode(node.id, { metadata: { prompt: value } }, { history: false });
+            }}
+            onSubmit={() => void send()}
+          />
+        </div>
+        <button
+          type="button"
+          className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
+          aria-busy={busy}
+          aria-label={busy ? "生成中" : "发送提示词"}
+          disabled={busy || !text.trim()}
+          onClick={() => void send()}
+          title="发送 (Ctrl/Cmd+Enter)"
+        >
+          <Send size={14} />
+        </button>
+      </div>
     </div>
   );
 }

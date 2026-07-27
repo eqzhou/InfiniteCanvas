@@ -1071,6 +1071,21 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         title: asset.title,
         metadata: { content: asset.content ?? "", status: "success" },
       });
+    } else if (
+      asset.kind === "image" &&
+      (asset.notes === "panoramaProjection:equirectangular" ||
+        asset.tags?.includes("panorama"))
+    ) {
+      get().addNode("panorama", position, {
+        title: asset.title || "360° 全景",
+        metadata: {
+          content: asset.coverUrl,
+          storageKey: asset.storageKey,
+          mimeType: asset.mimeType,
+          panoramaProjection: "equirectangular",
+          status: "success",
+        },
+      });
     } else {
       get().addNode(asset.kind, position, {
         title: asset.title,

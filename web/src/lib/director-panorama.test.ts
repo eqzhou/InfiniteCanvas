@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   bindDirectorPanorama,
+  isSphericalDirectorEnvironment,
   isUsableDirectorEnvironment,
   listDirectorEnvironmentOptions,
   removeEdgeAndReconcilePanorama,
@@ -76,7 +77,7 @@ describe("director panorama graph binding", () => {
     expect(listDirectorEnvironmentOptions(bound, director.id).map((node) => node.id)).toEqual([image.id]);
   });
 
-  test("prefers the currently connected image/panorama environment over other candidates", () => {
+  test("keeps multiple environment edges and prefers the active selection", () => {
     const project = createProject("Environment choice");
     const image = createNode("image", { x: 0, y: 0 }, { metadata: {
       content: "blob:image",
@@ -95,12 +96,14 @@ describe("director panorama graph binding", () => {
     const source = { ...project, nodes: [image, panorama, director] };
     const withImage = bindDirectorPanorama(source, director.id, image.id);
     expect(resolveDirectorPanorama(withImage, director.id)?.id).toBe(image.id);
+    expect(isSphericalDirectorEnvironment(image)).toBe(false);
+    expect(isSphericalDirectorEnvironment(panorama)).toBe(true);
 
     const withPanorama = bindDirectorPanorama(withImage, director.id, panorama.id);
-    expect(withPanorama.edges.filter((edge) => edge.to === director.id)).toHaveLength(1);
+    expect(withPanorama.edges.filter((edge) => edge.to === director.id)).toHaveLength(2);
     expect(resolveDirectorPanorama(withPanorama, director.id)?.id).toBe(panorama.id);
-    expect(listDirectorEnvironmentOptions(withPanorama, director.id).map((node) => node.id))
-      .toEqual([panorama.id]);
+    expect(listDirectorEnvironmentOptions(withPanorama, director.id).map((node) => node.id).sort())
+      .toEqual([image.id, panorama.id].sort());
     expect(listDirectorEnvironmentOptions(withImage, director.id).map((node) => node.id))
       .toEqual([image.id]);
   });
@@ -138,7 +141,7 @@ describe("director panorama graph binding", () => {
     expect(listDirectorEnvironmentOptions(unbound, director.id)).toEqual([]);
   });
 
-  test("replaces and unbinds panorama edges without disturbing unrelated edges", () => {
+  test("adds multiple panorama edges without disturbing unrelated edges", () => {
     const project = createProject("Panorama shot");
     const first = createNode("panorama", { x: 0, y: 0 }, { metadata: { content: "blob:first", storageKey: "image:first", naturalWidth: 2048, naturalHeight: 1024 } });
     const second = createNode("panorama", { x: 0, y: 300 }, { metadata: { content: "blob:second", storageKey: "image:second", naturalWidth: 2048, naturalHeight: 1024 } });
@@ -150,12 +153,17 @@ describe("director panorama graph binding", () => {
       edges: [{ id: "edge_text", from: text.id, to: director.id }],
     };
     const bound = bindDirectorPanorama(bindDirectorPanorama(source, director.id, first.id), director.id, second.id);
-    expect(bound.edges.some((edge) => edge.from === first.id)).toBe(false);
+    expect(bound.edges.some((edge) => edge.from === first.id)).toBe(true);
+    expect(bound.edges.some((edge) => edge.from === second.id)).toBe(true);
     expect(bound.edges.some((edge) => edge.id === "edge_text")).toBe(true);
+    expect(resolveDirectorPanorama(bound, director.id)?.id).toBe(second.id);
 
     const bindingEdge = bound.edges.find((edge) => edge.from === second.id)!;
     const unbound = removeEdgeAndReconcilePanorama(bound, bindingEdge.id);
-    expect(resolveDirectorPanorama(unbound, director.id)).toBeUndefined();
-    expect(unbound.edges).toEqual([{ id: "edge_text", from: text.id, to: director.id }]);
+    // Active selection cleared; first environment edge remains and becomes the fallback.
+    expect(resolveDirectorPanorama(unbound, director.id)?.id).toBe(first.id);
+    expect(unbound.edges.some((edge) => edge.id === "edge_text")).toBe(true);
+    expect(unbound.edges.some((edge) => edge.from === first.id)).toBe(true);
+    expect(unbound.edges.some((edge) => edge.from === second.id)).toBe(false);
   });
 });

@@ -59,6 +59,17 @@ export function listDirectorEnvironmentOptions(
 export function resolveDirectorPanorama(project: BoardProject, directorId: string): BoardNode | undefined {
   const director = project.nodes.find((node) => node.id === directorId && node.type === "director");
   if (!director) return undefined;
+  const preferredId = director.metadata.directorScene?.environment?.sourceId ?? null;
+  if (preferredId) {
+    const preferred = project.nodes.find((node) => node.id === preferredId);
+    if (
+      preferred &&
+      isUsableDirectorEnvironment(preferred) &&
+      project.edges.some((edge) => edge.from === preferred.id && edge.to === directorId)
+    ) {
+      return preferred;
+    }
+  }
   for (const edge of project.edges) {
     if (edge.to !== directorId) continue;
     const candidate = project.nodes.find((node) => node.id === edge.from);
@@ -67,6 +78,35 @@ export function resolveDirectorPanorama(project: BoardProject, directorId: strin
   return undefined;
 }
 
+/**
+ * True when the environment should be rendered as a spherical equirectangular
+ * skybox. Ordinary photos stay flat backgrounds even if they are connected.
+ */
+export function isSphericalDirectorEnvironment(node: BoardNode | null | undefined): boolean {
+  if (!node || !hasRenderableMedia(node)) return false;
+  if (node.type === "panorama") return isUsablePanoramaEnvironment(node);
+  if (node.type === "image") {
+    // Only images that were explicitly imported / marked as equirectangular
+    // panoramas use the sphere path; plain photos stay flat.
+    if (node.metadata.panoramaProjection === "equirectangular") {
+      try {
+        validatePanoramaDimensions(node.metadata.naturalWidth ?? 0, node.metadata.naturalHeight ?? 0);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Connect an environment source into a director without dropping other
+ * environment edges. Passing null clears every environment edge and the
+ * active selection. Passing an already-connected id only updates the active
+ * selection so multi-select stays intact.
+ */
 export function bindDirectorPanorama(
   project: BoardProject,
   directorId: string,
@@ -80,17 +120,104 @@ export function bindDirectorPanorama(
   if (environmentId !== null && !isDirectorEnvironmentSource(environment)) {
     throw new Error("环境节点不存在");
   }
+
   const environmentIds = new Set(
     project.nodes.filter((node) => isDirectorEnvironmentSource(node)).map((node) => node.id),
   );
-  const edges = project.edges.filter((edge) => !(edge.to === directorId && environmentIds.has(edge.from)));
-  if (environment) edges.push({ id: uid("edge"), from: environment.id, to: directorId });
-  const unchanged = edges.length === project.edges.length &&
-    edges.every((edge, index) => edge === project.edges[index]);
-  return unchanged ? project : { ...project, edges };
+
+  let edges = project.edges;
+  if (environmentId === null) {
+    edges = project.edges.filter((edge) => !(edge.to === directorId && environmentIds.has(edge.from)));
+  } else if (environment && !project.edges.some((edge) => edge.from === environment.id && edge.to === directorId)) {
+    edges = [...project.edges, { id: uid("edge"), from: environment.id, to: directorId }];
+  }
+
+  const nodes = project.nodes.map((node) => {
+    if (node.id !== directorId) return node;
+    const current = node.metadata.directorScene;
+    const sameSource = (current?.environment?.sourceId ?? null) === (environment?.id ?? null);
+    if (sameSource && edges === project.edges) return node;
+    if (!current) {
+      // Director without a scene yet: only record the active environment selection.
+      return {
+        ...node,
+        metadata: {
+          ...node.metadata,
+          directorScene: {
+            version: 4 as const,
+            background: "#0b1220",
+            showGroundGrid: true,
+            showRuleOfThirds: false,
+            showSafeFrame: true,
+            viewMode: "director" as const,
+            directorView: { position: { x: 0, y: 1.6, z: 4 }, target: { x: 0, y: 1, z: 0 } },
+            selectedObjectId: null,
+            activeCameraId: "camera_main",
+            cameras: [{
+              id: "camera_main",
+              name: "主摄像机",
+              position: { x: 0, y: 1.6, z: 4 },
+              target: { x: 0, y: 1, z: 0 },
+              focalLength: 35,
+              aperture: 2.8,
+              aspect: "16:9" as const,
+            }],
+            environment: {
+              rotationY: 0,
+              intensity: 1,
+              sourceId: environment?.id ?? null,
+            },
+            objects: [],
+          },
+        },
+      };
+    }
+    return {
+      ...node,
+      metadata: {
+        ...node.metadata,
+        directorScene: {
+          ...current,
+          environment: {
+            ...current.environment,
+            sourceId: environment?.id ?? null,
+          },
+        },
+      },
+    };
+  });
+
+  const unchanged = edges === project.edges && nodes.every((node, index) => node === project.nodes[index]);
+  return unchanged ? project : { ...project, edges, nodes };
 }
 
 export function removeEdgeAndReconcilePanorama(project: BoardProject, edgeId: string): BoardProject {
+  const removed = project.edges.find((edge) => edge.id === edgeId);
   const edges = project.edges.filter((edge) => edge.id !== edgeId);
-  return edges.length === project.edges.length ? project : { ...project, edges };
+  if (edges.length === project.edges.length || !removed) {
+    return edges.length === project.edges.length ? project : { ...project, edges };
+  }
+  const director = project.nodes.find((node) => node.id === removed.to && node.type === "director");
+  if (!director) return { ...project, edges };
+  const activeId = director.metadata.directorScene?.environment?.sourceId ?? null;
+  if (activeId !== removed.from) return { ...project, edges };
+  // Dropped the active environment edge: clear selection so resolve falls through.
+  const nodes = project.nodes.map((node) => {
+    if (node.id !== director.id || !node.metadata.directorScene) return node;
+    const scene = node.metadata.directorScene;
+    return {
+      ...node,
+      metadata: {
+        ...node.metadata,
+        directorScene: {
+          ...scene,
+          environment: {
+            ...scene.environment,
+            sourceId: null,
+          },
+        },
+      },
+    };
+  });
+  return { ...project, edges, nodes };
 }

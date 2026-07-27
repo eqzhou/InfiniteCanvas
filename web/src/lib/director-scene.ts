@@ -561,9 +561,16 @@ export function parseDirectorScene(value: unknown, path = "directorScene"): Dire
   const environmentInput = input.environment === undefined
     ? { rotationY: 0, intensity: 1 }
     : objectRecord(input.environment, `${path}.environment`);
+  const rawSourceId = environmentInput.sourceId;
+  const sourceId = rawSourceId === null || rawSourceId === undefined
+    ? null
+    : (typeof rawSourceId === "string" && rawSourceId.trim()
+      ? rawSourceId.trim().slice(0, 128)
+      : null);
   const environment = {
     rotationY: finite(environmentInput.rotationY, `${path}.environment.rotationY`, -360, 360),
     intensity: finite(environmentInput.intensity, `${path}.environment.intensity`, 0, 2),
+    sourceId,
   };
   if (!Array.isArray(input.objects) || input.objects.length > MAX_OBJECTS) {
     throw new Error(`${path}.objects exceeds ${MAX_OBJECTS} items`);

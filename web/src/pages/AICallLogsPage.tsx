@@ -3,12 +3,16 @@ import { useOptionalAuth } from "@/components/auth/AuthGate";
 import {
   deleteAICallLogs,
   getAICallLog,
+  getAICallLogClientReport,
   getAICallLogRetention,
   listAICallLogs,
+  putAICallLogClientReport,
   putAICallLogRetention,
   type AICallLog,
+  type AICallLogClientReport,
   type AICallLogRetention,
 } from "@/services/ai-call-logs";
+import { invalidateAICallLogClientReportCache } from "@/services/generation-activity";
 
 function isAdminRole(role: string | undefined | null): boolean {
   const value = (role ?? "").toLowerCase();
@@ -42,6 +46,7 @@ export function AICallLogsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [retention, setRetention] = useState<AICallLogRetention>({ enabled: false, retentionDays: 30 });
+  const [clientReport, setClientReport] = useState<AICallLogClientReport>({ enabled: false });
   const [detail, setDetail] = useState<AICallLog | null>(null);
   const [busy, setBusy] = useState(false);
   const [cleanupDays, setCleanupDays] = useState(30);
@@ -81,6 +86,9 @@ export function AICallLogsPage() {
     let cancelled = false;
     void getAICallLogRetention()
       .then((policy) => { if (!cancelled) setRetention(policy); })
+      .catch(() => undefined);
+    void getAICallLogClientReport()
+      .then((policy) => { if (!cancelled) setClientReport(policy); })
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, [canManage]);
@@ -169,7 +177,7 @@ export function AICallLogsPage() {
         <div>
           <h1 className="text-xl font-semibold text-[var(--ob-ink)]">AI 调用日志</h1>
           <p className="mt-1 text-sm text-[var(--ob-muted)]">
-            后端代理的请求/响应摘要、耗时、模型与渠道。密钥与二进制内容已脱敏。
+            后端代理与（可选）浏览器本地直连的请求/响应摘要、耗时、模型与渠道。密钥与二进制内容已脱敏。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -205,6 +213,25 @@ export function AICallLogsPage() {
               }}
             />
             自动清理{retention.enabled ? `（每 ${retention.retentionDays} 天）` : ""}
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-[var(--ob-muted)]">
+            <input
+              type="checkbox"
+              aria-label="本地直连日志上报"
+              checked={clientReport.enabled}
+              disabled={busy}
+              onChange={(event) => {
+                const next = { enabled: event.target.checked };
+                setClientReport(next);
+                void putAICallLogClientReport(next)
+                  .then((policy) => {
+                    setClientReport(policy);
+                    invalidateAICallLogClientReportCache();
+                  })
+                  .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+              }}
+            />
+            本地直连上报
           </label>
           <button
             type="button"

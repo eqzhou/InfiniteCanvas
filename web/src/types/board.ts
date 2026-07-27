@@ -90,6 +90,8 @@ export type DirectorScene = {
   environment: {
     rotationY: number;
     intensity: number;
+    /** Active connected image/panorama node id; multi-env edges stay connected. */
+    sourceId?: string | null;
   };
   objects: DirectorObject[];
 };
@@ -358,6 +360,8 @@ export type AiEndpointConfig = {
   model: string;
   protocol: AiProtocol;
   template?: AiTemplateConfig;
+  /** Last pulled model ids for this endpoint; used by node prompt model pickers. */
+  models?: string[];
 };
 export type AiProviders = Record<AiProviderKind, AiEndpointConfig>;
 

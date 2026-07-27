@@ -74,7 +74,7 @@ export function DirectorDialog({
   onModelCommit: (scene: DirectorScene) => void;
   onClose: () => void;
   onSendCaptures: (captures: DirectorCapture[]) => Promise<void>;
-  panoramaOptions: Array<{ id: string; label: string; url: string }>;
+  panoramaOptions: Array<{ id: string; label: string; url: string; spherical?: boolean }>;
   activePanoramaId: string | null;
   onPanoramaChange: (panoramaId: string | null) => void;
 }) {
@@ -134,6 +134,42 @@ export function DirectorDialog({
     [scene.objects, scene.selectedObjectId],
   );
   const activeCamera = getActiveDirectorCamera(scene);
+  const captureCurrent = () => {
+    if (captureInFlightRef.current) return;
+    captureInFlightRef.current = true;
+    void (async () => {
+      const capture = captureRef.current;
+      if (!capture) {
+        captureInFlightRef.current = false;
+        return;
+      }
+      setCaptureError(null);
+      setCapturing(true);
+      try {
+        const rendered = await capture();
+        const camera = getActiveDirectorCamera(sceneRef.current);
+        const record = await directorCaptureStore.add({
+          ownerScope,
+          projectId,
+          directorNodeId,
+          cameraId: camera.id,
+          cameraName: camera.name,
+          createdAt: new Date().toISOString(),
+          width: rendered.width,
+          height: rendered.height,
+          blob: rendered.blob,
+        });
+        await refreshCaptures();
+        setSelectedCaptureIds(new Set([record.id]));
+      } catch (error) {
+        setCaptureError(error instanceof Error ? error.message : "导演台截图保存失败");
+      } finally {
+        captureInFlightRef.current = false;
+        setCapturing(false);
+      }
+    })();
+  };
+
   const population = getDirectorPopulation(scene);
   const modelDescriptorSignature = scene.objects
     .filter((object) => object.kind === "model")
@@ -394,6 +430,7 @@ export function DirectorDialog({
         <DirectorViewport
           scene={scene}
           environmentUrl={panoramaOptions.find((option) => option.id === activePanoramaId)?.url}
+          environmentMode={panoramaOptions.find((option) => option.id === activePanoramaId)?.spherical ? "spherical" : "flat"}
           captureRef={captureRef}
           onSelect={selectObject}
           onViewChange={persistView}
@@ -423,41 +460,7 @@ export function DirectorDialog({
           onSelectAll={() => setSelectedCaptureIds((current) =>
             current.size === captureRecords.length ? new Set() : new Set(captureRecords.map((record) => record.id))
           )}
-          onCapture={() => {
-            if (captureInFlightRef.current) return;
-            captureInFlightRef.current = true;
-            void (async () => {
-              const capture = captureRef.current;
-              if (!capture) {
-                captureInFlightRef.current = false;
-                return;
-              }
-              setCaptureError(null);
-              setCapturing(true);
-              try {
-                const rendered = await capture();
-                const camera = getActiveDirectorCamera(scene);
-                const record = await directorCaptureStore.add({
-                  ownerScope,
-                  projectId,
-                  directorNodeId,
-                  cameraId: camera.id,
-                  cameraName: camera.name,
-                  createdAt: new Date().toISOString(),
-                  width: rendered.width,
-                  height: rendered.height,
-                  blob: rendered.blob,
-                });
-                await refreshCaptures();
-                setSelectedCaptureIds(new Set([record.id]));
-              } catch (error) {
-                setCaptureError(error instanceof Error ? error.message : "导演台截图保存失败");
-              } finally {
-                captureInFlightRef.current = false;
-                setCapturing(false);
-              }
-            })();
-          }}
+          onCapture={captureCurrent}
           onDeleteSelected={() => {
             void (async () => {
               setCapturing(true);
@@ -595,6 +598,15 @@ export function DirectorDialog({
               <h3 className="text-sm font-semibold">活动机位</h3>
               <button type="button" aria-label="删除活动机位" className="ml-auto rounded p-1.5 text-red-300 hover:bg-red-500/10 disabled:opacity-35" disabled={scene.cameras.length <= 1} onClick={() => onChange(removeDirectorCamera(scene, activeCamera.id))}><Trash2 size={14} /></button>
             </div>
+            <button
+              type="button"
+              className="mb-3 w-full rounded-lg bg-[#f0f269] px-3 py-2 text-xs font-semibold text-black disabled:opacity-50"
+              disabled={capturing}
+              aria-label="生成当前机位截图"
+              onClick={captureCurrent}
+            >
+              {capturing ? "拍摄中…" : "生成当前机位截图"}
+            </button>
             <label className="mb-3 block">机位名称<input aria-label="机位名称" className="mt-1 w-full rounded border border-white/10 bg-white/5 px-2 py-1.5" value={activeCamera.name} onChange={(event) => onChange(renameDirectorCamera(scene, activeCamera.id, event.target.value || activeCamera.name))} /></label>
             <VectorEditor label="摄像机位置" value={activeCamera.position} onChange={(position) => onChange(updateDirectorCamera(scene, { position }))} />
             <VectorEditor label="观察目标" value={activeCamera.target} onChange={(target) => onChange(updateDirectorCamera(scene, { target }))} />

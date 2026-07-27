@@ -70,6 +70,23 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   useEffect(() => {
     if (!open) return;
+    const active =
+      config.channels.find((c) => c.id === config.activeChannelId) ??
+      config.channels[0];
+    if (!active) {
+      setModels({});
+      return;
+    }
+    const next: Partial<Record<AiProviderKind, string[]>> = {};
+    for (const kind of PROVIDER_KINDS) {
+      const cached = getProvider(active, kind).models;
+      if (cached?.length) next[kind] = [...cached];
+    }
+    setModels(next);
+  }, [open, config.activeChannelId, config.channels]);
+
+  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     void getSitePolicy()
       .then((policy) => {
@@ -158,6 +175,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setModels((current) => ({ ...current, [kind]: list }));
       if (!list.length) {
         setError("未拉取到模型（该服务可能不支持模型列表，请手动填写）");
+        // Still clear a stale cached list so the node dialog cannot keep offering
+        // models the channel no longer advertises after a failed pull.
+        updateProvider(kind, { models: [] });
         return;
       }
       // Now that the channel has told us what it serves, apply the tenant
@@ -167,7 +187,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       const selectable = resolveSelectableModels(sitePolicy, list);
       const current = getProvider(channel, kind).model;
       const reconciled = reconcileProviderModel(sitePolicy, kind, current, selectable);
-      if (reconciled !== current) updateProvider(kind, { model: reconciled });
+      updateProvider(kind, {
+        models: list,
+        ...(reconciled !== current ? { model: reconciled } : {}),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -266,7 +289,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   key={kind}
                   kind={kind}
                   provider={getProvider(channel, kind)}
-                  models={resolveSelectableModels(sitePolicy, models[kind] ?? [])}
+                  models={resolveSelectableModels(sitePolicy, models[kind] ?? getProvider(channel, kind).models ?? [])}
                   busy={busyKind === kind}
                   disabled={busyKind !== null}
                   onPull={() => void pullModels(kind)}
@@ -279,24 +302,45 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           <section className="mb-6 grid gap-5 lg:grid-cols-[1.35fr_1fr]">
             <div>
               <SectionTitle title="生成偏好" />
-              <Field label="全局系统提示词">
-                <textarea
-                  className="ob-field min-h-28 resize-y"
-                  maxLength={SYSTEM_PROMPT_MAX_LENGTH}
-                  value={config.systemPrompt}
-                  onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
-                  placeholder="应用于文本、图片生成和图片编辑请求"
-                />
-              </Field>
-              <Field label="工作流 Agent 系统提示词">
-                <textarea
-                  className="ob-field min-h-24 resize-y"
-                  maxLength={SYSTEM_PROMPT_MAX_LENGTH}
-                  value={config.workflowAgentSystemPrompt ?? ""}
-                  onChange={(e) => setConfig({ ...config, workflowAgentSystemPrompt: e.target.value })}
-                  placeholder="留空则使用内置默认提示词"
-                />
-              </Field>
+              {canManageSitePolicy ? (
+                <>
+                  <Field label="全局系统提示词">
+                    <textarea
+                      className="ob-field min-h-28 resize-y"
+                      maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+                      value={config.systemPrompt}
+                      onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
+                      placeholder="应用于文本、图片生成和图片编辑请求"
+                    />
+                  </Field>
+                  <Field label="工作流 Agent 系统提示词">
+                    <textarea
+                      className="ob-field min-h-24 resize-y"
+                      maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+                      value={config.workflowAgentSystemPrompt ?? ""}
+                      onChange={(e) => setConfig({ ...config, workflowAgentSystemPrompt: e.target.value })}
+                      placeholder="留空则使用内置默认提示词"
+                    />
+                  </Field>
+                  <p className="mb-3 text-xs text-[var(--ob-muted)]">
+                    系统提示词为租户级配置，仅管理员可修改；成员侧保存不会改写服务端生成使用的提示词。
+                  </p>
+                </>
+              ) : (
+                <div className="mb-3 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_70%,transparent)] px-3 py-3 text-xs text-[var(--ob-muted)]">
+                  <p className="font-medium text-[var(--ob-ink)]">系统提示词由管理员维护</p>
+                  <p className="mt-1">
+                    当前账号为普通成员，租户级系统提示词只读生效于服务端生成；如需调整请联系管理员。
+                  </p>
+                  {config.systemPrompt.trim() ? (
+                    <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-[var(--ob-ink)]/80" title={config.systemPrompt}>
+                      当前生效摘要：{config.systemPrompt.trim()}
+                    </p>
+                  ) : (
+                    <p className="mt-2">当前未配置全局系统提示词。</p>
+                  )}
+                </div>
+              )}
             </div>
             <div className="grid content-start grid-cols-1 gap-3 sm:grid-cols-3 lg:mt-8 lg:grid-cols-1">
               <Field label="图片尺寸">

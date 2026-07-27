@@ -112,6 +112,83 @@ func (s *Server) sweepAICallLogRetention(ctx context.Context, tenantID string, n
 
 // startAICallLogRetentionScheduler reuses the prompt scheduler lifecycle so the
 // sweep stops cleanly with the server.
+
+const (
+	aiCallLogClientReportStateKey = "aiCallLogClientReport"
+)
+
+// aiCallLogClientReportPolicy is the admin switch for browser direct-connect
+// audit uploads. Off by default so local key traffic is never logged until an
+// administrator opts in.
+type aiCallLogClientReportPolicy struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (s *Server) loadAICallLogClientReport(ctx context.Context, tenantID string) (aiCallLogClientReportPolicy, error) {
+	var policy aiCallLogClientReportPolicy
+	if s == nil || s.store == nil {
+		return policy, nil
+	}
+	raw, err := s.store.GetState(ctx, tenantID, aiCallLogClientReportStateKey)
+	if errors.Is(err, store.ErrNotFound) || len(raw) == 0 {
+		return policy, nil
+	}
+	if err != nil {
+		return policy, err
+	}
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return aiCallLogClientReportPolicy{}, nil
+	}
+	return policy, nil
+}
+
+func (s *Server) saveAICallLogClientReport(ctx context.Context, tenantID string, policy aiCallLogClientReportPolicy) error {
+	if s == nil || s.store == nil {
+		return errors.New("store unavailable")
+	}
+	raw, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+	return s.store.PutState(ctx, tenantID, aiCallLogClientReportStateKey, raw)
+}
+
+func (s *Server) getAICallLogClientReport(w http.ResponseWriter, r *http.Request) {
+	// Readable by any authenticated caller so the browser knows whether to upload.
+	// When auth is off, the process-token bootstrap path still works via authorizeSecrets-like optional access.
+	if authMode() != "off" {
+		if _, ok := authUserFrom(r.Context()); !ok {
+			// Guests/anonymous: treat as disabled without leaking admin config.
+			writeJSON(w, aiCallLogClientReportPolicy{Enabled: false})
+			return
+		}
+	}
+	policy, err := s.loadAICallLogClientReport(r.Context(), tenantIDFrom(r))
+	if err != nil {
+		http.Error(w, "failed to load client report policy", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, policy)
+}
+
+func (s *Server) putAICallLogClientReport(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAICallLogAdmin(w, r) {
+		return
+	}
+	var body aiCallLogClientReportPolicy
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.saveAICallLogClientReport(r.Context(), tenantIDFrom(r), body); err != nil {
+		http.Error(w, "failed to save client report policy", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, body)
+}
+
 func (s *Server) startAICallLogRetentionScheduler() {
 	if s.store == nil {
 		return

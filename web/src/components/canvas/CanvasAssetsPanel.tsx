@@ -6,6 +6,11 @@ import { useBoardStore } from "@/stores/use-board-store";
 import { uploadMedia } from "@/services/storage";
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 import { writeOpenBoardAssetDrag } from "@/lib/asset-drag";
+import {
+  chooseLocalTwoToOneImageImportMode,
+  isStrictTwoToOnePanoramaCandidate,
+  readPanoramaBlobDimensions,
+} from "@/lib/panorama";
 
 export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
   const assets = useBoardStore((state) => state.assets);
@@ -36,16 +41,37 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
     setBusy(true);
     setError(null);
     try {
+      // Mirror canvas drop/import: strict 2:1 images can land as panorama nodes
+      // when later inserted, so the asset kind must carry that choice.
+      let assetKind: AssetItem["kind"] = kind;
+      let notes: string | undefined;
+      if (kind === "image") {
+        try {
+          const dimensions = await readPanoramaBlobDimensions(file);
+          if (isStrictTwoToOnePanoramaCandidate(file.type, dimensions.width, dimensions.height)) {
+            const mode = chooseLocalTwoToOneImageImportMode();
+            if (mode === "panorama") {
+              // Asset catalog only stores image/video/audio/text; mark panorama
+              // intent in notes so insertAsset can promote the node type.
+              assetKind = "image";
+              notes = "panoramaProjection:equirectangular";
+            }
+          }
+        } catch {
+          // Non-panorama or unreadable headers: ordinary image asset.
+        }
+      }
       const uploaded = await uploadMedia(file, kind === "image" ? "image" : "media");
       const t = nowIso();
       const item: AssetItem = {
         id: uid("asset"),
-        kind,
+        kind: assetKind,
         title: file.name,
         coverUrl: uploaded.url,
         storageKey: uploaded.storageKey,
         mimeType: uploaded.mimeType,
-        tags: [],
+        tags: notes === "panoramaProjection:equirectangular" ? ["panorama"] : [],
+        notes,
         createdAt: t,
         updatedAt: t,
       };

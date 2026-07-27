@@ -21,7 +21,7 @@ import { fitMediaDisplaySize } from "@/lib/geometry";
 import { defaultModelForMode } from "@/lib/generation-model";
 import { normalizeNodeTitle } from "@/lib/node-format";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
-import { listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
+import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
 
 const DirectorDialog = lazy(() => import("@/components/director/DirectorDialog").then((module) => ({
   default: module.DirectorDialog,
@@ -790,7 +790,14 @@ export function BoardNodeView({
             directorNodeId={node.id}
             title={node.title}
             scene={node.metadata.directorScene ?? createDefaultDirectorScene()}
-            panoramaOptions={(project ? listDirectorEnvironmentOptions(project, node.id) : []).map((candidate) => ({ id: candidate.id, label: candidate.type === "image" ? `${candidate.title}（图片）` : candidate.title, url: candidate.metadata.content! }))}
+            panoramaOptions={(project ? listDirectorEnvironmentOptions(project, node.id) : []).map((candidate) => ({
+              id: candidate.id,
+              label: candidate.type === "image"
+                ? `${candidate.title}（${isSphericalDirectorEnvironment(candidate) ? "全景图片" : "图片"}）`
+                : candidate.title,
+              url: candidate.metadata.content!,
+              spherical: isSphericalDirectorEnvironment(candidate),
+            }))}
             activePanoramaId={project ? resolveDirectorPanorama(project, node.id)?.id ?? null : null}
             onPanoramaChange={(panoramaId) => {
               const store = useBoardStore.getState();

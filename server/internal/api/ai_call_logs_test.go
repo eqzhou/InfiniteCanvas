@@ -230,3 +230,81 @@ func TestAICallLogRetentionRejectsTrailingGarbageAndNonAdmins(t *testing.T) {
 		t.Fatalf("trailing garbage status=%d body=%s", bad.Code, bad.Body.String())
 	}
 }
+
+func TestClientAICallLogReportRequiresAdminEnablement(t *testing.T) {
+	storeMem := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	defer srv.Close()
+	r := chi.NewRouter()
+	MountServer(r, srv)
+
+	// Default: reporting disabled.
+	got := request(t, r, http.MethodGet, "/api/ai-call-logs/client-report", nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("GET client-report status=%d body=%s", got.Code, got.Body.String())
+	}
+	var policy map[string]any
+	if err := json.Unmarshal(got.Body.Bytes(), &policy); err != nil {
+		t.Fatalf("decode policy: %v", err)
+	}
+	if policy["enabled"] == true {
+		t.Fatalf("expected disabled by default, got %v", policy)
+	}
+
+	blocked := request(t, r, http.MethodPost, "/api/ai-call-logs/report", []byte(`{
+		"kind":"image","status":"succeeded","model":"gpt-image-1","durationMs":12,
+		"channelId":"ch_local","request":{"prompt":"hi","apiKey":"secret"}
+	}`))
+	if blocked.Code != http.StatusForbidden {
+		t.Fatalf("report while disabled status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+
+	enabled := request(t, r, http.MethodPut, "/api/ai-call-logs/client-report", []byte(`{"enabled":true}`))
+	if enabled.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", enabled.Code, enabled.Body.String())
+	}
+
+	created := request(t, r, http.MethodPost, "/api/ai-call-logs/report", []byte(`{
+		"kind":"image","status":"succeeded","model":"gpt-image-1","durationMs":12,
+		"channelId":"ch_local","channelName":"Local","protocol":"openai",
+		"request":{"prompt":"hi","apiKey":"secret"},
+		"response":{"ok":true}
+	}`))
+	if created.Code != http.StatusOK {
+		t.Fatalf("report status=%d body=%s", created.Code, created.Body.String())
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &entry); err != nil {
+		t.Fatalf("decode entry: %v", err)
+	}
+	if entry["kind"] != "image" || entry["status"] != "succeeded" {
+		t.Fatalf("unexpected entry %#v", entry)
+	}
+	req, _ := entry["request"].(map[string]any)
+	if req == nil || req["apiKey"] == "secret" {
+		t.Fatalf("expected redacted request, got %#v", req)
+	}
+	if req["source"] != "client-direct" {
+		t.Fatalf("expected client-direct source, got %#v", req)
+	}
+
+	listed := request(t, r, http.MethodGet, "/api/ai-call-logs?kind=image", nil)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+}
+
+func TestClientAICallLogReportRejectsBadPayload(t *testing.T) {
+	storeMem := newMemoryStore()
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	defer srv.Close()
+	r := chi.NewRouter()
+	MountServer(r, srv)
+	if res := request(t, r, http.MethodPut, "/api/ai-call-logs/client-report", []byte(`{"enabled":true}`)); res.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", res.Code, res.Body.String())
+	}
+	bad := request(t, r, http.MethodPost, "/api/ai-call-logs/report", []byte(`{"kind":"nope","status":"succeeded","durationMs":1}`))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad kind status=%d body=%s", bad.Code, bad.Body.String())
+	}
+}

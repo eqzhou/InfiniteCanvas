@@ -86,3 +86,63 @@ export async function putAICallLogRetention(policy: AICallLogRetention): Promise
     }),
   );
 }
+
+/** Admin switch: whether browser direct-connect calls should upload audit rows. */
+export type AICallLogClientReport = { enabled: boolean };
+
+export async function getAICallLogClientReport(): Promise<AICallLogClientReport> {
+  try {
+    return await readJSON<AICallLogClientReport>(await authFetch("ai-call-logs/client-report"));
+  } catch {
+    return { enabled: false };
+  }
+}
+
+export async function putAICallLogClientReport(
+  policy: AICallLogClientReport,
+): Promise<AICallLogClientReport> {
+  return readJSON<AICallLogClientReport>(
+    await authFetch("ai-call-logs/client-report", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: Boolean(policy.enabled) }),
+    }),
+  );
+}
+
+export type ClientAICallLogReport = {
+  kind: string;
+  status: "succeeded" | "failed" | "cancelled";
+  channelId?: string;
+  channelName?: string;
+  model?: string;
+  protocol?: string;
+  durationMs: number;
+  error?: string;
+  request?: unknown;
+  response?: unknown;
+};
+
+/** Best-effort upload of a browser direct-connect audit row. Never throws to callers. */
+export async function reportAICallLog(entry: ClientAICallLogReport): Promise<void> {
+  try {
+    const response = await authFetch("ai-call-logs/report", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: entry.kind,
+        status: entry.status,
+        channelId: entry.channelId,
+        channelName: entry.channelName,
+        model: entry.model,
+        protocol: entry.protocol,
+        durationMs: Math.max(0, Math.floor(entry.durationMs || 0)),
+        error: entry.error,
+        request: entry.request ?? {},
+        response: entry.response ?? {},
+      }),
+    });
+    // 401/403 mean reporting is off or unauthenticated — silent no-op.
+    if (!response.ok) return;
+  } catch {
+    // Never break generation because audit upload failed.
+  }
+}

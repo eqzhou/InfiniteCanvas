@@ -39,21 +39,21 @@
 | T4-01 | 删除画布后，持有旧文档的标签页一次自动保存就能把它整个复活 | backend-database `canvas_projects`：软删除 + 延迟 7 天物理清理 | ✅ 已修复 | 见 §3 |
 | T4-02 | 生成记录「删除」后成果 JSON 仍留在库里，且墓碑永不清理 | backend-database `*_generation_logs`：删除时清空 `payload_json`，墓碑保留 7 天 | ✅ 已修复 | 见 §3 |
 | T4-03 | 共享渠道无 per-channel 模型列表，按模型路由会选中不提供该模型的渠道 | system-settings `private.channels[].models` | ✅ 已修复 | `adminChannelPublic.Models` + `cleanAdminChannelModels`/`channelModelsAllow`；`sharedChannelSupports` 在 protocol 判断前按 allow list 过滤。管理后台「可用模型」textarea + 拉取模型写入列表；保存后 `putAdminChannels` 序列化。测试：`TestSharedChannelRoutingHonorsPerChannelModelList`、`cleanAdminChannelModels` |
-| T4-04 | 节点下方对话框没有模型下拉 | canvas-node-manual「用下方对话框生成或修改文本」 | ⏳ 待实现 | 拉取到的模型列表存在 `SettingsModal` 组件内 `useState`（`SettingsModal.tsx:60`），从未持久化或进 store，画布侧拿不到；`NodePromptBar` 无任何模型 UI，模型只靠 `node.metadata.model \|\| provider.model` 兜底 |
-| T4-05 | 对话框内 `@` 唤起的是媒体引用而非提示词库 | canvas-node-manual：对话框输入「可手写，也可从提示词库选择」 | ⏳ 待实现 | 提示词库下拉只在文本节点正文（`BoardNodeView.tsx:228`），且选中会覆写 `metadata.content` 而非填入对话框 |
-| T4-06 | 普通图片连到导演台会被当成球形全景渲染 | features 全景图：「普通图片仍按普通背景显示」 | ⏳ 待实现 | `isUsablePanoramaEnvironment` 的严格 2:1 校验对 image 节点不生效（`director-panorama.ts:34` 直接 `return true`）；`DirectorViewport.tsx:628` 无条件贴到 `BackSide` 球体，无按类型分流的分支；`panoramaProjection` 只有写入方无读取方。后果：16:9 照片被拉伸成 360° 天空盒 |
-| T4-07 | 「上传素材」路径不提供 2:1 导入方式选择 | features 全景图：「上传素材」或拖入画布均可选择导入方式 | ⏳ 待实现 | 拖拽/工具栏/右键三个入口都走 `attachUploadedImage` 的 auto 探测；但素材面板「上传图片」绕过它（`CanvasAssetsPanel.tsx:35`），`insertAsset` 的 kind 恒为 image。`resolveLocalTwoToOneImageImportChoice` 排除测试后引用数为 **0** |
-| T4-08 | 导演台同时只能连接一张全景/图片 | features 导演台：图片节点连上后成为「**可选择的**全景图」 | ⏳ 待实现 | `listDirectorEnvironmentOptions` 按多候选写、UI 按数组渲染，但 `bindDirectorPanorama` 在加新边前会过滤掉该导演台**所有** image/panorama 入边（`director-panorama.ts:83`），候选列表长度恒为 0 或 1 |
-| T4-09 | 摄像机属性面板缺少「生成当前机位截图」入口 | features 导演台：「可在**摄像机属性或截图列表**生成当前机位截图」 | ⏳ 待实现 | 两个并列入口本地只有截图托盘一个（`DirectorCaptureTray.tsx:65`）；Inspector 活动机位区块（`DirectorDialog.tsx:593`–611）无拍摄按钮 |
+| T4-04 | 节点下方对话框没有模型下拉 | canvas-node-manual「用下方对话框生成或修改文本」 | ✅ 已修复 | `SettingsModal` 拉取模型后写入 `provider.models` 并持久化；`NodePromptBar` 增加模型下拉，基于 `resolveNodePromptModels` + 站点 allow list |
+| T4-05 | 对话框内 `@` 唤起的是媒体引用而非提示词库 | canvas-node-manual：对话框输入「可手写，也可从提示词库选择」 | ✅ 已修复 | `NodePromptBar` 增加提示词库选择，选中后追加到对话框 `prompt` 文本；`@` 媒体引用保持不变 |
+| T4-06 | 普通图片连到导演台会被当成球形全景渲染 | features 全景图：「普通图片仍按普通背景显示」 | ✅ 已修复 | 新增 `isSphericalDirectorEnvironment`；`DirectorViewport` 按 `environmentMode` 分流球体/平面；普通图片走 flat 背景 |
+| T4-07 | 「上传素材」路径不提供 2:1 导入方式选择 | features 全景图：「上传素材」或拖入画布均可选择导入方式 | ✅ 已修复 | 素材面板上传 2:1 图片时弹出导入方式选择；`notes/tags` 标记全景意图，`insertAsset` 提升为 panorama 节点 |
+| T4-08 | 导演台同时只能连接一张全景/图片 | features 导演台：图片节点连上后成为「**可选择的**全景图」 | ✅ 已修复 | `bindDirectorPanorama` 改为多环境入边；`environment.sourceId` 记录当前活动环境，UI 可在候选间切换 |
+| T4-09 | 摄像机属性面板缺少「生成当前机位截图」入口 | features 导演台：「可在**摄像机属性或截图列表**生成当前机位截图」 | ✅ 已修复 | `DirectorDialog` 活动机位区块增加「生成当前机位截图」，与托盘共用 `captureCurrent` |
 | T4-10 | `/api/v1/media/references` 前端从未调用 | features AI 生成：本地上传素材先存服务端再由 `PUBLIC_BASE_URL` 生成公开链接 | ✅ 已修复 | `createMediaReferences` 调 `POST /api/media/references`；`resolveMediaRefs` 在 server storage + 公网 HTTPS 源下优先返回 `/api/media/references/{token}` 绝对 URL，失败再回落 data:/blob:。测试见 `media-references.test.ts` |
-| T4-11 | 本地直连日志上报无上报通道与管理员开关 | features AI 生成：管理员可配置本地直连日志上报 | ⏳ 待实现 | `recordAICallLog` 两个非测试调用方都在服务端执行器；前端 `ai-call-logs.ts` 只有读/删接口，无 POST 上报。查过 11 个命名变体均零命中 |
+| T4-11 | 本地直连日志上报无上报通道与管理员开关 | features AI 生成：管理员可配置本地直连日志上报 | ✅ 已修复 | `POST /api/ai-call-logs/report` + admin `client-report` 开关；`runTrackedGeneration` 在开启时 best-effort 上报；AI 日志页可切换 |
 | T4-12 | 图片比例无独立配置项 | features AI 生成可配置项：「图片比例」与「图片质量」并列 | 🔶 待决策 | 本地只有自由文本 `imageSize`（默认 `1024x1024`），无比例枚举。能力可达，仅交互形态不同：用户需自行记忆并手输像素串表达 16:9 |
 | T4-13 | 提示词与提示词分组无独立数据表 | features 后端能力：数据库保存用户、提示词分组、提示词和服务器素材 | 🔶 待决策 | 用户与素材都有独立表，提示词目录整体序列化进 `openboard_state` KV。是否算缺陷取决于「手写迁移」这条既有决策的边界如何划 |
 | ~~T4-14~~ | ~~后台提示词无关键词查询、无分组/标签筛选~~ | features 后台提示词管理 | ⛔ 误报，已撤销 | 三者都在：搜索框 `AdminPromptCatalogPanel.tsx:118`、分类下拉 `:119`、标签下拉 `:124`，过滤逻辑 `filterAdminPrompts`（`:90`）。`retainVisibleSelection`（`:95`）也已处理「筛选后批量删除误删隐藏项」 |
 | ~~T4-15~~ | ~~服务器素材库按标签筛选接好一半~~ | features 素材 | ⛔ 误报，已撤销 | 前台有标签筛选输入并传参（`ServerLibraryPage.tsx:282`、查询 `:65`）；后台面板同样有（`AdminLibraryPanel.tsx:99`、`:44`） |
 | ~~T4-16~~ | ~~管理后台无素材库面板~~ | features 账号和后台 | ⛔ 误报，已撤销 | `AdminPage.tsx:20` 的 Tab 联合类型含 `library`，`:41` 挂载 `AdminLibraryPanel`，面板本身在 `web/src/components/admin/AdminLibraryPanel.tsx` |
 | T4-21 | 普通成员无法把直连渠道密钥与用户 S3/R2 凭据同步到账号 | features 账号和后台：登录用户可以同步本地直连模型渠道、画布偏好和用户 S3/R2 存储配置 | ✅ 已修复 | `authorizeSecrets` 允许任意已登录活跃用户；成员写 `__encrypted_user_config_secrets_v1:<userID>`，管理员仍写租户袋。租户级密钥迁移保持 admin-only。测试：`TestMemberPersonalSecretsAreIsolatedFromTenantBag`、更新后的 migration secret 用例 |
-| T4-22 | 系统提示词输入框对普通成员可见但保存无效 | features 账号和后台：管理后台支持系统提示词配置 | ⏳ 待实现 | 服务端读租户级 `config`（`generation_channel_snapshot.go:98`），但成员写入被重定向到 `__user_config_v1:`（`state.go:95`）。输入框未像站点策略那样用权限收起（对比 `SettingsModal.tsx:326`），成员修改后保存成功、无提示、服务端生成完全不受影响 |
+| T4-22 | 系统提示词输入框对普通成员可见但保存无效 | features 账号和后台：管理后台支持系统提示词配置 | ✅ 已修复 | `SettingsModal` 将全局/工作流系统提示词收为 admin/owner 可写；成员只读说明当前租户生效摘要 |
 | T4-23 | 渠道模型无「新获取／已有」分组选择器 | features 账号和后台 | 🔶 部分修复 | 拉取模型现写入渠道 `models` 列表（可编辑 textarea，保存后参与路由）。仍无「新获取／已有」分组选择器 UI。API Key 留空沿用已保存密钥本地成立 |
 | T4-24 | 算力点余额与生成前预计消耗对用户完全不可见 | CHANGELOG v0.0.8：画布右上角展示算力点余额，生成按钮展示预计消耗 | ✅ 已修复 | 余额：顶栏 chip 展示「算力 N」。生成前：`estimateCredits` 调 `GET /api/billing/estimate`；`CreativeWorkbench` 主按钮展示「开始生成 · 预计 N 算力」，余额不足时提示。其余生成面可按需复用同一 helper |
 | T4-25 | 非安全上下文下复制文本静默失败 | CHANGELOG v0.0.4：修复局域网 IP 访问时文本复制失败 | ✅ 已修复 | 新增 `writeTextWithFallback`：优先 `navigator.clipboard.writeText`，失败或不可用时回退 `document.execCommand("copy")`。五处复制入口均已改走该助手 |
