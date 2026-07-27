@@ -45,7 +45,7 @@
 | T4-07 | 「上传素材」路径不提供 2:1 导入方式选择 | features 全景图：「上传素材」或拖入画布均可选择导入方式 | ⏳ 待实现 | 拖拽/工具栏/右键三个入口都走 `attachUploadedImage` 的 auto 探测；但素材面板「上传图片」绕过它（`CanvasAssetsPanel.tsx:35`），`insertAsset` 的 kind 恒为 image。`resolveLocalTwoToOneImageImportChoice` 排除测试后引用数为 **0** |
 | T4-08 | 导演台同时只能连接一张全景/图片 | features 导演台：图片节点连上后成为「**可选择的**全景图」 | ⏳ 待实现 | `listDirectorEnvironmentOptions` 按多候选写、UI 按数组渲染，但 `bindDirectorPanorama` 在加新边前会过滤掉该导演台**所有** image/panorama 入边（`director-panorama.ts:83`），候选列表长度恒为 0 或 1 |
 | T4-09 | 摄像机属性面板缺少「生成当前机位截图」入口 | features 导演台：「可在**摄像机属性或截图列表**生成当前机位截图」 | ⏳ 待实现 | 两个并列入口本地只有截图托盘一个（`DirectorCaptureTray.tsx:65`）；Inspector 活动机位区块（`DirectorDialog.tsx:593`–611）无拍摄按钮 |
-| T4-10 | `/api/v1/media/references` 前端从未调用 | features AI 生成：本地上传素材先存服务端再由 `PUBLIC_BASE_URL` 生成公开链接 | ⏳ 待实现 | 服务端完整可用，但 `web/` 全仓对 `media/references` 引用数为 0；前端 `resolveMediaRefs` 只产出 data:/blob: URL。后果：本地直连做 Seedance 视频时参考素材被塞成 data: URL 发给火山，火山无法拉取 |
+| T4-10 | `/api/v1/media/references` 前端从未调用 | features AI 生成：本地上传素材先存服务端再由 `PUBLIC_BASE_URL` 生成公开链接 | ✅ 已修复 | `createMediaReferences` 调 `POST /api/media/references`；`resolveMediaRefs` 在 server storage + 公网 HTTPS 源下优先返回 `/api/media/references/{token}` 绝对 URL，失败再回落 data:/blob:。测试见 `media-references.test.ts` |
 | T4-11 | 本地直连日志上报无上报通道与管理员开关 | features AI 生成：管理员可配置本地直连日志上报 | ⏳ 待实现 | `recordAICallLog` 两个非测试调用方都在服务端执行器；前端 `ai-call-logs.ts` 只有读/删接口，无 POST 上报。查过 11 个命名变体均零命中 |
 | T4-12 | 图片比例无独立配置项 | features AI 生成可配置项：「图片比例」与「图片质量」并列 | 🔶 待决策 | 本地只有自由文本 `imageSize`（默认 `1024x1024`），无比例枚举。能力可达，仅交互形态不同：用户需自行记忆并手输像素串表达 16:9 |
 | T4-13 | 提示词与提示词分组无独立数据表 | features 后端能力：数据库保存用户、提示词分组、提示词和服务器素材 | 🔶 待决策 | 用户与素材都有独立表，提示词目录整体序列化进 `openboard_state` KV。是否算缺陷取决于「手写迁移」这条既有决策的边界如何划 |
