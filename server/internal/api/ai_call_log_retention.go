@@ -135,6 +135,9 @@ func (s *Server) startAICallLogRetentionScheduler() {
 					// Expired provider-facing media tokens are otherwise only
 					// dropped lazily when someone happens to read them.
 					s.sweepExpiredMediaReferences(s.promptSchedulerRoot, now.UTC())
+					// Delete markers guard against resurrection writes, but they
+					// only need to outlive stale clients, not live forever.
+					s.sweepExpiredTombstones(s.promptSchedulerRoot, now.UTC())
 				}
 			}
 		}()

@@ -237,8 +237,32 @@ function applySnap(project: BoardProject, s: Snapshot): BoardProject {
 
 let hydratePromise: { scope: string; promise: Promise<void> } | undefined;
 let activeWorkspaceScope: string | undefined;
-const projectWrites = new LatestWrite(saveProjects, (error) =>
-  console.error("OpenBoard project persistence failed", error));
+
+/**
+ * Forget projects the server reported as deleted. Another device removed them,
+ * so this tab's copy is stale rather than authoritative.
+ */
+function dropTombstonedProjects(ids: readonly string[]): void {
+  const gone = new Set(ids);
+  useBoardStore.setState((state) => {
+    const projects = state.projects.filter((project) => !gone.has(project.id));
+    if (projects.length === state.projects.length) return {};
+    for (const id of gone) histories.delete(id);
+    return {
+      projects,
+      activeProjectId: state.activeProjectId && gone.has(state.activeProjectId)
+        ? (projects[0]?.id ?? null)
+        : state.activeProjectId,
+    };
+  });
+}
+
+// The server refuses writes to projects it has tombstoned. Drop those locally
+// rather than letting a stale tab retry a write it can never win.
+const projectWrites = new LatestWrite(async (projects: BoardProject[]) => {
+  const gone = await saveProjects(projects);
+  if (gone.length) dropTombstonedProjects(gone);
+}, (error) => console.error("OpenBoard project persistence failed", error));
 const configWrites = new LatestWrite(saveConfig, (error) =>
   console.error("OpenBoard config persistence failed", error));
 const assetWrites = new LatestWrite(saveAssets, (error) =>

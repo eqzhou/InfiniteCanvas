@@ -230,7 +230,12 @@ func (s *Server) migrationPutProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.store.CompareAndSwapProject(r.Context(), tenantIDFrom(r), id, expected, body); errors.Is(err, store.ErrConflict) {
+	err = s.store.CompareAndSwapProject(r.Context(), tenantIDFrom(r), id, expected, body)
+	if errors.Is(err, store.ErrGone) {
+		http.Error(w, "project was deleted", http.StatusGone)
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
 		http.Error(w, "migration precondition failed", http.StatusPreconditionFailed)
 		return
 	} else if err != nil {

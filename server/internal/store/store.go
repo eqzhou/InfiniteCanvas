@@ -13,6 +13,7 @@ import (
 var (
 	ErrNotFound            = errors.New("not found")
 	ErrConflict            = errors.New("conflict")
+	ErrGone                = errors.New("deleted")
 	ErrQuotaExceeded       = errors.New("quota exceeded")
 	ErrInvalidCredentials  = errors.New("invalid credentials")
 	ErrUnauthorized        = errors.New("unauthorized")
@@ -341,6 +342,7 @@ type Store interface {
 	CreateMediaReference(ctx context.Context, tenantID, storageKey string, expiresAt time.Time) (MediaReference, error)
 	GetMediaReference(ctx context.Context, token string) (MediaReference, error)
 	DeleteExpiredMediaReferences(ctx context.Context, now time.Time) (int64, error)
+	PurgeExpiredTombstones(ctx context.Context, now time.Time) (int64, error)
 }
 
 func GenerationJobsVersion(jobs []GenerationJob) string {

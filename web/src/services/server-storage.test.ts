@@ -73,6 +73,41 @@ describe("server project persistence isolation", () => {
     expect(deleted.some((url) => url.includes("/api/projects/remote-only"))).toBe(true);
     expect(deleted.some((url) => url.includes("/api/projects/shared"))).toBe(false);
   });
+
+  // A tab that still holds a project the user deleted elsewhere gets 410 from
+  // the server. That tombstone is authoritative, so autosave must drop the dead
+  // project instead of failing the whole batch and retrying forever.
+  test("saveServerProjects treats a 410 tombstone as settled, not as a failure", async () => {
+    const attempted: string[] = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET").toUpperCase() === "PUT") {
+        attempted.push(url);
+        if (url.includes("/api/projects/deleted-elsewhere")) {
+          return new Response("project was deleted", { status: 410 });
+        }
+      }
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const { saveServerProjects } = await import("./server-storage");
+    const gone = await saveServerProjects([project("still-alive"), project("deleted-elsewhere")]);
+
+    expect(attempted.some((url) => url.includes("/api/projects/still-alive"))).toBe(true);
+    expect(gone).toEqual(["deleted-elsewhere"]);
+  });
+
+  test("saveServerProjects still surfaces genuine server failures", async () => {
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "PUT") {
+        return new Response("boom", { status: 500 });
+      }
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const { saveServerProjects } = await import("./server-storage");
+    await expect(saveServerProjects([project("still-alive")])).rejects.toThrow();
+  });
 });
 
 describe("migration compare-and-swap transport", () => {

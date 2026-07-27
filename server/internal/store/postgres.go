@@ -85,7 +85,12 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 12
+const currentSchemaVersion = 13
+
+// tombstoneRetention keeps a deleted-row marker around long enough to outlive a
+// stale browser tab that still holds the pre-delete document. Without it an
+// ordinary autosave would recreate the project the user just removed.
+const tombstoneRetention = 7 * 24 * time.Hour
 
 const defaultStorageQuotaBytes int64 = 1 << 30
 const defaultGenerationQuotaMonthly int64 = 1000
@@ -207,7 +212,30 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 13 {
+		if err := migrateV13(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV13(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 13, `
+ALTER TABLE openboard_projects
+  ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+CREATE INDEX IF NOT EXISTS openboard_projects_tenant_deleted_idx
+  ON openboard_projects (tenant_id, deleted_at)
+  WHERE deleted_at IS NOT NULL;
+ALTER TABLE openboard_generation_jobs
+  ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+UPDATE openboard_generation_jobs
+SET deleted_at = COALESCE(deleted_at, updated_at), result = '{}'::jsonb
+WHERE status = 'deleted';
+CREATE INDEX IF NOT EXISTS openboard_generation_jobs_tenant_deleted_idx
+  ON openboard_generation_jobs (tenant_id, deleted_at)
+  WHERE deleted_at IS NOT NULL;
+`)
 }
 
 func migrateV12(ctx context.Context, connection *pgxpool.Conn) error {
@@ -727,7 +755,7 @@ func projectCacheKey(tenantID, id string) string {
 func (s *PostgresStore) ListProjects(ctx context.Context, tenantID string) ([]ProjectSummary, error) {
 	tenantID = normalizeTenantID(tenantID)
 	rows, err := s.pool.Query(ctx, `SELECT id, title, updated_at FROM openboard_projects
-		WHERE tenant_id=$1 ORDER BY updated_at DESC`, tenantID)
+		WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY updated_at DESC`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -754,7 +782,8 @@ func (s *PostgresStore) GetProject(ctx context.Context, tenantID, id string) ([]
 		}
 	}
 	var document []byte
-	if err := s.pool.QueryRow(ctx, `SELECT document FROM openboard_projects WHERE tenant_id=$1 AND id=$2`,
+	if err := s.pool.QueryRow(ctx, `SELECT document FROM openboard_projects
+		WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL`,
 		tenantID, id).Scan(&document); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -780,14 +809,23 @@ func (s *PostgresStore) PutProject(ctx context.Context, tenantID, id string, doc
 	if err != nil {
 		return fmt.Errorf("invalid updatedAt: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
+	// A tombstoned row must survive an autosave from a tab that still holds the
+	// pre-delete document; otherwise the delete silently undoes itself.
+	result, err := s.pool.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
 		VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id, id) DO UPDATE SET
-		title=EXCLUDED.title, updated_at=EXCLUDED.updated_at, document=EXCLUDED.document`,
+		title=EXCLUDED.title, updated_at=EXCLUDED.updated_at, document=EXCLUDED.document
+		WHERE openboard_projects.deleted_at IS NULL`,
 		tenantID, id, metadata.Title, updated, document)
-	if err == nil && s.redis != nil {
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrGone
+	}
+	if s.redis != nil {
 		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()
 	}
-	return err
+	return nil
 }
 
 func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id string, expected, document []byte) error {
@@ -806,7 +844,8 @@ func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id 
 			VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id,id) DO NOTHING`, tenantID, id, metadata.Title, updated, document)
 	} else {
 		result, err = s.pool.Exec(ctx, `UPDATE openboard_projects SET title=$4,updated_at=$5,document=$6
-			WHERE tenant_id=$1 AND id=$2 AND document=$3::jsonb`, tenantID, id, string(expected), metadata.Title, updated, document)
+			WHERE tenant_id=$1 AND id=$2 AND document=$3::jsonb AND deleted_at IS NULL`,
+			tenantID, id, string(expected), metadata.Title, updated, document)
 	}
 	if err != nil {
 		return err
@@ -822,7 +861,11 @@ func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id 
 
 func (s *PostgresStore) DeleteProject(ctx context.Context, tenantID, id string) error {
 	tenantID = normalizeTenantID(tenantID)
-	_, err := s.pool.Exec(ctx, `DELETE FROM openboard_projects WHERE tenant_id=$1 AND id=$2`, tenantID, id)
+	// Soft-delete and drop the document body: the tombstone only has to block
+	// stale writes, it does not need to keep the canvas contents around.
+	_, err := s.pool.Exec(ctx, `UPDATE openboard_projects
+		SET deleted_at=COALESCE(deleted_at, clock_timestamp()), document='{}'::jsonb
+		WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL`, tenantID, id)
 	if err == nil && s.redis != nil {
 		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()
 	}
@@ -1322,6 +1365,7 @@ func (s *PostgresStore) DeleteGenerationJob(ctx context.Context, tenantID, id st
 	// Soft-delete: hide from history while preserving tombstone for multi-device sync/cleanup.
 	result, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs SET
 		status='deleted', error=CASE WHEN error='' THEN '已删除' ELSE error END,
+		result='{}'::jsonb, deleted_at=COALESCE(deleted_at, clock_timestamp()),
 		updated_at=clock_timestamp(), lease_owner='', lease_expires_at=NULL
 		WHERE tenant_id=$1 AND id=$2 AND status <> 'deleted'`, tenantID, id)
 	if err != nil {
@@ -1378,6 +1422,7 @@ func (s *PostgresStore) DeleteGenerationJobs(ctx context.Context, tenantID strin
 	// Soft-delete selected history rows; cancel any active leases first.
 	result, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs SET
 		status='deleted', error=CASE WHEN status IN ('queued','running') THEN '已批量删除' WHEN error='' THEN '已删除' ELSE error END,
+		result='{}'::jsonb, deleted_at=COALESCE(deleted_at, clock_timestamp()),
 		updated_at=clock_timestamp(), lease_owner='', lease_expires_at=NULL
 		WHERE tenant_id=$1 AND id = ANY($2) AND status <> 'deleted'`, tenantID, unique)
 	if err != nil {
@@ -3088,4 +3133,25 @@ func (s *PostgresStore) DeleteExpiredMediaReferences(ctx context.Context, now ti
 		return 0, err
 	}
 	return cmd.RowsAffected(), nil
+}
+
+// PurgeExpiredTombstones drops deleted-row markers once they are older than the
+// retention window. Keeping them forever would leak storage for every canvas a
+// user ever removed, while dropping them early lets a stale tab resurrect data.
+func (s *PostgresStore) PurgeExpiredTombstones(ctx context.Context, now time.Time) (int64, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	cutoff := now.UTC().Add(-tombstoneRetention)
+	projects, err := s.pool.Exec(ctx,
+		`DELETE FROM openboard_projects WHERE deleted_at IS NOT NULL AND deleted_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	jobs, err := s.pool.Exec(ctx,
+		`DELETE FROM openboard_generation_jobs WHERE deleted_at IS NOT NULL AND deleted_at < $1`, cutoff)
+	if err != nil {
+		return projects.RowsAffected(), err
+	}
+	return projects.RowsAffected() + jobs.RowsAffected(), nil
 }

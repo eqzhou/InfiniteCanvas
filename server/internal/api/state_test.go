@@ -1162,6 +1162,11 @@ func (m *memoryStore) DeleteExpiredMediaReferences(_ context.Context, now time.T
 	return n, nil
 }
 
+// The in-memory double keeps no tombstones, so there is never anything to purge.
+func (m *memoryStore) PurgeExpiredTombstones(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+
 func TestPersistentProjectAndStateLifecycle(t *testing.T) {
 	handler := persistentHandler(t)
 	project := []byte(`{"id":"board-1","title":"First","createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)

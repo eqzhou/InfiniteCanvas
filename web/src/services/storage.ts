@@ -412,9 +412,15 @@ export async function loadProjects(): Promise<BoardProject[]> {
   return projects.map(parseBoardProject);
 }
 
-export async function saveProjects(projects: BoardProject[]): Promise<void> {
+/**
+ * Persist the project catalog. Returns the ids the server has tombstoned, so an
+ * autosave from a tab that still holds a deleted project can drop it locally
+ * instead of retrying a write the server will always refuse.
+ */
+export async function saveProjects(projects: BoardProject[]): Promise<string[]> {
   if (SERVER_STORAGE) return saveServerProjects(projects);
   await set(PROJECTS_KEY, projects, appStore);
+  return [];
 }
 
 /** Explicit deletes for user-driven project removal. Ordinary save never deletes remote projects. */

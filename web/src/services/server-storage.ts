@@ -146,16 +146,24 @@ export async function loadServerProjects(): Promise<BoardProject[]> {
   ));
 }
 
-/** Upsert the provided projects without deleting any remote project absent from this list. */
-export async function saveServerProjects(projects: BoardProject[]): Promise<void> {
-  await Promise.all(projects.map(async (project) => {
+/**
+ * Upsert the provided projects without deleting any remote project absent from
+ * this list. Returns the ids the server reported as deleted (HTTP 410) so the
+ * caller can drop them locally: a tombstone is authoritative and retrying the
+ * write would never succeed.
+ */
+export async function saveServerProjects(projects: BoardProject[]): Promise<string[]> {
+  const gone = await Promise.all(projects.map(async (project) => {
     const response = await request(`projects/${encodeURIComponent(project.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(project),
     });
+    if (response.status === 410) return project.id;
     if (!response.ok) throw new Error(`Project save failed: HTTP ${response.status}`);
+    return null;
   }));
+  return gone.filter((id): id is string => id !== null);
 }
 
 /** Explicit single-project delete used by user-driven project removal. */

@@ -84,6 +84,21 @@ func (s *Server) sweepExpiredMediaReferences(ctx context.Context, now time.Time)
 	return deleted
 }
 
+// sweepExpiredTombstones drops deleted-project and deleted-job markers once they
+// have outlived any plausible stale client cache. Without this the markers,
+// which exist to block resurrection writes, would accumulate forever.
+func (s *Server) sweepExpiredTombstones(ctx context.Context, now time.Time) int64 {
+	if s == nil || s.store == nil {
+		return 0
+	}
+	purged, err := s.store.PurgeExpiredTombstones(ctx, now.UTC())
+	if err != nil {
+		log.Printf("expired tombstone purge failed: %v", err)
+		return 0
+	}
+	return purged
+}
+
 type createMediaReferencesBody struct {
 	StorageKeys []string `json:"storageKeys"`
 	// TTLSeconds is optional; clamped to [60, 86400], default 900.

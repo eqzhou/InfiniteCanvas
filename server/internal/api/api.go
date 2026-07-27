@@ -696,6 +696,12 @@ func (s *Server) putProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.store != nil {
 		if err := s.store.PutProject(r.Context(), tenantIDFrom(r), id, body); err != nil {
+			// The project was deleted while this client still held it. Say so
+			// explicitly so a stale tab stops retrying a write it can never win.
+			if errors.Is(err, store.ErrGone) {
+				http.Error(w, "project was deleted", http.StatusGone)
+				return
+			}
 			http.Error(w, "failed to store project", http.StatusInternalServerError)
 			return
 		}
