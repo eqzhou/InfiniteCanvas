@@ -1333,6 +1333,66 @@ func TestEncryptedSecretsRequireLoginAfterFirstUser(t *testing.T) {
 	}
 }
 
+
+func TestMemberPersonalSecretsAreIsolatedFromTenantBag(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	admin := store.AuthUser{ID: "admin-1", TenantID: store.DefaultTenantID, Role: "admin", Status: "active"}
+	memberA := store.AuthUser{ID: "member-a", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
+	memberB := store.AuthUser{ID: "member-b", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
+
+	adminPlain := []byte(`{"apiKeys":{"tenant":{"image":"sk-tenant"}},"webdavPass":""}`)
+	if got := request(t, withMigrationActor(router, admin), http.MethodPut, "/api/secrets/config", adminPlain); got.Code != http.StatusNoContent {
+		t.Fatalf("admin put: %d %s", got.Code, got.Body.String())
+	}
+	memberPlain := []byte(`{"apiKeys":{"personal":{"image":"sk-member-a"}},"webdavPass":"","objectStorageSecretAccessKey":"user-s3"}`)
+	if got := request(t, withMigrationActor(router, memberA), http.MethodPut, "/api/secrets/config", memberPlain); got.Code != http.StatusNoContent {
+		t.Fatalf("member put: %d %s", got.Code, got.Body.String())
+	}
+
+	// Admin still reads the tenant bag, not the member bag.
+	got := request(t, withMigrationActor(router, admin), http.MethodGet, "/api/secrets/config", nil)
+	if got.Code != http.StatusOK || !bytes.Equal(got.Body.Bytes(), adminPlain) {
+		t.Fatalf("admin get: %d %s", got.Code, got.Body.String())
+	}
+	// Member A reads their personal bag.
+	got = request(t, withMigrationActor(router, memberA), http.MethodGet, "/api/secrets/config", nil)
+	if got.Code != http.StatusOK || !bytes.Equal(got.Body.Bytes(), memberPlain) {
+		t.Fatalf("member A get: %d %s", got.Code, got.Body.String())
+	}
+	// Member B has no bag yet and must not see A or the tenant bag.
+	got = request(t, withMigrationActor(router, memberB), http.MethodGet, "/api/secrets/config", nil)
+	if got.Code != http.StatusNotFound {
+		t.Fatalf("member B get: %d %s", got.Code, got.Body.String())
+	}
+
+	backend.mu.RLock()
+	tenantStored := append([]byte(nil), backend.state[tenantKey(store.DefaultTenantID, secretStateKey)]...)
+	userStored := append([]byte(nil), backend.state[tenantKey(store.DefaultTenantID, userSecretStateKeyPrefix+memberA.ID)]...)
+	backend.mu.RUnlock()
+	if len(userStored) == 0 {
+		t.Fatal("member bag missing")
+	}
+	if bytes.Contains(tenantStored, []byte("sk-member-a")) || bytes.Contains(userStored, []byte("sk-tenant")) {
+		t.Fatal("member and tenant bags must stay isolated")
+	}
+	if bytes.Contains(tenantStored, []byte("sk-tenant")) {
+		// plaintext must never land on disk
+		t.Fatal("tenant bag stored plaintext")
+	}
+	if bytes.Contains(userStored, []byte("sk-member-a")) || bytes.Contains(userStored, []byte("user-s3")) {
+		t.Fatal("member bag stored plaintext")
+	}
+}
+
+
 func TestBlobDeleteReleasesStorageUsageAndKeysDecodeOnce(t *testing.T) {
 	backend := newMemoryStore()
 	server := NewServerWithStore(t.TempDir(), backend)

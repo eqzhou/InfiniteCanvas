@@ -80,13 +80,19 @@ func TestMigrationSecretResourcesRequireTenantAdmin(t *testing.T) {
 	MountServer(handler, server)
 	body := []byte(`{"resources":[{"kind":"secret","id":"config"}]}`)
 	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
+	// Tenant-wide secret migration remains admin-only.
 	if got := migrationRequest(t, withMigrationActor(handler, member), http.MethodPost, "/api/migration/versions", body, map[string]string{"Content-Type": "application/json"}); got.Code != http.StatusForbidden {
 		t.Fatalf("member secret preflight = %d: %s", got.Code, got.Body.String())
 	}
-	for _, method := range []string{http.MethodGet, http.MethodPut} {
-		if got := migrationRequest(t, withMigrationActor(handler, member), method, "/api/secrets/config", []byte(`{}`), map[string]string{"Content-Type": "application/json"}); got.Code != http.StatusForbidden {
-			t.Fatalf("member %s secrets = %d: %s", method, got.Code, got.Body.String())
-		}
+	if got := migrationRequest(t, withMigrationActor(handler, member), http.MethodPut, "/api/migration/secrets/config", []byte(`{"apiKeys":{},"webdavPass":""}`), map[string]string{"Content-Type": "application/json", "If-None-Match": "*"}); got.Code != http.StatusForbidden {
+		t.Fatalf("member migration put secrets = %d: %s", got.Code, got.Body.String())
+	}
+	// Personal secret bags are writable by members (separate from the tenant bag).
+	if got := migrationRequest(t, withMigrationActor(handler, member), http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"direct":{"image":"sk-member"}},"webdavPass":""}`), map[string]string{"Content-Type": "application/json"}); got.Code != http.StatusNoContent {
+		t.Fatalf("member put personal secrets = %d: %s", got.Code, got.Body.String())
+	}
+	if got := migrationRequest(t, withMigrationActor(handler, member), http.MethodGet, "/api/secrets/config", nil, map[string]string{}); got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte("sk-member")) {
+		t.Fatalf("member get personal secrets = %d: %s", got.Code, got.Body.String())
 	}
 	admin := store.AuthUser{ID: "admin-1", TenantID: "tenant-a", Role: "admin", Status: "active"}
 	if got := migrationRequest(t, withMigrationActor(handler, admin), http.MethodPost, "/api/migration/versions", body, map[string]string{"Content-Type": "application/json"}); got.Code != http.StatusOK {

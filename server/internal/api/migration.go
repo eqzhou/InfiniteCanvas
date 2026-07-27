@@ -140,7 +140,9 @@ func (s *Server) migrationVersions(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid migration resource", http.StatusBadRequest)
 				return
 			}
-			if !s.authorizeSecrets(w, r) {
+			// Tenant-wide secret migration stays admin-only even though
+			// members can sync their own personal secret bags.
+			if !s.requireTenantAdmin(w, r, "migration unavailable") {
 				return
 			}
 			value, err = s.decryptSecrets(r.Context(), tenantID)
@@ -299,7 +301,8 @@ func (s *Server) migrationPutState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) migrationPutSecrets(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeMigration(w, r) || !s.authorizeSecrets(w, r) || s.store == nil || s.secrets == nil {
+	// Conditional tenant-bag writes must not be available to members.
+	if !s.authorizeMigration(w, r) || !s.requireTenantAdmin(w, r, "migration unavailable") || s.store == nil || s.secrets == nil {
 		return
 	}
 	expectedVersion, absent, ok := migrationExpectedVersion(w, r)

@@ -82,6 +82,10 @@ func (s *Server) authorizeMigration(w http.ResponseWriter, r *http.Request) bool
 	return true
 }
 
+// authorizeSecrets gates the encrypted config-secret bag.
+// Any authenticated active user may read/write their own bag (members use a
+// per-user key; admins use the tenant bag). When auth is off, the process token
+// is required. Optional mode still allows token bootstrap before the first user.
 func (s *Server) authorizeSecrets(w http.ResponseWriter, r *http.Request) bool {
 	if authMode() == "off" {
 		if s.processToken == "" {
@@ -95,8 +99,14 @@ func (s *Server) authorizeSecrets(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	if user, ok := authUserFrom(r.Context()); ok {
-		if !isTenantAdmin(user) {
-			http.Error(w, "admin required", http.StatusForbidden)
+		// Members and admins both sync direct-connect keys; isolation is handled
+		// by secretStorageKey, not by this gate.
+		if strings.EqualFold(strings.TrimSpace(user.Status), "ban") {
+			http.Error(w, "account disabled", http.StatusForbidden)
+			return false
+		}
+		if strings.TrimSpace(user.ID) == "" {
+			http.Error(w, "login required", http.StatusUnauthorized)
 			return false
 		}
 		return true

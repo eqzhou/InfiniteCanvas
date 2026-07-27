@@ -11,15 +11,37 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/openboard/openboard/server/internal/store"
 )
 
-const secretStateKey = "__encrypted_config_secrets"
+const (
+	// secretStateKey is the tenant-wide encrypted bag used by admins and by
+	// server-side generation/object-storage when auth is off.
+	secretStateKey = "__encrypted_config_secrets"
+	// userSecretStateKeyPrefix scopes each member's direct-connect keys and
+	// personal object-storage credentials so they can sync across devices
+	// without reading or overwriting the tenant bag.
+	userSecretStateKeyPrefix = "__encrypted_user_config_secrets_v1:"
+)
 
 type secretEnvelope struct {
 	Nonce      string `json:"nonce"`
 	Ciphertext string `json:"ciphertext"`
+}
+
+// secretStorageKey returns the encrypted-bag key for this request.
+// Tenant admins (and token/bootstrap paths with no user) share the tenant bag;
+// ordinary members get a private per-user bag.
+func secretStorageKey(r *http.Request) (key string, tenantWide bool) {
+	if user, ok := authUserFrom(r.Context()); ok && !isTenantAdmin(user) {
+		id := strings.TrimSpace(user.ID)
+		if id != "" && len(id) <= 128 {
+			return userSecretStateKeyPrefix + id, false
+		}
+	}
+	return secretStateKey, true
 }
 
 func (s *Server) SetSecretKey(encoded string) error {
@@ -65,11 +87,15 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 		Ciphertext: base64.RawStdEncoding.EncodeToString(s.secrets.Seal(nil, nonce, plain, nil)),
 	})
 	tenantID := tenantIDFrom(r)
-	if err := s.store.PutState(r.Context(), tenantID, secretStateKey, envelope); err != nil {
+	storageKey, tenantWide := secretStorageKey(r)
+	if err := s.store.PutState(r.Context(), tenantID, storageKey, envelope); err != nil {
 		http.Error(w, "failed to store secrets", 500)
 		return
 	}
-	s.InvalidateTenantBlobStore(tenantID)
+	// Only tenant-wide credentials affect the shared object-storage client.
+	if tenantWide {
+		s.InvalidateTenantBlobStore(tenantID)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -81,7 +107,8 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	plain, err := s.decryptSecrets(r.Context(), tenantIDFrom(r))
+	storageKey, _ := secretStorageKey(r)
+	plain, err := s.decryptSecretsKey(r.Context(), tenantIDFrom(r), storageKey)
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -96,11 +123,17 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(plain)
 }
 
+// decryptSecrets reads the tenant-wide encrypted bag used by server-side
+// generation and tenant object storage.
 func (s *Server) decryptSecrets(ctx context.Context, tenantID string) ([]byte, error) {
+	return s.decryptSecretsKey(ctx, tenantID, secretStateKey)
+}
+
+func (s *Server) decryptSecretsKey(ctx context.Context, tenantID, key string) ([]byte, error) {
 	if s.store == nil || s.secrets == nil {
 		return nil, store.ErrNotFound
 	}
-	value, err := s.store.GetState(ctx, tenantID, secretStateKey)
+	value, err := s.store.GetState(ctx, tenantID, key)
 	if err != nil {
 		return nil, err
 	}
