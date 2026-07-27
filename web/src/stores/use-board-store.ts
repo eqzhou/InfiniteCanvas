@@ -56,7 +56,7 @@ import {
   deleteStorageKey,
   uploadMedia,
 } from "@/services/storage";
-import { TenantConfigAdminRequiredError } from "@/services/server-storage";
+import { SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
 import type { GenerationDefaults } from "@/lib/generation-defaults";
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
@@ -276,7 +276,7 @@ export async function saveWorkspaceReplacementConfig(save: () => Promise<void>):
 		await save();
 		return true;
 	} catch (error) {
-		if (error instanceof TenantConfigAdminRequiredError) return false;
+		if (error instanceof TenantConfigAdminRequiredError || error instanceof SecretAuthRequiredError) return false;
 		throw error;
 	}
 }
@@ -382,7 +382,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           savePrompts(personalPrompts),
           // Persist merged built-in prompt sources so reloads and formal storage keep them.
           saveConfig(hydratedConfig).catch((error) => {
-            if (!(error instanceof TenantConfigAdminRequiredError)) throw error;
+            if (!(error instanceof TenantConfigAdminRequiredError) && !(error instanceof SecretAuthRequiredError)) throw error;
           }),
         ]);
         // A tombstone is authoritative. Drop those ids before the first paint so a

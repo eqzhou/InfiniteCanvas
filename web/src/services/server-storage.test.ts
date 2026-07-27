@@ -212,3 +212,20 @@ describe("migration capability declaration", () => {
     await expect(loadMigrationCapabilities()).rejects.toBeInstanceOf(MigrationCapabilitiesUnavailableError);
   });
 });
+
+describe("secret bag auth boundaries", () => {
+  test("treats 401 as login required rather than a generic secret failure", async () => {
+    globalThis.fetch = mock(async () => new Response("login required", { status: 401 })) as typeof fetch;
+    const { SecretAuthRequiredError, saveServerSecrets } = await import("./server-storage");
+    await expect(saveServerSecrets({ apiKeys: {}, webdavPass: "" })).rejects.toBeInstanceOf(SecretAuthRequiredError);
+  });
+
+  test("loadServerSecrets returns null for guests instead of throwing", async () => {
+    for (const status of [401, 403, 404]) {
+      globalThis.fetch = mock(async () => new Response(null, { status })) as typeof fetch;
+      const { loadServerSecrets } = await import("./server-storage");
+      expect(await loadServerSecrets()).toBeNull();
+    }
+  });
+});
+

@@ -121,7 +121,14 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function me(): Promise<{ user: AuthUser; authMode: string }> {
+export type MeResponse = {
+  user: AuthUser;
+  authMode: string;
+  /** True when the server synthesized a guest placeholder instead of a real session. */
+  guest?: boolean;
+};
+
+export async function me(): Promise<MeResponse> {
   const response = await authFetch("auth/me");
   if (response.status === 404) {
     throw new AuthHttpError(404, "auth unavailable");

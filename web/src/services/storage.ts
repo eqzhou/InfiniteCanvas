@@ -26,6 +26,7 @@ import {
   saveMigrationState,
   loadMigrationCapabilities,
   TenantConfigAdminRequiredError,
+  SecretAuthRequiredError,
   type MigrationResourceRef,
 } from "@/services/server-storage";
 import {
@@ -595,11 +596,22 @@ export async function loadConfig(): Promise<AppConfig | null> {
 
 export async function saveConfig(config: AppConfig): Promise<void> {
   const secrets = extractConfigSecrets(config);
+  const hasSecrets = summarizeMigrationCredentials(secrets).present;
 	if (SERVER_STORAGE) {
 		try {
 			await saveServerSecrets(secrets);
 		} catch (error) {
-			if (!(error instanceof TenantConfigAdminRequiredError) || summarizeMigrationCredentials(secrets).present) throw error;
+      // Capability model:
+      // - guests may persist non-secret config / prompt sources
+      // - secrets require a signed-in account
+      // - empty secret bags never block catalog/prompt sync
+      if (error instanceof SecretAuthRequiredError) {
+        if (hasSecrets) throw error;
+      } else if (error instanceof TenantConfigAdminRequiredError) {
+        if (hasSecrets) throw error;
+      } else {
+        throw error;
+      }
 		}
 	}
   else writeSessionConfigSecrets(secrets);

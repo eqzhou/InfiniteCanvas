@@ -203,6 +203,18 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
       try {
         const result = await me();
         if (cancelled) return;
+        // optional mode answers with a synthetic guest. That is a read-only
+        // browse identity, not a signed-in account — treat it as open so the
+        // login entry stays visible and secrets stay gated.
+        if (result.guest === true || isGuestIdentity(result.user)) {
+          setUser(result.user);
+          readyScopeRef.current = "open";
+          setLocalAdmin(false);
+          setUsageSnapshot(null);
+          setStatus("open");
+          await finishReady();
+          return;
+        }
         setMigrationChecking(true);
         setUser(result.user);
         readyScopeRef.current = result.user.tenantId;

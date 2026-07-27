@@ -35,6 +35,17 @@ export class TenantConfigAdminRequiredError extends Error {
   }
 }
 
+/**
+ * Secrets require a real signed-in account (or auth_mode=off + process token).
+ * Callers that only persist non-secret state should catch this and continue.
+ */
+export class SecretAuthRequiredError extends Error {
+  constructor(message = "保存密钥需要登录账号") {
+    super(message);
+    this.name = "SecretAuthRequiredError";
+  }
+}
+
 export async function loadMigrationResourceVersions(
   resources: readonly MigrationResourceRef[],
 ): Promise<MigrationResourceVersion[]> {
@@ -210,9 +221,9 @@ export async function saveServerState(
 
 export async function loadServerSecrets<T>(): Promise<T | null> {
   const response = await request("secrets/config");
-  // Tenant members can use the shared, secret-free config catalog but must
-  // never receive tenant credentials.
-  if (response.status === 403 || response.status === 404) return null;
+  // Guests / unauthenticated sessions cannot read secret bags. Members can use
+  // the shared secret-free catalog but must never receive tenant credentials.
+  if (response.status === 401 || response.status === 403 || response.status === 404) return null;
   return readJSON<T>(response);
 }
 
@@ -222,6 +233,8 @@ export async function saveServerSecrets<T>(value: T): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(value),
   });
+  // 401 = no real account session. Prompt/catalog sync must not die on this.
+  if (response.status === 401) throw new SecretAuthRequiredError();
 	if (response.status === 403) throw new TenantConfigAdminRequiredError();
   if (!response.ok) throw new Error(`Secret save failed: HTTP ${response.status}`);
 }

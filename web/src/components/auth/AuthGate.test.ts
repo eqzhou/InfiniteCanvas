@@ -134,3 +134,12 @@ describe("login entry point availability", () => {
     expect(shouldOfferLogin("login_required", null, false)).toBe(false);
   });
 });
+
+describe("guest bootstrap status", () => {
+  test("synthetic guest is not treated as authenticated for capability checks", () => {
+    // Mirrors AuthGate bootstrap: guest identity keeps login available.
+    expect(shouldOfferLogin("open", guestAccount, false)).toBe(true);
+    expect(isGuestIdentity({ ...guestAccount, guest: true })).toBe(true);
+  });
+});
+

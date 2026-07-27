@@ -226,3 +226,18 @@ describe("remote media upload limits", () => {
     await expect(uploadMedia("https://127.0.0.1/image.png", "image")).rejects.toThrow("private");
   });
 });
+
+describe("guest capability model for config secrets", () => {
+  test("empty secret bag 401 does not block non-secret config persistence contract", async () => {
+    // Product rule: guests may save prompt-source config. Secrets require login.
+    // Empty bags + 401 must soft-fail; real credentials must fail closed.
+    globalThis.fetch = mock(async () => new Response("login required", { status: 401 })) as typeof fetch;
+    const { SecretAuthRequiredError, saveServerSecrets } = await import("./server-storage");
+    await expect(saveServerSecrets({ apiKeys: {}, webdavPass: "" })).rejects.toBeInstanceOf(SecretAuthRequiredError);
+    await expect(saveServerSecrets({
+      apiKeys: { main: { image: "sk-test" } },
+      webdavPass: "",
+    })).rejects.toBeInstanceOf(SecretAuthRequiredError);
+  });
+});
+
