@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 // TestOptionalModeGuestIsReadOnlyAndAdvertisesItself locks the contract the UI
@@ -187,3 +190,77 @@ func TestOptionalZeroUserDataPlaneRequiresProcessToken(t *testing.T) {
 		t.Fatalf("token data-plane read = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Browsers open /api/runtime/ws with only a single-use ticket in the query string.
+// Once accounts exist, requireUserWhenNeeded must still allow that upgrade path;
+// the ticket itself is the capability token (and is single-use / short-lived).
+func TestRuntimeWebSocketBypassesSessionGateWithTicket(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	backend.users = 1
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	// Ticket minting still requires a session when users already exist.
+	actor := store.AuthUser{ID: "user-1", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
+	ticketReq := httptest.NewRequest(http.MethodPost, "/api/runtime/ticket", nil)
+	ticketReq = ticketReq.WithContext(context.WithValue(ticketReq.Context(), authUserKey, actor))
+	ticketRec := httptest.NewRecorder()
+	router.ServeHTTP(ticketRec, ticketReq)
+	if ticketRec.Code != http.StatusOK {
+		t.Fatalf("mint ticket: %d %s", ticketRec.Code, ticketRec.Body.String())
+	}
+	var payload struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.NewDecoder(ticketRec.Body).Decode(&payload); err != nil || payload.Ticket == "" {
+		t.Fatalf("ticket payload: %v body=%s", err, ticketRec.Body.String())
+	}
+
+	// Anonymous upgrade with a valid ticket must not be rejected as "login required".
+	// Without a real WebSocket handshake the handler returns the ticket/origin error
+	// path instead of upgrading, but the session gate must already have passed.
+	wsReq := httptest.NewRequest(http.MethodGet, "/api/runtime/ws?ticket="+payload.Ticket, nil)
+	wsRec := httptest.NewRecorder()
+	router.ServeHTTP(wsRec, wsReq)
+	if wsRec.Code == http.StatusUnauthorized && strings.Contains(wsRec.Body.String(), "login required") {
+		t.Fatalf("runtime ws blocked by session gate: %d %s", wsRec.Code, wsRec.Body.String())
+	}
+	if wsRec.Code == http.StatusUnauthorized && strings.Contains(wsRec.Body.String(), "runtime ticket is invalid or expired") {
+		// Ticket was consumed or rejected after the gate; that is still past login.
+		return
+	}
+	// Any non-login-required outcome is acceptable for this gate regression.
+	if strings.Contains(wsRec.Body.String(), "login required") {
+		t.Fatalf("unexpected login required: %d %s", wsRec.Code, wsRec.Body.String())
+	}
+}
+
+func TestRuntimeWebSocketRejectsAnonymousMissingTicketWhenUsersExist(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	backend.users = 1
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	wsReq := httptest.NewRequest(http.MethodGet, "/api/runtime/ws", nil)
+	wsRec := httptest.NewRecorder()
+	router.ServeHTTP(wsRec, wsReq)
+	if wsRec.Code != http.StatusUnauthorized {
+		t.Fatalf("missing ticket status = %d, want 401; body=%s", wsRec.Code, wsRec.Body.String())
+	}
+	if strings.Contains(wsRec.Body.String(), "login required") {
+		t.Fatalf("missing ticket should fail on ticket auth, not session gate: %s", wsRec.Body.String())
+	}
+	if !strings.Contains(wsRec.Body.String(), "runtime ticket is invalid or expired") {
+		t.Fatalf("missing ticket body = %q", wsRec.Body.String())
+	}
+}
+

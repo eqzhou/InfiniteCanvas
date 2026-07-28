@@ -156,11 +156,14 @@ func (s *Server) requireUserWhenNeeded(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		// Public process endpoints and auth entrypoints. me/usage enforce their own session rules.
+		// /api/runtime/ws authenticates with a single-use ticket in the query
+		// string; browsers cannot attach session headers on the WebSocket upgrade.
 		if path == "/api/health" || path == "/api/version" ||
 			path == "/api/auth/register" || path == "/api/auth/login" || path == "/api/auth/logout" ||
 			path == "/api/auth/me" || path == "/api/auth/usage" ||
 			path == "/api/auth/oauth/linuxdo/start" || path == "/api/auth/oauth/linuxdo/callback" ||
 			path == "/api/site-policy" || path == "/api/billing/estimate" || path == "/api/admin/models" ||
+			path == "/api/runtime/ws" ||
 			strings.HasPrefix(path, "/api/media/references/") {
 			next.ServeHTTP(w, r)
 			return
