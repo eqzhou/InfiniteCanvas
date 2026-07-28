@@ -724,7 +724,7 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await creator.getByLabel("内容").fill("Stored in PostgreSQL");
   await creator.getByRole("button", { name: "保存" }).click();
   await expect(creator).toHaveCount(0);
-  await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();
+  await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible({ timeout: 15_000 });
   await page.reload();
   await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();
 

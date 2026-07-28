@@ -25,6 +25,8 @@ type fakeRuntimeTransport struct {
 }
 
 func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
+	testContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	server := NewServer(t.TempDir())
 	router := chi.NewRouter()
 	wantScope := agentScope{tenantID: "tenant-runtime", userID: "user-runtime"}
@@ -51,7 +53,7 @@ func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 		t.Fatal("ticket response was invalid")
 	}
 	websocketURL := strings.Replace(httpServer.URL, "http://", "ws://", 1) + "/api/runtime/ws?ticket=" + ticket.Value
-	connection, response, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
+	connection, response, err := websocket.Dial(testContext, websocketURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": []string{httpServer.URL}},
 	})
 	if err != nil {
@@ -62,6 +64,26 @@ func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 	}
 	defer connection.Close(websocket.StatusNormalClosure, "test complete")
 
+	_, readyData, err := connection.Read(testContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready runtimeEnvelope
+	if json.Unmarshal(readyData, &ready) != nil || ready.Type != "ready" {
+		t.Fatalf("invalid runtime ready message: %s", readyData)
+	}
+	var readyState struct {
+		ClientID string `json:"clientId"`
+	}
+	if json.Unmarshal(ready.Data, &readyState) != nil || readyState.ClientID == "" {
+		t.Fatalf("invalid runtime client identity: %s", ready.Data)
+	}
+	server.runtime.mu.Lock()
+	attachedScope := server.runtime.clients[readyState.ClientID].scope
+	server.runtime.mu.Unlock()
+	if attachedScope != wantScope {
+		t.Fatalf("websocket client scope = %+v, want ticket scope %+v", attachedScope, wantScope)
+	}
 	commandDone := make(chan struct {
 		status int
 		body   string
@@ -83,28 +105,7 @@ func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 			body   string
 		}{response.StatusCode, string(data)}
 	}()
-
-	_, readyData, err := connection.Read(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ready runtimeEnvelope
-	if json.Unmarshal(readyData, &ready) != nil || ready.Type != "ready" {
-		t.Fatalf("invalid runtime ready message: %s", readyData)
-	}
-	var readyState struct {
-		ClientID string `json:"clientId"`
-	}
-	if json.Unmarshal(ready.Data, &readyState) != nil || readyState.ClientID == "" {
-		t.Fatalf("invalid runtime client identity: %s", ready.Data)
-	}
-	server.runtime.mu.Lock()
-	attachedScope := server.runtime.clients[readyState.ClientID].scope
-	server.runtime.mu.Unlock()
-	if attachedScope != wantScope {
-		t.Fatalf("websocket client scope = %+v, want ticket scope %+v", attachedScope, wantScope)
-	}
-	_, data, err := connection.Read(context.Background())
+	_, data, err := connection.Read(testContext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 	result, _ := json.Marshal(runtimeEnvelope{
 		Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{"projectId":"board-1"}`),
 	})
-	if err := connection.Write(context.Background(), websocket.MessageText, result); err != nil {
+	if err := connection.Write(testContext, websocket.MessageText, result); err != nil {
 		t.Fatal(err)
 	}
 	completed := <-commandDone
@@ -123,7 +124,7 @@ func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected command response: %d %s", completed.status, completed.body)
 	}
 
-	second, reused, err := websocket.Dial(context.Background(), websocketURL, &websocket.DialOptions{
+	second, reused, err := websocket.Dial(testContext, websocketURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": []string{httpServer.URL}},
 	})
 	if second != nil {

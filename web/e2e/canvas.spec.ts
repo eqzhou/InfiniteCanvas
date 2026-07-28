@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { resolveE2EEnvironment } from "./environment";
 
@@ -222,6 +222,29 @@ async function expectPluginEnabledStateStored(page: Page, pluginId: string, enab
     };
   }), { id: pluginId, expectedEnabled: enabled });
   expect(isStored).toBe(true);
+}
+
+async function setPluginEnabledAndWaitForSave(toggle: Locator, enabled: boolean) {
+  await toggle.evaluate((element, expectedEnabled) => new Promise<void>((resolve, reject) => {
+    const button = element as HTMLButtonElement;
+    let savingSeen = button.disabled;
+    const timeout = window.setTimeout(() => {
+      observer.disconnect();
+      reject(new Error("Timed out waiting for plugin config persistence"));
+    }, 15_000);
+    const finishIfSaved = () => {
+      if (button.disabled) savingSeen = true;
+      const checked = button.getAttribute("aria-checked") === "true";
+      if (!savingSeen || button.disabled || checked !== expectedEnabled) return;
+      window.clearTimeout(timeout);
+      observer.disconnect();
+      resolve();
+    };
+    const observer = new MutationObserver(finishIfSaved);
+    observer.observe(button, { attributes: true, attributeFilter: ["disabled", "aria-checked"] });
+    button.click();
+    finishIfSaved();
+  }), enabled);
 }
 
 function projectCard(page: Page, title: string) {
@@ -2879,11 +2902,10 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
 
   await page.goto("/plugins");
   const enabled = page.getByRole("switch", { name: "便签 启用状态" });
-  await enabled.uncheck();
-  // A single read queues behind the config write. Repeated readonly polling can
-  // starve the pending readwrite transaction in WebKit.
+  await expect(enabled).toBeChecked();
+  await setPluginEnabledAndWaitForSave(enabled, false);
+  // Avoid overlapping repeated readonly probes with WebKit's config write.
   await expectPluginEnabledStateStored(page, "openboard.sticky-note", false);
-  await expect(enabled).toBeEnabled({ timeout: 15_000 });
   await expect(stickyCard.getByRole("button", { name: "添加到画布" })).toBeDisabled();
   await page.goto("/");
   await expect(page.getByTestId("plugin-unavailable")).toBeVisible({ timeout: 15_000 });
@@ -2891,9 +2913,8 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
 
   await page.goto("/plugins");
   await expect(enabled).not.toBeChecked();
-  await enabled.check();
+  await setPluginEnabledAndWaitForSave(enabled, true);
   await expectPluginEnabledStateStored(page, "openboard.sticky-note", true);
-  await expect(enabled).toBeEnabled({ timeout: 15_000 });
   await expect(enabled).toBeChecked();
   await page.goto("/");
   await expect(page.getByTestId("plugin-unavailable")).toHaveCount(0, { timeout: 15_000 });
