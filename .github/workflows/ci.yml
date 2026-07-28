@@ -101,9 +101,30 @@ jobs:
       - run: node scripts/audit-cleanroom.mjs
 
   e2e:
-    name: Cross-browser and production E2E
+    name: E2E (${{ matrix.id }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - id: chromium
+            project: chromium
+            browser: chromium
+            extended: true
+          - id: firefox
+            project: firefox
+            browser: firefox
+            extended: false
+          - id: webkit
+            project: webkit
+            browser: webkit
+            extended: false
+          - id: mobile-chromium
+            project: mobile-chromium
+            browser: chromium
+            extended: false
     env:
       OPENBOARD_DATABASE_URL: postgres://openboard_e2e:openboard_e2e@127.0.0.1:5432/openboard_e2e?sslmode=disable
       OPENBOARD_REDIS_URL: redis://127.0.0.1:6379/0
@@ -144,19 +165,34 @@ jobs:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
       - name: Install formal E2E database clients
+        if: matrix.extended
         run: sudo apt-get update && sudo apt-get install --yes postgresql-client redis-tools
       - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chromium firefox webkit
-      - run: bun run test:e2e
-      - run: bun run test:e2e:production --project=chromium --workers=1
-      - run: bun run test:e2e:formal
+      - run: bunx playwright install --with-deps ${{ matrix.browser }}
+      - run: bun run test:e2e --project=${{ matrix.project }}
+      - if: matrix.extended
+        run: bun run test:e2e:production --project=chromium --workers=1
+      - if: matrix.extended
+        run: bun run test:e2e:formal
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: playwright-results
+          name: playwright-results-${{ matrix.id }}
           path: web/node_modules/.cache/playwright-test-results
           if-no-files-found: ignore
           retention-days: 7
+
+  e2e-result:
+    name: Cross-browser and production E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: e2e
+    steps:
+      - name: Require every E2E matrix job to pass
+        env:
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: test "$E2E_RESULT" = success
 
   container:
     name: Container build and smoke test
