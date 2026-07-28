@@ -264,6 +264,9 @@ func (s *Server) cancelWorkflowChildIfParentCancelled(tenantID, parentID, childI
 		return
 	}
 	_, _ = s.store.CancelServerGenerationJob(ctx, tenantID, childID, time.Now().UTC())
+	// Wake the local child worker immediately; cross-instance cancel still relies
+	// on lease/status watch, but same-process cancel should not wait a tick.
+	s.cancelLocalGeneration(tenantID, childID)
 }
 
 func (s *Server) checkpointWorkflowJob(tenantID string, job store.GenerationJob, result workflowRunResult) bool {

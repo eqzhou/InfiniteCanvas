@@ -266,3 +266,36 @@ func TestConcurrentRefundCreditsIsExactlyOnceAndRejectsUnknownReasons(t *testing
 		t.Fatalf("unknown reason changed credits: credits=%d refunds=%d", credits, refunds)
 	}
 }
+
+func TestDeleteGenerationJobsForProjectRefundsActiveJobs(t *testing.T) {
+	backend := openRefundTestStore(t)
+	fixture := seedRefundFixture(t, backend, fmt.Sprintf("project-delete-%d", time.Now().UnixNano()))
+	const projectID = "board-project-delete"
+	if _, err := backend.pool.Exec(t.Context(), `UPDATE openboard_generation_jobs SET project_id=$3 WHERE tenant_id=$1 AND id=$2`,
+		fixture.tenantID, fixture.jobID, projectID); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := backend.DeleteGenerationJobsForProject(t.Context(), fixture.tenantID, projectID)
+	if err != nil {
+		t.Fatalf("delete project jobs: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted count = %d, want 1", deleted)
+	}
+
+	var credits int64
+	var refunds int
+	if err := backend.pool.QueryRow(t.Context(), `SELECT credits FROM openboard_users WHERE tenant_id=$1 AND id=$2`, fixture.tenantID, fixture.userID).Scan(&credits); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.pool.QueryRow(t.Context(), `SELECT count(*) FROM openboard_credit_logs WHERE tenant_id=$1 AND job_id=$2 AND reason IN ('refund','failed','cancelled')`, fixture.tenantID, fixture.jobID).Scan(&refunds); err != nil {
+		t.Fatal(err)
+	}
+	if credits != 100 || refunds != 1 {
+		t.Fatalf("project deletion did not refund reserved credits: credits=%d refunds=%d", credits, refunds)
+	}
+	if _, err := backend.GetGenerationJob(t.Context(), fixture.tenantID, fixture.jobID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted job still readable: %v", err)
+	}
+}

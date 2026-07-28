@@ -349,6 +349,13 @@ func (s *Server) deleteGenerationJobsForProject(w http.ResponseWriter, r *http.R
 					http.Error(w, "failed to cancel active generation job", http.StatusInternalServerError)
 					return
 				}
+				s.cancelLocalGeneration(tenantID, job.ID)
+				if job.Kind == "workflow" {
+					for _, childID := range workflowChildJobIDs(job.Result) {
+						_, _ = s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC())
+						s.cancelLocalGeneration(tenantID, childID)
+					}
+				}
 			}
 		}
 		if page*result.PageSize >= result.Total || len(result.Items) == 0 {

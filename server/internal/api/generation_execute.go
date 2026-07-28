@@ -448,7 +448,8 @@ func (s *Server) watchGenerationCancellation(ctx context.Context, cancel context
 			return
 		case <-statusTicker.C:
 			job, err := s.store.GetGenerationJob(ctx, tenantID, id)
-			if err == nil && (job.Status != "running" || job.LeaseOwner != owner) {
+			// NotFound covers hard-deleted project history; non-running covers cancel/refund.
+			if errors.Is(err, store.ErrNotFound) || (err == nil && (job.Status != "running" || job.LeaseOwner != owner)) {
 				cancel()
 				return
 			}
@@ -466,6 +467,16 @@ func (s *Server) watchGenerationCancellation(ctx context.Context, cancel context
 	}
 }
 
+func (s *Server) cancelLocalGeneration(tenantID, id string) {
+	key := tenantID + "\x00" + id
+	s.generationMu.Lock()
+	cancel := s.generationCancels[key]
+	s.generationMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeServerGeneration(w, r) {
 		return
@@ -480,7 +491,6 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	tenantID := tenantIDFrom(r)
-	key := tenantID + "\x00" + id
 	job, err := s.store.CancelServerGenerationJob(r.Context(), tenantID, id, time.Now().UTC())
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -494,15 +504,11 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	s.generationMu.Lock()
-	cancel := s.generationCancels[key]
-	s.generationMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	s.cancelLocalGeneration(tenantID, id)
 	if job.Kind == "workflow" {
 		for _, childID := range workflowChildJobIDs(job.Result) {
 			_, _ = s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC())
+			s.cancelLocalGeneration(tenantID, childID)
 		}
 	}
 	writeJSON(w, publicGenerationJob(job))

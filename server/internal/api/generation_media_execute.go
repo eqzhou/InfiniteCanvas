@@ -631,7 +631,11 @@ func (s *Server) executeClaimedMediaJob(claimed store.TenantGenerationJob, gener
 		if storageKey != "" {
 			_ = s.deleteTenantBlob(context.Background(), tenantID, "", storageKey)
 		}
-		finish("failed", nil, "生成结果无效或保存失败")
+		if errors.Is(ctx.Err(), context.Canceled) {
+			finish("cancelled", nil, "已取消")
+		} else {
+			finish("failed", nil, "生成结果无效或保存失败")
+		}
 		return
 	}
 	result, _ := json.Marshal(serverMediaJobResult{Items: []mediaGenerationItem{item}})

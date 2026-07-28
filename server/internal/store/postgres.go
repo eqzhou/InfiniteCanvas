@@ -1483,7 +1483,19 @@ func (s *PostgresStore) DeleteGenerationJobsForProject(ctx context.Context, tena
 	if projectID == "" {
 		return 0, errors.New("project id is required")
 	}
-	tx, err := s.pool.Begin(ctx)
+	var lastErr error
+	for range 3 {
+		deleted, err := s.deleteGenerationJobsForProjectOnce(ctx, tenantID, projectID)
+		if !isSerializationFailure(err) {
+			return deleted, err
+		}
+		lastErr = err
+	}
+	return 0, lastErr
+}
+
+func (s *PostgresStore) deleteGenerationJobsForProjectOnce(ctx context.Context, tenantID, projectID string) (int64, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return 0, err
 	}
@@ -1491,11 +1503,45 @@ func (s *PostgresStore) DeleteGenerationJobsForProject(ctx context.Context, tena
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
 		return 0, err
 	}
-	// Terminalize any active server/workflow jobs first so leases and workers stop cleanly.
-	if _, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs SET
-		status='cancelled', error='项目已删除', updated_at=clock_timestamp(), lease_owner='', lease_expires_at=NULL
-		WHERE tenant_id=$1 AND project_id=$2 AND status IN ('queued','running')`, tenantID, projectID); err != nil {
+	// Cancel active jobs with the same refund path as explicit cancellation so
+	// project deletion cannot burn reserved credits.
+	rows, err := tx.Query(ctx, `SELECT id FROM openboard_generation_jobs
+		WHERE tenant_id=$1 AND project_id=$2 AND status IN ('queued','running')
+		ORDER BY id ASC`, tenantID, projectID)
+	if err != nil {
 		return 0, err
+	}
+	activeIDs := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		activeIDs = append(activeIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	for _, id := range activeIDs {
+		if _, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs SET
+			status='cancelled', error='项目已删除', updated_at=clock_timestamp(), lease_owner='', lease_expires_at=NULL,
+			parameters=parameters #- '{sharedChannel,secret}',
+			result=CASE WHEN kind='workflow' THEN jsonb_set(result, '{steps}', COALESCE((
+			  SELECT jsonb_object_agg(step.key, CASE
+			    WHEN step.value->>'status' IN ('pending','queued','running')
+			      THEN step.value || jsonb_build_object('status','cancelled','error','项目已删除')
+			    ELSE step.value END)
+			  FROM jsonb_each(result->'steps') AS step
+			), '{}'::jsonb), true) ELSE result END
+			WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running')`, tenantID, id); err != nil {
+			return 0, err
+		}
+		if err := s.refundCreditsTx(ctx, tx, tenantID, "", id, "cancelled"); err != nil {
+			return 0, err
+		}
 	}
 	result, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID)
 	if err != nil {

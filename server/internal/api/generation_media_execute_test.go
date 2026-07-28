@@ -141,6 +141,40 @@ func minimalMP4() []byte {
 	return []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 0, 0, 'i', 's', 'o', 'm', 'm', 'p', '4', '2', 0, 0, 0, 8, 'm', 'd', 'a', 't'}
 }
 
+func TestServerVideoJobCancellationWinsAgainstLateCompletion(t *testing.T) {
+	backend := newMemoryStore()
+	video := newScriptedVideoExecutor(nil)
+	server, handler := mediaExecutionServer(t, backend, video, newScriptedAudioExecutor())
+	t.Cleanup(server.Close)
+
+	created := postVideoJob(t, handler, "job-cancel-video")
+	if created.code != http.StatusAccepted {
+		t.Fatalf("create: %d %s", created.code, created.body)
+	}
+	select {
+	case <-video.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("video executor did not start")
+	}
+
+	for range 2 {
+		cancelled := request(t, handler, http.MethodPost, "/api/generation-jobs/job-cancel-video/cancel", nil)
+		if cancelled.Code != http.StatusOK || !bytes.Contains(cancelled.Body.Bytes(), []byte(`"status": "cancelled"`)) {
+			t.Fatalf("cancel: %d %s", cancelled.Code, cancelled.Body.String())
+		}
+	}
+	select {
+	case <-video.cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream video context was not cancelled")
+	}
+	server.videoWG.Wait()
+	job, err := backend.GetGenerationJob(context.Background(), store.DefaultTenantID, "job-cancel-video")
+	if err != nil || job.Status != "cancelled" {
+		t.Fatalf("cancelled job = %#v, %v", job, err)
+	}
+}
+
 func TestGeneratedMediaValidationRejectsHeaderOnlyMP4(t *testing.T) {
 	header := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 0, 0, 'i', 's', 'o', 'm', 'm', 'p', '4', '2'}
 	if _, err := validateGeneratedMedia("video", generatedMedia{Data: header, MIMEType: "video/mp4"}); err == nil {
