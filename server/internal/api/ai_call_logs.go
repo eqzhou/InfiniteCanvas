@@ -224,18 +224,47 @@ func sanitizeAICallLogJSON(value any) (json.RawMessage, error) {
 	return json.RawMessage(out), nil
 }
 
+func normalizeAICallLogKey(key string) string {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	var b strings.Builder
+	b.Grow(len(lower))
+	for _, r := range lower {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isSensitiveAICallLogKey(key string) bool {
+	lower := strings.ToLower(key)
+	normalized := normalizeAICallLogKey(key)
+	if strings.Contains(lower, "apikey") ||
+		strings.Contains(lower, "api_key") ||
+		strings.Contains(lower, "authorization") ||
+		strings.Contains(lower, "password") ||
+		strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "token") ||
+		strings.Contains(lower, "credential") ||
+		strings.Contains(lower, "privatekey") ||
+		strings.Contains(lower, "private_key") {
+		return true
+	}
+	switch normalized {
+	case "xapikey", "accesskey", "accesskeyid", "secretaccesskey", "sessiontoken", "clientsecret", "refreshtoken":
+		return true
+	default:
+		return false
+	}
+}
+
 func redactAICallLogValue(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(typed))
 		for key, item := range typed {
 			lower := strings.ToLower(key)
-			if strings.Contains(lower, "apikey") ||
-				strings.Contains(lower, "api_key") ||
-				strings.Contains(lower, "authorization") ||
-				strings.Contains(lower, "password") ||
-				strings.Contains(lower, "secret") ||
-				strings.Contains(lower, "token") {
+			if isSensitiveAICallLogKey(key) {
 				out[key] = "[redacted]"
 				continue
 			}
@@ -338,9 +367,9 @@ func (s *Server) reportClientAICallLog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ai call logs unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	// Mirror requireTenantAdmin bootstrap for the local test harness and
-	// zero-user optional installs: process token when auth is off, any active
-	// session when auth is on, and open bootstrap only while no users exist.
+	// Process token when auth is off; any active session when auth is on.
+	// Zero-user optional installs still require the process token so anonymous
+	// browsers cannot spam audit rows before the first account exists.
 	if authMode() == "off" {
 		if !s.authorizeProcessToken(r) {
 			http.Error(w, "invalid access token", http.StatusUnauthorized)
@@ -360,7 +389,7 @@ func (s *Server) reportClientAICallLog(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to verify report access", http.StatusServiceUnavailable)
 			return
 		}
-		if count != 0 {
+		if count != 0 || !s.authorizeProcessToken(r) {
 			http.Error(w, "login required", http.StatusUnauthorized)
 			return
 		}

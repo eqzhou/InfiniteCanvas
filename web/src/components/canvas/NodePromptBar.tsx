@@ -39,6 +39,11 @@ import {
   resolveNodePromptModels,
   resolveNodePromptSelectedModel,
 } from "@/lib/node-prompt-models";
+import {
+  isServerManagedChannel,
+  mergeSharedChannelChoices,
+  useSharedChannels,
+} from "@/services/shared-channels";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
   const config = useBoardStore((s) => s.config);
@@ -50,7 +55,15 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   const [text, setText] = useState(node.metadata.prompt ?? "");
   const [busy, setBusy] = useState(false);
   const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
+  const sharedChannels = useSharedChannels();
+  const channelChoices = useMemo(
+    () => mergeSharedChannelChoices(config.channels, sharedChannels),
+    [config.channels, sharedChannels],
+  );
   const channel =
+    (config.activeSharedChannelId
+      ? channelChoices.find((c) => c.id === config.activeSharedChannelId)
+      : undefined) ??
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
   const references = buildPromptReferences(project, node.id);
@@ -79,6 +92,10 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   if (!promptable) return null;
 
+  const generationBusy =
+    busy ||
+    (node.metadata.status === "loading" && Boolean(node.metadata.generationJobId));
+
   const placeRight = (created: BoardNode[]) => {
     updateActive((p) => ({
       ...p,
@@ -91,9 +108,12 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   };
 
   const send = async () => {
-    if (!text.trim() || busy) return;
+    if (!text.trim() || generationBusy) return;
     const kind = nodePromptKind(promptType);
-    if (!channel || !getProvider(channel, kind).apiKey) {
+    if (
+      !channel ||
+      (!isServerManagedChannel(channel, kind) && !getProvider(channel, kind).apiKey)
+    ) {
       alert("请先在设置中配置 API Key");
       return;
     }
@@ -444,7 +464,7 @@ ${body}` : body;
           className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
           aria-busy={busy}
           aria-label={busy ? "生成中" : "发送提示词"}
-          disabled={busy || !text.trim()}
+          disabled={generationBusy || !text.trim()}
           onClick={() => void send()}
           title="发送 (Ctrl/Cmd+Enter)"
         >

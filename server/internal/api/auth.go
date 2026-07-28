@@ -165,15 +165,29 @@ func (s *Server) requireUserWhenNeeded(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if authMode() != "required" || s.store == nil {
+		// Auth disabled: local process-token deployments stay open after requireToken.
+		if authMode() == "off" || s.store == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if _, ok := authUserFrom(r.Context()); !ok {
-			http.Error(w, "login required", http.StatusUnauthorized)
+		if _, ok := authUserFrom(r.Context()); ok {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		// optional bootstrap: allow process-token tooling only while no users exist.
+		// Once accounts exist (or mode is required), anonymous callers cannot touch the data plane.
+		if authMode() == "optional" {
+			count, err := s.store.CountUsers(r.Context())
+			if err != nil {
+				http.Error(w, "failed to verify login requirement", http.StatusServiceUnavailable)
+				return
+			}
+			if count == 0 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		http.Error(w, "login required", http.StatusUnauthorized)
 	})
 }
 

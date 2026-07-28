@@ -13,6 +13,7 @@ import {
   AuthHttpError,
   clearSessionToken,
   formatUsageChip,
+  consumeOAuthSessionFragment,
   getSessionToken,
   isAuthDisabledError,
   logout as logoutSession,
@@ -51,10 +52,9 @@ type AuthContextValue = {
  * Whether an identity is the synthesized guest rather than a real account.
  *
  * In `optional` mode the server answers `/api/auth/me` with 200 and a
- * `role: "guest"` placeholder instead of 401, so the UI can stay open for
- * reading. Taking that at face value makes the app believe someone is signed
- * in: it offers "sign out" and hides the way to actually sign in, while every
- * write still fails with 401.
+ * `role: "guest"` placeholder instead of 401. The SPA still treats that as
+ * unsigned and shows the login wall; taking the 200 at face value would hide
+ * sign-in while data-plane writes still need a real session.
  */
 export function isGuestIdentity(user: (AuthUser & { guest?: boolean }) | null): boolean {
   if (!user) return true;
@@ -64,11 +64,9 @@ export function isGuestIdentity(user: (AuthUser & { guest?: boolean }) | null): 
 /**
  * Whether to expose a sign-in entry point.
  *
- * In `optional` mode a guest may read the shared catalog but every write is
- * refused, so without an entry point the session is a dead end: the sign-in
- * form is otherwise only reachable by arriving with an expired session token.
- * Authentication being disabled (`localAdmin`) grants full local access with no
- * account to sign into, and a signed-in user has no use for the prompt.
+ * Guests and null identities need a path back to the form when accounts are
+ * enabled. Authentication being disabled (`localAdmin`) grants full local
+ * access with no account to sign into, and a signed-in user has no use for it.
  */
 export function shouldOfferLogin(
   status: AuthStatus,
@@ -218,11 +216,11 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
 
     void (async () => {
       try {
+        consumeOAuthSessionFragment();
         const result = await me();
         if (cancelled) return;
-        // optional mode answers with a synthetic guest. That is a read-only
-        // browse identity, not a signed-in account — treat it as open so the
-        // login entry stays visible and secrets stay gated.
+        // optional mode answers with a synthetic guest. That is not a signed-in
+        // account — force the login wall and keep the deep link for return.
         if (result.guest === true || isGuestIdentity(result.user)) {
           // Auth is enabled: guests may not browse app surfaces. Keep the current
           // URL so login returns the user to the page they tried to open.
@@ -242,8 +240,7 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
 				await checkAuthenticatedMigration(result.user.role);
       } catch (error) {
         if (cancelled) return;
-        // 401 without a stored session means optional/open mode (no login yet).
-        // Only require the login wall when a session token exists but is invalid/expired.
+        // Auth-enabled deployments always land on the sign-in wall for 401.
         if (error instanceof AuthHttpError && error.status === 401) {
           const hadSession = Boolean(getSessionToken());
           setUser(null);

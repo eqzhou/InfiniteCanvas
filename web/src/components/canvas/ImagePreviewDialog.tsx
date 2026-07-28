@@ -47,6 +47,20 @@ export function ImagePreviewDialog({
     dragRef.current = null;
   }, [open, src]);
 
+  useEffect(() => {
+    if (!open) return;
+    const node = dialogRef.current;
+    if (!node) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const direction = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+      setZoom((current) => clampZoom(current + direction));
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [open]);
+
   if (!open) return null;
 
   const resetView = () => {
@@ -69,12 +83,6 @@ export function ImagePreviewDialog({
       onPointerDown={(event) => {
         event.stopPropagation();
         if (event.target === event.currentTarget) onClose();
-      }}
-      onWheel={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const direction = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-        zoomBy(direction);
       }}
     >
       <div className="absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-white/15 bg-black/65 p-1 text-white shadow-lg backdrop-blur-sm sm:top-5">

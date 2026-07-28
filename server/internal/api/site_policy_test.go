@@ -11,7 +11,9 @@ import (
 
 func TestSitePolicyGetDefaultsAndAdminUpdate(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)
@@ -60,7 +62,9 @@ func TestSitePolicyGetDefaultsAndAdminUpdate(t *testing.T) {
 
 func TestSitePolicyModelCatalogIsAdminOnlyAndBounded(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)
@@ -168,7 +172,9 @@ func containsString(haystack, needle string) bool {
 
 func TestSitePolicyRejectsTrailingGarbageAfterTheBody(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)

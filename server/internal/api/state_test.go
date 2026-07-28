@@ -854,8 +854,11 @@ func (m *memoryStore) ReleaseStorageUsage(_ context.Context, _, _ string, bytes 
 
 func persistentHandler(t *testing.T) http.Handler {
 	t.Helper()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	r := chi.NewRouter()
-	MountServer(r, NewServerWithStore(t.TempDir(), newMemoryStore()))
+	server := NewServerWithStore(t.TempDir(), newMemoryStore())
+	server.SetProcessToken("test-token")
+	MountServer(r, server)
 	return r
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -89,5 +90,62 @@ func TestOptionalModeGuestIsReadOnlyAndAdvertisesItself(t *testing.T) {
 	login := request(t, router, http.MethodPost, "/api/auth/login", []byte(`{"email":"nobody@example.com","password":"wrong-password"}`))
 	if login.Code == http.StatusNotFound {
 		t.Fatalf("login endpoint unavailable in optional mode: %d %s", login.Code, login.Body.String())
+	}
+}
+
+
+func TestOptionalModeRequiresSessionForDataPlaneWhenUsersExist(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	backend.users = 1
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	for _, path := range []string{
+		"/api/projects",
+		"/api/state/assets",
+		"/api/state/prompts",
+		"/api/shared-channels",
+	} {
+		got := request(t, router, http.MethodGet, path, nil)
+		if got.Code != http.StatusUnauthorized {
+			t.Fatalf("guest %s = %d %s, want 401", path, got.Code, got.Body.String())
+		}
+	}
+	// Public allowlist still open.
+	if got := request(t, router, http.MethodGet, "/api/site-policy", nil); got.Code != http.StatusOK {
+		t.Fatalf("site-policy = %d %s", got.Code, got.Body.String())
+	}
+	if got := request(t, router, http.MethodGet, "/api/auth/me", nil); got.Code != http.StatusOK {
+		t.Fatalf("me = %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestOptionalZeroUserAdminBootstrapRequiresProcessToken(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	backend.users = 0
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("bootstrap-token")
+	t.Cleanup(server.Close)
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	if got := request(t, router, http.MethodGet, "/api/admin/channels", nil); got.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous admin = %d %s, want 401", got.Code, got.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/channels", nil)
+	req.Header.Set("Authorization", "Bearer bootstrap-token")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("token admin = %d %s", rec.Code, rec.Body.String())
 	}
 }

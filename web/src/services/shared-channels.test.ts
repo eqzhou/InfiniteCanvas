@@ -20,6 +20,18 @@ describe("shared channel catalog", () => {
     expect(isServerManagedChannel(channel, "image")).toBe(true);
   });
 
+  test("publishes the shared models list onto managed providers", () => {
+    const channel = sharedChannelAsAI({
+      id: "shared-1",
+      name: "Shared",
+      protocol: "openai",
+      defaultImageModel: "image-1",
+      models: ["image-1", "video-1"],
+    });
+    expect(channel.providers?.image.models).toEqual(["image-1", "video-1"]);
+    expect(channel.providers?.video.models).toEqual(["image-1", "video-1"]);
+  });
+
   test("personal channel IDs take precedence over ambiguous shared IDs", () => {
     const personal = { ...createDefaultChannel(), id: "same", name: "Personal" };
     const merged = mergeSharedChannelChoices([personal], [{ id: "same", name: "Shared", protocol: "openai" }, { id: "other", name: "Other", protocol: "openai" }]);

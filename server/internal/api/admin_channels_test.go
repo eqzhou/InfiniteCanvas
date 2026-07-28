@@ -60,6 +60,7 @@ func TestAdminSharedChannelsEncryptSecretsAndNeverReturnThem(t *testing.T) {
 	channels, _ := json.Marshal([]adminChannelPublic{{
 		ID: "shared-main", Name: "Shared", BaseURL: upstream.URL, Protocol: "openai",
 		Enabled: true, AllowUserUse: true, Weight: 2, TimeoutSeconds: 15, DefaultImageModel: "gpt-image-1",
+		Models: []string{"gpt-image-1", "gpt-4.1"},
 	}})
 	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
@@ -78,6 +79,9 @@ func TestAdminSharedChannelsEncryptSecretsAndNeverReturnThem(t *testing.T) {
 	safe := request(t, router, http.MethodGet, "/api/shared-channels", nil)
 	if safe.Code != http.StatusOK || bytes.Contains(safe.Body.Bytes(), []byte(upstream.URL)) || bytes.Contains(safe.Body.Bytes(), []byte("timeoutSeconds")) || !bytes.Contains(safe.Body.Bytes(), []byte("shared-auto")) {
 		t.Fatalf("unsafe public shared catalog: %d %s", safe.Code, safe.Body.String())
+	}
+	if !bytes.Contains(safe.Body.Bytes(), []byte(`"models"`)) || !bytes.Contains(safe.Body.Bytes(), []byte("gpt-image-1")) {
+		t.Fatalf("public shared catalog missing models: %s", safe.Body.String())
 	}
 	models := request(t, router, http.MethodPost, "/api/admin/channels/shared-main/models", nil)
 	if models.Code != http.StatusOK || !bytes.Contains(models.Body.Bytes(), []byte("gpt-image-1")) {

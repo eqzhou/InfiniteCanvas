@@ -40,12 +40,13 @@ type adminChannelSecretsEnvelope struct {
 }
 
 type sharedChannelPublic struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Protocol          string `json:"protocol"`
-	DefaultImageModel string `json:"defaultImageModel,omitempty"`
-	DefaultVideoModel string `json:"defaultVideoModel,omitempty"`
-	DefaultAudioModel string `json:"defaultAudioModel,omitempty"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Protocol          string   `json:"protocol"`
+	DefaultImageModel string   `json:"defaultImageModel,omitempty"`
+	DefaultVideoModel string   `json:"defaultVideoModel,omitempty"`
+	DefaultAudioModel string   `json:"defaultAudioModel,omitempty"`
+	Models            []string `json:"models,omitempty"`
 }
 
 func (s *Server) getSharedChannels(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +73,7 @@ func (s *Server) getSharedChannels(w http.ResponseWriter, r *http.Request) {
 		result = append(result, sharedChannelPublic{
 			ID: channel.ID, Name: channel.Name, Protocol: channel.Protocol,
 			DefaultImageModel: channel.DefaultImageModel, DefaultVideoModel: channel.DefaultVideoModel,
-			DefaultAudioModel: channel.DefaultAudioModel,
+			DefaultAudioModel: channel.DefaultAudioModel, Models: append([]string(nil), channel.Models...),
 		})
 	}
 	if len(result) > 0 {

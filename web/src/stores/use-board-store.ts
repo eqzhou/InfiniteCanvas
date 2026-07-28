@@ -55,6 +55,7 @@ import {
   savePrompts,
   deleteStorageKey,
   uploadMedia,
+  resolveObjectUrl,
 } from "@/services/storage";
 import { SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
@@ -1076,12 +1077,53 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       (asset.notes === "panoramaProjection:equirectangular" ||
         asset.tags?.includes("panorama"))
     ) {
+      let naturalWidth: number | undefined;
+      let naturalHeight: number | undefined;
+      try {
+        const storageKey = (asset.storageKey ?? "").trim();
+        const url = storageKey
+          ? ((await resolveObjectUrl("image", storageKey, asset.coverUrl)) ?? asset.coverUrl)
+          : asset.coverUrl;
+        if (url) {
+          const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+            const img = new Image();
+            const timeout = window.setTimeout(() => reject(new Error("Timed out reading image size")), 2_000);
+            img.onload = () => {
+              window.clearTimeout(timeout);
+              resolve({ width: img.naturalWidth, height: img.naturalHeight });
+            };
+            img.onerror = () => {
+              window.clearTimeout(timeout);
+              reject(new Error("Failed to read image size"));
+            };
+            img.src = url;
+          });
+          if (dimensions.width > 0 && dimensions.height > 0) {
+            naturalWidth = dimensions.width;
+            naturalHeight = dimensions.height;
+          }
+        }
+      } catch {
+        // Best-effort: panorama validation can still run later when media loads.
+      }
+      const display =
+        naturalWidth && naturalHeight
+          ? fitMediaDisplaySize(
+              naturalWidth,
+              naturalHeight,
+              120,
+              Math.max(DEFAULT_NODE_SIZE.panorama.width, DEFAULT_NODE_SIZE.panorama.height),
+            )
+          : undefined;
       get().addNode("panorama", position, {
         title: asset.title || "360° 全景",
+        ...(display ? { width: display.width, height: display.height } : {}),
         metadata: {
           content: asset.coverUrl,
           storageKey: asset.storageKey,
           mimeType: asset.mimeType,
+          ...(naturalWidth ? { naturalWidth } : {}),
+          ...(naturalHeight ? { naturalHeight } : {}),
           panoramaProjection: "equirectangular",
           status: "success",
         },

@@ -10,6 +10,8 @@ export type SharedChannel = {
   defaultImageModel?: string;
   defaultVideoModel?: string;
   defaultAudioModel?: string;
+  /** Optional allow-list published by admins; never includes secrets. */
+  models?: string[];
 };
 
 const managedBaseUrl = "https://server-managed.invalid/v1";
@@ -28,16 +30,22 @@ export async function listSharedChannels(): Promise<SharedChannel[]> {
 }
 
 export function sharedChannelAsAI(channel: SharedChannel): AiChannel {
+  const models = Array.isArray(channel.models)
+    ? channel.models.map((model) => model.trim()).filter(Boolean)
+    : [];
   const endpoint = (model: string | undefined) => ({
-    baseUrl: managedBaseUrl, apiKey: model === undefined && channel.id !== "shared-auto" ? "" : managedCredential,
-    model: model ?? "", protocol: channel.protocol,
+    baseUrl: managedBaseUrl,
+    apiKey: model === undefined && channel.id !== "shared-auto" ? "" : managedCredential,
+    model: model ?? "",
+    protocol: channel.protocol,
+    ...(models.length ? { models: [...models] } : {}),
   });
   return {
     id: channel.id, name: channel.name, baseUrl: managedBaseUrl, apiKey: managedCredential,
     defaultTextModel: "", defaultImageModel: channel.defaultImageModel ?? "",
     defaultVideoModel: channel.defaultVideoModel ?? "", defaultAudioModel: channel.defaultAudioModel ?? "",
     providers: {
-      text: { baseUrl: "", apiKey: "", model: "", protocol: "openai" },
+      text: { baseUrl: "", apiKey: "", model: "", protocol: "openai", ...(models.length ? { models: [...models] } : {}) },
       image: endpoint(channel.defaultImageModel), video: endpoint(channel.defaultVideoModel),
       audio: endpoint(channel.defaultAudioModel),
     },

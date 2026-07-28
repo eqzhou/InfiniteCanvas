@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { canManageAdmin } from "@/services/admin";
 import {
   deleteAICallLogs,
   getAICallLog,
@@ -13,11 +14,6 @@ import {
   type AICallLogRetention,
 } from "@/services/ai-call-logs";
 import { invalidateAICallLogClientReportCache } from "@/services/generation-activity";
-
-function isAdminRole(role: string | undefined | null): boolean {
-  const value = (role ?? "").toLowerCase();
-  return value === "owner" || value === "admin";
-}
 
 function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "-";
@@ -35,7 +31,7 @@ function prettyJSON(value: unknown): string {
 
 export function AICallLogsPage() {
   const auth = useOptionalAuth();
-  const canManage = !auth?.user || isAdminRole(auth.user.role);
+  const canManage = canManageAdmin(auth);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const [status, setStatus] = useState("all");

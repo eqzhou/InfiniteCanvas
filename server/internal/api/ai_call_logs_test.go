@@ -12,7 +12,9 @@ import (
 
 func TestAICallLogListGetAndDelete(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)
@@ -115,7 +117,9 @@ func TestAICallLogSanitizeRedactsSecrets(t *testing.T) {
 
 func TestAICallLogRetentionPolicyIsAdminOnlyAndBounded(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)
@@ -154,7 +158,9 @@ func TestAICallLogRetentionPolicyIsAdminOnlyAndBounded(t *testing.T) {
 
 func TestAICallLogRetentionSweepDeletesOnlyExpiredRows(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
@@ -218,7 +224,9 @@ func TestRetentionSchedulerSweepsLogsAndExpiredMediaReferences(t *testing.T) {
 
 func TestAICallLogRetentionRejectsTrailingGarbageAndNonAdmins(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)
@@ -233,7 +241,9 @@ func TestAICallLogRetentionRejectsTrailingGarbageAndNonAdmins(t *testing.T) {
 
 func TestClientAICallLogReportRequiresAdminEnablement(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)
@@ -296,7 +306,9 @@ func TestClientAICallLogReportRequiresAdminEnablement(t *testing.T) {
 
 func TestClientAICallLogReportRejectsBadPayload(t *testing.T) {
 	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
 	defer srv.Close()
 	r := chi.NewRouter()
 	MountServer(r, srv)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { canManageAdmin } from "@/services/admin";
 import {
   createLibraryAsset,
   deleteLibraryAsset,
@@ -16,11 +17,6 @@ import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { nowIso, uid } from "@/lib/id";
 import { writeTextWithFallback } from "@/lib/clipboard";
 import type { AssetItem } from "@/types/board";
-
-function isAdminRole(role: string | undefined | null): boolean {
-  const value = (role ?? "").toLowerCase();
-  return value === "owner" || value === "admin";
-}
 
 function emptyDraft(kind: LibraryAssetKind = "image"): LibraryAssetInput {
   return {
@@ -56,7 +52,7 @@ export function ServerLibraryPage() {
   const [detail, setDetail] = useState<LibraryAsset | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const pageSize = 12;
-  const canManage = !auth?.user || isAdminRole(auth.user.role);
+  const canManage = canManageAdmin(auth);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const load = useCallback(async () => {

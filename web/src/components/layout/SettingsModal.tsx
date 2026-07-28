@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { canManageAdmin } from "@/services/admin";
 import {
   DEFAULT_SITE_POLICY,
   getSitePolicy,
@@ -62,7 +63,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const auth = useOptionalAuth();
-  const canManageSitePolicy = !auth?.user || ["owner", "admin"].includes((auth.user.role ?? "").toLowerCase());
+  const canManageSitePolicy = canManageAdmin(auth);
   const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const [sitePolicyLoaded, setSitePolicyLoaded] = useState(false);
   const [sitePolicyBusy, setSitePolicyBusy] = useState(false);

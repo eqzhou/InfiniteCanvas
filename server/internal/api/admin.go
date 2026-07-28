@@ -67,13 +67,18 @@ func (s *Server) requireTenantAdmin(w http.ResponseWriter, r *http.Request, unav
 		http.Error(w, "login required", http.StatusUnauthorized)
 		return false
 	}
-	// optional, no session: bootstrap only while the catalog has no users
+	// optional, no session: bootstrap only while the catalog has no users,
+	// and only with the process token so an unattended install is not world-admin.
 	count, err := s.store.CountUsers(r.Context())
 	if err != nil {
 		http.Error(w, "failed to verify admin access", http.StatusServiceUnavailable)
 		return false
 	}
 	if count == 0 {
+		if !s.authorizeProcessToken(r) {
+			http.Error(w, "login required", http.StatusUnauthorized)
+			return false
+		}
 		return true
 	}
 	http.Error(w, "login required", http.StatusUnauthorized)

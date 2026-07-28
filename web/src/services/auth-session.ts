@@ -57,6 +57,37 @@ export function clearSessionToken(): void {
   setSessionToken(null);
 }
 
+/** Picks up Linux.do OAuth redirect fragment and stores the session, then strips the hash. */
+export function consumeOAuthSessionFragment(
+  href: string = typeof window !== "undefined" ? window.location.href : "",
+): string | null {
+  if (!href || !href.includes("#")) return null;
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+  if (!hash) return null;
+  const params = new URLSearchParams(hash);
+  const token = (params.get("openboard_session") ?? "").trim();
+  if (!token) return null;
+  setSessionToken(token);
+  params.delete("openboard_session");
+  const nextHash = params.toString();
+  try {
+    const next = `${url.pathname}${url.search}${nextHash ? `#${nextHash}` : ""}`;
+    if (typeof window !== "undefined" && typeof window.history?.replaceState === "function") {
+      window.history.replaceState(window.history.state, "", next);
+    }
+  } catch {
+    /* ignore history rewrite failures */
+  }
+  return token;
+}
+
+
 /** Shared fetch for /api with optional user session header. */
 export async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers ?? undefined);
