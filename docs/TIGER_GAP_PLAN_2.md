@@ -1,5 +1,10 @@
 # Tiger 差异复审与补齐计划（第二轮）
 
+> **历史归档（第二轮）**：本文中的版本、缺口和测试数字是当时快照，
+> 不应作为当前功能清单。当前结论以
+> [`TIGER_GAP_PLAN_4.md`](TIGER_GAP_PLAN_4.md) 和
+> [`FEATURE_PARITY.md`](FEATURE_PARITY.md) 为准。
+
 > 审查日期：2026-07-26
 >
 > 本地基准：`main@61444e1`

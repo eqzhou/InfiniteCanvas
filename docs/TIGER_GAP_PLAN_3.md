@@ -1,5 +1,10 @@
 # Tiger 差异复审与补齐计划（第三轮）
 
+> **历史归档（第三轮）**：本文中的版本和差异结论已由第四轮复审取代，
+> 仅用于追溯决策。当前结论以
+> [`TIGER_GAP_PLAN_4.md`](TIGER_GAP_PLAN_4.md) 和
+> [`FEATURE_PARITY.md`](FEATURE_PARITY.md) 为准。
+
 > 审查日期：2026-07-27
 >
 > 本地基准：`main@b4b4694`

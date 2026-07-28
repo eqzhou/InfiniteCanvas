@@ -1,6 +1,8 @@
 # OpenBoard local server (Go)
 
-Optional companion process for OpenBoard.
+Local API, durable generation worker, protected-media service, and Agent/MCP
+bridge for OpenBoard. It is optional only for browser/offline development;
+formal server-storage deployments require it.
 
 ## Run
 
@@ -42,27 +44,31 @@ limits, upload concurrency and disk quotas, and cross-process write locking.
 - `POST /api/files` — multipart upload
 - `GET /api/files/{name}`
 - `GET|PUT|DELETE /api/projects...` — optional server-side project mirror
-- `GET|POST|PUT|DELETE /api/generation-jobs...` — paginated workbench history
-- `POST /api/generation-jobs/image` — enqueue a server-owned OpenAI-compatible, Gemini, or restricted declarative-Template image generation/edit job
-- `POST /api/generation-jobs/video` — enqueue an OpenAI or Ark/Seedance task with a durable upstream-task checkpoint, or a synchronous restricted declarative-Template video job
+- `GET|POST|PUT|DELETE /api/generation-jobs...` — paginated workbench history; delete creates a hidden tombstone, and stale create/update/full-restore collisions return 410 instead of resurrecting it
+- `POST /api/generation-jobs/image` — enqueue a server-owned OpenAI-compatible, Gemini, exact APIMart/KIE, or restricted declarative-Template image generation/edit job
+- `POST /api/generation-jobs/video` — enqueue OpenAI, Ark/Seedance, exact APIMart/KIE, or restricted declarative-Template video work; asynchronous providers persist upstream-task checkpoints
 - `POST /api/generation-jobs/audio` — enqueue an OpenAI-compatible speech job
 - `POST /api/generation-jobs/workflow` — enqueue a durable typed image workflow whose deterministic child jobs use the image worker pool
 - `POST /api/generation-jobs/{id}/cancel` — idempotently cancel a server-owned queued/running job
 - `GET|PUT /api/workflow-templates` and `PUT|DELETE /api/workflow-templates/{id}` — tenant-isolated personal workflow template storage and atomic replacement
 - `GET|POST|DELETE /api/director-captures...` — tenant-isolated director screenshot metadata backed by protected PNG blobs; `PUT /api/director-captures/prune` reclaims deleted-project and expired orphan media
 
-Server-owned image, video, audio, and workflow generation requires a valid user session unless
-`OPENBOARD_AUTH_MODE=off`; single-user `off` mode additionally requires a
-valid `OPENBOARD_TOKEN` Bearer credential so stored provider credentials cannot
-be read or spent by an anonymous caller. Generation workers use renewable,
+Server-owned image, video, audio, and workflow generation requires a valid user
+session in `optional`/`required` account deployments. Optional mode permits
+zero-user bootstrap but does not retain an anonymous data plane after the first
+account exists. Single-user `off` mode additionally requires a valid
+`OPENBOARD_TOKEN` Bearer credential so stored provider credentials cannot be
+read or spent by an anonymous caller. A process token never impersonates a user
+in account modes. Generation workers use renewable,
 attempt-scoped PostgreSQL leases. The default filesystem backend requires
 every API/worker instance to mount the same `OPENBOARD_DATA` blob volume. An
 S3-compatible backend removes that shared-volume requirement while keeping all
 media behind the authenticated `/api/blobs/*` endpoints. Video and audio use
 independent worker claim domains; a recovered video lease resumes its persisted
-provider task instead of creating a second upstream task. OpenAI-compatible and
-Gemini and restricted-Template canvas image/config/prompt actions can create indexed durable batches;
-OpenAI, Ark/Seedance, and restricted-Template video actions use the same durable placeholder recovery,
+provider task instead of creating a second upstream task. OpenAI-compatible,
+Gemini, exact APIMart/KIE and restricted-Template canvas image/config/prompt actions
+can create indexed durable batches; OpenAI, Ark/Seedance, exact APIMart/KIE and
+restricted-Template video actions use the same durable placeholder recovery,
 as do OpenAI audio actions. Their protected results reconcile after a browser reload.
 Template execution accepts only bounded JSON objects, exact known placeholders,
 safe relative paths, POST/PUT, and Bearer or `x-api-key` authentication. It does

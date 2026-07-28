@@ -162,3 +162,10 @@
 - 所有宣称支持的 APIMart 精确模型都有前后端一致 capability 和完整契约测试。
 - 未核验模型继续 fail-closed，不以相近模型冒充。
 - 文档基准、主干代码和 PM2 实际部署版本一致。
+
+PM2 验证不是单独执行 `pm2:start`：先确认工作区干净且
+`HEAD == origin/main`，再运行 `bun run pm2:build`，
+再运行 `bun run pm2:start`，随后核对 `HEAD == origin/main`、两个 OpenBoard
+进程均为 online、携带 `Authorization: Bearer $OPENBOARD_TOKEN` 的
+`/api/health` 为 200，以及 5173 返回的入口 asset 与刚生成
+的 `web/dist-local` 一致。`pm2:start` 本身只 reload 已有构建产物。

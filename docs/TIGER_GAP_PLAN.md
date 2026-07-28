@@ -1,5 +1,10 @@
 # Tiger Infinite Canvas 差异审查与补齐计划
 
+> **历史归档（第一轮）**：本文保留当时的证据、版本和验收记录，
+> 不代表当前实现状态。当前结论以
+> [`TIGER_GAP_PLAN_4.md`](TIGER_GAP_PLAN_4.md) 和
+> [`FEATURE_PARITY.md`](FEATURE_PARITY.md) 为准。
+
 > 审查日期：2026-07-26
 >
 > 本地基准：`main@a85df47379039cd9878f8994c8527069ee09b4c1`

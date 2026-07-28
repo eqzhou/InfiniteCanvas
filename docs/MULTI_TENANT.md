@@ -10,16 +10,16 @@ Goal: isolate projects, assets, prompts, generation jobs, secrets, and blobs per
 ## Auth modes (`OPENBOARD_AUTH_MODE`)
 | Mode | Behavior |
 |------|----------|
-| `off` | No user login; all data stays on tenant `local` (legacy single-user) |
-| `optional` | Session scopes data when present; otherwise tenant `local` |
-| `required` | Data APIs require a valid user session |
+| `off` | No user login; all data stays on tenant `local`. Process-sensitive routes still validate `OPENBOARD_TOKEN` |
+| `optional` | Allows zero-user bootstrap on tenant `local`; after the first user exists, protected data-plane routes require a valid session |
+| `required` | Protected data-plane routes require a valid session from the start |
 
-Service token (`OPENBOARD_TOKEN` / Vite proxy `Authorization`) remains for process-level access.
-Paid server-owned generation never uses the anonymous `local` fallback in
-`optional` mode. It requires a user session, or explicit single-user `off`
-mode together with a service token that is revalidated by the generation
-endpoint. Encrypted provider-secret reads and writes also require a session
-once the first user exists; `off` mode revalidates the same process token.
+Service token (`OPENBOARD_TOKEN` / Vite proxy `Authorization`) remains for
+process-level access and zero-user bootstrap. In account modes it never grants
+a tenant identity and cannot bypass the login wall. Projects, state, blobs,
+generation history, shared channels, migration and paid generation require a
+session once an account exists. Encrypted provider-secret reads and writes use
+the same rule; `off` mode revalidates the process token.
 
 ## First user
 The first registered user becomes **owner of tenant `local`**, claiming existing formal-local data. Later registrations create a new empty personal tenant.
@@ -33,8 +33,17 @@ The first registered user becomes **owner of tenant `local`**, claiming existing
 Independent OpenBoard feature; not derived from upstream AGPL source.
 
 ## API notes
-- `GET /api/auth/me` and `GET /api/auth/usage` enforce their own session checks.
-- In `required` mode, anonymous `usage` requests return 401.
+- Public/auth bootstrap routes are limited to health/version, register/login/logout,
+  OAuth callbacks, `auth/me`, `auth/usage`, site policy, billing estimate,
+  public model metadata and short-lived media-reference reads. Each handler may
+  still apply stricter checks; for example `auth/me` returns a self-identifying
+  guest only in `optional`, while `required` returns 401.
+- `GET /api/auth/usage` returns 401 anonymously in `required`; optional mode may
+  report the default local usage summary without granting data-plane access.
+- Anonymous optional-mode requests receive 401 for projects, state, blobs and
+  shared channels after the first user exists.
+- Login navigation preserves the originally requested SPA route and returns to
+  it after successful authentication.
 - Blobs live under `data/blobs/<tenantId>/…`. Reads for tenant `local` also fall back to the pre-migration flat `data/blobs/` layout.
 - Claude permission mode defaults to `acceptEdits`; override with `OPENBOARD_CLAUDE_PERMISSION_MODE`.
 - Claude SSE subscriber channels close via `sync.Once` so disconnect + session end cannot double-close.

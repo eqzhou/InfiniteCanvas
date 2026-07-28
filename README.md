@@ -5,9 +5,10 @@ AI-oriented infinite canvas workbench. Its behavior is specified from public
 product documentation and black-box observation, with a separate name, visual
 system, data model, and implementation.
 
-The current tree implements the frozen v0.8.2 engineering behavior baseline,
-but it is not a legal certification or a claim of identical protected
-expression. Before commercial distribution, audit
+The current tree implements the frozen v0.8.2 engineering behavior baseline
+plus the later public deltas recorded in `docs/BEHAVIOR_SPEC.md` and the Tiger
+v0.4.5 convergence recorded in `docs/TIGER_GAP_PLAN_4.md`. It is not a legal
+certification or a claim of identical protected expression. Before commercial distribution, audit
 the provenance of every existing file and dependency as described in
 [`docs/CLEANROOM.md`](docs/CLEANROOM.md). Use
 [`docs/RELEASE_AUDIT.md`](docs/RELEASE_AUDIT.md) before distribution.
@@ -49,14 +50,14 @@ canvas.
    dependency licenses, and similarity reviews.
 7. This is not legal advice; commercial release needs qualified counsel.
 
-## v0.8.2 feature delivery
+## Current feature delivery
 
 ### Phase 1 — Versioned canvas core
 - Multi-project list create/rename/delete/import/export
 - Infinite pan/zoom, zoom slider, reset view
 - Background modes: dots / lines / blank
 - Light/dark theme
-- Nodes: text / image / config / video
+- Nodes: text / image / config / video / audio / panorama / director / plugin, plus group containers
 - Connections, marquee select, multi-select, copy/paste
 - Undo/redo for nodes, edges, viewport, background
 - Minimap
@@ -66,11 +67,12 @@ canvas.
 
 ### Phase 2 — AI creation and workbenches
 - Independent text/image/video/audio endpoints and encrypted credentials
-- OpenAI, Ark/Seedance, Gemini, and restricted Template protocols
+- OpenAI-compatible, Ark/Seedance, Gemini, APIMart, KIE, and restricted Template protocols
+- Exact APIMart contracts for Seedream 5.0 Pro, Gemini 3.1 Flash Lite Image / Nano Banana 2 Lite, HappyHorse 1.1, Kling 3.0 Turbo, Kling 2.6/v3, and Seedance 2.0 variants; undocumented names such as Agnes fail closed
 - Transparent images, reverse prompting, adjustable split guides, and lineage
 - Reproducible image retries with reference protection and expandable result batches
 - Direct text/image-to-video creation with smart duration and provider preflight validation
-- Persistent image/video/audio generation jobs, history, retry, cancel, and canvas insertion; the image workbench adds side/bottom layouts, concurrent runs, persistent categories and filtering, reference/result previews with byte sizes, reusable assets, and a draggable workflow entrance; formal OpenAI/Gemini/restricted-Template image, OpenAI/Ark/restricted-Template video, OpenAI audio, and multi-step image workflows execute in the Go service and continue across browser reloads, including indexed canvas image batches
+- Persistent image/video/audio generation jobs, history, retry, cancel, soft-delete tombstones, and canvas insertion; stale restore/update paths cannot resurrect deleted jobs. The image workbench adds side/bottom layouts, concurrent runs, persistent categories and filtering, reference/result previews with byte sizes, reusable assets, a draggable workflow entrance, common aspect-ratio presets, and per-channel/per-kind model preferences. Formal OpenAI/Gemini/APIMart/KIE/restricted-Template image, OpenAI/Ark/APIMart/KIE/restricted-Template video, OpenAI audio, and multi-step image workflows execute in the Go service and continue across browser reloads, including indexed canvas image batches
 - Public/personal image workflow templates with typed variables, DAG references, AI-assisted draft creation, durable step checkpoints, image-history children, and atomic canvas insertion
 - WebDAV project and full-workspace backup/restore for projects, assets, prompts, workflow templates, history, and deduplicated media
 
@@ -95,6 +97,9 @@ canvas.
 - Optional Google Analytics 4 / Baidu analytics via `VITE_ANALYTICS_GA4_ID` / `VITE_ANALYTICS_BAIDU_ID` or `window.__RUNTIME_CONFIG__` (default off)
 - Top-bar version badge opens a local CHANGELOG release modal
 - Canvas sidebar asset tab can upload image/video assets
+- `/help` user guide in desktop and mobile navigation
+- Safe GFM rendering in prompt details without raw HTML, executable URL schemes, or remote body-image loading
+- Admin channel model reconciliation that previews added/existing/removed models before confirmation
 
 ### Public Unreleased prompt-source delta
 - Add/edit/disable/remove remote prompt sources with scheduled refresh
@@ -104,12 +109,14 @@ canvas.
 - Prompt center 「我的提示词」: local manage, save from public library, canvas use
 - Canvas prompt library cross-source search and title-preserving insert
 
-The detailed evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).
+The current evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md),
+and the latest Tiger review is [`docs/TIGER_GAP_PLAN_4.md`](docs/TIGER_GAP_PLAN_4.md).
+`TIGER_GAP_PLAN.md`, `_2`, and `_3` are retained only as historical audit records.
 
 ## Verification
 
 ```bash
-bun run test                         # TypeScript unit tests + Go API tests
+bun run test                         # web unit/integration tests + all Go packages
 bun run build                        # production web build
 bun run benchmark:indexes:assert     # 1k/10k spatial-index performance gate
 bun run audit:vulnerabilities        # fail-closed OSV scan for installed npm and Go modules
@@ -122,9 +129,9 @@ cd server && go test -race ./... && go vet ./...
 GitHub Actions runs the web tests, typecheck, production build, performance
 assertion, OSV dependency audit, cross-browser and production Playwright suites, Go race
 detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The current Bun coverage report reaches 81.94% lines and 86.00% functions for covered
-library/service modules; browser-only UI and persistence paths are validated by
-Playwright and are outside that report.
+pull requests. The dated count and coverage snapshot lives only in
+`docs/FEATURE_PARITY.md`; use `bun run test` and the CI result as the live source
+of truth. Browser-only UI and persistence paths are validated by Playwright.
 
 ## Quick start
 
@@ -167,6 +174,19 @@ state are stored in PostgreSQL, Redis is used only as a disposable cache, and
 media is stored under the user-scoped OpenBoard data directory. `bun run dev`
 is the frontend development mode and must not be used as the formal local data
 entry point.
+
+For the persistent PM2 deployment used by this workspace:
+
+```bash
+bun run pm2:build
+bun run pm2:start
+pm2 describe openboard-api
+pm2 describe openboard-web
+```
+
+PM2 serves the web UI at `http://127.0.0.1:5173` and the loopback API at
+`http://127.0.0.1:8790`. `pm2:start` reloads both processes with `.env`, then
+saves the process list.
 
 The database-backed end-to-end test uses one uniquely named
 `openboard_e2e_*` database, Redis database 14, and a temporary media directory.
@@ -250,6 +270,10 @@ for a token-protected single-user installation, or enabled in optional/required
 mode for email login, Linux.do OAuth, tenant-scoped users, roles, projects,
 application state, generation jobs, blobs and usage quotas. Site administrators
 can control registration, custom channels and use of backend/cloud channels.
+In `optional` mode, zero-user bootstrap can initialize the local workspace, but
+once the first account exists every protected data-plane route requires a real
+session; the process token never impersonates a user. `required` enforces the
+same session boundary from the start. See [`docs/MULTI_TENANT.md`](docs/MULTI_TENANT.md).
 
 PostgreSQL stores authoritative application data, Redis is a disposable cache,
 and media stays in protected service storage or a configured private S3/R2
@@ -263,6 +287,24 @@ organization-wide enterprise SSO or managed public hosting control plane.
 ## Clean-room notes
 
 See [docs/CLEANROOM.md](docs/CLEANROOM.md) and [docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md).
+
+## Documentation maintenance
+
+Keep current product documentation tied to these code-owned sources of truth:
+
+| Subject | Authoritative code/config | Current documentation |
+|---|---|---|
+| SPA routes and navigation | `web/src/App.tsx`, `web/src/components/layout/TopNav.tsx` | this README and the in-product `/help` page |
+| Node/config/provider types | `web/src/types/board.ts`, frontend/server provider capability tables | this README and `docs/FEATURE_PARITY.md` |
+| HTTP routes and authentication | `server/internal/api/api.go`, `server/internal/api/auth.go` | `server/README.md`, `.env.example`, `docs/MULTI_TENANT.md` |
+| Test/build/deploy commands | root/web `package.json`, `ecosystem.config.cjs` | this README and `docs/RELEASE_AUDIT.md` |
+| Current Tiger comparison | verified public release metadata plus local tests | `docs/TIGER_GAP_PLAN_4.md`; rounds 1–3 are historical only |
+
+When a change affects any row above, update its current documentation in the
+same commit. Do not copy test counts or coverage percentages into multiple
+files; `package.json`, CI output, and the dated verification block in
+`docs/FEATURE_PARITY.md` are the live evidence. Historical audit records should
+be marked superseded instead of silently rewritten.
 
 ## Disclaimer
 
