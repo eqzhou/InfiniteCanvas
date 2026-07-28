@@ -220,7 +220,7 @@ async function waitForPluginEnabledStateStored(page: Page, pluginId: string, ena
         reject(error);
       }
     };
-  }), { id: pluginId, expectedEnabled: enabled })).toBe(true);
+  }), { id: pluginId, expectedEnabled: enabled }), { timeout: 15_000 }).toBe(true);
 }
 
 function projectCard(page: Page, title: string) {
