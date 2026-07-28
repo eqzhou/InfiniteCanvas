@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { createServer, type Server as HTTPServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
@@ -32,6 +32,41 @@ function releasePendingImageRequest() {
   const release = releaseImage;
   releaseImage = undefined;
   release?.();
+}
+
+async function settleInitialSurface(page: Page, path: string) {
+  await page.goto(path);
+  await expect(page.getByTitle("设置")).toBeVisible();
+  await page.getByTitle("设置").click();
+  const settings = page.getByRole("dialog", { name: "设置" });
+  await expect(settings.getByLabel("当前渠道")).not.toHaveValue("");
+  await settings.getByRole("button", { name: "关闭设置" }).click();
+}
+
+async function waitForFormalChannel(
+  request: APIRequestContext,
+  channelId: string,
+  expectedSecret: string,
+) {
+  await expect.poll(async () => {
+    const response = await request.get("/api/state/config");
+    if (!response.ok()) return false;
+    const config = await response.json() as { channels?: Array<{ id?: string }> };
+    return config.channels?.some((channel) => channel.id === channelId) ?? false;
+  }).toBe(true);
+  await expect.poll(async () => {
+    const response = await request.get("/api/secrets/config");
+    return response.ok() ? JSON.stringify(await response.json()).includes(expectedSecret) : false;
+  }).toBe(true);
+}
+
+async function openHydratedSurface(page: Page, path: string, channelId: string) {
+  await page.goto(path);
+  await expect(page.getByTitle("设置")).toBeVisible();
+  await page.getByTitle("设置").click();
+  const settings = page.getByRole("dialog", { name: "设置" });
+  await expect(settings.getByLabel("当前渠道")).toHaveValue(`personal:${channelId}`);
+  await settings.getByRole("button", { name: "关闭设置" }).click();
 }
 
 test.beforeAll(async () => {
@@ -169,8 +204,7 @@ test("formal restricted Template image jobs survive reload", async ({ page, requ
   expect((await request.put("/api/secrets/config", {
     data: { apiKeys: { "formal-template": { image: "template-formal-secret" } }, webdavPass: "" },
   })).status()).toBe(204);
-  await page.reload();
-  await expect(page.getByTitle("设置")).toBeVisible();
+  await openHydratedSurface(page, "/workbench/image", "formal-template");
   await expect.poll(async () => {
     const response = await request.get("/api/secrets/config");
     return response.ok() ? JSON.stringify(await response.json()).includes("template-formal-secret") : false;
@@ -249,17 +283,19 @@ test("formal restricted Template video jobs survive reload", async ({ page, requ
     activeChannelId: "formal-template-video", systemPrompt: "formal template video rule",
     imageSize: "1024x1024", imageQuality: "auto", imageCount: 1, theme: "light",
   };
+  await settleInitialSurface(page, "/workbench/video");
   expect((await request.put("/api/state/config", { data: config })).status()).toBe(204);
   expect((await request.put("/api/secrets/config", {
     data: { apiKeys: { "formal-template-video": { video: "template-video-secret" } }, webdavPass: "" },
   })).status()).toBe(204);
+  await waitForFormalChannel(request, "formal-template-video", "template-video-secret");
   templateVideoProviderRequest = undefined;
   blockTemplateVideo = true;
   let startedResolve: (() => void) | undefined;
   const started = new Promise<void>((resolve) => { startedResolve = resolve; });
   notifyTemplateVideoStarted = startedResolve;
 
-  await page.goto("/workbench/video");
+  await openHydratedSurface(page, "/workbench/video", "formal-template-video");
   await page.getByPlaceholder("描述想生成的视频…").fill("durable restricted template video");
   await page.getByRole("button", { name: "生成", exact: true }).click();
   await Promise.race([
@@ -327,7 +363,7 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
   const started = new Promise<void>((resolve) => { startedResolve = resolve; });
   notifyGeminiStarted = startedResolve;
 
-  await page.goto("/");
+  await openHydratedSurface(page, "/", "formal-gemini");
   const toolbar = page.getByRole("toolbar", { name: "画布工具栏" });
   await toolbar.getByRole("button", { name: "图片", exact: true }).click();
   const root = page.locator('[data-node-type="image"]').last();
@@ -486,7 +522,7 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 	let videoStartedResolve: (() => void) | undefined;
 	const videoStarted = new Promise<void>((resolve) => { videoStartedResolve = resolve; });
 	notifyVideoStarted = videoStartedResolve;
-	await page.goto("/workbench/video");
+	await openHydratedSurface(page, "/workbench/video", "formal-media");
 	await page.getByPlaceholder("描述想生成的视频…").fill("durable formal video");
 	await page.getByRole("button", { name: "生成", exact: true }).click();
 	await Promise.race([
@@ -566,17 +602,19 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
     activeChannelId: "formal-image", systemPrompt: "", imageSize: "1024x1024",
     imageQuality: "auto", imageCount: 1, theme: "light",
   };
+  await settleInitialSurface(page, "/workbench/image");
   const savedConfig = await request.put("/api/state/config", { data: config });
   expect(savedConfig.status()).toBe(204);
   const savedSecrets = await request.put("/api/secrets/config", {
     data: { apiKeys: { "formal-image": { image: "sk-formal-private" } }, webdavPass: "" },
   });
   expect(savedSecrets.status()).toBe(204);
+  await waitForFormalChannel(request, "formal-image", "sk-formal-private");
 
   let imageStartedResolve: (() => void) | undefined;
   const imageStarted = new Promise<void>((resolve) => { imageStartedResolve = resolve; });
   notifyImageStarted = imageStartedResolve;
-  await page.goto("/workbench/image");
+  await openHydratedSurface(page, "/workbench/image", "formal-image");
   await page.getByPlaceholder("描述想生成的图片…").fill("survives a browser reload");
   await page.getByRole("button", { name: "生成", exact: true }).click();
   await Promise.race([
