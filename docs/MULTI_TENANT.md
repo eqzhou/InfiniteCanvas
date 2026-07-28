@@ -67,9 +67,12 @@ Independent OpenBoard feature; not derived from upstream AGPL source.
   traversal or symlink escape; agent subprocesses receive a minimal environment
   allowlist instead of server credentials.
 - Local MCP stdio (`openboard-mcp`) executes tools under tenant `local` unless a
-  remote connection file points at `/api/agent/execute` with a process or session
-  credential. Account-owned Claude sessions do not receive the machine
-  connection file until a turn-scoped grant exists.
+  remote connection file points at `/api/agent/execute`. Process tokens
+  (`{"token":"..."}`) work for auth-off / zero-user bootstrap; after accounts
+  exist use a session credential (`{"token":"...","session":true}`) so the
+  request carries `X-OpenBoard-Session` and runs under that user/tenant.
+  Account-owned Claude sessions do not receive the machine connection file
+  until a turn-scoped grant exists.
 - Claude permission mode defaults to `default`; `bypassPermissions` is rejected,
   and `acceptEdits` is honored only with authentication disabled.
 - Claude SSE subscriber channels close via `sync.Once` so disconnect + session end cannot double-close.

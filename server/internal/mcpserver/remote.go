@@ -14,16 +14,27 @@ import (
 	"time"
 )
 
-const maxRemoteResponseBytes = 32 << 20
+const (
+	maxRemoteResponseBytes = 32 << 20
+	// Must match api.sessionHeader so account-scoped MCP connections authenticate
+	// through withSession the same way the browser does.
+	openBoardSessionHeader = "X-OpenBoard-Session"
+)
 
 type connectionConfig struct {
 	BaseURL string `json:"baseUrl"`
+	// Token is either a process token (Authorization: Bearer) for auth-off /
+	// zero-user bootstrap, or a user session token sent as X-OpenBoard-Session
+	// when session is true. Account deployments need the latter after the first
+	// user exists: a bare process token no longer opens the data plane.
 	Token   string `json:"token"`
+	Session bool   `json:"session,omitempty"`
 }
 
 type remoteExecutor struct {
 	baseURL string
 	token   string
+	session bool
 	client  *http.Client
 }
 
@@ -49,12 +60,17 @@ func NewRemote(connectionFile string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(config.Token) > 64*1024 {
+	token := strings.TrimSpace(config.Token)
+	if len(token) > 64*1024 {
 		return nil, errors.New("OpenBoard connection token is too large")
+	}
+	if config.Session && token == "" {
+		return nil, errors.New("OpenBoard connection session token is required")
 	}
 	return newWithExecutor(&remoteExecutor{
 		baseURL: baseURL,
-		token:   config.Token,
+		token:   token,
+		session: config.Session,
 		client:  &http.Client{Timeout: 35 * time.Second},
 	}), nil
 }
@@ -87,7 +103,11 @@ func (r *remoteExecutor) ExecuteTool(tool string, arguments json.RawMessage) (an
 	}
 	request.Header.Set("Content-Type", "application/json")
 	if r.token != "" {
-		request.Header.Set("Authorization", "Bearer "+r.token)
+		if r.session {
+			request.Header.Set(openBoardSessionHeader, r.token)
+		} else {
+			request.Header.Set("Authorization", "Bearer "+r.token)
+		}
 	}
 	response, err := r.client.Do(request)
 	if err != nil {

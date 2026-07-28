@@ -130,6 +130,11 @@ text/image flows, asset/prompt search and insertion, navigation, and
 
 ## MCP stdio
 
+Remote MCP (`OPENBOARD_CONNECTION_FILE`) posts to `/api/agent/execute`. A bare
+process token is enough only while authentication is off or no users exist; for
+account deployments set `"session": true` so the token is sent as
+`X-OpenBoard-Session` and tools run under that tenant.
+
 Run the same tools through the standard MCP stdio transport:
 
 ```bash
