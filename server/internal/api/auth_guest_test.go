@@ -111,6 +111,7 @@ func TestOptionalModeRequiresSessionForDataPlaneWhenUsersExist(t *testing.T) {
 		"/api/projects",
 		"/api/state/assets",
 		"/api/state/prompts",
+		"/api/blobs/anonymous-probe",
 		"/api/shared-channels",
 	} {
 		got := request(t, router, http.MethodGet, path, nil)

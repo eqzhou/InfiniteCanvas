@@ -16,6 +16,7 @@ import { PluginsPage } from "@/pages/PluginsPage";
 import { ImageWorkbenchPage } from "@/pages/ImageWorkbenchPage";
 import { VideoWorkbenchPage } from "@/pages/VideoWorkbenchPage";
 import { AdminPage } from "@/pages/AdminPage";
+import { HelpPage } from "@/pages/HelpPage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
 import { initAnalytics } from "@/lib/analytics";
 import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
@@ -147,6 +148,7 @@ export function App() {
             <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
             <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/help" element={<HelpPage />} />
             <Route path="/workbench/workflows" element={(
               <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载工作流…</div>}>
                 <WorkflowWorkbenchPage />

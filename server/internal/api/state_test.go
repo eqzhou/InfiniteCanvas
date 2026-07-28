@@ -32,6 +32,8 @@ type memoryStore struct {
 	releases               map[string]struct{}
 	reservations           map[string]struct{}
 	compareAndSwapStateErr error
+	generationJobCreateErr error
+	generationJobPutErr    error
 	authUsers              map[string]store.AuthUser
 	credits                map[string]int64
 	creditLogs             map[string]struct{}
@@ -196,7 +198,7 @@ func (m *memoryStore) GetGenerationJob(_ context.Context, tenantID, id string) (
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	job, ok := m.jobs[tenantKey(tenantID, id)]
-	if !ok {
+	if !ok || job.Status == "deleted" {
 		return store.GenerationJob{}, store.ErrNotFound
 	}
 	return job, nil
@@ -205,6 +207,15 @@ func (m *memoryStore) GetGenerationJob(_ context.Context, tenantID, id string) (
 func (m *memoryStore) PutGenerationJob(_ context.Context, tenantID string, job store.GenerationJob) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if job.Status == "deleted" {
+		return store.ErrGone
+	}
+	if m.generationJobPutErr != nil {
+		return m.generationJobPutErr
+	}
+	if current, exists := m.jobs[tenantKey(tenantID, job.ID)]; exists && current.Status == "deleted" {
+		return store.ErrGone
+	}
 	m.jobs[tenantKey(tenantID, job.ID)] = job
 	return nil
 }
@@ -212,8 +223,17 @@ func (m *memoryStore) PutGenerationJob(_ context.Context, tenantID string, job s
 func (m *memoryStore) CreateGenerationJob(_ context.Context, tenantID string, job store.GenerationJob) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if job.Status == "deleted" {
+		return store.ErrGone
+	}
+	if m.generationJobCreateErr != nil {
+		return m.generationJobCreateErr
+	}
 	key := tenantKey(tenantID, job.ID)
-	if _, exists := m.jobs[key]; exists {
+	if current, exists := m.jobs[key]; exists {
+		if current.Status == "deleted" {
+			return store.ErrGone
+		}
 		return store.ErrConflict
 	}
 	m.jobs[key] = job
@@ -414,11 +434,17 @@ func (m *memoryStore) ReplaceGenerationJobs(_ context.Context, tenantID string, 
 			(job.Status == "queued" || job.Status == "running") {
 			return store.ErrConflict
 		}
-		if len(key) < len(prefix) || key[:len(prefix)] != prefix {
+		if len(key) < len(prefix) || key[:len(prefix)] != prefix || job.Status == "deleted" {
 			next[key] = job
 		}
 	}
 	for _, job := range jobs {
+		if job.Status == "deleted" {
+			return store.ErrGone
+		}
+		if current, exists := m.jobs[tenantKey(tenantID, job.ID)]; exists && current.Status == "deleted" {
+			return store.ErrGone
+		}
 		next[tenantKey(tenantID, job.ID)] = job
 	}
 	m.jobs = next
@@ -440,11 +466,17 @@ func (m *memoryStore) CompareAndSwapGenerationJobs(_ context.Context, tenantID, 
 	}
 	next := make(map[string]store.GenerationJob, len(m.jobs)+len(jobs))
 	for key, job := range m.jobs {
-		if len(key) < len(prefix) || key[:len(prefix)] != prefix {
+		if len(key) < len(prefix) || key[:len(prefix)] != prefix || job.Status == "deleted" {
 			next[key] = job
 		}
 	}
 	for _, job := range jobs {
+		if job.Status == "deleted" {
+			return store.ErrGone
+		}
+		if current, exists := m.jobs[tenantKey(tenantID, job.ID)]; exists && current.Status == "deleted" {
+			return store.ErrGone
+		}
 		next[tenantKey(tenantID, job.ID)] = job
 	}
 	m.jobs = next
@@ -1336,7 +1368,6 @@ func TestEncryptedSecretsRequireLoginAfterFirstUser(t *testing.T) {
 	}
 }
 
-
 func TestMemberPersonalSecretsAreIsolatedFromTenantBag(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
 	backend := newMemoryStore()
@@ -1394,7 +1425,6 @@ func TestMemberPersonalSecretsAreIsolatedFromTenantBag(t *testing.T) {
 		t.Fatal("member bag stored plaintext")
 	}
 }
-
 
 func TestBlobDeleteReleasesStorageUsageAndKeysDecodeOnce(t *testing.T) {
 	backend := newMemoryStore()
@@ -1525,14 +1555,53 @@ func TestGenerationHistorySoftDelete(t *testing.T) {
 	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(`"total": 0`)) || bytes.Contains(listed.Body.Bytes(), []byte(`"job-soft"`)) {
 		t.Fatalf("deleted job still listed: %d %s", listed.Code, listed.Body.String())
 	}
-	// Tombstone remains readable by id for multi-device sync/cleanup.
 	got := request(t, handler, http.MethodGet, "/api/generation-jobs/job-soft", nil)
-	if got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte(`"deleted"`)) {
-		t.Fatalf("tombstone missing: %d %s", got.Code, got.Body.String())
+	if got.Code != http.StatusNotFound {
+		t.Fatalf("tombstone should be hidden: %d %s", got.Code, got.Body.String())
 	}
-	// Idempotent second delete.
-	if got := request(t, handler, http.MethodDelete, "/api/generation-jobs/job-soft", nil); got.Code != http.StatusNoContent {
-		t.Fatalf("idempotent soft delete: %d %s", got.Code, got.Body.String())
+	if got := request(t, handler, http.MethodDelete, "/api/generation-jobs/job-soft", nil); got.Code != http.StatusNotFound {
+		t.Fatalf("hidden tombstone delete: %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestGenerationJobTombstoneWritesReturnGone(t *testing.T) {
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	backend := newMemoryStore()
+	router := chi.NewRouter()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	MountServer(router, server)
+	body := []byte(`{"id":"job-gone","kind":"image","status":"succeeded","prompt":"stale","providerId":"image-main","model":"mock","parameters":{},"result":{}}`)
+	deletedBody := []byte(`{"id":"job-fake-tombstone","kind":"image","status":"deleted","prompt":"stale","providerId":"image-main","model":"mock","parameters":{},"result":{}}`)
+	if got := request(t, router, http.MethodPost, "/api/generation-jobs", deletedBody); got.Code != http.StatusBadRequest {
+		t.Fatalf("client-created deleted status = %d, want 400: %s", got.Code, got.Body.String())
+	}
+
+	if got := request(t, router, http.MethodPost, "/api/generation-jobs", body); got.Code != http.StatusCreated {
+		t.Fatalf("seed job: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(t, router, http.MethodDelete, "/api/generation-jobs/job-gone", nil); got.Code != http.StatusNoContent {
+		t.Fatalf("delete job: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(t, router, http.MethodPost, "/api/generation-jobs", body); got.Code != http.StatusGone {
+		t.Fatalf("create over tombstone status = %d, want 410: %s", got.Code, got.Body.String())
+	}
+	staleRestore := []byte(`[{"id":"job-gone","kind":"image","status":"succeeded","prompt":"stale restore","providerId":"image-main","model":"mock","parameters":{},"result":{},"createdAt":"2026-07-01T00:00:00Z","updatedAt":"2026-07-01T00:00:00Z"}]`)
+	if got := request(t, router, http.MethodPut, "/api/generation-jobs", staleRestore); got.Code != http.StatusGone {
+		t.Fatalf("replace over tombstone status = %d, want 410: %s", got.Code, got.Body.String())
+	}
+
+	backend.mu.Lock()
+	backend.jobs[tenantKey(store.DefaultTenantID, "job-update-race")] = store.GenerationJob{
+		ID: "job-update-race", Kind: "image", Status: "succeeded", Prompt: "current",
+		Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	backend.generationJobPutErr = store.ErrGone
+	backend.mu.Unlock()
+	update := []byte(`{"id":"job-update-race","kind":"image","status":"succeeded","prompt":"stale","providerId":"image-main","model":"mock","parameters":{},"result":{}}`)
+	if got := request(t, router, http.MethodPut, "/api/generation-jobs/job-update-race", update); got.Code != http.StatusGone {
+		t.Fatalf("racing update status = %d, want 410: %s", got.Code, got.Body.String())
 	}
 }
 

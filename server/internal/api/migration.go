@@ -380,7 +380,7 @@ func (s *Server) migrationPutGenerationHistory(w http.ResponseWriter, r *http.Re
 	}
 	ids := make(map[string]struct{}, len(jobs))
 	for _, job := range jobs {
-		if !validGenerationJob(job) {
+		if !validGenerationJob(job) || job.Status == "deleted" {
 			http.Error(w, "invalid generation history", 400)
 			return
 		}
@@ -406,6 +406,9 @@ func (s *Server) migrationPutGenerationHistory(w http.ResponseWriter, r *http.Re
 	}
 	if err := s.store.CompareAndSwapGenerationJobs(r.Context(), tenantIDFrom(r), currentVersion, jobs); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "migration precondition failed", 412)
+		return
+	} else if errors.Is(err, store.ErrGone) {
+		http.Error(w, "generation history contains a deleted job", http.StatusGone)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to replace generation history", 500)

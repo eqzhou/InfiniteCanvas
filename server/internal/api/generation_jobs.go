@@ -68,6 +68,10 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if job.Status == "deleted" {
+		http.Error(w, "generation jobs must be deleted through the delete endpoint", http.StatusBadRequest)
+		return
+	}
 	if isServerGenerationJob(job) {
 		http.Error(w, "server generation jobs must use the execution endpoint", http.StatusBadRequest)
 		return
@@ -84,6 +88,9 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 	job.CreatedAt, job.UpdatedAt = now, now
 	if err := s.store.CreateGenerationJob(r.Context(), tenantID, job); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "generation job already exists", http.StatusConflict)
+		return
+	} else if errors.Is(err, store.ErrGone) {
+		http.Error(w, "generation job was deleted", http.StatusGone)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to store generation job", http.StatusInternalServerError)
@@ -111,7 +118,7 @@ func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	ids := make(map[string]struct{}, len(jobs))
 	for _, job := range jobs {
-		if !validGenerationJob(job) {
+		if !validGenerationJob(job) || job.Status == "deleted" {
 			http.Error(w, "invalid generation history item", http.StatusBadRequest)
 			return
 		}
@@ -127,6 +134,9 @@ func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.ReplaceGenerationJobs(r.Context(), tenantIDFrom(r), jobs); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "active server generation jobs must finish or be cancelled before restore", http.StatusConflict)
+		return
+	} else if errors.Is(err, store.ErrGone) {
+		http.Error(w, "generation history contains a deleted job", http.StatusGone)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to replace generation history", http.StatusInternalServerError)
@@ -164,7 +174,7 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	job, err := decodeGenerationJob(w, r)
-	if err != nil || job.ID != id {
+	if err != nil || job.ID != id || job.Status == "deleted" {
 		http.Error(w, "invalid generation job", http.StatusBadRequest)
 		return
 	}
@@ -177,6 +187,10 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
 		return
 	}
+	if current.Status == "deleted" {
+		http.Error(w, "generation job was deleted", http.StatusGone)
+		return
+	}
 	if isServerGenerationJob(current) {
 		http.Error(w, "server generation jobs are read-only", http.StatusConflict)
 		return
@@ -187,7 +201,10 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 	}
 	job.CreatedAt = current.CreatedAt
 	job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.store.PutGenerationJob(r.Context(), tenantIDFrom(r), job); err != nil {
+	if err := s.store.PutGenerationJob(r.Context(), tenantIDFrom(r), job); errors.Is(err, store.ErrGone) {
+		http.Error(w, "generation job was deleted", http.StatusGone)
+		return
+	} else if err != nil {
 		http.Error(w, "failed to update generation job", http.StatusInternalServerError)
 		return
 	}

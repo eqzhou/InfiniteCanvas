@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,6 +119,22 @@ func postAudioJob(t *testing.T, handler http.Handler, id string) *responseSnapsh
 	body := []byte(`{"id":"` + id + `","projectId":"board-1","prompt":"hello tiger","providerId":"media-main","model":"gpt-4o-mini-tts","parameters":{"voice":"alloy","format":"mp3"}}`)
 	got := request(t, handler, http.MethodPost, "/api/generation-jobs/audio", body)
 	return &responseSnapshot{code: got.Code, body: append([]byte(nil), got.Body.Bytes()...)}
+}
+
+func TestServerMediaTombstonesReturnGone(t *testing.T) {
+	backend := newMemoryStore()
+	server, handler := mediaExecutionServer(t, backend, newScriptedVideoExecutor(nil), newScriptedAudioExecutor())
+	t.Cleanup(server.Close)
+	backend.mu.Lock()
+	backend.generationJobCreateErr = store.ErrGone
+	backend.mu.Unlock()
+
+	if got := postVideoJob(t, handler, "job-video-gone"); got.code != http.StatusGone {
+		t.Fatalf("video create status = %d, want 410: %s", got.code, got.body)
+	}
+	if got := postAudioJob(t, handler, "job-audio-gone"); got.code != http.StatusGone {
+		t.Fatalf("audio create status = %d, want 410: %s", got.code, got.body)
+	}
 }
 
 func minimalMP4() []byte {
@@ -292,5 +309,68 @@ func TestServerMediaEndpointsRejectInvalidParameters(t *testing.T) {
 		if got.Code != http.StatusBadRequest {
 			t.Fatalf("invalid %s accepted: %d %s", path, got.Code, got.Body.String())
 		}
+	}
+}
+
+func TestVideoJobInputAllowsOnlyDocumentedPromptlessFirstFrameModes(t *testing.T) {
+	base := createVideoJobRequest{
+		ID: "job-first-frame", ProjectID: "board-1", ProviderID: "media-main",
+		Parameters: createVideoJobParameters{
+			Seconds: 5, Ratio: "16:9", Resolution: "720p",
+			ReferenceStorageKeys: []string{"image:first-frame"},
+		},
+	}
+	happyHorse := base
+	happyHorse.Model = "happyhorse-1.1"
+	happyHorse.Parameters.FrameMode = "first-last"
+	if !validCreateVideoJob(happyHorse) {
+		t.Fatal("HappyHorse first-frame-only job was rejected at the HTTP boundary")
+	}
+	happyHorse.Parameters.FrameMode = "references"
+	if validCreateVideoJob(happyHorse) {
+		t.Fatal("HappyHorse reference-to-video job accepted an empty prompt")
+	}
+	kling := base
+	kling.Model = "kling-3.0-turbo"
+	if !validCreateVideoJob(kling) {
+		t.Fatal("Kling Turbo first-frame-only job was rejected at the HTTP boundary")
+	}
+	kling.Parameters.ReferenceStorageKeys = nil
+	if validCreateVideoJob(kling) {
+		t.Fatal("Kling Turbo text-to-video job accepted an empty prompt")
+	}
+}
+
+func TestResolveMediaRequestKeepsDocumentedPromptlessFirstFrameJob(t *testing.T) {
+	backend := newMemoryStore()
+	server, handler := mediaExecutionServer(t, backend, newScriptedVideoExecutor(nil), newScriptedAudioExecutor())
+	t.Cleanup(server.Close)
+	config := []byte(`{"channels":[{"id":"media-main","name":"APIMart","baseUrl":"https://api.apimart.ai/v1","providers":{"video":{"baseUrl":"https://api.apimart.ai/v1","apiKey":"","model":"happyhorse-1.1","protocol":"apimart"}}}],"systemPrompt":""}`)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", config); err != nil {
+		t.Fatal(err)
+	}
+	put := httptest.NewRequest(http.MethodPut, "/api/blobs/image%3Afirst-frame", bytes.NewReader(apimartPNG(t)))
+	put.Header.Set("Content-Type", "image/png")
+	putResult := httptest.NewRecorder()
+	handler.ServeHTTP(putResult, put)
+	if putResult.Code != http.StatusNoContent {
+		t.Fatalf("store first frame: %d %s", putResult.Code, putResult.Body.String())
+	}
+	parameters, err := json.Marshal(persistedMediaJobParameters{
+		Executor: serverExecutorMarker, Seconds: 5, Ratio: "16:9", Resolution: "720p",
+		FrameMode: "first-last", ReferenceStorageKeys: []string{"image:first-frame"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := server.resolveMediaGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+		ID: "job-resolve-first-frame", Kind: "video", Status: "queued", ProviderID: "media-main",
+		Model: "happyhorse-1.1", Parameters: parameters, Result: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("resolve promptless first-frame job: %v", err)
+	}
+	if resolved.Video.Prompt != "" || resolved.Video.Model != "happyhorse-1.1" || len(resolved.Video.References) != 1 {
+		t.Fatalf("resolved first-frame request = %#v", resolved.Video)
 	}
 }

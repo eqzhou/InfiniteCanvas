@@ -10,7 +10,13 @@ import {
   type AdminChannelProtocol,
 } from "@/services/admin";
 import { invalidateSharedChannelCatalog } from "@/services/shared-channels";
-import { mergeSavedAdminChannels, shouldDeleteAdminChannel } from "@/lib/admin-channel-state";
+import {
+  applyAdminChannelModelSelection,
+  buildAdminChannelModelDiff,
+  mergeSavedAdminChannels,
+  shouldDeleteAdminChannel,
+  type AdminChannelModelDiff,
+} from "@/lib/admin-channel-state";
 
 const protocols: AdminChannelProtocol[] = ["openai", "gemini", "apimart", "kie"];
 
@@ -44,12 +50,18 @@ function parseModelsText(value: string): string[] {
     .filter(Boolean);
 }
 
+interface PendingModelReview {
+  diff: AdminChannelModelDiff;
+  selected: string[];
+}
+
 export function AdminChannelsPanel() {
   const [channels, setChannels] = useState<AdminChannel[]>([]);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [modelReviews, setModelReviews] = useState<Record<string, PendingModelReview>>({});
   const persistedIdsRef = useRef(new Set<string>());
 
   const load = async () => {
@@ -57,6 +69,7 @@ export function AdminChannelsPanel() {
       setError("");
       const loaded = await listAdminChannels();
       persistedIdsRef.current = new Set(loaded.map((channel) => channel.id));
+      setModelReviews({});
       setChannels(loaded);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -100,8 +113,15 @@ export function AdminChannelsPanel() {
               <textarea
                 className="ob-field min-h-24 font-mono text-xs"
                 value={modelsText(channel)}
+                disabled={busy === `models:${channel.id}`}
                 placeholder={"gpt-image-1\ngpt-image-2\nseedream-4"}
-                onChange={(event) => update(channel.id, { models: parseModelsText(event.target.value) })}
+                onChange={(event) => {
+                  update(channel.id, { models: parseModelsText(event.target.value) });
+                  setModelReviews((current) => {
+                    const { [channel.id]: _discarded, ...remaining } = current;
+                    return remaining;
+                  });
+                }}
               />
             </Field>
           </div>
@@ -120,13 +140,15 @@ export function AdminChannelsPanel() {
               const result = await testAdminChannel(channel.id); return `连接成功，发现 ${result.modelCount} 个模型`;
             })}>测试连接</button>
             <button type="button" className="ob-btn" disabled={busy !== "" || !channel.secretConfigured || !["openai", "apimart"].includes(channel.protocol)} onClick={() => void run(`models:${channel.id}`, async () => {
-              // Persist the fetched catalog on the channel so routing can use it.
-              // Previously the result was only rendered as a transient notice.
               const models = await fetchAdminChannelModels(channel.id);
-              update(channel.id, { models });
+              const diff = buildAdminChannelModelDiff(channel.models ?? [], models);
+              setModelReviews((current) => ({
+                ...current,
+                [channel.id]: { diff, selected: [...diff.selected] },
+              }));
               return models.length
-                ? `已写入 ${models.length} 个模型（保存全部后生效）：${models.slice(0, 20).join("、")}`
-                : "连接成功，未返回模型";
+                ? `已拉取 ${models.length} 个模型，请检查差异并确认更新`
+                : "拉取结果为空，请检查差异并确认是否清空模型";
             })}>拉取模型</button>
             <button type="button" className="ob-btn" disabled={busy !== ""} onClick={() => void run(`delete:${channel.id}`, async () => {
               const persisted = shouldDeleteAdminChannel(persistedIdsRef.current, channel.id);
@@ -134,9 +156,43 @@ export function AdminChannelsPanel() {
               persistedIdsRef.current = new Set([...persistedIdsRef.current].filter((id) => id !== channel.id));
               invalidateSharedChannelCatalog();
               setChannels((current) => current.filter((item) => item.id !== channel.id));
+              setModelReviews((current) => {
+                const { [channel.id]: _discarded, ...remaining } = current;
+                return remaining;
+              });
               return persisted ? "渠道已删除" : "未保存渠道已移除";
             })}>删除</button>
           </div>
+          {modelReviews[channel.id] ? (
+            <AdminChannelModelDiffReview
+              diff={modelReviews[channel.id].diff}
+              selected={modelReviews[channel.id].selected}
+              onToggle={(model) => setModelReviews((current) => {
+                const review = current[channel.id];
+                if (!review) return current;
+                const selected = review.selected.includes(model)
+                  ? review.selected.filter((item) => item !== model)
+                  : [...review.selected, model];
+                return { ...current, [channel.id]: { ...review, selected } };
+              })}
+              onConfirm={() => {
+                const review = modelReviews[channel.id];
+                if (!review) return;
+                const models = applyAdminChannelModelSelection(review.diff, review.selected);
+                update(channel.id, { models });
+                setModelReviews((current) => {
+                  const { [channel.id]: _confirmed, ...remaining } = current;
+                  return remaining;
+                });
+                setError("");
+                setNotice(`已选择 ${models.length} 个模型（保存全部后生效）`);
+              }}
+              onCancel={() => setModelReviews((current) => {
+                const { [channel.id]: _cancelled, ...remaining } = current;
+                return remaining;
+              })}
+            />
+          ) : null}
         </section>
       ))}
       <div className="flex flex-wrap gap-2">
@@ -151,6 +207,61 @@ export function AdminChannelsPanel() {
       </div>
       {notice ? <p role="status" className="text-sm text-emerald-600">{notice}</p> : null}
       {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
+    </div>
+  );
+}
+
+export function AdminChannelModelDiffReview({
+  diff,
+  selected,
+  onToggle,
+  onConfirm,
+  onCancel,
+}: {
+  diff: AdminChannelModelDiff;
+  selected: readonly string[];
+  onToggle: (model: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const selectedIds = new Set(selected);
+  const groups = [
+    { label: "新获取", models: diff.added, className: "text-emerald-700" },
+    { label: "已有", models: diff.existing, className: "text-[var(--ob-muted)]" },
+    { label: "已移除", models: diff.removed, className: "text-[var(--ob-danger)]" },
+  ];
+
+  return (
+    <div className="space-y-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-surface)] p-3" aria-label="模型差异确认">
+      <div>
+        <p className="text-sm font-medium">模型拉取差异</p>
+        <p className="text-xs text-[var(--ob-muted)]">
+          {diff.selected.length === 0
+            ? "拉取结果为空。已配置模型列在“已移除”中，确认前不会修改当前配置。"
+            : "勾选确认后要保留的模型；确认前不会修改当前配置。"}
+        </p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {groups.map((group) => (
+          <div key={group.label} className="space-y-1">
+            <p className={`text-xs font-medium ${group.className}`}>{group.label}（{group.models.length}）</p>
+            {group.models.length ? group.models.map((model) => (
+              <label key={model} className="flex items-start gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(model)}
+                  onChange={() => onToggle(model)}
+                />
+                <span className="break-all font-mono">{model}</span>
+              </label>
+            )) : <p className="text-xs text-[var(--ob-muted)]">无</p>}
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="ob-btn is-primary" onClick={onConfirm}>确认更新模型</button>
+        <button type="button" className="ob-btn" onClick={onCancel}>取消</button>
+      </div>
     </div>
   );
 }

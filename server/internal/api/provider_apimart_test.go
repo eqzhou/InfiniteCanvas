@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -254,10 +255,37 @@ func TestAPIMartSeedanceCapabilitiesResolveExactModels(t *testing.T) {
 	}
 	for _, model := range []string{
 		"seedance-2.0-mini", "doubao-seedance-2.0-mini-preview", "seedream-5-pro",
-		"nano-banana-2-lite", "happyhorse-1.1", "agnes",
+		"nano-banana-2-lite", "agnes",
 	} {
 		if _, ok := resolveProviderModelCapability("apimart", "video", model); ok {
 			t.Fatalf("unsupported or fuzzy model %q resolved", model)
+		}
+	}
+}
+
+func TestAPIMartCurrentOfficialCapabilitiesResolveExactModels(t *testing.T) {
+	seedream, ok := resolveProviderModelCapability("apimart", "image", " Doubao-Seedream-5-0-Pro ")
+	if !ok || seedream.Family != "seedream-5.0-pro" || seedream.MaxOutputs != 1 ||
+		seedream.MaxImageReferences != 10 || !reflect.DeepEqual(seedream.Resolutions, []string{"1K", "2K"}) {
+		t.Fatalf("seedream capability = %#v, %v", seedream, ok)
+	}
+	for _, model := range []string{"gemini-3.1-flash-lite-image", "nano-banana-2-lite"} {
+		capability, found := resolveProviderModelCapability("apimart", "image", model)
+		if !found || capability.Family != "gemini-3.1-flash-lite-image" || capability.MaxImageReferences != 14 ||
+			!reflect.DeepEqual(capability.Resolutions, []string{"1K"}) {
+			t.Fatalf("Gemini Lite capability for %s = %#v, %v", model, capability, found)
+		}
+	}
+	for _, model := range []string{"happyhorse-1.1", "kling-3.0-turbo"} {
+		capability, found := resolveProviderModelCapability("apimart", "video", model)
+		if !found || capability.MinDuration != 3 || capability.MaxDuration != 15 ||
+			!reflect.DeepEqual(capability.Resolutions, []string{"720p", "1080p"}) {
+			t.Fatalf("video capability for %s = %#v, %v", model, capability, found)
+		}
+	}
+	for _, kind := range []string{"image", "video"} {
+		if _, found := resolveProviderModelCapability("apimart", kind, "agnes"); found {
+			t.Fatalf("unknown Agnes %s model resolved", kind)
 		}
 	}
 }
@@ -325,6 +353,139 @@ func TestAPIMartSeedanceValidationMatrix(t *testing.T) {
 	mini.Prompt = strings.Repeat("x", 5_000)
 	if err := validateAPIMartVideoRequest(mini); err != nil {
 		t.Fatalf("mini's documented unbounded prompt was rejected: %v", err)
+	}
+}
+
+func TestAPIMartHappyHorseAndKlingTurboValidationMatrix(t *testing.T) {
+	image := generatedMedia{Data: apimartPNG(t), MIMEType: "image/png"}
+	happyHorse := videoGenerationRequest{
+		Protocol: "apimart", Model: "happyhorse-1.1", Prompt: "move", Seconds: 3,
+		Ratio: "4:3", Resolution: "720p",
+	}
+	if err := validateAPIMartVideoRequest(happyHorse); err != nil {
+		t.Fatalf("valid HappyHorse request rejected: %v", err)
+	}
+	happyHorse.Seconds, happyHorse.Ratio, happyHorse.Resolution = 15, "3:4", "1080p"
+	happyHorse.References = make([]generatedMedia, 9)
+	for index := range happyHorse.References {
+		happyHorse.References[index] = image
+	}
+	if err := validateAPIMartVideoRequest(happyHorse); err != nil {
+		t.Fatalf("valid HappyHorse R2V request rejected: %v", err)
+	}
+	happyHorse.FrameMode = "first-last"
+	if err := validateAPIMartVideoRequest(happyHorse); err == nil {
+		t.Fatal("HappyHorse accepted multiple images as first_frame_image")
+	}
+	happyHorse.References = []generatedMedia{image}
+	if err := validateAPIMartVideoRequest(happyHorse); err != nil {
+		t.Fatalf("valid HappyHorse first frame rejected: %v", err)
+	}
+	happyHorse.Prompt = ""
+	if err := validateAPIMartVideoRequest(happyHorse); err != nil {
+		t.Fatalf("HappyHorse first-frame-only request rejected: %v", err)
+	}
+	happyHorse.FrameMode = "references"
+	if err := validateAPIMartVideoRequest(happyHorse); err == nil {
+		t.Fatal("HappyHorse reference-to-video accepted an empty prompt")
+	}
+
+	kling := videoGenerationRequest{
+		Protocol: "apimart", Model: "kling-3.0-turbo", Prompt: strings.Repeat("x", 3_072),
+		Seconds: 15, Ratio: "1:1", Resolution: "1080p", References: []generatedMedia{image},
+	}
+	if err := validateAPIMartVideoRequest(kling); err != nil {
+		t.Fatalf("valid Kling Turbo request rejected: %v", err)
+	}
+	kling.Prompt = strings.Repeat("x", 3_073)
+	if err := validateAPIMartVideoRequest(kling); err == nil {
+		t.Fatal("Kling Turbo accepted prompt above upstream limit")
+	}
+	kling.Prompt, kling.References = "", []generatedMedia{image}
+	if err := validateAPIMartVideoRequest(kling); err != nil {
+		t.Fatalf("Kling Turbo first-frame-only request rejected: %v", err)
+	}
+	kling.References = nil
+	if err := validateAPIMartVideoRequest(kling); err == nil {
+		t.Fatal("Kling Turbo text-to-video accepted an empty prompt")
+	}
+	for name, mutate := range map[string]func(*videoGenerationRequest){
+		"duration":        func(value *videoGenerationRequest) { value.Seconds = 2 },
+		"resolution":      func(value *videoGenerationRequest) { value.Resolution = "4k" },
+		"ratio":           func(value *videoGenerationRequest) { value.Ratio = "4:3" },
+		"audio":           func(value *videoGenerationRequest) { value.GenerateAudio = true },
+		"negative prompt": func(value *videoGenerationRequest) { value.NegativePrompt = "blur" },
+		"Kling v3 element": func(value *videoGenerationRequest) {
+			value.Elements = []videoGenerationElement{{Name: "dog", Description: "gold", ImageURLs: []string{"https://a.example/1.png", "https://a.example/2.png"}}}
+		},
+	} {
+		request := videoGenerationRequest{Protocol: "apimart", Model: "kling-3.0-turbo", Prompt: "move", Seconds: 5, Ratio: "16:9", Resolution: "720p"}
+		mutate(&request)
+		if err := validateAPIMartVideoRequest(request); err == nil {
+			t.Fatalf("Kling Turbo accepted unsupported %s", name)
+		}
+	}
+}
+
+func TestAPIMartSerializesHappyHorseAndKlingTurboOfficialFields(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/uploads/images":
+			_, _ = io.Copy(io.Discard, r.Body)
+			_, _ = io.WriteString(w, `{"url":"https://cdn.example/reference.png"}`)
+		case "/v1/videos/generations":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			bodies = append(bodies, body)
+			_, _ = io.WriteString(w, `{"code":200,"data":[{"task_id":"task_exact"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	executor := newHTTPVideoExecutor()
+	executor.client = server.Client()
+	image := generatedMedia{Data: apimartPNG(t), MIMEType: "image/png"}
+
+	_, err := executor.createAPIMartVideo(context.Background(), videoGenerationRequest{
+		BaseURL: server.URL, APIKey: "token", Model: "happyhorse-1.1", Prompt: "move",
+		Seconds: 5, Ratio: "16:9", Resolution: "1080p", FrameMode: "first-last", References: []generatedMedia{image}, Watermark: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executor.createAPIMartVideo(context.Background(), videoGenerationRequest{
+		BaseURL: server.URL, APIKey: "token", Model: "kling-3.0-turbo", Seconds: 5,
+		Ratio: "9:16", Resolution: "720p", References: []generatedMedia{image},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("create bodies = %#v", bodies)
+	}
+	happy := bodies[0]
+	if happy["model"] != "happyhorse-1.1" || happy["resolution"] != "1080P" || happy["size"] != "16:9" ||
+		happy["first_frame_image"] != "https://cdn.example/reference.png" || happy["watermark"] != true {
+		t.Fatalf("HappyHorse body = %#v", happy)
+	}
+	for _, unsupported := range []string{"mode", "audio", "negative_prompt", "aspect_ratio", "image_urls", "element_list"} {
+		if _, exists := happy[unsupported]; exists {
+			t.Fatalf("HappyHorse serialized unsupported %s: %#v", unsupported, happy)
+		}
+	}
+	turbo := bodies[1]
+	if turbo["model"] != "kling-3.0-turbo" || turbo["resolution"] != "720p" ||
+		turbo["first_frame_image"] != "https://cdn.example/reference.png" {
+		t.Fatalf("Kling Turbo body = %#v", turbo)
+	}
+	for _, unsupported := range []string{"mode", "audio", "negative_prompt", "aspect_ratio", "image_urls", "element_list", "multi_shot", "watermark"} {
+		if _, exists := turbo[unsupported]; exists {
+			t.Fatalf("Kling Turbo serialized unsupported %s: %#v", unsupported, turbo)
+		}
 	}
 }
 
@@ -597,6 +758,68 @@ func TestAPIMartImageCapabilityRejectsUnsupportedPaidParametersBeforeCreate(t *t
 		if _, err := executor.GenerateResumable(context.Background(), request, nil, func(videoProviderCheckpoint) error { return nil }); err == nil {
 			t.Fatalf("unsupported %s accepted", name)
 		}
+	}
+}
+
+func TestAPIMartSerializesSeedreamAndGeminiLiteExactImageFields(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/images/generations":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			bodies = append(bodies, body)
+			_, _ = io.WriteString(w, fmt.Sprintf(`{"code":200,"data":[{"task_id":"task_image_%d"}]}`, len(bodies)))
+		case strings.HasPrefix(r.URL.Path, "/v1/tasks/"):
+			_, _ = io.WriteString(w, `{"code":200,"data":{"status":"failed"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	executor := newOpenAIImageExecutor()
+	executor.client = server.Client()
+	executor.apimartPollInterval = 0
+	executor.apimartMaxDuration = time.Second
+	for _, request := range []imageGenerationRequest{
+		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "21:9", Quality: "1K", Count: 1},
+		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "nano-banana-2-lite", Prompt: "draw", Size: "5:4", Quality: "auto", Count: 2},
+	} {
+		_, _ = executor.GenerateResumable(context.Background(), request, nil, func(videoProviderCheckpoint) error { return nil })
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("image bodies = %#v", bodies)
+	}
+	if !reflect.DeepEqual(bodies[0], map[string]any{"model": "doubao-seedream-5-0-pro", "prompt": "draw", "size": "21:9", "resolution": "1K"}) {
+		t.Fatalf("Seedream body = %#v", bodies[0])
+	}
+	if !reflect.DeepEqual(bodies[1], map[string]any{"model": "nano-banana-2-lite", "prompt": "draw", "size": "5:4", "resolution": "1K", "n": float64(2)}) {
+		t.Fatalf("Gemini Lite body = %#v", bodies[1])
+	}
+}
+
+func TestAPIMartCurrentImageContractsRejectUnsupportedParametersBeforeCreate(t *testing.T) {
+	executor := newOpenAIImageExecutor()
+	base := imageGenerationRequest{Protocol: "apimart", BaseURL: "https://api.apimart.ai", APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "1:1", Quality: "2K", Count: 1}
+	for name, mutate := range map[string]func(*imageGenerationRequest){
+		"Seedream count":         func(value *imageGenerationRequest) { value.Count = 2 },
+		"Seedream resolution":    func(value *imageGenerationRequest) { value.Quality = "4K" },
+		"empty prompt":           func(value *imageGenerationRequest) { value.Prompt = " " },
+		"transparent background": func(value *imageGenerationRequest) { value.TransparentBackground = true },
+		"too many references":    func(value *imageGenerationRequest) { value.References = make([]generatedImage, 11) },
+	} {
+		request := base
+		mutate(&request)
+		if _, err := executor.GenerateResumable(context.Background(), request, nil, func(videoProviderCheckpoint) error { return nil }); err == nil {
+			t.Fatalf("current image contract accepted %s", name)
+		}
+	}
+	gemini := base
+	gemini.Model, gemini.Quality = "gemini-3.1-flash-lite-image", "2K"
+	if _, err := executor.GenerateResumable(context.Background(), gemini, nil, func(videoProviderCheckpoint) error { return nil }); err == nil {
+		t.Fatal("Gemini Lite accepted a non-1K resolution")
 	}
 }
 

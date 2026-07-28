@@ -41,6 +41,9 @@ func validateAPIMartVideoRequest(request videoGenerationRequest) error {
 	if capability.Family == "seedance-2.0" {
 		return validateAPIMartSeedanceRequest(request, capability)
 	}
+	if capability.Family == "happyhorse-1.1" || capability.Family == "kling-3.0-turbo" {
+		return validateAPIMartCurrentVideoRequest(request, capability)
+	}
 	if len(request.Prompt) > 2_500 || request.Seconds < 1 || request.Seconds > 15 || len(request.NegativePrompt) > 2_500 ||
 		len(request.References) > capability.MaxImageReferences {
 		return errors.New("invalid APIMart video parameters")
@@ -121,6 +124,41 @@ func validateAPIMartVideoRequest(request videoGenerationRequest) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateAPIMartCurrentVideoRequest(request videoGenerationRequest, capability providerModelCapability) error {
+	resolution := strings.ToLower(strings.TrimSpace(request.Resolution))
+	if request.Seconds < capability.MinDuration || request.Seconds > capability.MaxDuration ||
+		!containsAPIMartString(capability.Ratios, request.Ratio) ||
+		!containsAPIMartString(capability.Resolutions, resolution) ||
+		len(request.References) > capability.MaxImageReferences {
+		return errors.New("invalid APIMart video parameters")
+	}
+	if (request.Mode != "" && request.Mode != "std") || request.NegativePrompt != "" || request.GenerateAudio ||
+		request.MultiShot || request.ShotType != "" || len(request.Shots) > 0 || len(request.Elements) > 0 {
+		return errors.New("APIMart video request contains unsupported controls")
+	}
+	for _, reference := range request.References {
+		supportedReference := reference.MIMEType == "image/png" || reference.MIMEType == "image/jpeg" ||
+			(capability.Family == "happyhorse-1.1" && reference.MIMEType == "image/webp")
+		if !supportedReference {
+			return errors.New("APIMart video reference type is unsupported")
+		}
+	}
+	if capability.Family == "happyhorse-1.1" {
+		firstFrameMode := normalizeVideoFrameMode(request.FrameMode) == "first-last"
+		if len(request.Prompt) > 2_500 || (strings.TrimSpace(request.Prompt) == "" && (!firstFrameMode || len(request.References) != 1)) {
+			return errors.New("invalid HappyHorse prompt")
+		}
+		if firstFrameMode && len(request.References) != 1 {
+			return errors.New("HappyHorse first-frame mode requires exactly one image")
+		}
+		return nil
+	}
+	if len(request.Prompt) > 3_072 || (strings.TrimSpace(request.Prompt) == "" && len(request.References) == 0) {
+		return errors.New("invalid Kling 3.0 Turbo prompt")
 	}
 	return nil
 }
@@ -285,6 +323,12 @@ func (e *httpVideoExecutor) createAPIMartVideo(ctx context.Context, request vide
 	if supported && capability.Family == "seedance-2.0" {
 		return e.createAPIMartSeedanceVideo(ctx, request, imageURLs)
 	}
+	if supported && capability.Family == "happyhorse-1.1" {
+		return e.createAPIMartHappyHorseVideo(ctx, request, imageURLs)
+	}
+	if supported && capability.Family == "kling-3.0-turbo" {
+		return e.createAPIMartKlingTurboVideo(ctx, request, imageURLs)
+	}
 	mode := request.Mode
 	if mode == "" {
 		mode = "std"
@@ -314,6 +358,46 @@ func (e *httpVideoExecutor) createAPIMartVideo(ctx context.Context, request vide
 			}
 		}
 		body["element_list"] = elements
+	}
+	return apimartJSONRequest(ctx, e.client, request.BaseURL, request.APIKey, http.MethodPost, "/videos/generations", body)
+}
+
+func (e *httpVideoExecutor) createAPIMartHappyHorseVideo(ctx context.Context, request videoGenerationRequest, imageURLs []string) (map[string]any, error) {
+	body := map[string]any{
+		"model": request.Model, "duration": request.Seconds, "size": request.Ratio,
+		"resolution": strings.ToUpper(strings.TrimSpace(request.Resolution)),
+	}
+	if request.Watermark {
+		body["watermark"] = true
+	}
+	if request.Prompt != "" {
+		body["prompt"] = request.Prompt
+	}
+	if len(imageURLs) > 0 {
+		if normalizeVideoFrameMode(request.FrameMode) == "first-last" {
+			body["first_frame_image"] = imageURLs[0]
+		} else {
+			body["image_urls"] = imageURLs
+		}
+	}
+	return apimartJSONRequest(ctx, e.client, request.BaseURL, request.APIKey, http.MethodPost, "/videos/generations", body)
+}
+
+func (e *httpVideoExecutor) createAPIMartKlingTurboVideo(ctx context.Context, request videoGenerationRequest, imageURLs []string) (map[string]any, error) {
+	body := map[string]any{
+		"model": request.Model, "duration": request.Seconds,
+		"resolution": strings.ToLower(strings.TrimSpace(request.Resolution)),
+	}
+	if request.Watermark {
+		body["watermark"] = true
+	}
+	if request.Prompt != "" {
+		body["prompt"] = request.Prompt
+	}
+	if len(imageURLs) > 0 {
+		body["first_frame_image"] = imageURLs[0]
+	} else {
+		body["aspect_ratio"] = request.Ratio
 	}
 	return apimartJSONRequest(ctx, e.client, request.BaseURL, request.APIKey, http.MethodPost, "/videos/generations", body)
 }
@@ -454,13 +538,33 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 	}
 	request.Model = capability.Model
 	size := apimartImageSize(request.Size)
-	quality := request.Quality
-	if quality == "" {
+	currentImageModel := capability.Family == "seedream-5.0-pro" || capability.Family == "gemini-3.1-flash-lite-image"
+	quality := strings.TrimSpace(request.Quality)
+	resolution := ""
+	if currentImageModel {
+		resolution = strings.ToUpper(quality)
+		if resolution == "" || resolution == "AUTO" {
+			if capability.Family == "seedream-5.0-pro" {
+				resolution = "2K"
+			} else {
+				resolution = "1K"
+			}
+		}
+	} else if quality == "" {
 		quality = "auto"
 	}
 	if request.Count < 1 || request.Count > capability.MaxOutputs || len(request.References) > capability.MaxImageReferences ||
-		!containsAPIMartString(capability.Sizes, size) || !containsAPIMartString(capability.Qualities, quality) {
+		!containsAPIMartString(capability.Sizes, size) ||
+		(currentImageModel && (strings.TrimSpace(request.Prompt) == "" || !containsAPIMartString(capability.Resolutions, resolution) || request.TransparentBackground)) ||
+		(!currentImageModel && !containsAPIMartString(capability.Qualities, quality)) {
 		return nil, errors.New("invalid APIMart image parameters")
+	}
+	if capability.Family == "gemini-3.1-flash-lite-image" {
+		for _, reference := range request.References {
+			if reference.MIMEType != "image/png" && reference.MIMEType != "image/jpeg" && reference.MIMEType != "image/webp" {
+				return nil, errors.New("Gemini Lite reference type is unsupported")
+			}
+		}
 	}
 	maxDuration := e.apimartMaxDuration
 	if maxDuration <= 0 {
@@ -483,12 +587,18 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 		if err != nil {
 			return nil, err
 		}
-		body := map[string]any{
-			"model": request.Model, "prompt": request.Prompt, "size": size,
-			"quality": quality, "n": request.Count,
-		}
-		if request.TransparentBackground {
-			body["background"] = "transparent"
+		body := map[string]any{"model": request.Model, "prompt": request.Prompt, "size": size}
+		if currentImageModel {
+			body["resolution"] = resolution
+			if capability.Family == "gemini-3.1-flash-lite-image" {
+				body["n"] = request.Count
+			}
+		} else {
+			body["quality"] = quality
+			body["n"] = request.Count
+			if request.TransparentBackground {
+				body["background"] = "transparent"
+			}
 		}
 		if len(imageURLs) > 0 {
 			body["image_urls"] = imageURLs

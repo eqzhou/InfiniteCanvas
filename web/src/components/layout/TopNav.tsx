@@ -6,6 +6,7 @@ import {
   Archive,
   Bot,
   HelpCircle,
+  BookOpen,
   LayoutDashboard,
   Library,
   MessageSquare,
@@ -156,6 +157,14 @@ export function TopNav({
           >
             <HelpCircle size={18} />
           </button>
+          <Link
+            to="/help"
+            className={cn("ob-icon-btn", location.pathname === "/help" && "is-active")}
+            title="使用帮助"
+            aria-label="打开使用帮助"
+          >
+            <BookOpen size={18} />
+          </Link>
           <button
             type="button"
             className="ob-icon-btn"
@@ -242,6 +251,15 @@ export function TopNav({
                   <HelpCircle size={16} />
                   快捷键
                 </button>
+                <Link
+                  to="/help"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
+                  onClick={() => setCompactMenuOpen(false)}
+                >
+                  <BookOpen size={16} />
+                  使用帮助
+                </Link>
                 <button
                   type="button"
                   role="menuitem"

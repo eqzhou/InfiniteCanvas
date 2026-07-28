@@ -53,6 +53,7 @@ describe("config credential persistence", () => {
       imageSize: "1024x1024",
       imageQuality: "auto",
       imageCount: 1,
+      preferredModels: { channel: { image: "image-v2", video: "video-v2" } },
       theme: "dark",
       webdavUrl: "https://dav.example",
       webdavUser: "user",
@@ -79,6 +80,7 @@ describe("config credential persistence", () => {
     expect(persisted.objectStorage?.secretAccessKey).toBe("");
     expect(persisted.objectStorage?.sessionToken).toBe("");
     expect(persisted.objectStorage?.endpoint).toBe("https://account.r2.cloudflarestorage.com");
+    expect(persisted.preferredModels).toEqual({ channel: { image: "image-v2", video: "video-v2" } });
     expect(config.channels[0]?.apiKey).toBe(testCredential("legacy"));
     expect(config.webdavPass).toBe("dav-secret");
     expect(config.objectStorage?.secretAccessKey).toBe(testCredential("s3-sk"));
@@ -240,4 +242,3 @@ describe("guest capability model for config secrets", () => {
     })).rejects.toBeInstanceOf(SecretAuthRequiredError);
   });
 });
-

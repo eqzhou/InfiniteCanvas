@@ -7,6 +7,7 @@ import {
 } from "@/services/prompt-source-presets";
 import { normalizeImageToolbarPreferences } from "@/lib/image-toolbar-preferences";
 import { normalizeGenerationDefaults } from "@/lib/generation-defaults";
+import { normalizePreferredModels } from "@/lib/workbench-preferences";
 
 export const SYSTEM_PROMPT_MAX_LENGTH = 20_000;
 
@@ -68,6 +69,8 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
       ? rawPanelTab
       : "projects",
     disabledPluginIds,
+    preferredModels: normalizePreferredModels(
+      (config as AppConfig & { preferredModels?: unknown }).preferredModels),
     objectStorage: normalizeObjectStorage((config as AppConfig & { objectStorage?: unknown }).objectStorage),
     promptSources: mergeBuiltinPromptSources(normalizePromptSourceConfigs(
       (config as AppConfig & { promptSources?: unknown }).promptSources)),

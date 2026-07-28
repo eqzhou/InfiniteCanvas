@@ -1,142 +1,164 @@
-# Tiger 差异复审与补齐计划（第四轮）
+# Tiger v0.4.5 功能差异复审与实施计划（第四轮）
 
-> 审查日期：2026-07-27
+> 审查日期：2026-07-28
 >
-> 本地基准：`main@b75e0b6`
+> 实施起始基准：`main@b701b7a35bf4303909c2e0b8194bd60c3a0b3c69`
 >
-> 对照基准：`tigerowo/infinite-canvas main@64cb00a6da99a50017abcb2e443166a13364c6c1`（最新 tag `v0.4.4`）。本轮开始前用 `git ls-remote` 核对，上游 HEAD 与 tag 列表均未变化，第二轮的文档快照继续有效。
+> 对照基准：`tigerowo/infinite-canvas main@9435f1c76130448ed7c41357b7b8ec5b60046538`
 >
-> 输入来源：仅使用 `/tmp/tiger-*.md`（公开 README、CHANGELOG、`docs/overview/features.md`、`docs/canvas/*.md`、`docs/backend/*.md` 的快照）。未使用上游源码、资产或视觉表达。
+> 对照版本：`v0.4.5`（tag 与 main 同一提交）
 
-## 1. 本轮的起点是一次方法错误
+## 1. 审查边界
 
-第三轮结尾我写下「盲区已清空」。这个结论是错的，而且错在方法上：我用**自己挑的关键词**去统计覆盖度，挑出来的词当然都命中，这是循环论证。
+本轮继续遵守 clean-room：只使用 Tiger 的公开 README、公开功能文档、公开 CHANGELOG、Release 页面和提交标题作为行为证据；不把上游源码、目录结构、视觉资产、提示词内容或实现细节作为本项目的开发规格。
 
-改用**上游 README 自己声明的 8 份文档清单**逐份对账后，立刻发现三份文档在前三轮里从未被引用过一次：
+判定按用户可观察行为进行：
 
-| 上游文档 | 前三轮引用次数 |
+| 状态 | 含义 |
 |---|---|
-| `docs/overview/features.md` | 27 |
-| `docs/overview/docker.md` | 5 |
-| `docs/canvas/canvas-shortcuts.md` | 3 |
-| `docs/backend/system-settings.md` | 4（仅覆盖 availableModels 一条线） |
-| **`docs/canvas/canvas-node-manual.md`** | **0** |
-| **`docs/backend/backend-database.md`** | **0** |
-| **`docs/backend/api-response.md`** | **0** |
-| `docs/progress/todo.md` | 0（内容为空，无需审） |
+| 已覆盖 | 本地已有入口、实现和可重复测试证据 |
+| 等价/更强 | 实现方式不同，但覆盖同一用户目标或具有更强安全/可靠性 |
+| 待回归 | 静态证据存在，但缺少针对 Tiger 最新行为的独立回归 |
+| 部分覆盖 | 通用能力存在，但精确模型或细节仍缺失 |
+| 未实现 | 本地没有等价用户能力 |
+| 有意不同 | 已有明确产品/架构决策，不机械追平 |
 
-把粒度再降一级、按**章节和条目**统计后，盲区还要大得多：
+## 2. 最新版本确认
 
-- `features.md` 共 14 节 147 条，前三轮逐条走过的只有 7 节，`AI 生成`(18)、`图片工作流`(15)、`导演台`(12)、`账号和后台`(11)、`后端能力`(6)、`全景图`(5) 合计 67 条从未逐条对照。
-- `CHANGELOG` 共 36 个版本组 105 条，被点名引用过的只有 4 组，`v0.0.1`–`v0.3.13` 共 30 组 76 条从未比对。
+- Tiger 当前 `main`、`VERSION` 与最新 tag 均为 `v0.4.5@9435f1c`。
+- `v0.4.5` 相对旧计划的 `v0.4.4` 新增/修复：组节点、未登录本地渠道生图任务、普通节点 `@` 引用输入、提示词库展开后的画布性能、连续鼠标拖动画布、提示词详情 Markdown 文本、悬浮工具栏和长模型名布局。
+- 旧计划使用的 `main@64cb00a` 已过期，不能继续作为“最新功能”结论的依据。
 
-**教训**：覆盖度必须用**上游自己的目录结构**来度量，不能用自选关键词。度量单位要下沉到章节与条目，「文档份数」这个粒度太粗，足以掩盖整节的空白。
+## 3. Tiger v0.4.5 增量映射
 
-## 2. 差异总表
+| ID | Tiger v0.4.5 行为 | 本地状态 | 本地证据 / 结论 |
+|---|---|---|---|
+| T4R-01 | Ctrl/Cmd+G 创建组，组拖动/缩放/拖入拖出/复制删除 | 已覆盖 | `grouping.ts`、store 单测与 `canvas.spec.ts` 组操作 E2E |
+| T4R-02 | 未登录使用本地渠道生图不再卡在生成中 | 等价且有意不同 | Auth-off 本地模式可直连；账号模式统一登录墙。有用户后不再允许匿名数据面访问，避免 UI 登录墙被 API 绕过 |
+| T4R-03 | 普通节点提示词框 `@` 引用定位、缩略图和连续输入 | 已覆盖 | `PromptChipInput.tsx`、`prompt-references.test.ts`；节点条已接入共享渠道与持久任务门控 |
+| T4R-04 | 展开多个提示词源后拖动画布不卡顿 | 已覆盖 | `CanvasPromptsPanel` 只订阅稳定的 prompts slice；1000 条目录回归证明无关画布状态不会改变 selector 结果，避免拖动期间重渲染整个目录 |
+| T4R-05 | 连续鼠标按键后不会持续拖动画布 | 已覆盖 | `gesture.test.ts` 与 lost-pointer-capture / Escape E2E |
+| T4R-06 | 提示词详情不显示 Markdown 原始标记 | 已覆盖 | 使用 `react-markdown` + GFM；禁用 raw HTML、危险协议和正文远程图片，复制/插入仍保留原始 body |
+| T4R-07 | 节点悬浮工具栏样式和窄空间可用性 | 已覆盖 | 紧凑工具栏及窄视口 E2E |
+| T4R-08 | 长模型名不挤压提示词发送按钮/摄像机面板 | 已覆盖 | compact node controls E2E；模型下拉和发送操作分区 |
+| T4R-09 | SSRF、鉴权默认值、媒体访问与 CI P0 加固 | 本地更强 | 远程内容边界、短期媒体引用、optional 数据面登录要求、零用户 bootstrap token、CI 安全审计均已覆盖 |
 
-| ID | 差异 | 上游出处 | 状态 | 证据与说明 |
-|---|---|---|---|---|
-| T4-01 | 删除画布后，持有旧文档的标签页一次自动保存就能把它整个复活 | backend-database `canvas_projects`：软删除 + 延迟 7 天物理清理 | ✅ 已修复 | 见 §3 |
-| T4-02 | 生成记录「删除」后成果 JSON 仍留在库里，且墓碑永不清理 | backend-database `*_generation_logs`：删除时清空 `payload_json`，墓碑保留 7 天 | ✅ 已修复 | 见 §3 |
-| T4-03 | 共享渠道无 per-channel 模型列表，按模型路由会选中不提供该模型的渠道 | system-settings `private.channels[].models` | ✅ 已修复 | `adminChannelPublic.Models` + `cleanAdminChannelModels`/`channelModelsAllow`；`sharedChannelSupports` 在 protocol 判断前按 allow list 过滤。管理后台「可用模型」textarea + 拉取模型写入列表；保存后 `putAdminChannels` 序列化。测试：`TestSharedChannelRoutingHonorsPerChannelModelList`、`cleanAdminChannelModels` |
-| T4-04 | 节点下方对话框没有模型下拉 | canvas-node-manual「用下方对话框生成或修改文本」 | ✅ 已修复 | `SettingsModal` 拉取模型后写入 `provider.models` 并持久化；`NodePromptBar` 增加模型下拉，基于 `resolveNodePromptModels` + 站点 allow list |
-| T4-05 | 对话框内 `@` 唤起的是媒体引用而非提示词库 | canvas-node-manual：对话框输入「可手写，也可从提示词库选择」 | ✅ 已修复 | `NodePromptBar` 增加提示词库选择，选中后追加到对话框 `prompt` 文本；`@` 媒体引用保持不变 |
-| T4-06 | 普通图片连到导演台会被当成球形全景渲染 | features 全景图：「普通图片仍按普通背景显示」 | ✅ 已修复 | 新增 `isSphericalDirectorEnvironment`；`DirectorViewport` 按 `environmentMode` 分流球体/平面；普通图片走 flat 背景 |
-| T4-07 | 「上传素材」路径不提供 2:1 导入方式选择 | features 全景图：「上传素材」或拖入画布均可选择导入方式 | ✅ 已修复 | 素材面板上传 2:1 图片时弹出导入方式选择；`notes/tags` 标记全景意图，`insertAsset` 提升为 panorama 节点 |
-| T4-08 | 导演台同时只能连接一张全景/图片 | features 导演台：图片节点连上后成为「**可选择的**全景图」 | ✅ 已修复 | `bindDirectorPanorama` 改为多环境入边；`environment.sourceId` 记录当前活动环境，UI 可在候选间切换 |
-| T4-09 | 摄像机属性面板缺少「生成当前机位截图」入口 | features 导演台：「可在**摄像机属性或截图列表**生成当前机位截图」 | ✅ 已修复 | `DirectorDialog` 活动机位区块增加「生成当前机位截图」，与托盘共用 `captureCurrent` |
-| T4-10 | `/api/v1/media/references` 前端从未调用 | features AI 生成：本地上传素材先存服务端再由 `PUBLIC_BASE_URL` 生成公开链接 | ✅ 已修复 | `createMediaReferences` 调 `POST /api/media/references`；`resolveMediaRefs` 在 server storage + 公网 HTTPS 源下优先返回 `/api/media/references/{token}` 绝对 URL，失败再回落 data:/blob:。测试见 `media-references.test.ts` |
-| T4-11 | 本地直连日志上报无上报通道与管理员开关 | features AI 生成：管理员可配置本地直连日志上报 | ✅ 已修复 | `POST /api/ai-call-logs/report` + admin `client-report` 开关；`runTrackedGeneration` 在开启时 best-effort 上报；AI 日志页可切换 |
-| T4-12 | 图片比例无独立配置项 | features AI 生成可配置项：「图片比例」与「图片质量」并列 | 🔶 待决策 | 本地只有自由文本 `imageSize`（默认 `1024x1024`），无比例枚举。能力可达，仅交互形态不同：用户需自行记忆并手输像素串表达 16:9 |
-| T4-13 | 提示词与提示词分组无独立数据表 | features 后端能力：数据库保存用户、提示词分组、提示词和服务器素材 | 🔶 待决策 | 用户与素材都有独立表，提示词目录整体序列化进 `openboard_state` KV。是否算缺陷取决于「手写迁移」这条既有决策的边界如何划 |
-| ~~T4-14~~ | ~~后台提示词无关键词查询、无分组/标签筛选~~ | features 后台提示词管理 | ⛔ 误报，已撤销 | 三者都在：搜索框 `AdminPromptCatalogPanel.tsx:118`、分类下拉 `:119`、标签下拉 `:124`，过滤逻辑 `filterAdminPrompts`（`:90`）。`retainVisibleSelection`（`:95`）也已处理「筛选后批量删除误删隐藏项」 |
-| ~~T4-15~~ | ~~服务器素材库按标签筛选接好一半~~ | features 素材 | ⛔ 误报，已撤销 | 前台有标签筛选输入并传参（`ServerLibraryPage.tsx:282`、查询 `:65`）；后台面板同样有（`AdminLibraryPanel.tsx:99`、`:44`） |
-| ~~T4-16~~ | ~~管理后台无素材库面板~~ | features 账号和后台 | ⛔ 误报，已撤销 | `AdminPage.tsx:20` 的 Tab 联合类型含 `library`，`:41` 挂载 `AdminLibraryPanel`，面板本身在 `web/src/components/admin/AdminLibraryPanel.tsx` |
-| T4-21 | 普通成员无法把直连渠道密钥与用户 S3/R2 凭据同步到账号 | features 账号和后台：登录用户可以同步本地直连模型渠道、画布偏好和用户 S3/R2 存储配置 | ✅ 已修复 | `authorizeSecrets` 允许任意已登录活跃用户；成员写 `__encrypted_user_config_secrets_v1:<userID>`，管理员仍写租户袋。租户级密钥迁移保持 admin-only。测试：`TestMemberPersonalSecretsAreIsolatedFromTenantBag`、更新后的 migration secret 用例 |
-| T4-22 | 系统提示词输入框对普通成员可见但保存无效 | features 账号和后台：管理后台支持系统提示词配置 | ✅ 已修复 | `SettingsModal` 将全局/工作流系统提示词收为 admin/owner 可写；成员只读说明当前租户生效摘要 |
-| T4-23 | 渠道模型无「新获取／已有」分组选择器 | features 账号和后台 | 🔶 部分修复 | 拉取模型现写入渠道 `models` 列表（可编辑 textarea，保存后参与路由）。仍无「新获取／已有」分组选择器 UI。API Key 留空沿用已保存密钥本地成立 |
-| T4-24 | 算力点余额与生成前预计消耗对用户完全不可见 | CHANGELOG v0.0.8：画布右上角展示算力点余额，生成按钮展示预计消耗 | ✅ 已修复 | 余额：顶栏 chip 展示「算力 N」。生成前：`estimateCredits` 调 `GET /api/billing/estimate`；`CreativeWorkbench` 主按钮展示「开始生成 · 预计 N 算力」，余额不足时提示。其余生成面可按需复用同一 helper |
-| T4-25 | 非安全上下文下复制文本静默失败 | CHANGELOG v0.0.4：修复局域网 IP 访问时文本复制失败 | ✅ 已修复 | 新增 `writeTextWithFallback`：优先 `navigator.clipboard.writeText`，失败或不可用时回退 `document.execCommand("copy")`。五处复制入口均已改走该助手 |
-| T4-26 | 四个模型无能力声明与参数转译 | CHANGELOG v0.3.13 Seedream 5 Pro、v0.3.11 Nano Banana 2 Lite、v0.3.7 Kling 3.0 Turbo / HappyHorse 1.1 | ⏳ 待实现 | 能力表只有 kling-v3 而无 turbo 变体；其余三个零命中。模型名是自由文本，用户仍可手填走通用协议，但没有能力声明、参数转译与校验（对比 Seedance 2.0 Mini 有完整能力表）。后果：专属参数不被正确转译，失败信息不友好 |
-| T4-27 | 产品内无用户文档入口 | CHANGELOG v0.2.1：新增文档站点页面 | 🔶 待决策 | 换 7 种命名检索均零命中，路由无 docs 项，顶栏 HelpCircle 指向快捷键弹窗。仓库 `docs/` 是内部审计文档，不对外 |
-| T4-28 | 模型选择不记住用户偏好 | CHANGELOG v0.2.1：优化模型选择用户偏好 | ⏳ 待实现 | 渠道偏好已持久化（`board.ts:379`），但模型输入框不回写，切换渠道即被重置为该渠道默认模型。查 `lastModel`/`preferredModel`/`rememberedModel` 均零命中 |
-| T4-29 | 版本弹窗不检查最新版本 | CHANGELOG v0.0.5：展示当前版本、最新版本和时间线 | ⛔ 有意不同 | `checkLatest` 直接把 latest 设为 `APP_VERSION`，`hasNew` 恒 false（`VersionReleaseModal.tsx:44`）。代码注释写明「Self-hosted: prefer local VERSION/CHANGELOG assets first; no remote required」，是自托管不外联的有意取舍。时间线与当前版本展示均正常 |
-| T4-30 | WebDAV 同步 | CHANGELOG v0.2.5 新增 → v0.3.7 上游自行移除 | ⛔ 本地超集 | 本地保留 `webdav.ts` 且有生产引用。上游最终态是删除，本地属「多一个功能」而非缺失，不跟进移除 |
-| T4-31 | Apimart 兼容协议的模型覆盖面 | CHANGELOG v0.3.1 / v0.3.5：「全部」图片/视频模型 | 🔶 未做结论 | 协议骨架完整，图片 2 个、视频 3 系。上游模型清单在 clean-room 约束下不可见，无法量化差多少，不猜 |
-| T4-17 | 工作流 Agent 系统提示词不可配置 | features 提示词库首条：管理员未填写时才用默认 | ⏳ 待实现 | 默认提示词是硬编码常量（`WorkflowWorkbench.tsx:33`），缺「可配置 + 未填写回落默认」这层 |
-| T4-18 | 群众阵列人数有硬上限 | features 导演台：「想多少人就可以多少人」 | ⛔ 有意不同 | 单阵列 ≤1024、场景 ≤4096、渲染批次 ≤128，是浏览器性能保护 |
-| T4-19 | 导演台截图在 server 存储模式下会跨设备同步 | features 导演台：「仅保存在当前浏览器…不随账号跨设备同步」 | ⛔ 有意不同（本地更强） | 默认部署为纯 IndexedDB，符合上游；仅 `VITE_OPENBOARD_STORAGE=server` 时切到服务端存储，属本地额外能力 |
-| T4-20 | 接口响应 envelope | api-response 全文 | ⛔ 有意不同 | 沿用 T2-21 决策：本地用 HTTP 状态码。本轮补充核对了「业务失败也回 200」「前端按 code 判断」两条，均随该决策一并有意不同 |
+## 4. 全量功能差异结论
 
-## 3. 已修复：删除语义的两个数据正确性缺陷
+### 4.1 已覆盖或本地更强
 
-这两条是本轮唯一的**数据正确性**问题——不是「功能少一块」，而是「已删的东西会回来」和「已删的东西没真删」，所以优先处理。
+- 无限画布、多项目、组、撤销重做、节点连线、小地图、左右面板和素材拖入。
+- 文本、图片、配置、视频、音频、全景与导演台节点。
+- 全景生成/导入/查看、摄像机控制、3D 导演台、角色/姿势/群演/模型/机位/截图。
+- 图片与视频工作台、多任务、分类、历史回填、重试、持久任务恢复。
+- 画布助手、公开/个人工作流、AI 工作流草稿。
+- 提示词来源、公共/个人提示词、图片预览和服务器素材库。
+- 注册登录、Linux.do OAuth、管理员后台、用户/额度/模型成本/AI 日志。
+- 共享渠道、模型拉取/测试、权重/超时、普通用户云渠道权限。
+- 用户 S3/R2、租户存储池、登录迁移、PostgreSQL/Redis 正式存储。
+- New API URL 自动配置；公网环境使用 fragment，legacy query 只允许 loopback，安全性强于直接在公网 query 携带 key。
+- 本地额外提供插件 SDK、Browser Runtime/MCP、Codex/Claude 面板和 WebDAV 工作区备份。
 
-### 3.1 已删画布会被陈旧标签页复活（T4-01）
+### 4.2 确认未实现或部分覆盖
 
-`DeleteProject` 是硬删除，`PutProject` 是无条件 upsert。两者组合下，一个仍持有删除前文档的标签页只要触发一次普通自动保存，就会把项目原样写回，且没有任何东西能拦住它。上游用 `deleted_at` 软删除加 7 天延迟清理，正是为了这个场景。
+| GAP | 差异 | 状态 | 决策 |
+|---|---|---|---|
+| R4-GAP-01 | 已软删除的生成任务可被旧客户端更新复活 | 已修复 | 查询过滤墓碑，创建/更新返回 `ErrGone`，API 映射 410；清理仅处理 `status='deleted'` 的过期墓碑 |
+| R4-GAP-02 | 提示词详情安全渲染 Markdown | 已覆盖 | GFM 安全渲染，原始 HTML、危险链接和正文远程图片均不执行/加载 |
+| R4-GAP-03 | 图片工作台比例选择 | 已覆盖 | 1:1、3:2、2:3 预设按 provider capability 映射；自定义尺寸独立保留 |
+| R4-GAP-04 | 工作台模型偏好 | 已覆盖 | `preferredModels[channelId][kind]` 分渠道与类型持久化，下架模型回落合法默认 |
+| R4-GAP-05 | 管理渠道模型差异选取 | 已覆盖 | 拉取后展示新增/已有/移除，勾选确认前不修改现有配置 |
+| R4-GAP-06 | 产品内用户帮助 | 已覆盖 | 新增 `/help` 及桌面/移动导航入口，内容基于本项目行为独立编写 |
+| R4-GAP-07 | APIMart `doubao-seedream-5-0-pro` 精确适配 | 已覆盖 | 1K/2K、比例、单输出和最多 10 引用使用专用校验/JSON |
+| R4-GAP-08 | APIMart `gemini-3.1-flash-lite-image` / `nano-banana-2-lite` | 已覆盖 | 精确别名、1K、比例、最多 14 引用及专用 JSON |
+| R4-GAP-09 | APIMart `kling-3.0-turbo` 精确适配 | 已覆盖 | 3–15 秒、720p/1080p、最多一个首帧、3072 提示词上限；不继承 Kling v3 扩展字段 |
+| R4-GAP-10 | APIMart `happyhorse-1.1` 精确适配 | 已覆盖 | 3–15 秒、五种比例、720P/1080P、首帧与 1–9 多图互斥 |
+| R4-GAP-11 | APIMart `Agnes` 图片/视频最新参数 | 有意未支持 | 官方公开契约不足，前后端继续 exact fail-closed，不用相近模型冒充 |
+| R4-GAP-12 | SQLite / MySQL 正式数据库后端 | 未实现、有意不同 | 不进入当前开发队列；正式部署继续 PostgreSQL + Redis，出现明确单文件/客户数据库需求后另立项 |
+| R4-GAP-13 | 登录后按 `updatedAt` 自动覆盖式多设备合并 | 有意不同 | 保持指纹冲突 + 显式迁移；若要增强，做字段级/操作级合并，不做静默 last-write-wins |
+| R4-GAP-14 | 账号模式仍允许未登录访客使用本地渠道和本地画布 | 有意不同 | 保持登录墙与服务端数据面一致；仅 auth-off 本地部署保留无账号模式 |
 
-做法：新增迁移 v13，给 `openboard_projects` 加 `deleted_at`。删除改为写墓碑并清空 document（墓碑只需拦截写入，不必留着画布内容）；`PutProject` 的 upsert 加 `WHERE deleted_at IS NULL` 条件，写不进去就回 `ErrGone`；`GetProject` 与 `ListProjects` 同步过滤墓碑。`CompareAndSwapProject` 的 `expected == nil` 分支同样会建行，因此一并加了守卫。
+### 4.3 不应误列为缺口
 
-API 层把 `ErrGone` 映射成 HTTP 410 而不是 500——这个区别很重要：500 会让客户端当成服务器故障无限重试，410 才表达「这东西没了，别再试」。前端 `saveServerProjects` 收到 410 后把该 id 当作已结算返回，store 据此把本地副本一并丢弃，而真正的服务端错误仍然照常抛出。
+- Tiger 功能文档明确写着“后端已有用户接口、前端尚无用户管理页”，本地已经有完整管理 UI。
+- Tiger 服务器素材库也主要保存 URL/文本，尚无文件上传，因此本地不是落后项。
+- Tiger 导演台截图默认只保存在当前浏览器；本地已有受保护的服务端 capture 存储，属于增强。
+- Tiger 移动端触控尚未系统完善；本地已有移动视口和触控 E2E。
+- 技术栈、视觉、品牌、默认提示词内容和内置资产不属于功能追平范围。
 
-顺带确认了一个边界：`importProject` 会为导入的项目生成**新 id**，所以墓碑不会误伤「删除后重新导入同一份画布」。
+## 5. 实施计划
 
-### 3.2 已删生成记录仍留着成果 JSON（T4-02）
+### Phase A — 生成任务墓碑正确性（P0，0.5–1 天）
 
-`DeleteGenerationJob` 只把 `status` 改成 `deleted`，`result` 原封不动，而 `includeDeleted=1` 还能把它读回来。上游在删除时会清空 `payload_json`。
+- [x] PostgreSQL 回归覆盖删除后查询、旧客户端更新、同 ID 创建和清理条件。
+- [x] `GetGenerationJob` 默认过滤 `deleted_at`，普通 API 不暴露墓碑。
+- [x] `PutGenerationJob` / `CreateGenerationJob` / 服务端任务创建对墓碑返回 `ErrGone`，不提供隐式 undelete。
+- [x] purge 同时要求 `status='deleted'` 与过期 `deleted_at`。
+- [x] API 将 `ErrGone` 映射为 410；前端停止恢复轮询并清理本地状态。
 
-做法：单条删除与批量删除两条 SQL 都改为同时 `result='{}'::jsonb` 并写 `deleted_at`；迁移 v13 对存量 `status='deleted'` 的行做一次回溯清空。
+验收：已删任务不能被恢复轮询、旧标签页或恶意 PUT 复活；保留期清理只处理真实墓碑。
 
-### 3.3 墓碑必须会过期
+### Phase B — v0.4.5 回归基线（P0，0.5–1 天）
 
-加墓碑就等于制造了一类永不消失的行。上游给的是 7 天，本地照做：`PurgeExpiredTombstones` 按 `tombstoneRetention` 删掉过期的项目与任务墓碑。
+- [x] 固定 Tiger `v0.4.5@9435f1c` 的公开行为清单。
+- [x] 增加 1000 条提示词的 selector 稳定性回归；画布拖动不再订阅/重渲染大目录。
+- [x] 本地直连即时结果、异步任务、失败和恢复已有自动化契约覆盖。
+- [x] `@` 引用连续输入、定位、删除 chip 和缩略图已有组件/E2E 覆盖。
+- [x] 本轮状态同步到 `FEATURE_PARITY.md`，旧 `v0.4.4` 标为历史基准。
 
-这里刻意避开了本轮审查反复抓到的那个反模式——**写完清理函数却没人调用**。`DeleteExpiredMediaReferences` 就是前车之鉴：store 层实现了，api 层零调用，只靠读时惰性删除。所以 `PurgeExpiredTombstones` 直接挂进既有的保留期调度器，与 AI 调用日志清理、媒体令牌清理同一个 ticker。
+验收：所有 v0.4.5 新增行为均有本地自动化映射；性能用可重复数值判断，不用主观“感觉不卡”。
 
-## 4. 实施记录
+### Phase C — 提示词详情 Markdown（P1，0.5 天）
 
-### Phase A — 删除语义（P0，已完成）
+- [x] 测试覆盖标题、列表、粗体、删除线、代码和表格等 GFM 展示。
+- [x] 使用 `react-markdown`；不启用 raw HTML。
+- [x] 外链限制安全协议并带隔离属性；正文图片不远程加载。
+- [x] 复制、插入画布和加入素材仍使用原始 prompt body。
+- [x] 长内容/代码/表格使用有界滚动，弹窗沿用统一 Escape 层级。
 
-- [x] 先写失败测试（真实跑出 RED：`ErrGone` 与 `PurgeExpiredTombstones` 都未定义，编译失败）
-- [x] 迁移 v13：两张表加 `deleted_at` 与部分索引，回溯清空存量已删记录的 result
-- [x] `DeleteProject` 改软删除并清空 document；`PutProject` / `CompareAndSwapProject` 加墓碑守卫；`GetProject` / `ListProjects` 过滤墓碑
-- [x] 单条与批量删除生成任务时清空 result 并写 `deleted_at`
-- [x] `PurgeExpiredTombstones` 实现并**接入既有保留期调度器**
-- [x] API 层把 `ErrGone` 映射为 HTTP 410（普通写入与迁移 CAS 两条路径）
-- [x] 前端把 410 当作已结算：`saveServerProjects` 返回被墓碑的 id，store 丢弃本地副本；真实错误仍然抛出
+验收：展示友好且不改变实际提示词内容；XSS/危险协议 fixture 全部被拒绝。
 
-验收：5 个 store 层测试覆盖陈旧写回被拒、CAS 复活被拒、单条与批量删除都清空成果、墓碑在保留期内不清理且过期后物理消失；2 个前端测试分别覆盖 410 结算与 500 仍报错。
+### Phase D — 创作与管理 UX 补齐（P1，1–2 天）
 
-## 5. 本轮覆盖记录（供下一轮度量用）
+- [x] 图片工作台增加常用比例预设，并保留不被重渲染覆盖的自定义尺寸。
+- [x] 增加 `preferredModels[channelId][kind]`，按渠道/类型记忆并处理模型下架回落。
+- [x] 模型拉取显示新增/已有/移除差异，确认后才更新；空 API Key 继续沿用加密密钥。
+- [x] 增加 `/help`，覆盖登录、画布、节点、提示词、素材、工作台、导演台和部署模式。
+- [x] 补偏好迁移、渠道切换、模型下架、比例选择和可访问标签测试。
 
-按 §1 的教训，覆盖度必须可被后续轮次复算。本轮实际逐条走过的范围如下，**未列入差异总表 = 已核对且无缺口**，不是「没审」：
+验收：用户不再靠记忆输入常用像素尺寸；模型偏好跨刷新恢复；管理员拉取模型不会无提示覆盖已有清单。
 
-| 范围 | 条目数 | 结论 |
-|---|---|---|
-| `features.md` / AI 生成 | 18 条 + 6 段正文 | 逐条追到生产调用链，缺口见 T4-10、T4-11、T4-12 |
-| `features.md` / 图片工作流 | 15 | 缺口见 T4-06、T4-07；其余 13 条已实现 |
-| `features.md` / 全景图 | 5 | 全部已实现 |
-| `features.md` / 导演台 | 12 + 节首正文 | 缺口见 T4-08、T4-09、T4-18、T4-19；含「8 种人物/20 种姿势」精确吻合 |
-| `features.md` / 账号和后台 | 11 | 缺口见 T4-21、T4-22、T4-23 |
-| `features.md` / 当前限制 | 6 | 5 条一致，1 条本地更严格（T4-21 的副作用） |
-| `features.md` / 后端能力 | 6 | 均为既有决策，另见 T4-13 |
-| `canvas-node-manual.md` | 6 小节 | 缺口见 T4-04、T4-05 |
-| `backend-database.md` | 11 张表 | 缺口见 T4-01、T4-02；另有 progress 字段等中低度差异 |
-| `system-settings.md` | 22 个字段 | 缺口见 T4-03 |
-| `api-response.md` | 全文 | 见 T4-20，随既有 envelope 决策一并有意不同 |
-| `CHANGELOG` v0.0.1–v0.3.13 | 30 组 76 条 | 缺口见 T4-24 至 T4-31。其余条目分三类：已实现、本地不存在该 bug、或纯样式/未描述可观察行为而未做结论 |
+### Phase E — APIMart 精确模型契约（P1/P2，1–3 天/模型族）
 
-**度量陷阱提醒**：本轮收尾复算时，`v0.0.2`、`v0.3.4` 等 22 个版本号在计划文档里搜不到，看起来像盲区——实际它们都已逐条审过，只是无缺口所以没被写进差异表。**「文档里搜不到版本号」不等于「没审过」**。下一轮如要复算覆盖度，请以本表为准，不要重复用 grep 版本号的方式判断。
+- [x] 核验 Seedream 5 Pro、Gemini Flash Lite/Nano Banana 2 Lite、HappyHorse 1.1 与 Kling 3.0 Turbo 的官方精确契约。
+- [x] 仅契约完整的模型进入前后端 capability；Agnes 保持 unsupported。
+- [x] 精确 keyset/边界 fixture 叠加通用 adapter 的失败、限流、超时、取消、轮询、恢复与脱敏测试。
+- [x] adapter 只做精确模型匹配，不使用包含/前缀模糊匹配。
+- [x] 真实付费 smoke 保持 opt-in，不进入默认 CI。
 
-`CHANGELOG` 未做结论的条目及原因已在审计中逐条记录，主要是三类：条目未描述具体 bug 表现（v0.3.11、v0.2.5）、纯视觉样式在 clean-room 下不可判等价（v0.3.2、v0.0.7、v0.0.2 移动端）、以及属结构性选择而非缺口（v0.0.6 代理路径形态）。
+优先级：官方契约最完整的模型先做；不要按 Tiger 的营销名称反推协议。
 
-## 6. 质量门禁
+### Phase F — 产品差异守卫（P2，0.5 天）
 
-沿用前三轮，并把第三轮新增的「已实现判定必须追完整调用链」保留为固定动作。本轮再加两条：
+- [x] 帮助页明确区分 `auth-off` 与 `optional/required` 账号模式。
+- [x] optional 模式覆盖 projects/state/blobs/shared-channels 匿名 401 矩阵。
+- [x] 本计划将 SQLite/MySQL 与静默时间戳覆盖合并记录为有意不同。
+- [x] clean-room 审计通过，未引入 Tiger 源码、视觉资产、提示词内容或实现结构。
 
-1. **覆盖度用上游自己的目录结构度量**，统计单位下沉到章节与条目，在每轮**开头和结尾各做一次**。自选关键词的命中率不构成覆盖度证据。
-2. **新增的清理/维护函数必须当场接上调度或调用方**，并在同一次提交里给出「它确实会被执行」的证据。本轮 `DeleteExpiredMediaReferences` 的历史教训表明，「写了但没接」与「没写」对用户是等价的。
-3. **判「缺失」要以当前工作树为准，不能沿用上一轮的结论**。本轮初稿的 T4-14/15/16 三条全是误报：后台提示词的搜索框与分类、标签下拉，前台与后台素材库的标签筛选，管理后台的素材库页签，代码里全都存在，其中一部分正是上一轮自己加的（`1d61da0 feat: add admin catalog filters, library console...`）。误报的成因是把上一轮的旧结论当成了已知前提直接转述，而没有重新读代码——这与 §1 的循环论证是同一类错误，只是把「自选关键词」换成了「自选的历史结论」。
+## 6. 推荐执行顺序
 
-验证基线：`bun run typecheck`、`bun test src`（538 pass）、`go test ./...`、`go vet ./...`、Playwright chromium（104/104）、`audit:cleanroom`、`audit:vulnerabilities`、`audit:deployment-env` 全部通过。store 层的墓碑测试需要 PostgreSQL，通过 `OPENBOARD_TEST_DATABASE_URL` 提供，未设置时按既有约定跳过（CI 中缺失即失败）。
+1. 先完成 Phase A；生成任务墓碑是数据正确性问题，优先级高于功能追平。
+2. 再完成 Phase B，确认 v0.4.5 没有被静态审查漏掉的行为问题。
+3. Phase C 与 Phase D 是明确、可独立交付的用户体验缺口。
+4. Phase E 按官方契约成熟度逐模型推进，不追求“名称上全支持”。
+5. Phase F 与文档收尾一起完成；SQLite/MySQL 和静默时间戳合并不进入本轮开发。
+
+## 7. 完成定义
+
+- Tiger `v0.4.5` 的每个公开新增行为都有本地自动化测试或明确的有意不同说明。
+- 已删生成任务不能被旧客户端复活，也不会在“复活”后被保留期任务误删。
+- 提示词详情不显示 Markdown 原始标记，且不存在 raw HTML/XSS 回归。
+- 图片比例、最近模型和渠道模型差异选择可跨刷新稳定工作。
+- 所有宣称支持的 APIMart 精确模型都有前后端一致 capability 和完整契约测试。
+- 未核验模型继续 fail-closed，不以相近模型冒充。
+- 文档基准、主干代码和 PM2 实际部署版本一致。

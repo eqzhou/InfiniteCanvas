@@ -57,6 +57,14 @@ import {
   formatEstimateSuffix,
   type CreditEstimate,
 } from "@/services/auth-session";
+import {
+  IMAGE_ASPECT_PRESETS,
+  imageAspectForSize,
+  resolveImageSizeForAspect,
+  resolvePreferredModel,
+  withPreferredModel,
+  type ImageAspectSelection,
+} from "@/lib/workbench-preferences";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const config = useBoardStore((state) => state.config);
@@ -64,14 +72,21 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const project = useBoardStore((state) => state.getActive());
   const addNode = useBoardStore((state) => state.addNode);
   const persistNow = useBoardStore((state) => state.persistNow);
+  const setConfig = useBoardStore((state) => state.setConfig);
 	const sharedChannels = useSharedChannels();
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
   const [channelId, setChannelId] = useState(config.activeSharedChannelId ?? config.activeChannelId ?? config.channels[0]?.id ?? "");
   const channel = channelChoices.find((item) => item.id === channelId) ?? config.channels[0];
   const provider = channel ? getProvider(channel, kind) : undefined;
-  const [model, setModel] = useState(provider?.model ?? "");
+  const [model, setModel] = useState(() => resolvePreferredModel(
+    config.preferredModels?.[channelId]?.[kind],
+    provider?.model,
+    provider?.models,
+  ));
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState(config.imageSize);
+  const [imageAspect, setImageAspect] = useState<ImageAspectSelection>(() => imageAspectForSize(config.imageSize));
+  const [customImageSize, setCustomImageSize] = useState(config.imageSize);
   const [quality, setQuality] = useState(config.imageQuality);
   const [count, setCount] = useState(config.imageCount);
   const [transparent, setTransparent] = useState(false);
@@ -112,10 +127,35 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		["doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"].includes(model) &&
 		(references.length > 0 || selectedAssetIds.length > 0);
   const estimateUnits = kind === "image" ? Math.max(1, Math.min(100, count || 1)) : 1;
+  const preferredModel = config.preferredModels?.[channelId]?.[kind];
 
   useEffect(() => {
-    setModel(provider?.model ?? "");
-  }, [provider?.model]);
+    const resolved = resolvePreferredModel(preferredModel, provider?.model, provider?.models);
+    setModel(resolved);
+    if (preferredModel && resolved && preferredModel !== resolved) {
+      const latestConfig = useBoardStore.getState().config;
+      setConfig({
+        ...latestConfig,
+        preferredModels: withPreferredModel(latestConfig.preferredModels, channelId, kind, resolved),
+      });
+    }
+  }, [channelId, kind, preferredModel, provider?.model, provider?.models, setConfig]);
+
+  const rememberModel = useCallback((nextModel: string) => {
+    const cleaned = nextModel.trim();
+    const latestConfig = useBoardStore.getState().config;
+    if (!channelId || !cleaned || latestConfig.preferredModels?.[channelId]?.[kind] === cleaned) return;
+    setConfig({
+      ...latestConfig,
+      preferredModels: withPreferredModel(latestConfig.preferredModels, channelId, kind, cleaned),
+    });
+  }, [channelId, kind, setConfig]);
+
+  useEffect(() => {
+    if (kind === "image" && imageAspect !== "custom") {
+      setSize(resolveImageSizeForAspect(imageAspect, provider?.protocol, model));
+    }
+  }, [imageAspect, kind, model, provider?.protocol]);
 
   // Refresh the pre-flight cost whenever the model or unit count changes so the
   // primary button can show "预计 N 算力" without an extra click.
@@ -153,13 +193,39 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       referenceStorageKeys: [],
     });
     setPrompt(restored.prompt);
-    setModel(restored.model);
     setSize(restored.size);
+    setCustomImageSize(restored.size);
+    // Legacy jobs only record a size, not whether it came from a preset.
+    setImageAspect("custom");
     setQuality(restored.quality);
     setCount(restored.count);
     setTransparent(restored.transparentBackground);
     setCategory(restored.category === WORKBENCH_UNCATEGORIZED ? "" : restored.category);
-    if (channelChoices.some((item) => item.id === restored.providerId)) setChannelId(restored.providerId);
+    const restoredChannel = channelChoices.find((item) => item.id === restored.providerId);
+    if (restoredChannel) {
+      const restoredProvider = getProvider(restoredChannel, kind);
+      const restoredModel = resolvePreferredModel(
+        restored.model,
+        restoredProvider?.model,
+        restoredProvider?.models,
+      );
+      setModel(restoredModel);
+      const latestConfig = useBoardStore.getState().config;
+      if (restoredModel && latestConfig.preferredModels?.[restored.providerId]?.[kind] !== restoredModel) {
+        setConfig({
+          ...latestConfig,
+          preferredModels: withPreferredModel(
+            latestConfig.preferredModels,
+            restored.providerId,
+            kind,
+            restoredModel,
+          ),
+        });
+      }
+      setChannelId(restored.providerId);
+    } else {
+      setModel(restored.model);
+    }
 
     const { assetIds, unresolved } = workbenchRefillAssetIds(restored.referenceStorageKeys, reusableAssets);
     setSelectedAssetIds(assetIds);
@@ -169,7 +235,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setError(unresolved
       ? `已回填设置，但有 ${unresolved} 张参考图来自本地上传，需要重新选择`
       : "");
-  }, [category, channelChoices, channelId, count, model, prompt, quality, reusableAssets, size, transparent]);
+  }, [category, channelChoices, channelId, count, kind, model, prompt, quality, reusableAssets, setConfig, size, transparent]);
 
   const refresh = useCallback(async () => {
     const page = await listGenerationJobs({ projectId: project?.id, kind, page: 1, pageSize: 50 });
@@ -703,17 +769,62 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             </label>
             <label className="block">
               <span className="ob-label">模型</span>
-              <input
-                className="ob-field"
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-              />
+              {provider?.models?.length ? (
+                <select
+                  className="ob-field cursor-pointer"
+                  value={model}
+                  onChange={(event) => {
+                    setModel(event.target.value);
+                    rememberModel(event.target.value);
+                  }}
+                >
+                  {provider.models.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              ) : (
+                <input
+                  className="ob-field"
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  onBlur={(event) => rememberModel(event.target.value)}
+                />
+              )}
             </label>
             {kind === "image" ? (
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
+                  <span className="ob-label">比例</span>
+                  <select
+                    aria-label="图片比例"
+                    className="ob-field cursor-pointer"
+                    value={imageAspect}
+                    onChange={(event) => {
+                      const next = event.target.value as ImageAspectSelection;
+                      setImageAspect(next);
+                      if (next === "custom") {
+                        setSize(customImageSize);
+                      } else {
+                        setSize(resolveImageSizeForAspect(next, provider?.protocol, model));
+                      }
+                    }}
+                  >
+                    {IMAGE_ASPECT_PRESETS.map((preset) => (
+                      <option key={preset.aspect} value={preset.aspect}>{preset.label}</option>
+                    ))}
+                    <option value="custom">自定义</option>
+                  </select>
+                </label>
+                <label className="block">
                   <span className="ob-label">尺寸</span>
-                  <input className="ob-field" value={size} onChange={(event) => setSize(event.target.value)} />
+                  <input
+                    aria-label="图片尺寸"
+                    className="ob-field"
+                    value={size}
+                    onChange={(event) => {
+                      setSize(event.target.value);
+                      setCustomImageSize(event.target.value);
+                      setImageAspect("custom");
+                    }}
+                  />
                 </label>
                 <label className="block">
                   <span className="ob-label">质量</span>

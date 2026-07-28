@@ -1,4 +1,4 @@
-# OpenBoard v0.8.2 core, v0.9.0, and public Unreleased parity
+# OpenBoard public parity inventory
 
 This inventory freezes the engineering core to the publicly documented and
 black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
@@ -12,10 +12,11 @@ Status: `verified` means the behavior is implemented and has repeatable unit,
 integration, E2E, or formal-storage evidence in this repository. Provider
 smoke tests that require real paid credentials remain opt-in.
 
-## Tiger v0.4.4 convergence
+## Tiger v0.4.5 convergence
 
 The broader product goal additionally tracks the publicly documented behavior
-of `tigerowo/infinite-canvas v0.4.4`. This is an independent implementation;
+of `tigerowo/infinite-canvas v0.4.5@9435f1c`. The previous v0.4.4 review is a
+historical baseline only. This is an independent implementation;
 Tiger source, bundled director assets, visual expression, and product identity
 are not implementation inputs.
 
@@ -38,6 +39,12 @@ are not implementation inputs.
 | Multi-tab project catalog isolation | [verified] ordinary formal autosave only upserts the projects present in the current tab; remote projects are deleted only by explicit user delete or full workspace replacement, so another tab cannot wipe projects it has not loaded |
 | Workbench history bulk delete | [verified] image/video workbench history supports multi-select and a single bulk-delete action; server path uses bounded POST `/generation-jobs/bulk-delete` (1–100 ids, de-duplicated) and cancels active leases before hard delete; orphaned media is reclaimed after deletion |
 | Generation history soft delete | [verified] workbench history delete/bulk-delete marks rows `deleted` and hides them from default listings while retaining id-addressable tombstones for multi-device sync; project cascade cleanup still hard-deletes project-scoped jobs and media ownership can consult `includeDeleted` listings |
+| v0.4.5 canvas and prompt-library regressions | [verified] grouping, pointer-release recovery, ordinary-node `@` reference input, retained prompt text, bounded long-model layout and a 1,000-item prompt-catalog selector regression are covered independently |
+| Safe prompt-detail Markdown | [verified] prompt bodies render CommonMark/GFM without raw HTML, executable URL schemes, or remote body-image fetches; copy and insert preserve the original prompt body |
+| User help entry | [verified] `/help` is reachable from desktop and mobile navigation and documents the local product's routes, authentication modes, generation, prompts, storage, administration and troubleshooting in independent Chinese copy |
+| Preferred image models and aspect ratios | [verified] image workbench preferences persist bounded quick-model choices and common aspect ratios while retaining explicit dimensions and provider capability validation |
+| Admin shared-channel model reconciliation | [verified] fetched models are previewed as selectable added/existing/removed differences before an administrator confirms the bounded replacement |
+| APIMart current exact contracts | [verified] exact adapters remain fail-closed and validate only independently documented model identifiers and limits; undocumented marketing names, including Agnes, remain unsupported |
 
 ## Public baseline traceability
 
@@ -120,7 +127,7 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 486 Bun unit/integration tests at the 2026-07-26 verification baseline, with 81.94% line and 86.00% function coverage
+- [verified] 592 Bun unit/integration tests at the 2026-07-28 verification baseline; the coverage threshold remains enforced by the dedicated coverage job
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)
@@ -143,10 +150,12 @@ Public CHANGELOG still lists only these Unreleased names (no new release tag aft
 
 Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent SDK Adapter; remains **not targeted**.
 
-### Tiger public CHANGELOG Unreleased recheck (2026-07-25)
+### Tiger public release recheck (2026-07-28)
 
-The public Tiger release tag remains `v0.4.4`. Its current Unreleased section
-names four canvas refinements; no implementation source or assets were read:
+The public Tiger release tag is `v0.4.5@9435f1c`. The formerly Unreleased
+canvas refinements shipped in that tag together with local-channel generation,
+ordinary-node reference input, prompt-library performance, prompt-detail
+Markdown and layout fixes. No implementation source or assets were read:
 
 | Public Unreleased name | Local status |
 |---|---|

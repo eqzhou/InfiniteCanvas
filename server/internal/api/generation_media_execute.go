@@ -299,6 +299,23 @@ func normalizeVideoFrameMode(value string) string {
 	return "references"
 }
 
+func allowsPromptlessAPIMartVideo(model, frameMode string, referenceCount int) bool {
+	capability, ok := resolveProviderModelCapability("apimart", "video", model)
+	if !ok {
+		return false
+	}
+	switch capability.Family {
+	case "seedance-2.0":
+		return referenceCount > 0
+	case "happyhorse-1.1":
+		return normalizeVideoFrameMode(frameMode) == "first-last" && referenceCount == 1
+	case "kling-3.0-turbo":
+		return referenceCount == 1
+	default:
+		return false
+	}
+}
+
 func validCreateVideoJob(input createVideoJobRequest) bool {
 	if input.Parameters.FrameMode != "" && input.Parameters.FrameMode != "references" && input.Parameters.FrameMode != "first-last" {
 		return false
@@ -308,8 +325,9 @@ func validCreateVideoJob(input createVideoJobRequest) bool {
 	if strings.TrimSpace(identityPrompt) == "" && strings.EqualFold(strings.TrimSpace(input.Model), "kling-v3") &&
 		input.Parameters.MultiShot && input.Parameters.ShotType == "customize" && len(input.Parameters.Shots) > 0 {
 		identityPrompt = "multi-shot"
-	} else if strings.TrimSpace(identityPrompt) == "" && isAPIMartSeedanceModel(input.Model) &&
-		len(input.Parameters.ReferenceStorageKeys) > 0 {
+	} else if strings.TrimSpace(identityPrompt) == "" && allowsPromptlessAPIMartVideo(
+		input.Model, input.Parameters.FrameMode, len(input.Parameters.ReferenceStorageKeys),
+	) {
 		identityPrompt = "reference-media"
 	}
 	if !validServerMediaIdentity(input.ID, input.ProjectID, input.ProviderID, input.Model, identityPrompt) ||
@@ -397,6 +415,10 @@ func (s *Server) createServerMediaJob(w http.ResponseWriter, r *http.Request, jo
 			return
 		}
 		http.Error(w, "generation job id already belongs to another request", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, store.ErrGone) {
+		http.Error(w, "generation job was deleted", http.StatusGone)
 		return
 	}
 	if errors.Is(err, store.ErrQuotaExceeded) {
@@ -721,7 +743,9 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 		prompt = systemPrompt + "\n\n" + prompt
 	}
 	if job.Kind == "video" && strings.TrimSpace(prompt) == "" &&
-		!(protocol == "apimart" && isAPIMartSeedanceModel(model) && len(parameters.ReferenceStorageKeys) > 0) {
+		!(protocol == "apimart" && allowsPromptlessAPIMartVideo(
+			model, parameters.FrameMode, len(parameters.ReferenceStorageKeys),
+		)) {
 		return resolvedMediaRequest{}, errors.New("missing media prompt")
 	}
 	request := resolvedMediaRequest{ProviderTimeout: providerTimeout}

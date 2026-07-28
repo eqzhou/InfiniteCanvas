@@ -342,6 +342,7 @@ export type AiChannel = {
 };
 
 export type AiProviderKind = "text" | "image" | "video" | "audio";
+export type PreferredModels = Record<string, Partial<Record<AiProviderKind, string>>>;
 export type AiProtocol = "openai" | "ark" | "gemini" | "template" | "apimart" | "kie";
 export type AiTemplateConfig = {
   method: "POST" | "PUT";
@@ -387,6 +388,8 @@ export type AppConfig = {
   imageSize: string;
   imageQuality: string;
   imageCount: number;
+  /** Last model selected for each channel and generation kind. */
+  preferredModels?: PreferredModels;
   theme: "light" | "dark" | "system";
   webdavUrl?: string;
   webdavUser?: string;

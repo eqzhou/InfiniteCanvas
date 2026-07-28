@@ -998,7 +998,7 @@ func (s *PostgresStore) GetGenerationJob(ctx context.Context, tenantID, id strin
 	err := s.pool.QueryRow(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
 		provider_id, model, parameters, result, error, created_at, updated_at,
 		lease_owner, lease_expires_at
-		FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`, tenantID, id).Scan(
+		FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL`, tenantID, id).Scan(
 		&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
 		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated,
 		&job.LeaseOwner, &leaseExpires)
@@ -1018,6 +1018,9 @@ func (s *PostgresStore) GetGenerationJob(ctx context.Context, tenantID, id strin
 
 func (s *PostgresStore) PutGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error {
 	tenantID = normalizeTenantID(tenantID)
+	if job.Status == "deleted" {
+		return ErrGone
+	}
 	created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("invalid generation createdAt: %w", err)
@@ -1034,23 +1037,30 @@ func (s *PostgresStore) PutGenerationJob(ctx context.Context, tenantID string, j
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
+	result, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
 		(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
 		VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (tenant_id, id) DO UPDATE SET project_id=EXCLUDED.project_id, kind=EXCLUDED.kind,
 		status=EXCLUDED.status, prompt=EXCLUDED.prompt, provider_id=EXCLUDED.provider_id,
 		model=EXCLUDED.model, parameters=EXCLUDED.parameters, result=EXCLUDED.result,
-		error=EXCLUDED.error, updated_at=EXCLUDED.updated_at`, tenantID, job.ID, job.ProjectID, job.Kind,
+		error=EXCLUDED.error, updated_at=EXCLUDED.updated_at
+		WHERE openboard_generation_jobs.deleted_at IS NULL AND openboard_generation_jobs.status <> 'deleted'`, tenantID, job.ID, job.ProjectID, job.Kind,
 		job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error,
 		created, updated)
 	if err != nil {
 		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrGone
 	}
 	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) CreateGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error {
 	tenantID = normalizeTenantID(tenantID)
+	if job.Status == "deleted" {
+		return ErrGone
+	}
 	created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("invalid generation createdAt: %w", err)
@@ -1077,13 +1087,29 @@ func (s *PostgresStore) CreateGenerationJob(ctx context.Context, tenantID string
 		return err
 	}
 	if result.RowsAffected() == 0 {
-		return ErrConflict
+		return generationJobConflictError(ctx, tx, tenantID, job.ID)
 	}
 	return tx.Commit(ctx)
 }
 
+func generationJobConflictError(ctx context.Context, tx pgx.Tx, tenantID, id string) error {
+	var deletedAt *time.Time
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status, deleted_at FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`,
+		tenantID, id).Scan(&status, &deletedAt); err != nil {
+		return err
+	}
+	if deletedAt != nil || status == "deleted" {
+		return ErrGone
+	}
+	return ErrConflict
+}
+
 func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID, userID string, job GenerationJob, units int, usageMeta json.RawMessage) error {
 	tenantID = normalizeTenantID(tenantID)
+	if job.Status == "deleted" {
+		return ErrGone
+	}
 	if units < 1 {
 		units = 1
 	}
@@ -1116,7 +1142,7 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 		return err
 	}
 	if inserted.RowsAffected() == 0 {
-		return ErrConflict
+		return generationJobConflictError(ctx, tx, tenantID, job.ID)
 	}
 	var quota int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(
@@ -1491,6 +1517,11 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
 		return err
 	}
+	if collision, err := generationRestoreTouchesTombstone(ctx, tx, tenantID, jobs); err != nil {
+		return err
+	} else if collision {
+		return ErrGone
+	}
 	var activeServerJobs int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND status IN ('queued','running') AND
@@ -1501,7 +1532,7 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 	if activeServerJobs > 0 {
 		return ErrConflict
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1`, tenantID); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1 AND deleted_at IS NULL`, tenantID); err != nil {
 		return err
 	}
 	for _, job := range jobs {
@@ -1560,6 +1591,11 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	if GenerationJobsVersion(current) != expectedVersion {
 		return ErrConflict
 	}
+	if collision, err := generationRestoreTouchesTombstone(ctx, tx, tenantID, jobs); err != nil {
+		return err
+	} else if collision {
+		return ErrGone
+	}
 	var active int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs WHERE tenant_id=$1 AND status IN ('queued','running') AND
 		((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR (kind='workflow' AND parameters->>'executor'='workflow'))`, tenantID).Scan(&active); err != nil {
@@ -1568,7 +1604,7 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	if active > 0 {
 		return ErrConflict
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1`, tenantID); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1 AND deleted_at IS NULL`, tenantID); err != nil {
 		return err
 	}
 	for _, job := range jobs {
@@ -1587,6 +1623,25 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func generationRestoreTouchesTombstone(ctx context.Context, tx pgx.Tx, tenantID string, jobs []GenerationJob) (bool, error) {
+	ids := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		if job.Status == "deleted" {
+			return true, nil
+		}
+		ids = append(ids, job.ID)
+	}
+	if len(ids) == 0 {
+		return false, nil
+	}
+	var collision bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM openboard_generation_jobs
+		WHERE tenant_id=$1 AND deleted_at IS NOT NULL AND id=ANY($2::text[])
+	)`, tenantID, ids).Scan(&collision)
+	return collision, err
 }
 
 // --- Server material library ---
@@ -3167,7 +3222,7 @@ func (s *PostgresStore) PurgeExpiredTombstones(ctx context.Context, now time.Tim
 		return 0, err
 	}
 	jobs, err := s.pool.Exec(ctx,
-		`DELETE FROM openboard_generation_jobs WHERE deleted_at IS NOT NULL AND deleted_at < $1`, cutoff)
+		`DELETE FROM openboard_generation_jobs WHERE status='deleted' AND deleted_at IS NOT NULL AND deleted_at < $1`, cutoff)
 	if err != nil {
 		return projects.RowsAffected(), err
 	}

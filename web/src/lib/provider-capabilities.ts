@@ -24,6 +24,7 @@ export type ProviderCapability = Readonly<{
   maxImageReferences: number;
   maxOutputs?: number;
   sizes?: readonly string[];
+  resolutions?: readonly string[];
   qualities?: readonly string[];
   video?: VideoProviderCapability;
 }>;
@@ -42,6 +43,44 @@ const APIMART_CAPABILITIES: readonly ProviderCapability[] = [
       maxImageReferences: 2,
       audioModes: ["pro"],
       lastFrameModes: ["pro"],
+      maxShots: 0,
+      maxElements: 0,
+    },
+  },
+  {
+    protocol: "apimart",
+    kind: "video",
+    model: "happyhorse-1.1",
+    family: "happyhorse-1.1",
+    maxImageReferences: 9,
+    video: {
+      modes: ["std"],
+      minDuration: 3,
+      maxDuration: 15,
+      aspectRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"],
+      resolutions: ["720p", "1080p"],
+      maxImageReferences: 9,
+      audioModes: [],
+      lastFrameModes: [],
+      maxShots: 0,
+      maxElements: 0,
+    },
+  },
+  {
+    protocol: "apimart",
+    kind: "video",
+    model: "kling-3.0-turbo",
+    family: "kling-3.0-turbo",
+    maxImageReferences: 1,
+    video: {
+      modes: ["std"],
+      minDuration: 3,
+      maxDuration: 15,
+      aspectRatios: ["16:9", "9:16", "1:1"],
+      resolutions: ["720p", "1080p"],
+      maxImageReferences: 1,
+      audioModes: [],
+      lastFrameModes: [],
       maxShots: 0,
       maxElements: 0,
     },
@@ -93,6 +132,18 @@ const APIMART_CAPABILITIES: readonly ProviderCapability[] = [
     protocol: "apimart", kind: "image", model: "gpt-image-1.5-official", family: "gpt-image-1.5",
     maxImageReferences: 15, maxOutputs: 4, sizes: ["1:1", "2:3", "3:2"], qualities: ["auto", "low", "medium", "high"],
   },
+  {
+    protocol: "apimart", kind: "image", model: "doubao-seedream-5-0-pro", family: "seedream-5.0-pro",
+    maxImageReferences: 10, maxOutputs: 1,
+    sizes: ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "auto"],
+    resolutions: ["1K", "2K"],
+  },
+  ...(["gemini-3.1-flash-lite-image", "nano-banana-2-lite"] as const).map((model) => ({
+    protocol: "apimart" as const, kind: "image" as const, model, family: "gemini-3.1-flash-lite-image",
+    maxImageReferences: 14, maxOutputs: 4,
+    sizes: ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "5:4", "4:5", "21:9"] as const,
+    resolutions: ["1K"] as const,
+  })),
 ];
 
 function freezeCapability(value: ProviderCapability): ProviderCapability {
@@ -110,6 +161,7 @@ function freezeCapability(value: ProviderCapability): ProviderCapability {
   return Object.freeze({
     ...value,
     sizes: value.sizes ? Object.freeze([...value.sizes]) : undefined,
+    resolutions: value.resolutions ? Object.freeze([...value.resolutions]) : undefined,
     qualities: value.qualities ? Object.freeze([...value.qualities]) : undefined,
     video,
   });

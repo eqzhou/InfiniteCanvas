@@ -58,6 +58,53 @@ describe("provider capabilities", () => {
       expect(resolveProviderCapability("apimart", "video", model)?.video?.resolutions).toEqual(["480p", "720p"]);
     }
     expect(resolveProviderCapability("apimart", "video", "seedance-2.0-mini")).toBeUndefined();
-    expect(resolveProviderCapability("apimart", "video", "happyhorse-1.1")).toBeUndefined();
+  });
+
+  test("describes the current official APIMart image contracts and aliases", () => {
+    expect(resolveProviderCapability("apimart", "image", "doubao-seedream-5-0-pro")).toMatchObject({
+      family: "seedream-5.0-pro",
+      maxImageReferences: 10,
+      maxOutputs: 1,
+      sizes: ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "auto"],
+      resolutions: ["1K", "2K"],
+    });
+    for (const model of ["gemini-3.1-flash-lite-image", "nano-banana-2-lite"]) {
+      expect(resolveProviderCapability("apimart", "image", model)).toMatchObject({
+        family: "gemini-3.1-flash-lite-image",
+        maxImageReferences: 14,
+        maxOutputs: 4,
+        resolutions: ["1K"],
+      });
+    }
+    expect(resolveProviderCapability("apimart", "image", "nano-banana-2-lite-ext")).toBeUndefined();
+    expect(resolveProviderCapability("apimart", "image", "agnes")).toBeUndefined();
+  });
+
+  test("describes HappyHorse 1.1 and Kling 3.0 Turbo without Kling v3 assumptions", () => {
+    expect(resolveProviderCapability("apimart", "video", "happyhorse-1.1")?.video).toMatchObject({
+      modes: ["std"],
+      minDuration: 3,
+      maxDuration: 15,
+      aspectRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"],
+      resolutions: ["720p", "1080p"],
+      maxImageReferences: 9,
+      audioModes: [],
+      maxShots: 0,
+      maxElements: 0,
+    });
+    expect(resolveProviderCapability("apimart", "video", "kling-3.0-turbo")?.video).toEqual({
+      modes: ["std"],
+      minDuration: 3,
+      maxDuration: 15,
+      aspectRatios: ["16:9", "9:16", "1:1"],
+      resolutions: ["720p", "1080p"],
+      maxImageReferences: 1,
+      audioModes: [],
+      lastFrameModes: [],
+      maxShots: 0,
+      maxElements: 0,
+    });
+    expect(resolveProviderCapability("apimart", "video", "kling-3.0-turbo-preview")).toBeUndefined();
+    expect(resolveProviderCapability("apimart", "video", "agnes")).toBeUndefined();
   });
 });

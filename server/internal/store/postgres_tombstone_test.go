@@ -142,15 +142,20 @@ func TestDeletedGenerationJobDropsResultPayload(t *testing.T) {
 		t.Fatalf("delete generation job: %v", err)
 	}
 
-	stored, err := backend.GetGenerationJob(ctx, tenantID, job.ID)
-	if err != nil {
-		t.Fatalf("read tombstoned job: %v", err)
+	if _, err := backend.GetGenerationJob(ctx, tenantID, job.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("tombstoned job should be unreadable, got %v", err)
 	}
-	if stored.Status != "deleted" {
-		t.Fatalf("expected deleted status, got %q", stored.Status)
+	var status string
+	var result []byte
+	if err := backend.pool.QueryRow(ctx, `SELECT status, result FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`,
+		tenantID, job.ID).Scan(&status, &result); err != nil {
+		t.Fatalf("read raw tombstone: %v", err)
 	}
-	if strings.Contains(string(stored.Result), secret) {
-		t.Fatalf("deleted job still carries its result payload: %s", stored.Result)
+	if status != "deleted" {
+		t.Fatalf("expected deleted status, got %q", status)
+	}
+	if strings.Contains(string(result), secret) {
+		t.Fatalf("deleted job still carries its result payload: %s", result)
 	}
 }
 
@@ -178,12 +183,151 @@ func TestBulkDeletedGenerationJobsDropResultPayload(t *testing.T) {
 		t.Fatalf("bulk delete generation job: %v", err)
 	}
 
-	stored, err := backend.GetGenerationJob(ctx, tenantID, job.ID)
-	if err != nil {
-		t.Fatalf("read tombstoned job: %v", err)
+	if _, err := backend.GetGenerationJob(ctx, tenantID, job.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bulk tombstone should be unreadable, got %v", err)
 	}
-	if strings.Contains(string(stored.Result), secret) {
-		t.Fatalf("bulk-deleted job still carries its result payload: %s", stored.Result)
+	var result []byte
+	if err := backend.pool.QueryRow(ctx, `SELECT result FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`,
+		tenantID, job.ID).Scan(&result); err != nil {
+		t.Fatalf("read raw tombstone: %v", err)
+	}
+	if strings.Contains(string(result), secret) {
+		t.Fatalf("bulk-deleted job still carries its result payload: %s", result)
+	}
+}
+
+func TestDeletedGenerationJobResistsRecreation(t *testing.T) {
+	backend := openTombstoneTestStore(t)
+	tenantID := seedTombstoneTenant(t, backend)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	job := GenerationJob{
+		ID: "job-no-resurrection", Kind: "image", Status: "succeeded", Prompt: "original",
+		Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`),
+		CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano),
+	}
+	if err := backend.CreateGenerationJob(ctx, tenantID, job); err != nil {
+		t.Fatalf("seed generation job: %v", err)
+	}
+	if err := backend.DeleteGenerationJob(ctx, tenantID, job.ID); err != nil {
+		t.Fatalf("delete generation job: %v", err)
+	}
+
+	stale := job
+	stale.Status = "succeeded"
+	stale.Prompt = "stale write"
+	stale.UpdatedAt = now.Add(time.Second).Format(time.RFC3339Nano)
+	for name, write := range map[string]func() error{
+		"put":    func() error { return backend.PutGenerationJob(ctx, tenantID, stale) },
+		"create": func() error { return backend.CreateGenerationJob(ctx, tenantID, stale) },
+		"server create": func() error {
+			return backend.CreateServerGenerationJob(ctx, tenantID, "", stale, 1, json.RawMessage(`{}`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := write(); !errors.Is(err, ErrGone) {
+				t.Fatalf("write over tombstone should return ErrGone, got %v", err)
+			}
+		})
+	}
+	if _, err := backend.GetGenerationJob(ctx, tenantID, job.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted generation job must stay unreadable, got %v", err)
+	}
+	var status, prompt string
+	if err := backend.pool.QueryRow(ctx, `SELECT status, prompt FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`,
+		tenantID, job.ID).Scan(&status, &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "deleted" || prompt != "original" {
+		t.Fatalf("tombstone was changed: status=%q prompt=%q", status, prompt)
+	}
+
+	fakeTombstone := stale
+	fakeTombstone.ID = "job-client-deleted-status"
+	fakeTombstone.Status = "deleted"
+	for name, write := range map[string]func() error{
+		"put":    func() error { return backend.PutGenerationJob(ctx, tenantID, fakeTombstone) },
+		"create": func() error { return backend.CreateGenerationJob(ctx, tenantID, fakeTombstone) },
+		"server create": func() error {
+			return backend.CreateServerGenerationJob(ctx, tenantID, "", fakeTombstone, 1, json.RawMessage(`{}`))
+		},
+	} {
+		t.Run("reject deleted status/"+name, func(t *testing.T) {
+			if err := write(); !errors.Is(err, ErrGone) {
+				t.Fatalf("direct deleted-status write should return ErrGone, got %v", err)
+			}
+		})
+	}
+}
+
+func TestGenerationHistoryRestoreCannotReplaceTombstones(t *testing.T) {
+	backend := openTombstoneTestStore(t)
+	tenantID := seedTombstoneTenant(t, backend)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	job := GenerationJob{
+		ID: "job-restore-tombstone", Kind: "image", Status: "succeeded", Prompt: "original",
+		Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`),
+		CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano),
+	}
+	if err := backend.CreateGenerationJob(ctx, tenantID, job); err != nil {
+		t.Fatalf("seed generation job: %v", err)
+	}
+	if err := backend.DeleteGenerationJob(ctx, tenantID, job.ID); err != nil {
+		t.Fatalf("delete generation job: %v", err)
+	}
+
+	stale := job
+	stale.Prompt = "stale restore"
+	stale.UpdatedAt = now.Add(time.Minute).Format(time.RFC3339Nano)
+	if err := backend.ReplaceGenerationJobs(ctx, tenantID, []GenerationJob{stale}); !errors.Is(err, ErrGone) {
+		t.Fatalf("full restore over tombstone should return ErrGone, got %v", err)
+	}
+	page, err := backend.ListGenerationJobs(ctx, tenantID, GenerationJobQuery{Page: 1, PageSize: 100, IncludeDeleted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.CompareAndSwapGenerationJobs(ctx, tenantID, GenerationJobsVersion(page.Items), []GenerationJob{stale}); !errors.Is(err, ErrGone) {
+		t.Fatalf("CAS restore over tombstone should return ErrGone, got %v", err)
+	}
+
+	var status, prompt string
+	if err := backend.pool.QueryRow(ctx, `SELECT status,prompt FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`,
+		tenantID, job.ID).Scan(&status, &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "deleted" || prompt != "original" {
+		t.Fatalf("restore changed tombstone: status=%q prompt=%q", status, prompt)
+	}
+}
+
+func TestPurgeGenerationTombstonesRequiresDeletedStatus(t *testing.T) {
+	backend := openTombstoneTestStore(t)
+	tenantID := seedTombstoneTenant(t, backend)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	job := GenerationJob{
+		ID: "job-live-with-deleted-at", Kind: "image", Status: "succeeded", Prompt: "keep",
+		Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`),
+		CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano),
+	}
+	if err := backend.CreateGenerationJob(ctx, tenantID, job); err != nil {
+		t.Fatalf("seed generation job: %v", err)
+	}
+	if _, err := backend.pool.Exec(ctx, `UPDATE openboard_generation_jobs SET deleted_at=$3 WHERE tenant_id=$1 AND id=$2`,
+		tenantID, job.ID, now.Add(-8*24*time.Hour)); err != nil {
+		t.Fatalf("seed inconsistent deleted_at: %v", err)
+	}
+	if _, err := backend.PurgeExpiredTombstones(ctx, now); err != nil {
+		t.Fatalf("purge tombstones: %v", err)
+	}
+	var rows int
+	if err := backend.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`,
+		tenantID, job.ID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatal("purge removed a generation row whose status was not deleted")
 	}
 }
 

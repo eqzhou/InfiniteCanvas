@@ -88,6 +88,21 @@ func postImageJob(t *testing.T, handler http.Handler, id, prompt string) *respon
 	return &responseSnapshot{code: got.Code, body: append([]byte(nil), got.Body.Bytes()...)}
 }
 
+func TestServerImageAndWorkflowTombstonesReturnGone(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	_, backend, handler := imageExecutionHandler(t, executor)
+	backend.mu.Lock()
+	backend.generationJobCreateErr = store.ErrGone
+	backend.mu.Unlock()
+
+	if got := postImageJob(t, handler, "job-image-gone", "stale image"); got.code != http.StatusGone {
+		t.Fatalf("image create status = %d, want 410: %s", got.code, got.body)
+	}
+	if got := postWorkflowRun(t, handler, "job-workflow-gone"); got.code != http.StatusGone {
+		t.Fatalf("workflow create status = %d, want 410: %s", got.code, got.body)
+	}
+}
+
 func TestServerImageJobCategoryIsBounded(t *testing.T) {
 	input := createImageJobRequest{
 		ID: "job-category", ProjectID: "board-1", Prompt: "draw", ProviderID: "image-main", Model: "image",

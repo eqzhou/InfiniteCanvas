@@ -164,9 +164,9 @@ export function generationRequestError(status: number, body: string): Error {
   const usable = reason.length > 0 &&
     reason.length <= MAX_SERVER_REASON_LENGTH &&
     !reason.startsWith("<");
-  return new Error(usable
+  return Object.assign(new Error(usable
     ? `Generation request failed: ${reason}`
-    : `Generation history failed: HTTP ${status}`);
+    : `Generation history failed: HTTP ${status}`), { status });
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -204,7 +204,7 @@ export async function getGenerationJob(id: string): Promise<GenerationJob | unde
     try {
       return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`));
     } catch (error) {
-      if (error instanceof Error && error.message.endsWith("HTTP 404")) return undefined;
+      if (error instanceof Error && (error as Error & { status?: number }).status === 404) return undefined;
       throw error;
     }
   }

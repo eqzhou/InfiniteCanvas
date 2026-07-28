@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   filterCanvasPrompts,
   groupCanvasPromptsBySource,
+  selectCanvasPrompts,
 } from "@/components/canvas/CanvasPromptsPanel";
 import type { PromptItem } from "@/types/board";
 
@@ -36,5 +37,22 @@ describe("canvas prompt library helpers", () => {
     expect(filterCanvasPrompts(items, "poster").map((item) => item.id)).toEqual(["2"]);
     expect(filterCanvasPrompts(items, "city").map((item) => item.id)).toEqual(["1"]);
     expect(filterCanvasPrompts(items, "  ").map((item) => item.id)).toEqual(["1", "2"]);
+  });
+
+  test("keeps a large catalog reference stable across unrelated canvas state", () => {
+    const prompts = Array.from({ length: 1_000 }, (_, index): PromptItem => ({
+      id: `bulk-${index}`,
+      title: `Prompt ${index}`,
+      body: `body ${index}`,
+      tags: [index % 2 ? "odd" : "even"],
+      source: `source-${index % 12}`,
+    }));
+    const before = { prompts, projects: [{ id: "before" }] };
+    const after = { prompts, projects: [{ id: "after" }] };
+
+    expect(selectCanvasPrompts(before)).toBe(prompts);
+    expect(selectCanvasPrompts(after)).toBe(prompts);
+    expect(groupCanvasPromptsBySource(prompts)).toHaveLength(12);
+    expect(filterCanvasPrompts(prompts, "odd")).toHaveLength(500);
   });
 });

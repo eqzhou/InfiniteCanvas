@@ -51,6 +51,7 @@ export function createDefaultConfig(): AppConfig {
     imageSize: "1024x1024",
     imageQuality: "auto",
     imageCount: 1,
+    preferredModels: {},
     theme: "system",
     webdavUrl: "",
     webdavUser: "",

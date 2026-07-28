@@ -215,6 +215,9 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, "generation job id already belongs to another request", http.StatusConflict)
 		return
+	} else if errors.Is(err, store.ErrGone) {
+		http.Error(w, "generation job was deleted", http.StatusGone)
+		return
 	} else if errors.Is(err, store.ErrQuotaExceeded) {
 		http.Error(w, "generation quota exceeded", http.StatusTooManyRequests)
 		return

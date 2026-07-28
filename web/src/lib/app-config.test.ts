@@ -118,6 +118,27 @@ describe("application configuration", () => {
     expect(normalized.imageToolbar?.showLabels).toBe(true);
   });
 
+  test("normalizes preferred models without mutating legacy or persisted config", () => {
+    const base = createDefaultConfig();
+    const preferredModels = {
+      "channel-a": { image: " image-v2 ", video: "video-v1", invalid: "ignored" },
+      "bad channel": { image: "ignored" },
+    };
+    const normalized = normalizeAppConfig({
+      ...base,
+      preferredModels,
+    } as unknown as typeof base);
+
+    expect(normalized.preferredModels).toEqual({
+      "channel-a": { image: "image-v2", video: "video-v1" },
+    });
+    expect(preferredModels["channel-a"]).toEqual({
+      image: " image-v2 ", video: "video-v1", invalid: "ignored",
+    });
+    expect(normalizeAppConfig({ ...base, preferredModels: undefined } as unknown as typeof base).preferredModels)
+      .toEqual({});
+  });
+
   test("upgrades legacy prompt source URLs to bounded declarative configs", () => {
     const base = createDefaultConfig();
     const input = {

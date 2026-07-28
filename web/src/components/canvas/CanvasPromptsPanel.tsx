@@ -48,8 +48,19 @@ export function filterCanvasPrompts(
     prompt.tags.some((tag) => tag.toLowerCase().includes(needle)));
 }
 
+/**
+ * Keep the panel subscribed only to the prompt catalog. Canvas drags update
+ * projects many times per second; returning the stable prompt array prevents
+ * those unrelated writes from re-rendering a large expanded catalog.
+ */
+export function selectCanvasPrompts(
+  state: Pick<ReturnType<typeof useBoardStore.getState>, "prompts">,
+): PromptItem[] {
+  return state.prompts;
+}
+
 export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
-  const prompts = useBoardStore((state) => state.prompts);
+  const prompts = useBoardStore(selectCanvasPrompts);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterCanvasPrompts(prompts, query), [prompts, query]);

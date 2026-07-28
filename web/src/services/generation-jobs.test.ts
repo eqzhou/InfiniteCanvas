@@ -33,6 +33,8 @@ describe("generation job pagination", () => {
       .toContain("model is not in the tenant allow list");
     expect(generationRequestError(403, "cloud channel generation disabled by admin").message)
       .toContain("cloud channel generation disabled by admin");
+    const gone = generationRequestError(410, "generation job was deleted") as Error & { status?: number };
+    expect(gone.status).toBe(410);
   });
 
   test("falls back to the status when the body carries no usable reason", () => {
