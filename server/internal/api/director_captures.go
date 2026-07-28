@@ -290,40 +290,40 @@ func (s *Server) deleteDirectorCapture(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid capture id", http.StatusBadRequest)
 		return
 	}
-	_, document, err := s.readDirectorCaptureDocument(r)
-	if err != nil {
-		http.Error(w, "failed to read director captures", http.StatusInternalServerError)
-		return
-	}
-	var found *directorCaptureRecord
-	for index := range document.Items {
-		if document.Items[index].ID == id {
-			copy := document.Items[index]
-			found = &copy
-			break
-		}
-	}
-	if found == nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err := s.deleteTenantBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), found.StorageKey); err != nil {
-		http.Error(w, "failed to delete capture media", http.StatusInternalServerError)
-		return
-	}
-	err = s.mutateDirectorCaptures(r, func(current directorCaptureDocument) (directorCaptureDocument, error) {
+	var removed *directorCaptureRecord
+	err := s.mutateDirectorCaptures(r, func(current directorCaptureDocument) (directorCaptureDocument, error) {
 		next := make([]directorCaptureRecord, 0, len(current.Items))
+		var found *directorCaptureRecord
 		for _, item := range current.Items {
-			if item.ID != id {
-				next = append(next, item)
+			if item.ID == id {
+				copy := item
+				found = &copy
+				continue
 			}
+			next = append(next, item)
 		}
+		if found == nil {
+			return directorCaptureDocument{}, store.ErrNotFound
+		}
+		removed = found
 		current.Items = next
 		return current, nil
 	})
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
 		http.Error(w, "failed to delete capture metadata", http.StatusInternalServerError)
 		return
+	}
+	// Metadata is authoritative. Drop media after a successful CAS so a failed
+	// metadata write cannot leave a listed capture pointing at a missing blob.
+	if removed != nil {
+		if err := s.deleteTenantBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), removed.StorageKey); err != nil {
+			http.Error(w, "failed to delete capture media", http.StatusInternalServerError)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -388,12 +388,6 @@ func (s *Server) pruneDirectorCaptures(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		for _, item := range remove {
-			if err := s.deleteTenantBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), item.StorageKey); err != nil {
-				http.Error(w, "failed to prune capture media", http.StatusInternalServerError)
-				return
-			}
-		}
 		current.Items = next
 		encoded, _ := json.Marshal(current)
 		err = s.store.CompareAndSwapState(r.Context(), tenantIDFrom(r), directorCaptureStateKey, raw, encoded)
@@ -403,6 +397,14 @@ func (s *Server) pruneDirectorCaptures(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, "failed to prune capture metadata", http.StatusInternalServerError)
 			return
+		}
+		// Only reclaim blobs after metadata is durable, so a CAS conflict cannot
+		// delete media that is still listed on a concurrent writer's snapshot.
+		for _, item := range remove {
+			if err := s.deleteTenantBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), item.StorageKey); err != nil {
+				http.Error(w, "failed to prune capture media", http.StatusInternalServerError)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return

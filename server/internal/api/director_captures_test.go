@@ -160,6 +160,66 @@ func TestDirectorCapturePruneDeletesRemovedProjectsAndMedia(t *testing.T) {
 	}
 }
 
+
+func TestDirectorCaptureDeleteKeepsBlobWhenMetadataCASFails(t *testing.T) {
+	png, _ := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	memory := newMemoryStore()
+	handler := tenantCaptureHandler(t, memory)
+	created := directorCaptureRequest(t, handler, http.MethodPost,
+		captureCreatePath("project-a", "director-a", "camera-main", "主摄像机", 1, 1), png, "tenant-a")
+	var record directorCaptureResponse
+	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &record) != nil {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	usageBefore := memory.storageUsage
+	memory.compareAndSwapStateErr = errors.New("metadata unavailable")
+	deleted := directorCaptureRequest(t, handler, http.MethodDelete, "/api/director-captures/"+record.ID, nil, "tenant-a")
+	if deleted.Code != http.StatusInternalServerError {
+		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	if memory.storageUsage != usageBefore {
+		t.Fatalf("blob reclaimed despite metadata CAS failure: before=%d after=%d", usageBefore, memory.storageUsage)
+	}
+	memory.compareAndSwapStateErr = nil
+	listed := directorCaptureRequest(t, handler, http.MethodGet,
+		"/api/director-captures?projectId=project-a&directorNodeId=director-a", nil, "tenant-a")
+	var records []directorCaptureResponse
+	if listed.Code != http.StatusOK || json.Unmarshal(listed.Body.Bytes(), &records) != nil || len(records) != 1 || records[0].ID != record.ID {
+		t.Fatalf("capture disappeared after failed delete: %d %s", listed.Code, listed.Body.String())
+	}
+	if got := directorCaptureRequest(t, handler, http.MethodGet, record.URL, nil, "tenant-a"); got.Code != http.StatusOK {
+		t.Fatalf("blob missing after failed delete: %d", got.Code)
+	}
+}
+
+func TestDirectorCapturePruneKeepsBlobWhenMetadataCASFails(t *testing.T) {
+	png, _ := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	memory := newMemoryStore()
+	handler := tenantCaptureHandler(t, memory)
+	created := directorCaptureRequest(t, handler, http.MethodPost,
+		captureCreatePath("project-a", "director-a", "camera-main", "主摄像机", 1, 1), png, "tenant-a")
+	var record directorCaptureResponse
+	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &record) != nil {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	usageBefore := memory.storageUsage
+	memory.compareAndSwapStateErr = errors.New("metadata unavailable")
+	req := httptest.NewRequest(http.MethodPut, "/api/director-captures/prune", bytes.NewBufferString(`{"projects":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-Tenant", "tenant-a")
+	pruned := httptest.NewRecorder()
+	handler.ServeHTTP(pruned, req)
+	if pruned.Code != http.StatusInternalServerError {
+		t.Fatalf("prune status=%d body=%s", pruned.Code, pruned.Body.String())
+	}
+	if memory.storageUsage != usageBefore {
+		t.Fatalf("blob reclaimed despite prune CAS failure: before=%d after=%d", usageBefore, memory.storageUsage)
+	}
+	memory.compareAndSwapStateErr = nil
+	if got := directorCaptureRequest(t, handler, http.MethodGet, record.URL, nil, "tenant-a"); got.Code != http.StatusOK {
+		t.Fatalf("blob missing after failed prune: %d", got.Code)
+	}
+}
 func TestProjectValidatorAcceptsPersistedDirectorCaptureOwnerNode(t *testing.T) {
 	node := map[string]any{
 		"id": "director-a", "type": "director", "title": "3D 导演台",
