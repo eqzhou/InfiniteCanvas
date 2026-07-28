@@ -49,7 +49,7 @@ function memoryAdapter(seed: Array<[string, unknown]> = []) {
     values,
     adapter: {
       entries: async () => [...values.entries()],
-      set: async (key: string, value: DirectorModelRecord) => { values.set(key, structuredClone(value)); },
+      set: async (key: string, value: unknown) => { values.set(key, structuredClone(value)); },
       delete: async (key: string) => { values.delete(key); },
     },
   };
@@ -186,6 +186,39 @@ describe("director browser-local model store", () => {
     expect(updated.fileName).toBe("new.glb");
     expect(updated.blob.size).toBe(replacement.size);
     expect((await store.get(ref))?.blob.size).toBe(replacement.size);
+  });
+
+  test("stores portable ArrayBuffer payloads while reading legacy Blob records", async () => {
+    const { adapter, values } = memoryAdapter();
+    const store = createDirectorModelStore(adapter);
+    const source = glb();
+    await store.put({ ...ref, fileName: "portable.glb", blob: source });
+
+    const stored = [...values.values()][0] as {
+      blob?: { version?: unknown; mimeType?: unknown; bytes?: unknown };
+    };
+    expect(stored.blob).not.toBeInstanceOf(Blob);
+    expect(stored.blob?.version).toBe(1);
+    expect(stored.blob?.mimeType).toBe("model/gltf-binary");
+    expect(stored.blob?.bytes).toBeInstanceOf(ArrayBuffer);
+    expect((stored.blob?.bytes as ArrayBuffer).byteLength).toBe(source.size);
+    expect((await store.get(ref))?.blob.size).toBe(source.size);
+
+    const legacy = {
+      ...(await store.get(ref))!,
+      fileName: "legacy.glb",
+      blob: source,
+    };
+    const legacyMemory = memoryAdapter([[
+      [...values.keys()][0]!,
+      legacy,
+    ]]);
+    const legacyStore = createDirectorModelStore(legacyMemory.adapter);
+    expect(await legacyStore.get(ref)).toMatchObject({ fileName: "legacy.glb", bytes: source.size });
+    await legacyStore.prune(ref.ownerScope, { project_1: { director_1: {} } }, Date.parse("2026-07-28T00:00:00.000Z"));
+    const migrated = [...legacyMemory.values.values()][0] as { blob?: unknown; orphanedAt?: unknown };
+    expect(migrated.blob).not.toBeInstanceOf(Blob);
+    expect(migrated.orphanedAt).toBe("2026-07-28T00:00:00.000Z");
   });
 
   test("uses unambiguous composite keys even when valid ids contain colons", async () => {

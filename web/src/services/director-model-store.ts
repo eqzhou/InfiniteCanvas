@@ -31,9 +31,21 @@ export type DirectorModelInput = DirectorModelIdentity & {
   blob: Blob;
 };
 
+type StoredDirectorModelBlob = {
+  version: 1;
+  mimeType: "model/gltf-binary";
+  bytes: ArrayBuffer;
+};
+
+type StoredDirectorModelRecord = Omit<DirectorModelRecord, "blob"> & {
+  blob: StoredDirectorModelBlob;
+};
+
+type DirectorModelMetadata = Omit<DirectorModelRecord, "blob">;
+
 export type DirectorModelAdapter = {
   entries: () => Promise<Array<[string, unknown]>>;
-  set: (key: string, value: DirectorModelRecord) => Promise<void>;
+  set: (key: string, value: unknown) => Promise<void>;
   delete: (key: string) => Promise<void>;
 };
 
@@ -89,9 +101,9 @@ function sameIdentity(left: DirectorModelIdentity, right: DirectorModelIdentity)
     left.directorNodeId === right.directorNodeId && left.objectId === right.objectId && left.assetId === right.assetId;
 }
 
-function normalizeRecord(value: unknown): DirectorModelRecord | null {
+function normalizeRecordMetadata(value: unknown): DirectorModelMetadata | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const input = value as Partial<DirectorModelRecord>;
+  const input = value as Partial<Omit<DirectorModelRecord, "blob"> & { blob: unknown }>;
   try {
     const identity: DirectorModelIdentity = {
       ownerScope: boundedId(input.ownerScope, "ownerScope"),
@@ -101,8 +113,19 @@ function normalizeRecord(value: unknown): DirectorModelRecord | null {
       assetId: boundedId(input.assetId, "assetId"),
     };
     const fileName = boundedFileName(input.fileName);
-    if (!(input.blob instanceof Blob) || input.mimeType !== "model/gltf-binary" || input.blob.type !== input.mimeType ||
-        input.bytes !== input.blob.size || input.bytes < 20 || input.bytes > DEFAULT_LIMITS.maxBlobBytes) return null;
+    if (input.mimeType !== "model/gltf-binary") return null;
+    const payloadBytes = input.blob instanceof Blob && input.blob.type === input.mimeType
+      ? input.blob.size
+      : input.blob && typeof input.blob === "object" && !Array.isArray(input.blob)
+        ? (() => {
+            const stored = input.blob as Partial<StoredDirectorModelBlob>;
+            return stored.version === 1 && stored.mimeType === "model/gltf-binary" && stored.bytes instanceof ArrayBuffer
+              ? stored.bytes.byteLength
+              : null;
+          })()
+        : null;
+    if (payloadBytes === null || input.bytes !== payloadBytes ||
+        input.bytes < 20 || input.bytes > DEFAULT_LIMITS.maxBlobBytes) return null;
     if (typeof input.createdAt !== "string" || !Number.isFinite(Date.parse(input.createdAt))) return null;
     const orphanedAt = input.orphanedAt === undefined
       ? undefined
@@ -116,12 +139,36 @@ function normalizeRecord(value: unknown): DirectorModelRecord | null {
       bytes: input.bytes,
       mimeType: "model/gltf-binary",
       createdAt: new Date(input.createdAt).toISOString(),
-      blob: input.blob,
       orphanedAt,
     };
   } catch {
     return null;
   }
+}
+
+function normalizeRecord(value: unknown): DirectorModelRecord | null {
+  const metadata = normalizeRecordMetadata(value);
+  if (!metadata || !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const payload = (value as { blob?: unknown }).blob;
+  const blob = payload instanceof Blob
+    ? payload
+    : new Blob([(payload as StoredDirectorModelBlob).bytes], { type: "model/gltf-binary" });
+  return { ...metadata, blob };
+}
+
+function storedRecord(record: DirectorModelRecord, bytes: ArrayBuffer): StoredDirectorModelRecord {
+  return {
+    ...record,
+    blob: {
+      version: 1,
+      mimeType: "model/gltf-binary",
+      bytes,
+    },
+  };
+}
+
+async function serializeRecord(record: DirectorModelRecord): Promise<StoredDirectorModelRecord> {
+  return storedRecord(record, await record.blob.arrayBuffer());
 }
 
 function copyRecord(record: DirectorModelRecord): DirectorModelRecord {
@@ -172,18 +219,14 @@ export function createDirectorModelStore(
     assetId: boundedId(value.assetId, "assetId"),
   });
   const commit = async (
-    stored: Array<{ key: string; record: DirectorModelRecord }>,
     input: DirectorModelInput,
+    usage: { count: number; totalBytes: number },
     write: (record: DirectorModelRecord) => Promise<void>,
   ): Promise<DirectorModelRecord> => {
     const safeIdentity = identity(input);
     const fileName = boundedFileName(input.fileName);
-    const key = keyFor(safeIdentity);
-    const existing = stored.find((entry) => entry.key === key);
-    const others = stored.filter((entry) => entry.key !== key);
-    if (!existing && others.length >= limits.maxGlobal) throw new Error(`Model storage is limited to ${limits.maxGlobal} items`);
-    const totalBytes = others.reduce((sum, entry) => sum + entry.record.bytes, 0);
-    if (totalBytes + input.blob.size > limits.maxTotalBytes) {
+    if (usage.count >= limits.maxGlobal) throw new Error(`Model storage is limited to ${limits.maxGlobal} items`);
+    if (usage.totalBytes + input.blob.size > limits.maxTotalBytes) {
       throw new Error(`Model storage is limited to ${limits.maxTotalBytes} bytes`);
     }
     const blob = input.blob.slice(0, input.blob.size, "model/gltf-binary");
@@ -240,28 +283,52 @@ export function createDirectorModelStore(
         throw new Error("GLB MIME type is unsupported");
       }
       if (input.blob.size > limits.maxBlobBytes) throw new Error(`GLB exceeds ${limits.maxBlobBytes} bytes`);
-      await validateDirectorGlb(input.blob, { maxBlobBytes: limits.maxBlobBytes });
+      const { bytes: portableBytes } = await validateDirectorGlb(input.blob, { maxBlobBytes: limits.maxBlobBytes });
       if (adapter === defaultAdapter) {
+        // Validation prepares bytes before opening the transaction. WebKit
+        // auto-commits an IndexedDB transaction across an asynchronous Blob read.
         return withWriteLock(() => modelStore("readwrite", async (store) => {
-          const [keys, values] = await Promise.all([
-            promisifyRequest(store.getAllKeys()),
-            promisifyRequest(store.getAll()),
-          ]);
-          const raw = keys.flatMap((key, index) => typeof key === "string"
-            ? [[key, values[index]] as [string, unknown]]
-            : []);
-          const stored = normalizeEntries(raw);
-          const validKeys = new Set(stored.map(({ key }) => key));
-          await Promise.all(raw
-            .map(([key]) => key)
-            .filter((key) => key.startsWith("model:") && !validKeys.has(key))
-            .map((key) => promisifyRequest(store.delete(key))));
-          return commit(stored, input, async (record) => {
-            await promisifyRequest(store.put(record, keyFor(record)));
+          const targetKey = keyFor(identity(input));
+          const usage = await new Promise<{ count: number; totalBytes: number }>((resolve, reject) => {
+            let count = 0;
+            let totalBytes = 0;
+            const request = store.openCursor();
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+              const cursor = request.result;
+              if (!cursor) {
+                resolve({ count, totalBytes });
+                return;
+              }
+              const key = typeof cursor.key === "string" ? cursor.key : "";
+              const metadata = normalizeRecordMetadata(cursor.value);
+              if (key.startsWith("model:") && (!metadata || key !== keyFor(metadata))) {
+                cursor.delete();
+              } else if (metadata && key !== targetKey) {
+                count += 1;
+                totalBytes += metadata.bytes;
+              }
+              cursor.continue();
+            };
+          });
+          return commit(input, usage, async (record) => {
+            await promisifyRequest(store.put(storedRecord(record, portableBytes), keyFor(record)));
           });
         }));
       }
-      return withWriteLock(async () => commit(await all(true), input, async (record) => adapter.set(keyFor(record), record)));
+      return withWriteLock(async () => {
+        const stored = await all(true);
+        const targetKey = keyFor(identity(input));
+        const others = stored.filter(({ key }) => key !== targetKey);
+        return commit(
+          input,
+          {
+            count: others.length,
+            totalBytes: others.reduce((total, { record }) => total + record.bytes, 0),
+          },
+          async (record) => adapter.set(keyFor(record), storedRecord(record, portableBytes)),
+        );
+      });
     },
 
     async delete(value: DirectorModelIdentity): Promise<void> {
@@ -299,31 +366,65 @@ export function createDirectorModelStore(
       };
       await withWriteLock(async () => {
         if (adapter === defaultAdapter) {
+          const legacyUpdates: DirectorModelRecord[] = [];
           await modelStore("readwrite", async (store) => {
-            const [keys, values] = await Promise.all([
-              promisifyRequest(store.getAllKeys()),
-              promisifyRequest(store.getAll()),
-            ]);
-            const raw = keys.flatMap((key, index) => typeof key === "string"
-              ? [[key, values[index]] as [string, unknown]]
-              : []);
-            const stored = normalizeEntries(raw);
-            const validKeys = new Set(stored.map(({ key }) => key));
-            const { deletes, updates } = planPrune(stored);
-            await Promise.all([
-              ...raw.map(([key]) => key)
-                .filter((key) => key.startsWith("model:") && !validKeys.has(key))
-                .map((key) => promisifyRequest(store.delete(key))),
-              ...deletes.map((key) => promisifyRequest(store.delete(key))),
-              ...updates.map((record) => promisifyRequest(store.put(record, keyFor(record)))),
-            ]);
+            await new Promise<void>((resolve, reject) => {
+              const request = store.openCursor();
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) {
+                  resolve();
+                  return;
+                }
+                const key = typeof cursor.key === "string" ? cursor.key : "";
+                const metadata = normalizeRecordMetadata(cursor.value);
+                if (key.startsWith("model:") && (!metadata || key !== keyFor(metadata))) {
+                  cursor.delete();
+                  cursor.continue();
+                  return;
+                }
+                if (!metadata || metadata.ownerScope !== ownerScope) {
+                  cursor.continue();
+                  return;
+                }
+                const directors = valid[metadata.projectId];
+                const objects = directors?.[metadata.directorNodeId];
+                const active = objects?.[metadata.objectId] === metadata.assetId;
+                if (!directors || (!active && metadata.orphanedAt &&
+                    Date.parse(metadata.orphanedAt) <= now - ORPHAN_GRACE_MS)) {
+                  cursor.delete();
+                } else if (active && metadata.orphanedAt) {
+                  const payload = (cursor.value as { blob?: unknown }).blob;
+                  if (payload instanceof Blob) {
+                    legacyUpdates.push({ ...metadata, blob: payload, orphanedAt: undefined });
+                  } else {
+                    cursor.update({ ...(cursor.value as object), orphanedAt: undefined });
+                  }
+                } else if (!active && !metadata.orphanedAt) {
+                  const orphanedAt = new Date(now).toISOString();
+                  const payload = (cursor.value as { blob?: unknown }).blob;
+                  if (payload instanceof Blob) {
+                    legacyUpdates.push({ ...metadata, blob: payload, orphanedAt });
+                  } else {
+                    cursor.update({ ...(cursor.value as object), orphanedAt });
+                  }
+                }
+                cursor.continue();
+              };
+            });
           });
+          // Blob reads cannot occur inside the cursor transaction on WebKit.
+          // Migrate changed legacy records one at a time after it closes.
+          for (const record of legacyUpdates) {
+            await defaultAdapter.set(keyFor(record), await serializeRecord(record));
+          }
           return;
         }
         const { deletes, updates } = planPrune(await all(true));
         await Promise.all([
           ...deletes.map((key) => adapter.delete(key)),
-          ...updates.map((record) => adapter.set(keyFor(record), record)),
+          ...updates.map(async (record) => adapter.set(keyFor(record), await serializeRecord(record))),
         ]);
       });
     },
