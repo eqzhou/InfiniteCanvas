@@ -194,8 +194,8 @@ async function downloadActiveProjectBundle(page: Page) {
     .click();
 }
 
-async function waitForPluginEnabledStateStored(page: Page, pluginId: string, enabled: boolean) {
-  await expect.poll(() => page.evaluate(({ id, expectedEnabled }) => new Promise<boolean>((resolve, reject) => {
+async function expectPluginEnabledStateStored(page: Page, pluginId: string, enabled: boolean) {
+  const isStored = await page.evaluate(({ id, expectedEnabled }) => new Promise<boolean>((resolve, reject) => {
     const request = indexedDB.open("openboard-app");
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
@@ -220,7 +220,8 @@ async function waitForPluginEnabledStateStored(page: Page, pluginId: string, ena
         reject(error);
       }
     };
-  }), { id: pluginId, expectedEnabled: enabled }), { timeout: 15_000 }).toBe(true);
+  }), { id: pluginId, expectedEnabled: enabled });
+  expect(isStored).toBe(true);
 }
 
 function projectCard(page: Page, title: string) {
@@ -2879,7 +2880,9 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await page.goto("/plugins");
   const enabled = page.getByRole("switch", { name: "便签 启用状态" });
   await enabled.uncheck();
-  await waitForPluginEnabledStateStored(page, "openboard.sticky-note", false);
+  // A single read queues behind the config write. Repeated readonly polling can
+  // starve the pending readwrite transaction in WebKit.
+  await expectPluginEnabledStateStored(page, "openboard.sticky-note", false);
   await expect(enabled).toBeEnabled({ timeout: 15_000 });
   await expect(stickyCard.getByRole("button", { name: "添加到画布" })).toBeDisabled();
   await page.goto("/");
@@ -2889,8 +2892,7 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   await page.goto("/plugins");
   await expect(enabled).not.toBeChecked();
   await enabled.check();
-  // Product sets busy while flushConfig runs; wait until the switch is interactive again.
-  await waitForPluginEnabledStateStored(page, "openboard.sticky-note", true);
+  await expectPluginEnabledStateStored(page, "openboard.sticky-note", true);
   await expect(enabled).toBeEnabled({ timeout: 15_000 });
   await expect(enabled).toBeChecked();
   await page.goto("/");
