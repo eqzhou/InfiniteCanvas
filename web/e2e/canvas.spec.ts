@@ -1,9 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { resolveE2EEnvironment } from "./environment";
 
-const agentUrl = process.env.OPENBOARD_E2E_PRODUCTION === "1"
-  ? "http://127.0.0.1:8792"
-  : "http://127.0.0.1:8791";
+const { agentPort } = resolveE2EEnvironment();
+const agentUrl = `http://127.0.0.1:${agentPort}`;
 const pngPixelBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWP8z8AARAjAhGBCWIQFAIPRAgYQO+IXAAAAAElFTkSuQmCC";
 const pngReplacementBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWNk+A+ESIAJiQ1mEhYAAILSAgahbK2jAAAAAElFTkSuQmCC";
 
@@ -68,6 +68,34 @@ async function openFreshBoard(
   if ((page.viewportSize()?.width ?? 1440) < 768) {
     await page.locator("aside").getByRole("button", { name: "关闭项目侧栏" }).click();
   }
+}
+
+async function installOwnerAuthRoutes(page: Page) {
+  await page.route(/\/api\/auth\/me$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      authMode: "local",
+      guest: false,
+      user: {
+        id: "owner-e2e",
+        tenantId: "tenant-e2e",
+        email: "owner@example.test",
+        displayName: "Owner",
+        role: "owner",
+      },
+    }),
+  }));
+  await page.route(/\/api\/auth\/usage$/, async (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      storageBytes: 0,
+      generationThisMonth: 0,
+      storageQuotaBytes: 1_000_000,
+      generationQuotaMonthly: 1_000,
+      plan: "test",
+      credits: 1_000,
+    }),
+  }));
 }
 
 /** Click the canvas toolbar tool by accessible name (avoids node title collisions). */
@@ -357,14 +385,14 @@ test("3D director edits persist and rendered captures return to the canvas", asy
   const imagesBefore = await imageNodes.count();
   const edgesBefore = await edgeGroups.count();
   const captureButton = dialog.getByRole("button", { name: "拍摄当前机位" });
+  const captures = dialog.getByRole("list", { name: "本机截图列表" }).getByRole("listitem");
   await captureButton.click();
-  await expect(dialog.getByRole("button", { name: "拍摄中…" })).toBeDisabled();
+  await expect(captures).toHaveCount(1);
   await expect(captureButton).toBeEnabled();
   await captureButton.click();
-  await expect(dialog.getByRole("button", { name: "拍摄中…" })).toBeDisabled();
+  await expect(captures).toHaveCount(2);
   await expect(captureButton).toBeEnabled();
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("list", { name: "本机截图列表" }).getByRole("listitem")).toHaveCount(2);
   await expect(imageNodes).toHaveCount(imagesBefore);
 
   await dialog.getByRole("button", { name: "关闭导演台" }).click();
@@ -2040,6 +2068,7 @@ test("text-to-image creates a connected config and executes immediately", async 
       }),
     });
   });
+  await installOwnerAuthRoutes(page);
   await openFreshBoard(page);
   await page.getByTitle("设置").click();
   const settings = page.getByRole("dialog", { name: "设置" });
@@ -2157,6 +2186,7 @@ test("a configuration node generates the requested text batch", async ({ page })
     });
   });
 
+  await installOwnerAuthRoutes(page);
   await openFreshBoard(page);
   await page.getByTitle("设置").click();
   await page.getByLabel("文本 URL").fill("https://batch.example/v1");
@@ -4629,7 +4659,7 @@ test("mobile asset and prompt pages keep primary actions usable", async ({ page 
 test("mobile assistant can be opened and closed without hiding the canvas", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFreshBoard(page);
-  await page.getByTitle("助手面板").click();
+  await page.getByRole("button", { name: "助手面板" }).last().click();
   await expect(page.getByText("画布助手", { exact: true })).toBeVisible();
   await page.getByTitle("关闭助手").click();
   await expect(page.getByTestId("canvas-surface")).toBeVisible();

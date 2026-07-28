@@ -1,16 +1,53 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolveE2EEnvironment, type E2EMode } from "./e2e/environment";
 
-const production = process.env.OPENBOARD_E2E_PRODUCTION === "1";
-const formal = process.env.OPENBOARD_E2E_FORMAL === "1";
-const defaultWebPort = formal ? 5175 : production ? 5174 : 5173;
-const defaultAgentPort = formal ? 8793 : production ? 8792 : 8791;
-const webPort = Number(process.env.OPENBOARD_E2E_WEB_PORT ?? defaultWebPort);
-const agentPort = Number(process.env.OPENBOARD_E2E_AGENT_PORT ?? defaultAgentPort);
-const origin = `http://127.0.0.1:${webPort}`;
+const { mode, production, formal, webPort, agentPort, origin } = resolveE2EEnvironment();
 const chromiumExecutable = process.env.OPENBOARD_CHROMIUM_EXECUTABLE;
 const dataDir = production
   ? "$(mktemp -d \"${TMPDIR:-/tmp}/openboard-e2e-prod.XXXXXX\")"
   : "../web/node_modules/.cache/openboard-agent-e2e";
+
+type AgentServerCommandOptions = Readonly<{
+  mode: E2EMode;
+  agentPort: number;
+  origin: string;
+  dataDir: string;
+}>;
+
+export function createAgentServerCommand({
+  mode,
+  agentPort,
+  origin,
+  dataDir,
+}: AgentServerCommandOptions): string {
+  if (mode === "production") {
+    return `data_dir=${dataDir}; trap 'rm -rf "$data_dir"' EXIT; cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_AUTH_MODE=off OPENBOARD_DATA="$data_dir" go run ./cmd/server`;
+  }
+  if (mode === "formal") {
+    return `../scripts/run-formal-e2e-server.sh ${agentPort} ${origin}`;
+  }
+  return `cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_AUTH_MODE=off OPENBOARD_DATA=../web/node_modules/.cache/openboard-agent-e2e go run ./cmd/server`;
+}
+
+type WebServerCommandOptions = Readonly<{
+  mode: E2EMode;
+  agentPort: number;
+  webPort: number;
+}>;
+
+export function createWebServerCommand({
+  mode,
+  agentPort,
+  webPort,
+}: WebServerCommandOptions): string {
+  if (mode === "production") {
+    return `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`;
+  }
+  if (mode === "formal") {
+    return `VITE_OPENBOARD_STORAGE=server bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`;
+  }
+  return `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run dev --host 127.0.0.1 --port ${webPort} --strictPort`;
+}
 
 export default defineConfig({
 	timeout: formal ? 120_000 : 60_000,
@@ -61,21 +98,13 @@ export default defineConfig({
   ]),
   webServer: [
     {
-      command: production
-        ? `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`
-        : formal
-          ? `VITE_OPENBOARD_STORAGE=server bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`
-        : `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run dev --host 127.0.0.1`,
+      command: createWebServerCommand({ mode, agentPort, webPort }),
       url: origin,
 		reuseExistingServer: !formal && !process.env.CI,
       timeout: 120_000,
     },
     {
-      command: production
-        ? `data_dir=${dataDir}; trap 'rm -rf "$data_dir"' EXIT; cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_DATA="$data_dir" go run ./cmd/server`
-        : formal
-          ? `../scripts/run-formal-e2e-server.sh ${agentPort} ${origin}`
-        : `cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_DATA=../web/node_modules/.cache/openboard-agent-e2e go run ./cmd/server`,
+      command: createAgentServerCommand({ mode, agentPort, origin, dataDir }),
       url: `http://127.0.0.1:${agentPort}/api/health`,
 		reuseExistingServer: !formal && !process.env.CI,
       timeout: 120_000,
