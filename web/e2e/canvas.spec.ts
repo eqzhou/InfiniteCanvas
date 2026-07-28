@@ -174,7 +174,10 @@ async function openProjectPanel(page: Page) {
   const panel = page.getByRole("complementary", { name: "项目侧栏" });
   if (await panel.isVisible().catch(() => false)) return;
   const trigger = page.getByRole("button", { name: /^(打开项目侧栏|展开侧栏)$/ });
-  await expect(trigger).toBeVisible();
+  // During a desktop hydrate the panel and trigger may both be absent briefly;
+  // the panel then opens by default without ever exposing the trigger.
+  await expect(panel.or(trigger)).toBeVisible();
+  if (await panel.isVisible().catch(() => false)) return;
   await trigger.click();
   await expect(panel).toBeVisible();
 }
