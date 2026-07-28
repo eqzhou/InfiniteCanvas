@@ -209,12 +209,20 @@ func (s *Server) getMediaReference(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read blob", http.StatusInternalServerError)
 		return
 	}
-	if value.Metadata.ContentType != "" {
-		w.Header().Set("Content-Type", value.Metadata.ContentType)
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
+	contentType := value.Metadata.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
 	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "private, max-age=60")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Token URLs are capability-bearing and may be opened outside the app.
+	// Prefer attachment so a mistaken or hostile content type cannot render.
+	if contentType == "application/octet-stream" ||
+		!(strings.HasPrefix(contentType, "image/") ||
+			strings.HasPrefix(contentType, "audio/") ||
+			strings.HasPrefix(contentType, "video/")) {
+		w.Header().Set("Content-Disposition", "attachment")
+	}
 	_, _ = w.Write(value.Data)
 }

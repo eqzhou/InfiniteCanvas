@@ -635,6 +635,11 @@ func (s *Server) getFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// Runtime/agent drops are never meant to be navigated as documents in the
+	// browser. Force download + nosniff so a leaked URL cannot execute as HTML.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "attachment")
+	w.Header().Set("Cache-Control", "private, no-store")
 	http.ServeFile(w, r, path)
 }
 

@@ -91,3 +91,64 @@ func TestRuntimeFilesAreIsolatedByTenant(t *testing.T) {
 		t.Fatalf("cross-tenant read status=%d body=%s, want 404", cross.Code, cross.Body.String())
 	}
 }
+
+func TestRuntimeFileDownloadHeaders(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	dataDir := t.TempDir()
+	backend := newMemoryStore()
+	server := NewServerWithStore(dataDir, backend)
+	t.Cleanup(server.Close)
+
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			actor := store.AuthUser{ID: "user-a", TenantID: "tenant-a", Role: "member", Status: "active"}
+			r = r.WithContext(context.WithValue(r.Context(), authUserKey, actor))
+			next.ServeHTTP(w, r)
+		})
+	})
+	MountServer(router, server)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "note.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("<script>alert(1)</script>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upload := httptest.NewRequest(http.MethodPost, "/api/files", &body)
+	upload.Header.Set("Content-Type", writer.FormDataContentType())
+	uploaded := httptest.NewRecorder()
+	router.ServeHTTP(uploaded, upload)
+	if uploaded.Code != http.StatusOK {
+		t.Fatalf("upload status=%d body=%s", uploaded.Code, uploaded.Body.String())
+	}
+	var response struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(uploaded.Body.Bytes(), &response); err != nil || response.URL == "" {
+		t.Fatalf("upload response=%s err=%v", uploaded.Body.String(), err)
+	}
+
+	got := httptest.NewRecorder()
+	router.ServeHTTP(got, httptest.NewRequest(http.MethodGet, response.URL, nil))
+	if got.Code != http.StatusOK {
+		t.Fatalf("download status=%d body=%s", got.Code, got.Body.String())
+	}
+	if got.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("missing nosniff: %#v", got.Header())
+	}
+	if got.Header().Get("Content-Disposition") != "attachment" {
+		t.Fatalf("Content-Disposition=%q, want attachment", got.Header().Get("Content-Disposition"))
+	}
+	if got.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("Cache-Control=%q", got.Header().Get("Cache-Control"))
+	}
+}
+

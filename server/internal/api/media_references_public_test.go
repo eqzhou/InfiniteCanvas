@@ -1,10 +1,16 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
 )
 
@@ -90,3 +96,114 @@ func TestExpiredMediaReferencesAreSweptRatherThanAccumulating(t *testing.T) {
 		t.Fatalf("sweep removed a live reference: %v", err)
 	}
 }
+
+func TestMediaReferenceServesBytesWithSafeHeaders(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+
+	ctx := t.Context()
+	if err := server.storeTenantBlob(ctx, "tenant-a", "user-a", "shot.png", "image/png", []byte("png-bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.storeTenantBlob(ctx, "tenant-a", "user-a", "raw.bin", "application/octet-stream", []byte("bin-bytes")); err != nil {
+		t.Fatal(err)
+	}
+
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			actor := store.AuthUser{ID: "user-a", TenantID: "tenant-a", Role: "member", Status: "active"}
+			r = r.WithContext(context.WithValue(r.Context(), authUserKey, actor))
+			next.ServeHTTP(w, r)
+		})
+	})
+	MountServer(router, server)
+
+	// Mint via authenticated API so existence checks run under the caller tenant.
+	mint := httptest.NewRequest(http.MethodPost, "/api/media/references", bytes.NewReader([]byte(
+		`{"storageKeys":["shot.png","raw.bin"],"ttlSeconds":120}`,
+	)))
+	mint.Header.Set("Content-Type", "application/json")
+	minted := httptest.NewRecorder()
+	router.ServeHTTP(minted, mint)
+	if minted.Code != http.StatusCreated {
+		t.Fatalf("mint status=%d body=%s", minted.Code, minted.Body.String())
+	}
+	var payload struct {
+		Items []store.MediaReference `json:"items"`
+	}
+	if err := json.NewDecoder(minted.Body).Decode(&payload); err != nil || len(payload.Items) != 2 {
+		t.Fatalf("mint payload=%s err=%v", minted.Body.String(), err)
+	}
+
+	byKey := map[string]store.MediaReference{}
+	for _, item := range payload.Items {
+		byKey[item.StorageKey] = item
+	}
+
+	// Public GET uses only the token; no session required.
+	image := httptest.NewRecorder()
+	router.ServeHTTP(image, httptest.NewRequest(http.MethodGet, "/api/media/references/"+byKey["shot.png"].Token, nil))
+	if image.Code != http.StatusOK || image.Body.String() != "png-bytes" {
+		t.Fatalf("image ref status=%d body=%s", image.Code, image.Body.String())
+	}
+	if image.Header().Get("Content-Type") != "image/png" || image.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("image headers=%#v", image.Header())
+	}
+	if image.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("image should stay inline for providers, got %q", image.Header().Get("Content-Disposition"))
+	}
+
+	raw := httptest.NewRecorder()
+	router.ServeHTTP(raw, httptest.NewRequest(http.MethodGet, "/api/media/references/"+byKey["raw.bin"].Token, nil))
+	if raw.Code != http.StatusOK || raw.Body.String() != "bin-bytes" {
+		t.Fatalf("raw ref status=%d body=%s", raw.Code, raw.Body.String())
+	}
+	if raw.Header().Get("Content-Disposition") != "attachment" {
+		t.Fatalf("octet-stream disposition=%q", raw.Header().Get("Content-Disposition"))
+	}
+
+	// A token minted for tenant-a must not resolve a same-named key under tenant-b.
+	if err := server.storeTenantBlob(ctx, "tenant-b", "user-b", "shot.png", "image/png", []byte("other-tenant")); err != nil {
+		t.Fatal(err)
+	}
+	cross := httptest.NewRecorder()
+	router.ServeHTTP(cross, httptest.NewRequest(http.MethodGet, "/api/media/references/"+byKey["shot.png"].Token, nil))
+	if cross.Code != http.StatusOK || cross.Body.String() != "png-bytes" {
+		t.Fatalf("token must stay bound to minting tenant: status=%d body=%s", cross.Code, cross.Body.String())
+	}
+}
+
+func TestCreateMediaReferencesRejectsForeignTenantKeys(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	ctx := t.Context()
+	if err := server.storeTenantBlob(ctx, "tenant-b", "user-b", "secret.png", "image/png", []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			actor := store.AuthUser{ID: "user-a", TenantID: "tenant-a", Role: "member", Status: "active"}
+			r = r.WithContext(context.WithValue(r.Context(), authUserKey, actor))
+			next.ServeHTTP(w, r)
+		})
+	})
+	MountServer(router, server)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/media/references", bytes.NewReader([]byte(`{"storageKeys":["secret.png"]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	got := httptest.NewRecorder()
+	router.ServeHTTP(got, req)
+	if got.Code != http.StatusNotFound {
+		t.Fatalf("foreign key mint status=%d body=%s, want 404", got.Code, got.Body.String())
+	}
+}
+
