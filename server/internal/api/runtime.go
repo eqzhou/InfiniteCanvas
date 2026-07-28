@@ -26,11 +26,23 @@ type runtimeTransport interface {
 
 type runtimeClient struct {
 	id        string
+	scope     agentScope
 	transport runtimeTransport
 	state     json.RawMessage
 	sequence  uint64
 	focusSeq  uint64
 	focused   bool
+	projectID string
+}
+
+type runtimeTicket struct {
+	scope     agentScope
+	expiresAt time.Time
+}
+
+type runtimePin struct {
+	owner     string
+	clientID  string
 	projectID string
 }
 
@@ -45,68 +57,71 @@ type pendingRuntimeCommand struct {
 }
 
 type runtimeHub struct {
-	mu           sync.Mutex
-	clients      map[string]*runtimeClient
-	active       *runtimeClient
-	sequence     uint64
-	focusSeq     uint64
-	pending      map[string]pendingRuntimeCommand
-	tickets      map[string]time.Time
-	pinOwner     string
-	pinClientID  string
-	pinProjectID string
+	mu       sync.Mutex
+	clients  map[string]*runtimeClient
+	active   map[agentScope]*runtimeClient
+	sequence uint64
+	focusSeq uint64
+	pending  map[string]pendingRuntimeCommand
+	tickets  map[string]runtimeTicket
+	pins     map[agentScope]runtimePin
 }
 
 func newRuntimeHub() *runtimeHub {
 	return &runtimeHub{
 		clients: make(map[string]*runtimeClient),
+		active:  make(map[agentScope]*runtimeClient),
 		pending: make(map[string]pendingRuntimeCommand),
-		tickets: make(map[string]time.Time),
+		tickets: make(map[string]runtimeTicket),
+		pins:    make(map[agentScope]runtimePin),
 	}
 }
 
-func (h *runtimeHub) issueTicket(ttl time.Duration) string {
+func (h *runtimeHub) issueTicket(scope agentScope, ttl time.Duration) string {
 	now := time.Now()
 	ticket := randomID("runtime")
 	h.mu.Lock()
-	for value, expires := range h.tickets {
-		if !expires.After(now) {
+	for value, entry := range h.tickets {
+		if !entry.expiresAt.After(now) {
 			delete(h.tickets, value)
 		}
 	}
-	h.tickets[ticket] = now.Add(ttl)
+	h.tickets[ticket] = runtimeTicket{scope: scope, expiresAt: now.Add(ttl)}
 	h.mu.Unlock()
 	return ticket
 }
 
-func (h *runtimeHub) consumeTicket(ticket string) bool {
+func (h *runtimeHub) consumeTicket(ticket string) (agentScope, bool) {
 	if ticket == "" {
-		return false
+		return agentScope{}, false
 	}
 	now := time.Now()
 	h.mu.Lock()
-	expires, ok := h.tickets[ticket]
+	entry, ok := h.tickets[ticket]
 	delete(h.tickets, ticket)
 	h.mu.Unlock()
-	return ok && expires.After(now)
+	return entry.scope, ok && entry.expiresAt.After(now)
 }
 
-func (h *runtimeHub) attach(transport runtimeTransport) *runtimeClient {
+func (h *runtimeHub) attach(scope agentScope, transport runtimeTransport) *runtimeClient {
 	h.mu.Lock()
 	h.sequence++
-	client := &runtimeClient{id: randomID("browser"), transport: transport, sequence: h.sequence}
+	client := &runtimeClient{id: randomID("browser"), scope: scope, transport: transport, sequence: h.sequence}
 	h.clients[client.id] = client
-	if h.active == nil {
-		h.active = client
+	if h.active[scope] == nil {
+		h.active[scope] = client
 	}
 	h.mu.Unlock()
 	return client
 }
 
-func (h *runtimeHub) bestClientLocked() *runtimeClient {
+func (h *runtimeHub) bestClientLocked(scope agentScope) *runtimeClient {
 	var bestRecent *runtimeClient
 	var bestAny *runtimeClient
 	for _, candidate := range h.clients {
+		if candidate.scope != scope {
+			continue
+		}
 		if bestAny == nil || candidate.sequence > bestAny.sequence {
 			bestAny = candidate
 		}
@@ -120,13 +135,13 @@ func (h *runtimeHub) bestClientLocked() *runtimeClient {
 	return bestAny
 }
 
-func (h *runtimeHub) bestClientForProjectLocked(projectID string) *runtimeClient {
+func (h *runtimeHub) bestClientForProjectLocked(scope agentScope, projectID string) *runtimeClient {
 	if projectID == "" {
 		return nil
 	}
 	var best *runtimeClient
 	for _, candidate := range h.clients {
-		if candidate.projectID != projectID {
+		if candidate.scope != scope || candidate.projectID != projectID {
 			continue
 		}
 		moreRecent := best == nil || candidate.focusSeq > best.focusSeq ||
@@ -138,40 +153,37 @@ func (h *runtimeHub) bestClientForProjectLocked(projectID string) *runtimeClient
 	return best
 }
 
-func (h *runtimeHub) claimClient(requested string) (string, bool) {
+func (h *runtimeHub) claimClient(scope agentScope, requested string) (string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if requested != "" {
-		if client := h.clients[requested]; client != nil {
+		if client := h.clients[requested]; client != nil && client.scope == scope {
 			return client.id, true
 		}
 		return "", false
 	}
-	client := h.bestClientLocked()
+	client := h.bestClientLocked(scope)
 	if client == nil {
 		return "", false
 	}
 	return client.id, true
 }
 
-func (h *runtimeHub) pin(owner, clientID string) {
+func (h *runtimeHub) pin(scope agentScope, owner, clientID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if owner == "" || h.clients[clientID] == nil {
+	client := h.clients[clientID]
+	if owner == "" || client == nil || client.scope != scope {
 		return
 	}
-	h.pinOwner = owner
-	h.pinClientID = clientID
-	h.pinProjectID = h.clients[clientID].projectID
+	h.pins[scope] = runtimePin{owner: owner, clientID: clientID, projectID: client.projectID}
 }
 
-func (h *runtimeHub) unpin(owner string) {
+func (h *runtimeHub) unpin(scope agentScope, owner string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if owner != "" && h.pinOwner == owner {
-		h.pinOwner = ""
-		h.pinClientID = ""
-		h.pinProjectID = ""
+	if pin := h.pins[scope]; owner != "" && pin.owner == owner {
+		delete(h.pins, scope)
 	}
 }
 
@@ -192,16 +204,21 @@ func (h *runtimeHub) detach(client *runtimeClient, cause error) {
 			delete(h.pending, id)
 		}
 	}
-	if h.active == client {
-		h.active = h.bestClientLocked()
-	}
-	if h.pinClientID == client.id {
-		fallback := h.bestClientForProjectLocked(h.pinProjectID)
-		if fallback == nil {
-			h.pinClientID = ""
-		} else {
-			h.pinClientID = fallback.id
+	if h.active[client.scope] == client {
+		h.active[client.scope] = h.bestClientLocked(client.scope)
+		if h.active[client.scope] == nil {
+			delete(h.active, client.scope)
 		}
+	}
+	pin := h.pins[client.scope]
+	if pin.clientID == client.id {
+		fallback := h.bestClientForProjectLocked(client.scope, pin.projectID)
+		if fallback == nil {
+			pin.clientID = ""
+		} else {
+			pin.clientID = fallback.id
+		}
+		h.pins[client.scope] = pin
 	}
 	h.mu.Unlock()
 	_ = client.transport.Close()
@@ -216,13 +233,35 @@ func (h *runtimeHub) connected() bool {
 	return len(h.clients) > 0
 }
 
-func (h *runtimeHub) state() json.RawMessage {
+func (h *runtimeHub) connectedFor(scope agentScope) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.active == nil {
+	return h.bestClientLocked(scope) != nil
+}
+
+func (h *runtimeHub) closeAll() {
+	h.mu.Lock()
+	clients := make([]*runtimeClient, 0, len(h.clients))
+	for _, client := range h.clients {
+		clients = append(clients, client)
+	}
+	h.mu.Unlock()
+	for _, client := range clients {
+		h.detach(client, errors.New("server stopped"))
+	}
+}
+
+func (h *runtimeHub) state() json.RawMessage {
+	return h.stateFor(agentScope{})
+}
+
+func (h *runtimeHub) stateFor(scope agentScope) json.RawMessage {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.active[scope] == nil {
 		return nil
 	}
-	return append(json.RawMessage(nil), h.active.state...)
+	return append(json.RawMessage(nil), h.active[scope].state...)
 }
 
 func (h *runtimeHub) receive(client *runtimeClient, message runtimeEnvelope) error {
@@ -253,10 +292,10 @@ func (h *runtimeHub) receive(client *runtimeClient, message runtimeEnvelope) err
 				h.focusSeq++
 				client.focusSeq = h.focusSeq
 			}
-			if becameFocused || h.active == nil {
-				h.active = client
-			} else if h.active == client {
-				h.active = h.bestClientLocked()
+			if becameFocused || h.active[client.scope] == nil {
+				h.active[client.scope] = client
+			} else if h.active[client.scope] == client {
+				h.active[client.scope] = h.bestClientLocked(client.scope)
 			}
 		}
 		h.mu.Unlock()
@@ -297,7 +336,7 @@ func (h *runtimeHub) receive(client *runtimeClient, message runtimeEnvelope) err
 	}
 }
 
-func (h *runtimeHub) command(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+func (h *runtimeHub) command(ctx context.Context, scope agentScope, method string, params json.RawMessage) (json.RawMessage, error) {
 	if method == "" {
 		return nil, errors.New("runtime command method is required")
 	}
@@ -310,9 +349,13 @@ func (h *runtimeHub) command(ctx context.Context, method string, params json.Raw
 	id := randomID("command")
 	waiter := make(chan runtimeResult, 1)
 	h.mu.Lock()
-	client := h.clients[h.pinClientID]
-	if client == nil && h.pinOwner == "" {
-		client = h.active
+	pin := h.pins[scope]
+	client := h.clients[pin.clientID]
+	if client != nil && client.scope != scope {
+		client = nil
+	}
+	if client == nil && pin.owner == "" {
+		client = h.active[scope]
 	}
 	if client != nil {
 		h.pending[id] = pendingRuntimeCommand{client: client, waiter: waiter}

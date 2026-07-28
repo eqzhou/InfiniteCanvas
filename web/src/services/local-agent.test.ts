@@ -16,6 +16,7 @@ import {
   subscribeCodexEvents,
   uploadCodexAttachments,
 } from "./local-agent";
+import { clearSessionToken, setSessionToken } from "./auth-session";
 
 describe("local agent project synchronization", () => {
   test("newer remote projects are pulled", () => {
@@ -96,6 +97,23 @@ describe("local agent connection", () => {
   });
 
   test("validates Codex session and message responses", async () => {
+	const priorStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+	const priorLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+	const values = new Map<string, string>();
+	Object.defineProperty(globalThis, "localStorage", {
+	  configurable: true,
+	  value: {
+		getItem: (key: string) => values.get(key) ?? null,
+		setItem: (key: string, value: string) => values.set(key, value),
+		removeItem: (key: string) => values.delete(key),
+	  },
+	});
+	Object.defineProperty(globalThis, "location", {
+	  configurable: true,
+	  value: new URL("http://localhost:5173/prompts"),
+	});
+	setSessionToken("user-session-1");
+	try {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push({ url: String(input), init });
@@ -118,7 +136,7 @@ describe("local agent connection", () => {
         headers: { "content-type": "application/json" },
       });
     };
-    const connection = { baseUrl: "http://127.0.0.1:8790", token: "secret" };
+	const connection = { baseUrl: "http://localhost:5173", token: "secret" };
     const session = await createCodexSession(connection, "/tmp/board", fetcher);
     const active = await getCodexSession(connection, "default", fetcher);
     const attachments = await uploadCodexAttachments(connection, session.id, [
@@ -130,20 +148,38 @@ describe("local agent connection", () => {
     await respondCodexApproval(connection, session.id, 7, true, fetcher);
     await closeCodexSession(connection, session.id, fetcher);
     expect(requests.map((request) => request.url)).toEqual([
-      "http://127.0.0.1:8790/api/codex/session",
-      "http://127.0.0.1:8790/api/codex/session?profile=default",
-      "http://127.0.0.1:8790/api/codex/attachments",
-      "http://127.0.0.1:8790/api/codex/attachments/image-1?sessionId=session-1",
-      "http://127.0.0.1:8790/api/codex/message",
-      "http://127.0.0.1:8790/api/codex/interrupt",
-      "http://127.0.0.1:8790/api/codex/approval",
-      "http://127.0.0.1:8790/api/codex/session/session-1",
+	  "http://localhost:5173/api/codex/session",
+	  "http://localhost:5173/api/codex/session?profile=default",
+	  "http://localhost:5173/api/codex/attachments",
+	  "http://localhost:5173/api/codex/attachments/image-1?sessionId=session-1",
+	  "http://localhost:5173/api/codex/message",
+	  "http://localhost:5173/api/codex/interrupt",
+	  "http://localhost:5173/api/codex/approval",
+	  "http://localhost:5173/api/codex/session/session-1",
     ]);
     expect(active?.threadId).toBe("thread-1");
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({ cwd: "/tmp/board" });
     expect(JSON.parse(String(requests[4].init?.body))).toEqual({ sessionId: "session-1", text: "hello", attachmentIds: ["image-1"] });
     expect(JSON.parse(String(requests[6].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
-    expect(new Headers(requests[4].init?.headers).get("Authorization")).toBe("Bearer secret");
+	  expect(new Headers(requests[4].init?.headers).get("Authorization")).toBeNull();
+	  expect(requests.every((request) => new Headers(request.init?.headers).get("X-OpenBoard-Session") === "user-session-1")).toBe(true);
+	  let remoteHeaders = new Headers();
+	  const remoteConnectionCredential = ["remote", "agent", "credential"].join("-");
+	  await fetchAgentStatus({ baseUrl: "https://agent.example.com", token: remoteConnectionCredential }, async (_input, init) => {
+		remoteHeaders = new Headers(init?.headers);
+		return new Response(JSON.stringify({ connected: true, tools: [] }), {
+		  headers: { "content-type": "application/json" },
+		});
+	  });
+	  expect(remoteHeaders.get("Authorization")).toBe(`Bearer ${remoteConnectionCredential}`);
+	  expect(remoteHeaders.get("X-OpenBoard-Session")).toBeNull();
+	} finally {
+	  clearSessionToken();
+	  if (priorStorage) Object.defineProperty(globalThis, "localStorage", priorStorage);
+	  else delete (globalThis as { localStorage?: Storage }).localStorage;
+	  if (priorLocation) Object.defineProperty(globalThis, "location", priorLocation);
+	  else delete (globalThis as { location?: Location }).location;
+	}
   });
 
   test("reconnects sequenced Codex streams and suppresses replay duplicates", async () => {

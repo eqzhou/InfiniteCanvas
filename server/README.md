@@ -102,7 +102,19 @@ never returned to the web app and no public bucket URL is required.
 The interactive infinite canvas remains in the web app. Go owns local services,
 file persistence helpers, and the optional local Codex bridge. Codex startup is
 opt-in at runtime and requires the `codex` executable (or `OPENBOARD_CODEX_BIN`)
-to be available on the host.
+to be available on the host. Runtime tickets, browser clients, Codex/Claude
+profiles, sessions, events, approvals, and attachments are scoped by both tenant
+and user.
+
+Host CLI execution is enabled automatically only with `OPENBOARD_AUTH_MODE=off`.
+In account modes it fails closed unless `OPENBOARD_AGENT_ACCOUNT_EXECUTION=true`.
+That opt-in is appropriate only for a trusted self-hosted account because the
+CLI still runs as the server OS user; it is not a tenant sandbox. Restrict CWDs
+with `OPENBOARD_AGENT_WORKSPACE_ROOTS` (a platform path list). Paths are
+canonicalized, symlink escapes are rejected, and child processes receive only a
+small OS environment allowlist rather than database, master-key, OAuth, S3, or
+process-token values. Claude defaults to permission mode `default`, never allows
+`bypassPermissions`, and accepts `acceptEdits` only when auth is off.
 
 ## Agent tools
 

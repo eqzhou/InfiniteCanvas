@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 type fakeRuntimeTransport struct {
@@ -26,6 +27,13 @@ type fakeRuntimeTransport struct {
 func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 	server := NewServer(t.TempDir())
 	router := chi.NewRouter()
+	wantScope := agentScope{tenantID: "tenant-runtime", userID: "user-runtime"}
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			actor := store.AuthUser{ID: wantScope.userID, TenantID: wantScope.tenantID}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authUserKey, actor)))
+		})
+	})
 	MountServer(router, server)
 	httpServer := httptest.NewServer(router)
 	defer httpServer.Close()
@@ -84,6 +92,18 @@ func TestRuntimeHTTPWebSocketRoundTrip(t *testing.T) {
 	if json.Unmarshal(readyData, &ready) != nil || ready.Type != "ready" {
 		t.Fatalf("invalid runtime ready message: %s", readyData)
 	}
+	var readyState struct {
+		ClientID string `json:"clientId"`
+	}
+	if json.Unmarshal(ready.Data, &readyState) != nil || readyState.ClientID == "" {
+		t.Fatalf("invalid runtime client identity: %s", ready.Data)
+	}
+	server.runtime.mu.Lock()
+	attachedScope := server.runtime.clients[readyState.ClientID].scope
+	server.runtime.mu.Unlock()
+	if attachedScope != wantScope {
+		t.Fatalf("websocket client scope = %+v, want ticket scope %+v", attachedScope, wantScope)
+	}
 	_, data, err := connection.Read(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +138,10 @@ func newFakeRuntimeTransport() *fakeRuntimeTransport {
 	return &fakeRuntimeTransport{notify: make(chan struct{}, 16)}
 }
 
+func testLocalAgentScope() agentScope {
+	return agentScope{tenantID: "tenant-local", userID: "user-local"}
+}
+
 func (f *fakeRuntimeTransport) Write(_ context.Context, message []byte) error {
 	f.mu.Lock()
 	f.messages = append(f.messages, append([]byte(nil), message...))
@@ -146,23 +170,36 @@ func (f *fakeRuntimeTransport) last(t *testing.T) runtimeEnvelope {
 
 func TestRuntimeTicketsAreSingleUse(t *testing.T) {
 	hub := newRuntimeHub()
-	ticket := hub.issueTicket(time.Minute)
-	if !hub.consumeTicket(ticket) {
+	scope := testLocalAgentScope()
+	ticket := hub.issueTicket(scope, time.Minute)
+	consumed, ok := hub.consumeTicket(ticket)
+	if !ok || consumed != scope {
 		t.Fatal("fresh ticket was rejected")
 	}
-	if hub.consumeTicket(ticket) {
+	if _, ok := hub.consumeTicket(ticket); ok {
 		t.Fatal("ticket was accepted twice")
 	}
-	expired := hub.issueTicket(-time.Second)
-	if hub.consumeTicket(expired) {
+	expired := hub.issueTicket(scope, -time.Second)
+	if _, ok := hub.consumeTicket(expired); ok {
 		t.Fatal("expired ticket was accepted")
+	}
+}
+
+func TestRuntimeTicketReturnsIssuingScope(t *testing.T) {
+	hub := newRuntimeHub()
+	want := agentScope{tenantID: "tenant-a", userID: "user-a"}
+	ticket := hub.issueTicket(want, time.Minute)
+	got, ok := hub.consumeTicket(ticket)
+	if !ok || got != want {
+		t.Fatalf("consumed scope = %+v ok=%v, want %+v", got, ok, want)
 	}
 }
 
 func TestRuntimeCommandsResolveAndStateIsCopied(t *testing.T) {
 	hub := newRuntimeHub()
 	transport := newFakeRuntimeTransport()
-	client := hub.attach(transport)
+	scope := testLocalAgentScope()
+	client := hub.attach(scope, transport)
 	defer hub.detach(client, errors.New("test complete"))
 
 	state := json.RawMessage(`{"route":"/","projectId":"board-1"}`)
@@ -170,14 +207,14 @@ func TestRuntimeCommandsResolveAndStateIsCopied(t *testing.T) {
 		t.Fatal(err)
 	}
 	state[2] = 'X'
-	if got := string(hub.state()); got != `{"route":"/","projectId":"board-1"}` {
+	if got := string(hub.stateFor(scope)); got != `{"route":"/","projectId":"board-1"}` {
 		t.Fatalf("state was not copied: %s", got)
 	}
 
 	result := make(chan json.RawMessage, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		value, err := hub.command(context.Background(), "board.get_selection", json.RawMessage(`{}`))
+		value, err := hub.command(context.Background(), scope, "board.get_selection", json.RawMessage(`{}`))
 		result <- value
 		errCh <- err
 	}()
@@ -199,13 +236,14 @@ func TestRuntimeCommandsResolveAndStateIsCopied(t *testing.T) {
 func TestRuntimeTimeoutAndDisconnectDoNotReplayCommands(t *testing.T) {
 	hub := newRuntimeHub()
 	transport := newFakeRuntimeTransport()
-	client := hub.attach(transport)
+	scope := testLocalAgentScope()
+	client := hub.attach(scope, transport)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := hub.command(ctx, "site.navigate", json.RawMessage(`{"path":"/assets"}`))
+		_, err := hub.command(ctx, scope, "site.navigate", json.RawMessage(`{"path":"/assets"}`))
 		done <- err
 	}()
 	command := transport.last(t)
@@ -218,7 +256,7 @@ func TestRuntimeTimeoutAndDisconnectDoNotReplayCommands(t *testing.T) {
 
 	waiting := make(chan error, 1)
 	go func() {
-		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		_, err := hub.command(context.Background(), scope, "board.get_state", json.RawMessage(`{}`))
 		waiting <- err
 	}()
 	_ = transport.last(t)
@@ -233,10 +271,11 @@ func TestRuntimeTimeoutAndDisconnectDoNotReplayCommands(t *testing.T) {
 
 func TestRuntimeKeepsMultipleBrowserTabsAndRoutesToMostRecent(t *testing.T) {
 	hub := newRuntimeHub()
+	scope := testLocalAgentScope()
 	firstTransport := newFakeRuntimeTransport()
 	secondTransport := newFakeRuntimeTransport()
-	first := hub.attach(firstTransport)
-	second := hub.attach(secondTransport)
+	first := hub.attach(scope, firstTransport)
+	second := hub.attach(scope, secondTransport)
 	defer hub.detach(first, errors.New("test complete"))
 	defer hub.detach(second, errors.New("test complete"))
 
@@ -248,7 +287,7 @@ func TestRuntimeKeepsMultipleBrowserTabsAndRoutesToMostRecent(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		_, err := hub.command(context.Background(), scope, "board.get_state", json.RawMessage(`{}`))
 		done <- err
 	}()
 	command := firstTransport.last(t)
@@ -264,7 +303,7 @@ func TestRuntimeKeepsMultipleBrowserTabsAndRoutesToMostRecent(t *testing.T) {
 		t.Fatal("closing one tab disconnected the remaining browser runtime")
 	}
 	go func() {
-		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		_, err := hub.command(context.Background(), scope, "board.get_state", json.RawMessage(`{}`))
 		done <- err
 	}()
 	command = secondTransport.last(t)
@@ -278,10 +317,11 @@ func TestRuntimeKeepsMultipleBrowserTabsAndRoutesToMostRecent(t *testing.T) {
 
 func TestRuntimePinsCommandsToInitiatingTabAndFallsBackAfterDisconnect(t *testing.T) {
 	hub := newRuntimeHub()
+	scope := testLocalAgentScope()
 	firstTransport := newFakeRuntimeTransport()
 	secondTransport := newFakeRuntimeTransport()
-	first := hub.attach(firstTransport)
-	second := hub.attach(secondTransport)
+	first := hub.attach(scope, firstTransport)
+	second := hub.attach(scope, secondTransport)
 	defer hub.detach(second, errors.New("test complete"))
 	if err := hub.receive(first, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"projectId":"board-one","focused":true}`)}); err != nil {
 		t.Fatal(err)
@@ -290,13 +330,13 @@ func TestRuntimePinsCommandsToInitiatingTabAndFallsBackAfterDisconnect(t *testin
 		t.Fatal(err)
 	}
 
-	if claimed, ok := hub.claimClient(first.id); !ok || claimed != first.id {
+	if claimed, ok := hub.claimClient(scope, first.id); !ok || claimed != first.id {
 		t.Fatalf("claimed client = %q ok=%v, want %q", claimed, ok, first.id)
 	}
-	hub.pin("codex-turn", first.id)
+	hub.pin(scope, "codex-turn", first.id)
 	done := make(chan error, 1)
 	go func() {
-		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		_, err := hub.command(context.Background(), scope, "board.get_state", json.RawMessage(`{}`))
 		done <- err
 	}()
 	command := firstTransport.last(t)
@@ -309,7 +349,7 @@ func TestRuntimePinsCommandsToInitiatingTabAndFallsBackAfterDisconnect(t *testin
 
 	hub.detach(first, errors.New("initiating tab closed"))
 	go func() {
-		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		_, err := hub.command(context.Background(), scope, "board.get_state", json.RawMessage(`{}`))
 		done <- err
 	}()
 	command = secondTransport.last(t)
@@ -319,21 +359,22 @@ func TestRuntimePinsCommandsToInitiatingTabAndFallsBackAfterDisconnect(t *testin
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	hub.unpin("codex-turn")
+	hub.unpin(scope, "codex-turn")
 }
 
 func TestRuntimeRejectsUnknownExplicitClientAndFallsBackOnlyWithinPinnedProject(t *testing.T) {
 	hub := newRuntimeHub()
+	scope := testLocalAgentScope()
 	firstTransport := newFakeRuntimeTransport()
 	sameProjectTransport := newFakeRuntimeTransport()
 	otherProjectTransport := newFakeRuntimeTransport()
-	first := hub.attach(firstTransport)
-	sameProject := hub.attach(sameProjectTransport)
-	otherProject := hub.attach(otherProjectTransport)
+	first := hub.attach(scope, firstTransport)
+	sameProject := hub.attach(scope, sameProjectTransport)
+	otherProject := hub.attach(scope, otherProjectTransport)
 	defer hub.detach(sameProject, errors.New("test complete"))
 	defer hub.detach(otherProject, errors.New("test complete"))
 
-	if _, ok := hub.claimClient("missing-client"); ok {
+	if _, ok := hub.claimClient(scope, "missing-client"); ok {
 		t.Fatal("unknown explicit client was silently rebound")
 	}
 	for client, state := range map[*runtimeClient]string{
@@ -345,12 +386,12 @@ func TestRuntimeRejectsUnknownExplicitClientAndFallsBackOnlyWithinPinnedProject(
 			t.Fatal(err)
 		}
 	}
-	hub.pin("codex-turn", first.id)
+	hub.pin(scope, "codex-turn", first.id)
 	hub.detach(first, errors.New("initiating tab closed"))
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		_, err := hub.command(context.Background(), scope, "board.get_state", json.RawMessage(`{}`))
 		done <- err
 	}()
 	command := sameProjectTransport.last(t)
@@ -367,10 +408,11 @@ func TestRuntimeRejectsUnknownExplicitClientAndFallsBackOnlyWithinPinnedProject(
 
 func TestRuntimeUnfocusedStateDoesNotStealRecentFocusedRouting(t *testing.T) {
 	hub := newRuntimeHub()
+	scope := testLocalAgentScope()
 	firstTransport := newFakeRuntimeTransport()
 	secondTransport := newFakeRuntimeTransport()
-	first := hub.attach(firstTransport)
-	second := hub.attach(secondTransport)
+	first := hub.attach(scope, firstTransport)
+	second := hub.attach(scope, secondTransport)
 	defer hub.detach(first, errors.New("test complete"))
 	defer hub.detach(second, errors.New("test complete"))
 
@@ -382,7 +424,7 @@ func TestRuntimeUnfocusedStateDoesNotStealRecentFocusedRouting(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := hub.command(context.Background(), "board.get_state", json.RawMessage(`{}`))
+		_, err := hub.command(context.Background(), scope, "board.get_state", json.RawMessage(`{}`))
 		done <- err
 	}()
 	command := firstTransport.last(t)
@@ -396,8 +438,9 @@ func TestRuntimeUnfocusedStateDoesNotStealRecentFocusedRouting(t *testing.T) {
 
 func TestRuntimeUsesHistoricalFocusWhenEveryTabIsBlurred(t *testing.T) {
 	hub := newRuntimeHub()
-	first := hub.attach(newFakeRuntimeTransport())
-	second := hub.attach(newFakeRuntimeTransport())
+	scope := testLocalAgentScope()
+	first := hub.attach(scope, newFakeRuntimeTransport())
+	second := hub.attach(scope, newFakeRuntimeTransport())
 	defer hub.detach(first, errors.New("test complete"))
 	defer hub.detach(second, errors.New("test complete"))
 
@@ -420,16 +463,129 @@ func TestRuntimeUsesHistoricalFocusWhenEveryTabIsBlurred(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	claimed, ok := hub.claimClient("")
+	claimed, ok := hub.claimClient(scope, "")
 	if !ok || claimed != first.id {
 		t.Fatalf("claimed=%q ok=%v, want most recently focused %q", claimed, ok, first.id)
 	}
 }
 
+func TestRuntimeClientClaimCommandAndFallbackStayWithinOwner(t *testing.T) {
+	hub := newRuntimeHub()
+	owner := agentScope{tenantID: "tenant-a", userID: "user-a"}
+	otherUser := agentScope{tenantID: "tenant-a", userID: "user-b"}
+	otherTenant := agentScope{tenantID: "tenant-b", userID: "user-c"}
+	ownerTransport := newFakeRuntimeTransport()
+	otherUserTransport := newFakeRuntimeTransport()
+	otherTenantTransport := newFakeRuntimeTransport()
+	ownerClient := hub.attach(owner, ownerTransport)
+	otherUserClient := hub.attach(otherUser, otherUserTransport)
+	otherTenantClient := hub.attach(otherTenant, otherTenantTransport)
+	defer hub.detach(otherUserClient, errors.New("test complete"))
+	defer hub.detach(otherTenantClient, errors.New("test complete"))
+
+	for client, state := range map[*runtimeClient]string{
+		ownerClient:       `{"projectId":"shared-board","focused":false}`,
+		otherUserClient:   `{"projectId":"shared-board","focused":true}`,
+		otherTenantClient: `{"projectId":"shared-board","focused":true}`,
+	} {
+		if err := hub.receive(client, runtimeEnvelope{Type: "state", Data: json.RawMessage(state)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, ok := hub.claimClient(owner, otherUserClient.id); ok {
+		t.Fatal("owner claimed another user's runtime client")
+	}
+	if _, ok := hub.claimClient(owner, otherTenantClient.id); ok {
+		t.Fatal("owner claimed another tenant's runtime client")
+	}
+	if claimed, ok := hub.claimClient(owner, ""); !ok || claimed != ownerClient.id {
+		t.Fatalf("automatic owner claim = %q ok=%v, want %q", claimed, ok, ownerClient.id)
+	}
+
+	commandContext, cancelCommand := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCommand()
+	done := make(chan error, 1)
+	go func() {
+		_, err := hub.command(commandContext, owner, "board.get_state", json.RawMessage(`{}`))
+		done <- err
+	}()
+	command := ownerTransport.last(t)
+	if err := hub.receive(ownerClient, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(otherUserTransport.messages) != 0 || len(otherTenantTransport.messages) != 0 {
+		t.Fatal("owner command was written to a foreign runtime client")
+	}
+
+	hub.pin(owner, "owner-turn", ownerClient.id)
+	hub.detach(ownerClient, errors.New("owner browser disconnected"))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := hub.command(ctx, owner, "board.get_state", json.RawMessage(`{}`)); err == nil || err.Error() != "browser runtime is not connected" {
+		t.Fatalf("foreign client was used as owner fallback: %v", err)
+	}
+	if len(otherUserTransport.messages) != 0 || len(otherTenantTransport.messages) != 0 {
+		t.Fatal("owner disconnect fell back to a foreign runtime client")
+	}
+}
+
+func TestRuntimePinsAndUnpinsAreScoped(t *testing.T) {
+	hub := newRuntimeHub()
+	owner := agentScope{tenantID: "tenant-a", userID: "user-a"}
+	foreign := agentScope{tenantID: "tenant-b", userID: "user-b"}
+	ownerPinnedTransport := newFakeRuntimeTransport()
+	ownerActiveTransport := newFakeRuntimeTransport()
+	foreignTransport := newFakeRuntimeTransport()
+	ownerPinned := hub.attach(owner, ownerPinnedTransport)
+	ownerActive := hub.attach(owner, ownerActiveTransport)
+	foreignClient := hub.attach(foreign, foreignTransport)
+	defer hub.detach(ownerPinned, errors.New("test complete"))
+	defer hub.detach(ownerActive, errors.New("test complete"))
+	defer hub.detach(foreignClient, errors.New("test complete"))
+
+	if err := hub.receive(ownerActive, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"projectId":"board-a","focused":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.receive(foreignClient, runtimeEnvelope{Type: "state", Data: json.RawMessage(`{"projectId":"board-b","focused":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	hub.pin(owner, "shared-turn", ownerPinned.id)
+	hub.pin(foreign, "shared-turn", foreignClient.id)
+	hub.unpin(foreign, "shared-turn")
+
+	runRuntimeCommand := func(scope agentScope, transport *fakeRuntimeTransport, client *runtimeClient) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			_, err := hub.command(ctx, scope, "board.get_state", json.RawMessage(`{}`))
+			done <- err
+		}()
+		command := transport.last(t)
+		if err := hub.receive(client, runtimeEnvelope{Type: "result", ID: command.ID, OK: true, Data: json.RawMessage(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runRuntimeCommand(owner, ownerPinnedTransport, ownerPinned)
+	if len(ownerActiveTransport.messages) != 0 {
+		t.Fatal("foreign-scope pin or unpin displaced the owner's pin")
+	}
+	runRuntimeCommand(foreign, foreignTransport, foreignClient)
+}
+
 func TestExecuteToolRoutesLiveToolsWithoutHoldingProjectLock(t *testing.T) {
 	server := NewServer(t.TempDir())
 	transport := newFakeRuntimeTransport()
-	client := server.runtime.attach(transport)
+	client := server.runtime.attach(agentScope{}, transport)
 	defer server.runtime.detach(client, errors.New("test complete"))
 
 	result := make(chan any, 1)

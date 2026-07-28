@@ -45,5 +45,14 @@ Independent OpenBoard feature; not derived from upstream AGPL source.
 - Login navigation preserves the originally requested SPA route and returns to
   it after successful authentication.
 - Blobs live under `data/blobs/<tenantId>/…`. Reads for tenant `local` also fall back to the pre-migration flat `data/blobs/` layout.
-- Claude permission mode defaults to `acceptEdits`; override with `OPENBOARD_CLAUDE_PERMISSION_MODE`.
+- Runtime tickets/clients and Codex/Claude profiles, sessions, events, approvals,
+  and attachments are isolated by tenant plus user.
+- Account-backed host CLI execution fails closed unless the deployer explicitly
+  sets `OPENBOARD_AGENT_ACCOUNT_EXECUTION=true`; this is for trusted self-hosted
+  accounts and is not an OS/container tenant sandbox.
+- `OPENBOARD_AGENT_WORKSPACE_ROOTS` bounds canonical Codex/Claude CWDs and rejects
+  traversal or symlink escape; agent subprocesses receive a minimal environment
+  allowlist instead of server credentials.
+- Claude permission mode defaults to `default`; `bypassPermissions` is rejected,
+  and `acceptEdits` is honored only with authentication disabled.
 - Claude SSE subscriber channels close via `sync.Once` so disconnect + session end cannot double-close.

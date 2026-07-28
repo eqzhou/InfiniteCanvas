@@ -342,14 +342,15 @@ func TestCodexSubscriberResumesAfterSequenceAndRejectsExpiredHistory(t *testing.
 
 func TestCodexManagerAllowsOnlyOneBoundTurnAcrossProfiles(t *testing.T) {
 	manager := newCodexManager()
-	if !manager.claimTurn("session-one") {
+	scope := agentScope{tenantID: "tenant-a", userID: "user-a"}
+	if !manager.claimTurn(scope, "session-one") {
 		t.Fatal("first turn was rejected")
 	}
-	if manager.claimTurn("session-two") {
+	if manager.claimTurn(scope, "session-two") {
 		t.Fatal("concurrent turn from another profile was accepted")
 	}
-	manager.releaseTurn("session-one")
-	if !manager.claimTurn("session-two") {
+	manager.releaseTurn(scope, "session-one")
+	if !manager.claimTurn(scope, "session-two") {
 		t.Fatal("next turn remained blocked after release")
 	}
 }

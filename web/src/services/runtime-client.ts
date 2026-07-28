@@ -1,7 +1,7 @@
 import { validateJsonObject } from "@/lib/bounded-json";
 import { parseBoardProject } from "@/lib/board-document";
 import type { BoardEdge, BoardNode, BoardProject, Viewport } from "@/types/board";
-import { normalizeAgentBaseUrl, type AgentConnection } from "@/services/local-agent";
+import { agentAuthHeaders, normalizeAgentBaseUrl, type AgentConnection } from "@/services/local-agent";
 
 export const RUNTIME_METHODS = [
   "board.get_state",
@@ -170,8 +170,7 @@ export async function requestRuntimeTicket(
   fetcher: typeof fetch = fetch,
 ): Promise<{ ticket: string; websocketUrl: string }> {
   const baseUrl = normalizeAgentBaseUrl(connection.baseUrl);
-  const headers = new Headers();
-  if (connection.token) headers.set("Authorization", `Bearer ${connection.token}`);
+  const headers = agentAuthHeaders(connection);
   const response = await fetcher(`${baseUrl}/api/runtime/ticket`, {
     method: "POST",
     headers,
@@ -204,8 +203,7 @@ export async function uploadRuntimeSnapshot(
   }
   const body = new FormData();
   body.append("file", image, "board-snapshot.png");
-  const headers = new Headers();
-  if (connection.token) headers.set("Authorization", `Bearer ${connection.token}`);
+  const headers = agentAuthHeaders(connection);
   const response = await fetcher(`${baseUrl}/api/files`, {
     method: "POST",
     headers,

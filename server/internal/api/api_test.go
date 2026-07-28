@@ -309,7 +309,7 @@ func TestPendingCodexAttachmentCanBeCancelledAndStartupPurgesOrphans(t *testing.
 	}
 	session.pendingAttachments["image-one"] = codexAttachment{ID: "image-one", Path: path}
 	server.codex.sessions[session.id] = session
-	server.codex.profiles[session.profile] = session.id
+	server.codex.profiles[agentProfileKey{scope: session.scope, profile: session.profile}] = session.id
 	router := chi.NewRouter()
 	MountServer(router, server)
 

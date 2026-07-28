@@ -73,7 +73,7 @@ func (s *Server) executeAgentTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.executeTool(r.Context(), tenantIDFrom(r), request.Tool, request.Arguments)
+	data, err := s.executeTool(r.Context(), requestAgentScope(r), request.Tool, request.Arguments)
 	if err != nil {
 		var typed *toolError
 		if errors.As(err, &typed) {
@@ -89,17 +89,14 @@ func (s *Server) executeAgentTool(w http.ResponseWriter, r *http.Request) {
 // ExecuteTool implements the MCP tool executor interface and runs tools under the
 // default local tenant. HTTP callers should use executeTool with the request tenant.
 func (s *Server) ExecuteTool(tool string, arguments json.RawMessage) (any, error) {
-	return s.executeTool(context.Background(), store.DefaultTenantID, tool, arguments)
+	return s.executeTool(context.Background(), agentScope{}, tool, arguments)
 }
 
-func (s *Server) executeTool(ctx context.Context, tenantID string, tool string, arguments json.RawMessage) (any, error) {
-	if tenantID == "" {
-		tenantID = store.DefaultTenantID
-	}
+func (s *Server) executeTool(ctx context.Context, scope agentScope, tool string, arguments json.RawMessage) (any, error) {
 	if isBrowserRuntimeTool(tool) {
 		toolCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		result, err := s.runtime.command(toolCtx, tool, arguments)
+		result, err := s.runtime.command(toolCtx, scope, tool, arguments)
 		if err != nil {
 			return nil, err
 		}
@@ -108,6 +105,10 @@ func (s *Server) executeTool(ctx context.Context, tenantID string, tool string, 
 			return nil, fmt.Errorf("decode browser runtime result: %w", err)
 		}
 		return decoded, nil
+	}
+	tenantID := scope.tenantID
+	if tenantID == "" {
+		tenantID = store.DefaultTenantID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

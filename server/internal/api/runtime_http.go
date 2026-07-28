@@ -36,7 +36,7 @@ func (s *Server) runtimeTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{
-		"ticket":      s.runtime.issueTicket(runtimeTicketTTL),
+		"ticket":      s.runtime.issueTicket(requestAgentScope(r), runtimeTicketTTL),
 		"expiresInMs": runtimeTicketTTL.Milliseconds(),
 	})
 }
@@ -48,7 +48,8 @@ func (s *Server) runtimeSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !s.runtime.consumeTicket(r.URL.Query().Get("ticket")) {
+	scope, ok := s.runtime.consumeTicket(r.URL.Query().Get("ticket"))
+	if !ok {
 		http.Error(w, "runtime ticket is invalid or expired", http.StatusUnauthorized)
 		return
 	}
@@ -60,7 +61,7 @@ func (s *Server) runtimeSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	connection.SetReadLimit(maxRuntimeMessageBytes)
 	transport := &websocketRuntimeTransport{connection: connection}
-	client := s.runtime.attach(transport)
+	client := s.runtime.attach(scope, transport)
 	defer s.runtime.detach(client, errors.New("browser disconnected"))
 	ready, _ := json.Marshal(runtimeEnvelope{
 		Type: "ready",
@@ -114,7 +115,7 @@ func (s *Server) runtimeCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(request.TimeoutMS)*time.Millisecond)
 	defer cancel()
-	result, err := s.runtime.command(ctx, request.Method, request.Params)
+	result, err := s.runtime.command(ctx, requestAgentScope(r), request.Method, request.Params)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, context.DeadlineExceeded) {

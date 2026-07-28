@@ -43,6 +43,22 @@ jobs:
     name: Go checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      OPENBOARD_TEST_DATABASE_URL: postgres://openboard_go:openboard_go@127.0.0.1:5432/openboard_go?sslmode=disable
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: openboard_go
+          POSTGRES_USER: openboard_go
+          POSTGRES_PASSWORD: openboard_go
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openboard_go -d openboard_go"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: server
@@ -176,7 +192,7 @@ jobs:
           grep -q 'postgresql+redis' health.json
           docker compose exec -T openboard sh -c 'test "$(id -u)" -ne 0'
           docker compose exec -T postgres psql -U openboard_local -d openboard_local -Atc \
-            "select count(*) from information_schema.tables where table_schema='public'" | grep -Eq '^[2-9][0-9]*$'
+            "select count(*) from information_schema.tables where table_schema='public'" | grep -Eq '^(1[2-9]|[2-9][0-9]+)$'
           docker compose exec -T redis redis-cli -a "$OPENBOARD_REDIS_PASSWORD" ping | grep -q PONG
       - name: Container logs
         if: failure()

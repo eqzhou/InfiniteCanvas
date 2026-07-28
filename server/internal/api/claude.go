@@ -29,7 +29,8 @@ const (
 type claudeManager struct {
 	mu       sync.RWMutex
 	sessions map[string]*claudeSession
-	profiles map[string]string
+	profiles map[agentProfileKey]string
+	closed   bool
 }
 
 type claudeSub struct {
@@ -43,6 +44,7 @@ func (sub *claudeSub) close() {
 
 type claudeSession struct {
 	id              string
+	scope           agentScope
 	profile         string
 	claudeSessionID string
 	cwd             string
@@ -78,7 +80,26 @@ type claudeEvent struct {
 func newClaudeManager() *claudeManager {
 	return &claudeManager{
 		sessions: make(map[string]*claudeSession),
-		profiles: make(map[string]string),
+		profiles: make(map[agentProfileKey]string),
+	}
+}
+
+func (m *claudeManager) closeAll() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.closed = true
+	sessions := make([]*claudeSession, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	m.sessions = make(map[string]*claudeSession)
+	m.profiles = make(map[agentProfileKey]string)
+	m.mu.Unlock()
+	for _, session := range sessions {
+		session.close()
 	}
 }
 
@@ -97,19 +118,28 @@ func claudeAvailable() bool {
 }
 
 // claudePermissionMode controls Claude Code tool approval behavior for headless turns.
-// Default remains acceptEdits for personal local use; set OPENBOARD_CLAUDE_PERMISSION_MODE
-// to "default" or "plan" for stricter approval (may block tools until interactive approval).
+// Headless Claude must never bypass approvals. acceptEdits remains an explicit
+// opt-in for auth-off local installations only; account-backed deployments fail safe.
 func claudePermissionMode() string {
 	mode := strings.TrimSpace(os.Getenv("OPENBOARD_CLAUDE_PERMISSION_MODE"))
 	switch mode {
-	case "default", "plan", "acceptEdits", "bypassPermissions":
+	case "default", "plan":
 		return mode
+	case "acceptEdits":
+		if authMode() == "off" {
+			return mode
+		}
+		return "default"
 	default:
-		return "acceptEdits"
+		return "default"
 	}
 }
 
 func (s *Server) createClaudeSession(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
+	scope := requestAgentScope(r)
 	r.Body = http.MaxBytesReader(w, r.Body, maxClaudeBody)
 	var req struct {
 		CWD     string `json:"cwd"`
@@ -126,9 +156,10 @@ func (s *Server) createClaudeSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "claude CLI not found; install Claude Code and ensure `claude` is on PATH (or set OPENBOARD_CLAUDE_BIN)", http.StatusServiceUnavailable)
 		return
 	}
-	cwd := strings.TrimSpace(req.CWD)
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+	cwd, err := resolveAgentCWD(req.CWD)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	profile := strings.TrimSpace(req.Profile)
 	if profile == "" {
@@ -138,29 +169,40 @@ func (s *Server) createClaudeSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid claude profile", http.StatusBadRequest)
 		return
 	}
+	profileKey := agentProfileKey{scope: scope, profile: profile}
+	s.claude.mu.RLock()
+	managerClosed := s.claude.closed
+	s.claude.mu.RUnlock()
+	if managerClosed {
+		http.Error(w, "claude manager is closed", http.StatusServiceUnavailable)
+		return
+	}
 
 	if !req.Fresh {
-		if existing, ok := s.findClaudeByProfile(profile); ok {
+		if existing, ok := s.findClaudeByProfileForScope(scope, profile); ok {
 			writeJSON(w, existing.snapshot(true))
 			return
 		}
 	}
 
 	session := &claudeSession{
-		id:      randomID("claude"),
-		profile: profile,
-		cwd:     cwd,
-		subs:    make(map[*claudeSub]struct{}),
+		id: randomID("claude"), scope: scope, profile: profile, cwd: cwd,
+		subs: make(map[*claudeSub]struct{}),
 	}
 	s.claude.mu.Lock()
-	if prevID, ok := s.claude.profiles[profile]; ok {
+	if s.claude.closed {
+		s.claude.mu.Unlock()
+		http.Error(w, "claude manager is closed", http.StatusServiceUnavailable)
+		return
+	}
+	if prevID, ok := s.claude.profiles[profileKey]; ok {
 		if prev, exists := s.claude.sessions[prevID]; exists {
 			go prev.close()
 		}
 		delete(s.claude.sessions, prevID)
 	}
 	s.claude.sessions[session.id] = session
-	s.claude.profiles[profile] = session.id
+	s.claude.profiles[profileKey] = session.id
 	s.claude.mu.Unlock()
 
 	session.publish(claudeEvent{
@@ -175,11 +217,12 @@ func (s *Server) createClaudeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getClaudeSession(w http.ResponseWriter, r *http.Request) {
+	scope := requestAgentScope(r)
 	profile := strings.TrimSpace(r.URL.Query().Get("profile"))
 	if profile == "" {
 		profile = "claude-default"
 	}
-	if session, ok := s.findClaudeByProfile(profile); ok {
+	if session, ok := s.findClaudeByProfileForScope(scope, profile); ok {
 		writeJSON(w, session.snapshot(true))
 		return
 	}
@@ -204,7 +247,7 @@ func (s *Server) sendClaudeMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
-	session, ok := s.findClaude(req.SessionID)
+	session, ok := s.findClaudeForScope(requestAgentScope(r), req.SessionID)
 	if !ok {
 		http.Error(w, "claude session not found", http.StatusNotFound)
 		return
@@ -226,7 +269,7 @@ func (s *Server) interruptClaude(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"sessionId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	session, ok := s.findClaude(req.SessionID)
+	session, ok := s.findClaudeForScope(requestAgentScope(r), req.SessionID)
 	if !ok {
 		http.Error(w, "claude session not found", http.StatusNotFound)
 		return
@@ -236,7 +279,7 @@ func (s *Server) interruptClaude(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) claudeEvents(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.findClaude(r.URL.Query().Get("sessionId"))
+	session, ok := s.findClaudeForScope(requestAgentScope(r), r.URL.Query().Get("sessionId"))
 	if !ok {
 		http.Error(w, "claude session not found", http.StatusNotFound)
 		return
@@ -284,13 +327,17 @@ func (s *Server) claudeEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) closeClaudeSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	scope := requestAgentScope(r)
 	s.claude.mu.Lock()
 	session, ok := s.claude.sessions[id]
-	if ok {
+	if ok && session.scope == scope {
 		delete(s.claude.sessions, id)
-		if s.claude.profiles[session.profile] == id {
-			delete(s.claude.profiles, session.profile)
+		key := agentProfileKey{scope: scope, profile: session.profile}
+		if s.claude.profiles[key] == id {
+			delete(s.claude.profiles, key)
 		}
+	} else {
+		ok = false
 	}
 	s.claude.mu.Unlock()
 	if !ok {
@@ -302,21 +349,35 @@ func (s *Server) closeClaudeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) findClaude(id string) (*claudeSession, bool) {
+	return s.findClaudeForScope(agentScope{}, id)
+}
+
+func (s *Server) findClaudeForScope(scope agentScope, id string) (*claudeSession, bool) {
 	s.claude.mu.RLock()
 	defer s.claude.mu.RUnlock()
 	session, ok := s.claude.sessions[id]
-	return session, ok && !session.closed
+	return session, ok && session.scope == scope && !session.isClosed()
 }
 
 func (s *Server) findClaudeByProfile(profile string) (*claudeSession, bool) {
+	return s.findClaudeByProfileForScope(agentScope{}, profile)
+}
+
+func (s *Server) findClaudeByProfileForScope(scope agentScope, profile string) (*claudeSession, bool) {
 	s.claude.mu.RLock()
 	defer s.claude.mu.RUnlock()
-	id, ok := s.claude.profiles[profile]
+	id, ok := s.claude.profiles[agentProfileKey{scope: scope, profile: profile}]
 	if !ok {
 		return nil, false
 	}
 	session, ok := s.claude.sessions[id]
-	return session, ok && !session.closed
+	return session, ok && session.scope == scope && !session.isClosed()
+}
+
+func (session *claudeSession) isClosed() bool {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.closed
 }
 
 func (session *claudeSession) snapshot(reused bool) claudeSessionSnapshot {
@@ -465,18 +526,24 @@ func (session *claudeSession) runTurn(prompt string) {
 		})
 	}()
 
-	bin := claudeBinary()
-	if bin == "" {
-		session.publish(claudeEvent{Type: "error", Data: map[string]any{"message": "claude binary not found"}})
+	session.mu.Lock()
+	if session.closed || !session.running {
+		session.running = false
+		session.mu.Unlock()
 		return
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-	session.mu.Lock()
 	session.cancel = cancel
 	claudeSessionID := session.claudeSessionID
 	cwd := session.cwd
 	session.mu.Unlock()
+
+	bin := claudeBinary()
+	if bin == "" {
+		session.publish(claudeEvent{Type: "error", Data: map[string]any{"message": "claude binary not found"}})
+		cancel()
+		return
+	}
 
 	permMode := claudePermissionMode()
 	args := []string{
@@ -486,7 +553,7 @@ func (session *claudeSession) runTurn(prompt string) {
 		"--include-partial-messages",
 		"--permission-mode", permMode,
 	}
-	if mcpConfig := buildOpenBoardMCPConfig(session.id); mcpConfig != "" {
+	if mcpConfig := buildOpenBoardMCPConfig(session.scope, session.id); mcpConfig != "" {
 		args = append(args, "--mcp-config", mcpConfig)
 		defer os.Remove(mcpConfig)
 	}
@@ -497,7 +564,7 @@ func (session *claudeSession) runTurn(prompt string) {
 
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=openboard")
+	cmd.Env = append(agentProcessEnvironment(session.scope, os.Environ()), "CLAUDE_CODE_ENTRYPOINT=openboard")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		session.publish(claudeEvent{Type: "error", Data: map[string]any{"message": err.Error()}})
@@ -672,7 +739,12 @@ func extractClaudeDelta(raw map[string]any) string {
 	return ""
 }
 
-func buildOpenBoardMCPConfig(sessionID string) string {
+func buildOpenBoardMCPConfig(scope agentScope, sessionID string) string {
+	// The connection file contains a machine capability, not a tenant identity.
+	// Never expose it to an account-owned session until a turn-scoped grant exists.
+	if scope != (agentScope{}) {
+		return ""
+	}
 	mcpBin, err := exec.LookPath("openboard-mcp")
 	if err != nil {
 		home, _ := os.UserHomeDir()

@@ -30,22 +30,46 @@ const codexTurnStartTimeout = 30 * time.Second
 var errCodexHistoryGap = errors.New("Codex event history is no longer available")
 
 type codexManager struct {
-	mu                  sync.RWMutex
-	sessions            map[string]*codexSession
-	profiles            map[string]string
-	creating            map[string]*codexCreation
-	activeTurnSessionID string
+	mu                   sync.RWMutex
+	sessions             map[string]*codexSession
+	profiles             map[agentProfileKey]string
+	creating             map[agentProfileKey]*codexCreation
+	activeTurnSessionIDs map[agentScope]string
+	closed               bool
+	root                 context.Context
+	cancel               context.CancelFunc
+	startupWG            sync.WaitGroup
 }
 
 type codexCreation struct {
 	done     chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
 	snapshot codexSessionSnapshot
 	status   int
 	err      string
 }
 
+func (c *codexCreation) complete(snapshot codexSessionSnapshot, status int, message string) {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.snapshot = snapshot
+		c.status = status
+		c.err = message
+		c.mu.Unlock()
+		close(c.done)
+	})
+}
+
+func (c *codexCreation) result() (codexSessionSnapshot, int, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.snapshot, c.status, c.err
+}
+
 type codexSession struct {
 	id                 string
+	scope              agentScope
 	profile            string
 	threadID           string
 	turnID             string
@@ -92,29 +116,60 @@ type codexEvent struct {
 }
 
 func newCodexManager() *codexManager {
+	root, cancel := context.WithCancel(context.Background())
 	return &codexManager{
-		sessions: make(map[string]*codexSession),
-		profiles: make(map[string]string),
-		creating: make(map[string]*codexCreation),
+		sessions:             make(map[string]*codexSession),
+		profiles:             make(map[agentProfileKey]string),
+		creating:             make(map[agentProfileKey]*codexCreation),
+		activeTurnSessionIDs: make(map[agentScope]string),
+		root:                 root,
+		cancel:               cancel,
 	}
 }
 
-func (m *codexManager) claimTurn(sessionID string) bool {
+func (m *codexManager) claimTurn(scope agentScope, sessionID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.activeTurnSessionID != "" && m.activeTurnSessionID != sessionID {
+	if active := m.activeTurnSessionIDs[scope]; active != "" && active != sessionID {
 		return false
 	}
-	m.activeTurnSessionID = sessionID
+	m.activeTurnSessionIDs[scope] = sessionID
 	return true
 }
 
-func (m *codexManager) releaseTurn(sessionID string) {
+func (m *codexManager) releaseTurn(scope agentScope, sessionID string) {
 	m.mu.Lock()
-	if m.activeTurnSessionID == sessionID {
-		m.activeTurnSessionID = ""
+	if m.activeTurnSessionIDs[scope] == sessionID {
+		delete(m.activeTurnSessionIDs, scope)
 	}
 	m.mu.Unlock()
+}
+
+func (m *codexManager) closeAll() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		m.startupWG.Wait()
+		return
+	}
+	m.closed = true
+	m.cancel()
+	sessions := make([]*codexSession, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	m.sessions = make(map[string]*codexSession)
+	m.profiles = make(map[agentProfileKey]string)
+	for _, creation := range m.creating {
+		creation.complete(codexSessionSnapshot{}, http.StatusServiceUnavailable, "codex manager is closed")
+	}
+	m.creating = make(map[agentProfileKey]*codexCreation)
+	m.activeTurnSessionIDs = make(map[agentScope]string)
+	m.mu.Unlock()
+	for _, session := range sessions {
+		session.close()
+	}
+	m.startupWG.Wait()
 }
 
 func randomID(prefix string) string {
@@ -126,6 +181,10 @@ func randomID(prefix string) string {
 }
 
 func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
+	scope := requestAgentScope(r)
 	r.Body = http.MaxBytesReader(w, r.Body, maxCodexBody)
 	var req struct {
 		CWD     string `json:"cwd"`
@@ -138,9 +197,10 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid codex session request", http.StatusBadRequest)
 		return
 	}
-	cwd := strings.TrimSpace(req.CWD)
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+	cwd, err := resolveAgentCWD(req.CWD)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	profile := strings.TrimSpace(req.Profile)
 	if profile == "" {
@@ -150,16 +210,22 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid codex profile", http.StatusBadRequest)
 		return
 	}
+	profileKey := agentProfileKey{scope: scope, profile: profile}
 	s.codex.mu.Lock()
-	if creating := s.codex.creating[profile]; creating != nil {
+	if s.codex.closed {
+		s.codex.mu.Unlock()
+		http.Error(w, "codex manager is closed", http.StatusServiceUnavailable)
+		return
+	}
+	if creating := s.codex.creating[profileKey]; creating != nil {
 		s.codex.mu.Unlock()
 		select {
 		case <-creating.done:
-			if creating.err != "" {
-				http.Error(w, creating.err, creating.status)
+			snapshot, status, message := creating.result()
+			if message != "" {
+				http.Error(w, message, status)
 				return
 			}
-			snapshot := creating.snapshot
 			snapshot.Reused = true
 			writeJSON(w, snapshot)
 		case <-r.Context().Done():
@@ -167,7 +233,7 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	existingID := s.codex.profiles[profile]
+	existingID := s.codex.profiles[profileKey]
 	existing := s.codex.sessions[existingID]
 	if existing != nil && !existing.isClosed() {
 		if req.Fresh && existing.snapshot(false).Running {
@@ -186,15 +252,20 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 	creation := &codexCreation{done: make(chan struct{})}
 	s.codex.mu.Lock()
 	// A creator could have appeared while the prior session state was inspected.
-	if current := s.codex.creating[profile]; current != nil {
+	if s.codex.closed {
+		s.codex.mu.Unlock()
+		http.Error(w, "codex manager is closed", http.StatusServiceUnavailable)
+		return
+	}
+	if current := s.codex.creating[profileKey]; current != nil {
 		s.codex.mu.Unlock()
 		select {
 		case <-current.done:
-			if current.err != "" {
-				http.Error(w, current.err, current.status)
+			snapshot, status, message := current.result()
+			if message != "" {
+				http.Error(w, message, status)
 				return
 			}
-			snapshot := current.snapshot
 			snapshot.Reused = true
 			writeJSON(w, snapshot)
 		case <-r.Context().Done():
@@ -202,7 +273,7 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	latestID := s.codex.profiles[profile]
+	latestID := s.codex.profiles[profileKey]
 	latest := s.codex.sessions[latestID]
 	if latestID != existingID && latest != nil && !latest.isClosed() {
 		snapshot := latest.snapshot(true)
@@ -210,28 +281,38 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 		s.codex.mu.Unlock()
 		return
 	}
-	s.codex.creating[profile] = creation
+	s.codex.creating[profileKey] = creation
+	s.codex.startupWG.Add(1)
+	managerRoot := s.codex.root
 	s.codex.mu.Unlock()
+	defer s.codex.startupWG.Done()
 	// The HTTP request context ends as soon as this response is sent. A Codex
 	// session must outlive the request and is cancelled explicitly on close.
-	session, err := startCodexSession(context.Background(), cwd)
+	session, err := startCodexSessionForScope(managerRoot, scope, cwd)
 	if err != nil {
 		message := "codex app-server unavailable: " + err.Error()
 		http.Error(w, message, http.StatusServiceUnavailable)
 		s.codex.mu.Lock()
-		creation.status = http.StatusServiceUnavailable
-		creation.err = message
-		delete(s.codex.creating, profile)
-		close(creation.done)
+		delete(s.codex.creating, profileKey)
+		creation.complete(codexSessionSnapshot{}, http.StatusServiceUnavailable, message)
 		s.codex.mu.Unlock()
 		return
 	}
 	session.profile = profile
+	session.scope = scope
 	s.codex.mu.Lock()
-	previousID := s.codex.profiles[profile]
+	if s.codex.closed {
+		delete(s.codex.creating, profileKey)
+		creation.complete(codexSessionSnapshot{}, http.StatusServiceUnavailable, "codex manager is closed")
+		s.codex.mu.Unlock()
+		session.close()
+		http.Error(w, "codex manager is closed", http.StatusServiceUnavailable)
+		return
+	}
+	previousID := s.codex.profiles[profileKey]
 	previous := s.codex.sessions[previousID]
 	s.codex.sessions[session.id] = session
-	s.codex.profiles[profile] = session.id
+	s.codex.profiles[profileKey] = session.id
 	if previous != nil {
 		delete(s.codex.sessions, previous.id)
 	}
@@ -242,13 +323,13 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 	snapshot := session.snapshot(false)
 	writeJSON(w, snapshot)
 	s.codex.mu.Lock()
-	creation.snapshot = snapshot
-	delete(s.codex.creating, profile)
-	close(creation.done)
+	delete(s.codex.creating, profileKey)
+	creation.complete(snapshot, 0, "")
 	s.codex.mu.Unlock()
 }
 
 func (s *Server) getCodexSession(w http.ResponseWriter, r *http.Request) {
+	scope := requestAgentScope(r)
 	profile := strings.TrimSpace(r.URL.Query().Get("profile"))
 	if profile == "" {
 		profile = "default"
@@ -258,7 +339,7 @@ func (s *Server) getCodexSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.codex.mu.RLock()
-	session := s.codex.sessions[s.codex.profiles[profile]]
+	session := s.codex.sessions[s.codex.profiles[agentProfileKey{scope: scope, profile: profile}]]
 	s.codex.mu.RUnlock()
 	if session == nil || session.isClosed() {
 		http.Error(w, "codex session not found", http.StatusNotFound)
@@ -285,6 +366,10 @@ func (s *codexSession) stateEventLocked() codexEvent {
 }
 
 func startCodexSession(parent context.Context, cwd string) (*codexSession, error) {
+	return startCodexSessionForScope(parent, agentScope{}, cwd)
+}
+
+func startCodexSessionForScope(parent context.Context, scope agentScope, cwd string) (*codexSession, error) {
 	bin := strings.TrimSpace(os.Getenv("OPENBOARD_CODEX_BIN"))
 	if bin == "" {
 		bin = "codex"
@@ -297,6 +382,7 @@ func startCodexSession(parent context.Context, cwd string) (*codexSession, error
 	defer finishStartup()
 	cmd := exec.CommandContext(ctx, bin, "app-server", "--stdio")
 	cmd.Dir = cwd
+	cmd.Env = agentProcessEnvironment(scope, os.Environ())
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -530,10 +616,14 @@ func (s *codexSession) close() {
 }
 
 func (s *Server) findCodex(id string) (*codexSession, bool) {
+	return s.findCodexForScope(agentScope{}, id)
+}
+
+func (s *Server) findCodexForScope(scope agentScope, id string) (*codexSession, bool) {
 	s.codex.mu.RLock()
 	v, ok := s.codex.sessions[id]
 	s.codex.mu.RUnlock()
-	return v, ok && !v.isClosed()
+	return v, ok && v.scope == scope && !v.isClosed()
 }
 
 func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
@@ -550,7 +640,8 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sessionId and text are required", http.StatusBadRequest)
 		return
 	}
-	session, ok := s.findCodex(req.SessionID)
+	scope := requestAgentScope(r)
+	session, ok := s.findCodexForScope(scope, req.SessionID)
 	if !ok {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return
@@ -570,28 +661,28 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "codex turn is already running", http.StatusConflict)
 		return
 	}
-	if !s.codex.claimTurn(session.id) {
+	if !s.codex.claimTurn(scope, session.id) {
 		session.cancelTurnStart()
 		http.Error(w, "another codex turn is already running", http.StatusConflict)
 		return
 	}
 	requestedClientID := strings.TrimSpace(req.ClientID)
-	clientID, clientClaimed := s.runtime.claimClient(requestedClientID)
+	clientID, clientClaimed := s.runtime.claimClient(scope, requestedClientID)
 	if requestedClientID != "" && !clientClaimed {
-		s.codex.releaseTurn(session.id)
+		s.codex.releaseTurn(scope, session.id)
 		session.cancelTurnStart()
 		http.Error(w, "requested browser runtime is not connected", http.StatusConflict)
 		return
 	}
 	releaseTurn := func() {
-		s.codex.releaseTurn(session.id)
-		s.runtime.unpin(session.id)
+		s.codex.releaseTurn(scope, session.id)
+		s.runtime.unpin(scope, session.id)
 	}
 	session.mu.Lock()
 	session.releaseRuntime = releaseTurn
 	session.mu.Unlock()
 	if clientID != "" {
-		s.runtime.pin(session.id, clientID)
+		s.runtime.pin(scope, session.id, clientID)
 		session.mu.Lock()
 		session.runtimeClientID = clientID
 		session.mu.Unlock()
@@ -716,8 +807,9 @@ func (s *Server) discardCodexSession(session *codexSession) {
 	if s.codex.sessions[session.id] == session {
 		delete(s.codex.sessions, session.id)
 	}
-	if s.codex.profiles[session.profile] == session.id {
-		delete(s.codex.profiles, session.profile)
+	profileKey := agentProfileKey{scope: session.scope, profile: session.profile}
+	if s.codex.profiles[profileKey] == session.id {
+		delete(s.codex.profiles, profileKey)
 	}
 	s.codex.mu.Unlock()
 	session.close()
@@ -746,7 +838,7 @@ func (s *Server) interruptCodex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sessionId is required", http.StatusBadRequest)
 		return
 	}
-	session, ok := s.findCodex(req.SessionID)
+	session, ok := s.findCodexForScope(requestAgentScope(r), req.SessionID)
 	if !ok {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return
@@ -779,7 +871,7 @@ func (s *Server) respondCodexApproval(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sessionId and id are required", http.StatusBadRequest)
 		return
 	}
-	session, ok := s.findCodex(req.SessionID)
+	session, ok := s.findCodexForScope(requestAgentScope(r), req.SessionID)
 	if !ok {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return
@@ -801,7 +893,7 @@ func (s *Server) respondCodexApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) codexEvents(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.findCodex(r.URL.Query().Get("sessionId"))
+	session, ok := s.findCodexForScope(requestAgentScope(r), r.URL.Query().Get("sessionId"))
 	if !ok {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return
@@ -855,13 +947,17 @@ func (s *Server) codexEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) closeCodexSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	scope := requestAgentScope(r)
 	s.codex.mu.Lock()
 	session, ok := s.codex.sessions[id]
-	if ok {
+	if ok && session.scope == scope {
 		delete(s.codex.sessions, id)
-		if s.codex.profiles[session.profile] == id {
-			delete(s.codex.profiles, session.profile)
+		key := agentProfileKey{scope: scope, profile: session.profile}
+		if s.codex.profiles[key] == id {
+			delete(s.codex.profiles, key)
 		}
+	} else {
+		ok = false
 	}
 	s.codex.mu.Unlock()
 	if !ok {

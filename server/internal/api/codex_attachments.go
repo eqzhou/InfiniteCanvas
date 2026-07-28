@@ -27,7 +27,7 @@ func (s *Server) uploadCodexAttachments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sessionID := strings.TrimSpace(r.FormValue("sessionId"))
-	session, ok := s.findCodex(sessionID)
+	session, ok := s.findCodexForScope(requestAgentScope(r), sessionID)
 	if !ok {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return
@@ -147,7 +147,7 @@ func (s *Server) deleteCodexAttachment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "valid sessionId and attachment ID are required", http.StatusBadRequest)
 		return
 	}
-	session, ok := s.findCodex(sessionID)
+	session, ok := s.findCodexForScope(requestAgentScope(r), sessionID)
 	if !ok {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return

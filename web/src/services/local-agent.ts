@@ -1,6 +1,7 @@
 import type { BoardProject } from "@/types/board";
 import { parseBoardProject } from "@/lib/board-document";
 import { readBoundedResponse } from "@/services/remote-content";
+import { getSessionToken } from "@/services/auth-session";
 
 export type SyncDirection = "push" | "pull" | "none";
 
@@ -30,13 +31,24 @@ export function saveAgentToken(token: string): void {
 
 export function resolveAgentBaseUrl(configured: string | undefined, token: string, pageOrigin: string): string {
   const baseUrl = configured || DEFAULT_AGENT_BASE_URL;
-  return !token && baseUrl === DEFAULT_AGENT_BASE_URL ? pageOrigin : baseUrl;
+  return (!token || getSessionToken()) && baseUrl === DEFAULT_AGENT_BASE_URL ? pageOrigin : baseUrl;
 }
 
 export type AgentConnection = {
   baseUrl: string;
   token?: string;
 };
+
+export function agentAuthHeaders(connection: AgentConnection, initial?: HeadersInit): Headers {
+  const headers = new Headers(initial);
+  const agentUrl = new URL(normalizeAgentBaseUrl(connection.baseUrl || DEFAULT_AGENT_BASE_URL));
+  const pageOrigin = typeof location !== "undefined" ? location.origin : "";
+  const sameOrigin = pageOrigin !== "" && agentUrl.origin === pageOrigin;
+  if (connection.token && !sameOrigin) headers.set("Authorization", `Bearer ${connection.token}`);
+  const sessionToken = sameOrigin ? getSessionToken() : null;
+  if (sessionToken) headers.set("X-OpenBoard-Session", sessionToken);
+  return headers;
+}
 
 export type AgentStatus = {
   connected: boolean;
@@ -123,8 +135,7 @@ async function agentFetch(
   fetcher: Fetcher = fetch,
 ): Promise<Response> {
   const baseUrl = normalizeAgentBaseUrl(connection.baseUrl || DEFAULT_AGENT_BASE_URL);
-  const headers = new Headers(init.headers);
-  if (connection.token) headers.set("Authorization", `Bearer ${connection.token}`);
+  const headers = agentAuthHeaders(connection, init.headers);
   return fetcher(`${baseUrl}/${path.replace(/^\/+/, "")}`, {
     ...init,
     headers,
@@ -291,8 +302,7 @@ export function subscribeCodexEvents(
 ): { close: () => void } {
   const baseUrl = normalizeAgentBaseUrl(connection.baseUrl || DEFAULT_AGENT_BASE_URL);
   const controller = new AbortController();
-  const headers = new Headers();
-  if (connection.token) headers.set("Authorization", `Bearer ${connection.token}`);
+  const headers = agentAuthHeaders(connection);
   let lastSequence = 0;
   const deliver = (event: CodexEvent): boolean => {
     const sequence = event.sequence;
@@ -558,8 +568,7 @@ export function subscribeClaudeEvents(
     const query = new URLSearchParams({ sessionId });
     if (afterSequence > 0) query.set("afterSequence", String(afterSequence));
     try {
-      const headers: Record<string, string> = {};
-      if (connection.token) headers.Authorization = `Bearer ${connection.token}`;
+      const headers = agentAuthHeaders(connection);
       const response = await fetcher(`${baseUrl}/api/claude/events?${query}`, {
         headers,
         credentials: "omit",

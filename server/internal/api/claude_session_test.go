@@ -1,10 +1,26 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestClosedClaudeSessionCannotStartDelayedTurn(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "started")
+	bin := filepath.Join(t.TempDir(), "fake-claude.sh")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntouch \""+marker+"\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_CLAUDE_BIN", bin)
+	session := &claudeSession{closed: true, running: true, subs: make(map[*claudeSub]struct{})}
+	session.runTurn("must not run")
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("closed session started a delayed process: %v", err)
+	}
+}
 
 func TestClaudeSubscribeUnsubscribeDoesNotDoubleClose(t *testing.T) {
 	session := &claudeSession{
@@ -39,8 +55,9 @@ func TestClaudeSubscribeUnsubscribeDoesNotDoubleClose(t *testing.T) {
 }
 
 func TestClaudePermissionModeEnv(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
 	t.Setenv("OPENBOARD_CLAUDE_PERMISSION_MODE", "")
-	if got := claudePermissionMode(); got != "acceptEdits" {
+	if got := claudePermissionMode(); got != "default" {
 		t.Fatalf("default=%q", got)
 	}
 	t.Setenv("OPENBOARD_CLAUDE_PERMISSION_MODE", "plan")
@@ -48,7 +65,19 @@ func TestClaudePermissionModeEnv(t *testing.T) {
 		t.Fatalf("plan=%q", got)
 	}
 	t.Setenv("OPENBOARD_CLAUDE_PERMISSION_MODE", "nope")
-	if got := claudePermissionMode(); got != "acceptEdits" {
+	if got := claudePermissionMode(); got != "default" {
 		t.Fatalf("invalid fallback=%q", got)
+	}
+	t.Setenv("OPENBOARD_CLAUDE_PERMISSION_MODE", "bypassPermissions")
+	if got := claudePermissionMode(); got != "default" {
+		t.Fatalf("bypass fallback=%q", got)
+	}
+	t.Setenv("OPENBOARD_CLAUDE_PERMISSION_MODE", "acceptEdits")
+	if got := claudePermissionMode(); got != "default" {
+		t.Fatalf("authenticated acceptEdits=%q", got)
+	}
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	if got := claudePermissionMode(); got != "acceptEdits" {
+		t.Fatalf("local acceptEdits=%q", got)
 	}
 }

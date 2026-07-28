@@ -281,6 +281,9 @@ func (s *Server) ConfigureS3BlobStorage(config S3BlobStorageConfig) error {
 }
 
 func (s *Server) Close() {
+	s.runtime.closeAll()
+	s.codex.closeAll()
+	s.claude.closeAll()
 	s.stopPromptScheduler()
 	s.stopGeneration()
 	s.generationMu.Lock()
@@ -498,18 +501,19 @@ func (s *Server) version(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) agentStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
+	hostExecution := accountAgentExecutionAllowed(requestAgentScope(r))
 	bridges := []string{"http-json", "mcp-stdio", "codex-app-server"}
-	if claudeAvailable() {
+	if hostExecution && claudeAvailable() {
 		bridges = append(bridges, "claude-code")
 	}
 	writeJSON(w, map[string]any{
 		"connected": true,
-		"runtime":   map[string]any{"connected": s.runtime.connected()},
+		"runtime":   map[string]any{"connected": s.runtime.connectedFor(requestAgentScope(r))},
 		"bridges":   bridges,
 		"message":   "Local board tools, Codex, and optional Claude Code sessions are available.",
-		"codex":     map[string]any{"available": true, "sessionEndpoint": "/api/codex/session", "eventsEndpoint": "/api/codex/events"},
-		"claude":    map[string]any{"available": claudeAvailable(), "sessionEndpoint": "/api/claude/session", "eventsEndpoint": "/api/claude/events", "binary": claudeBinary()},
+		"codex":     map[string]any{"available": hostExecution, "sessionEndpoint": "/api/codex/session", "eventsEndpoint": "/api/codex/events"},
+		"claude":    map[string]any{"available": hostExecution && claudeAvailable(), "sessionEndpoint": "/api/claude/session", "eventsEndpoint": "/api/claude/events", "binary": claudeBinary()},
 		"tools": []string{
 			"board.get_state",
 			"board.get_selection",
