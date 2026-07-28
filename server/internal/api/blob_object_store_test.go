@@ -153,15 +153,18 @@ func TestObjectBlobOverwriteKeepsLatestValueAndOneReservation(t *testing.T) {
 }
 
 func TestObjectBlobProtectedHTTPAPI(t *testing.T) {
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	backend := newMemoryStore()
 	objects := newMemoryBlobObjectStore()
 	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
 	server.setBlobObjectStore(objects)
 	router := chi.NewRouter()
 	MountServer(router, server)
 
 	put := httptest.NewRequest(http.MethodPut, "/api/blobs/image%3Aremote", bytes.NewReader([]byte("abcdef")))
 	put.Header.Set("Content-Type", "image/png")
+	put.Header.Set("Authorization", "Bearer test-token")
 	putResult := httptest.NewRecorder()
 	router.ServeHTTP(putResult, put)
 	if putResult.Code != http.StatusNoContent {
@@ -169,6 +172,7 @@ func TestObjectBlobProtectedHTTPAPI(t *testing.T) {
 	}
 	rangeRequest := httptest.NewRequest(http.MethodGet, "/api/blobs/image%3Aremote", nil)
 	rangeRequest.Header.Set("Range", "bytes=1-3")
+	rangeRequest.Header.Set("Authorization", "Bearer test-token")
 	rangeResult := httptest.NewRecorder()
 	router.ServeHTTP(rangeResult, rangeRequest)
 	if rangeResult.Code != http.StatusPartialContent || rangeResult.Body.String() != "bcd" || rangeResult.Header().Get("Content-Type") != "image/png" {

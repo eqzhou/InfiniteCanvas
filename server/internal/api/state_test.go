@@ -1303,6 +1303,7 @@ func TestBlobContentTypeBoundary(t *testing.T) {
 	handler := persistentHandler(t)
 	unsafe := httptest.NewRequest(http.MethodPut, "/api/blobs/unsafe", bytes.NewReader([]byte("<script>alert(1)</script>")))
 	unsafe.Header.Set("Content-Type", "text/html")
+	unsafe.Header.Set("Authorization", "Bearer test-token")
 	unsafeResult := httptest.NewRecorder()
 	handler.ServeHTTP(unsafeResult, unsafe)
 	if unsafeResult.Code != http.StatusUnsupportedMediaType {
@@ -1311,6 +1312,7 @@ func TestBlobContentTypeBoundary(t *testing.T) {
 
 	safe := httptest.NewRequest(http.MethodPut, "/api/blobs/safe", bytes.NewReader([]byte("png")))
 	safe.Header.Set("Content-Type", "image/png")
+	safe.Header.Set("Authorization", "Bearer test-token")
 	safeResult := httptest.NewRecorder()
 	handler.ServeHTTP(safeResult, safe)
 	if safeResult.Code != http.StatusNoContent {
@@ -1427,8 +1429,10 @@ func TestMemberPersonalSecretsAreIsolatedFromTenantBag(t *testing.T) {
 }
 
 func TestBlobDeleteReleasesStorageUsageAndKeysDecodeOnce(t *testing.T) {
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	backend := newMemoryStore()
 	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
 	router := chi.NewRouter()
 	MountServer(router, server)
 
@@ -1436,6 +1440,7 @@ func TestBlobDeleteReleasesStorageUsageAndKeysDecodeOnce(t *testing.T) {
 		path := "/api/blobs/" + url.PathEscape(key)
 		put := httptest.NewRequest(http.MethodPut, path, bytes.NewReader([]byte("png")))
 		put.Header.Set("Content-Type", "image/png")
+		put.Header.Set("Authorization", "Bearer test-token")
 		putResult := httptest.NewRecorder()
 		router.ServeHTTP(putResult, put)
 		if putResult.Code != http.StatusNoContent {
@@ -1454,6 +1459,7 @@ func TestBlobDeleteReleasesStorageUsageAndKeysDecodeOnce(t *testing.T) {
 	for _, value := range []string{"first", "second-value"} {
 		put := httptest.NewRequest(http.MethodPut, overwritePath, bytes.NewReader([]byte(value)))
 		put.Header.Set("Content-Type", "image/png")
+		put.Header.Set("Authorization", "Bearer test-token")
 		result := httptest.NewRecorder()
 		router.ServeHTTP(result, put)
 		if result.Code != http.StatusNoContent {
@@ -1472,6 +1478,7 @@ func TestBlobDeleteReleasesStorageUsageAndKeysDecodeOnce(t *testing.T) {
 }
 
 func TestConcurrentServerBlobOverwriteKeepsOneReservation(t *testing.T) {
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	backend := newMemoryStore()
 	dataDir := t.TempDir()
 	servers := []*Server{
@@ -1480,6 +1487,7 @@ func TestConcurrentServerBlobOverwriteKeepsOneReservation(t *testing.T) {
 	}
 	routers := make([]http.Handler, 0, len(servers))
 	for _, server := range servers {
+		server.SetProcessToken("test-token")
 		router := chi.NewRouter()
 		MountServer(router, server)
 		routers = append(routers, router)
@@ -1493,6 +1501,7 @@ func TestConcurrentServerBlobOverwriteKeepsOneReservation(t *testing.T) {
 			defer wait.Done()
 			request := httptest.NewRequest(http.MethodPut, "/api/blobs/shared", bytes.NewReader(bytes.Repeat([]byte{byte(index + 1)}, 1024)))
 			request.Header.Set("Content-Type", "image/png")
+			request.Header.Set("Authorization", "Bearer test-token")
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
 			results <- response.Code
@@ -1684,9 +1693,12 @@ func TestGenerationJobRejectsInvalidInput(t *testing.T) {
 }
 
 func TestGenerationJobBulkRestore(t *testing.T) {
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
 	handler := chi.NewRouter()
-	MountServer(handler, NewServerWithStore(t.TempDir(), backend))
+	MountServer(handler, server)
 	body := []byte(`[{"id":"job-restored","projectId":"board-1","kind":"video","status":"succeeded","prompt":"restored","parameters":{"duration":5},"result":{"items":[]},"createdAt":"2026-07-01T01:02:03Z","updatedAt":"2026-07-02T04:05:06.123Z"}]`)
 	if got := request(t, handler, http.MethodPut, "/api/generation-jobs", body); got.Code != http.StatusNoContent {
 		t.Fatalf("restore jobs: %d %s", got.Code, got.Body.String())
@@ -1700,10 +1712,13 @@ func TestGenerationJobBulkRestore(t *testing.T) {
 }
 
 func TestGenerationJobBulkRestoreRejectsEntireInvalidBatch(t *testing.T) {
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	backend := newMemoryStore()
 	backend.jobs[tenantKey(store.DefaultTenantID, "existing")] = store.GenerationJob{ID: "existing"}
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
 	handler := chi.NewRouter()
-	MountServer(handler, NewServerWithStore(t.TempDir(), backend))
+	MountServer(handler, server)
 	valid := `{"id":"job-1","kind":"image","status":"succeeded","prompt":"ok","parameters":{},"result":{},"createdAt":"2026-07-01T00:00:00Z","updatedAt":"2026-07-01T00:00:00Z"}`
 	for _, body := range []string{
 		`null`,

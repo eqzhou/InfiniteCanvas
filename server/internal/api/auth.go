@@ -183,6 +183,12 @@ func (s *Server) requireUserWhenNeeded(next http.Handler) http.Handler {
 				return
 			}
 			if count == 0 {
+				// Match admin bootstrap: never leave the empty-install data plane
+				// world-writable. Process-token tooling may still seed local state.
+				if !s.authorizeProcessToken(r) {
+					http.Error(w, "login required", http.StatusUnauthorized)
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -324,11 +330,10 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	// /api/auth/* is exempt from requireUserWhenNeeded; enforce session here so
 	// required mode (and optional with an invalid token) cannot read tenant usage anonymously.
 	if _, ok := authUserFrom(r.Context()); !ok {
-		if authMode() == "required" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		// optional without session: report default local workspace usage only
+		// Never report a real tenant's storage/generation counters to guests.
+		// Optional mode used to fall through to DefaultTenantID ("local").
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 	summary, err := s.store.GetUsage(r.Context(), tenantIDFrom(r))
 	if err != nil {
@@ -530,6 +535,10 @@ func (s *Server) linuxDoOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, store.ErrBanned) {
 		http.Error(w, "account banned", http.StatusForbidden)
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		http.Error(w, "email already registered", http.StatusConflict)
 		return
 	}
 	if err != nil {

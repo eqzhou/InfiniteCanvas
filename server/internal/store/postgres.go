@@ -3101,28 +3101,27 @@ VALUES ($1, $2, 'free', $3, $4)`, tenantID, name, defaultStorageQuotaBytes, defa
 			}
 			role = "owner"
 		}
+		// Never auto-link by email alone: a colliding password account would
+		// otherwise be taken over by any Linux.do identity that reports the same
+		// address.
+		var existingCount int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_users WHERE email=$1`, email).Scan(&existingCount); err != nil {
+			return AuthUser{}, "", err
+		}
+		if existingCount > 0 {
+			return AuthUser{}, "", ErrConflict
+		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO openboard_users (id, tenant_id, email, password_hash, display_name, role, credits, status, linux_do_id)
-VALUES ($1,$2,$3,'',$4,$5,0,'active',$6)
-ON CONFLICT (email) DO NOTHING`, userID, tenantID, email, displayName, role, linuxID); err != nil {
-			return AuthUser{}, "", err
-		}
-		// If email conflict without linux id link, try update existing email row.
-		err = tx.QueryRow(ctx, `
-SELECT id, tenant_id, email, display_name, role, COALESCE(credits,0), COALESCE(status,'active'), COALESCE(linux_do_id,'')
-FROM openboard_users WHERE linux_do_id=$1 OR email=$2 ORDER BY CASE WHEN linux_do_id=$1 THEN 0 ELSE 1 END LIMIT 1`, linuxID, email).Scan(
-			&user.ID, &user.TenantID, &user.Email, &user.DisplayName, &user.Role, &user.Credits, &user.Status, &user.LinuxDoID)
-		if err != nil {
-			return AuthUser{}, "", err
-		}
-		if user.LinuxDoID == "" {
-			if _, err := tx.Exec(ctx, `UPDATE openboard_users SET linux_do_id=$2, display_name=CASE WHEN display_name='' THEN $3 ELSE display_name END WHERE id=$1`, user.ID, linuxID, displayName); err != nil {
-				return AuthUser{}, "", err
+VALUES ($1,$2,$3,'',$4,$5,0,'active',$6)`, userID, tenantID, email, displayName, role, linuxID); err != nil {
+			if strings.Contains(err.Error(), "openboard_users_email") || strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "openboard_users_linux_do") {
+				return AuthUser{}, "", ErrConflict
 			}
-			user.LinuxDoID = linuxID
+			return AuthUser{}, "", err
 		}
-		if strings.EqualFold(user.Status, "ban") {
-			return AuthUser{}, "", ErrBanned
+		user = AuthUser{
+			ID: userID, TenantID: tenantID, Email: email, DisplayName: displayName,
+			Role: role, Credits: 0, Status: "active", LinuxDoID: linuxID,
 		}
 	} else {
 		return AuthUser{}, "", err

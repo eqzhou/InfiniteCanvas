@@ -557,7 +557,14 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	dir := filepath.Join(s.dataDir, "files")
+	tenantID := tenantIDFrom(r)
+	if !projectIDPattern.MatchString(tenantID) {
+		http.Error(w, "invalid tenant", http.StatusBadRequest)
+		return
+	}
+	// Scope runtime/agent file drops per tenant so a shared filename cannot
+	// become a cross-tenant read once the URL leaks into logs or chat.
+	dir := filepath.Join(s.dataDir, "files", tenantID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		http.Error(w, "failed to prepare file storage", http.StatusInternalServerError)
 		return
@@ -571,7 +578,7 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 	if name == "." || name == "/" || name == "" {
 		name = "upload.bin"
 	}
-	// avoid collisions
+	// avoid collisions; filepath.Base already strips directory components
 	name = time.Now().UTC().Format("20060102T150405.000000000") + "_" + name
 	dst := filepath.Join(dir, name)
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -588,7 +595,7 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"name": name,
-		"url":  "/api/files/" + name,
+		"url":  "/api/files/" + name, // resolved under the caller's tenant on GET
 		"size": hdr.Size,
 	})
 }
@@ -614,7 +621,16 @@ func directoryBytes(dir string) (int64, error) {
 
 func (s *Server) getFile(w http.ResponseWriter, r *http.Request) {
 	name := filepath.Base(chi.URLParam(r, "name"))
-	path := filepath.Join(s.dataDir, "files", name)
+	if name == "." || name == "/" || name == "" || strings.Contains(name, string(filepath.Separator)) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	tenantID := tenantIDFrom(r)
+	if !projectIDPattern.MatchString(tenantID) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	path := filepath.Join(s.dataDir, "files", tenantID, name)
 	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink != 0 {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

@@ -93,7 +93,6 @@ func TestOptionalModeGuestIsReadOnlyAndAdvertisesItself(t *testing.T) {
 	}
 }
 
-
 func TestOptionalModeRequiresSessionForDataPlaneWhenUsersExist(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
 	t.Setenv("OPENBOARD_TOKEN", "")
@@ -148,5 +147,43 @@ func TestOptionalZeroUserAdminBootstrapRequiresProcessToken(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("token admin = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOptionalZeroUserDataPlaneRequiresProcessToken(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	backend.users = 0
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("bootstrap-token")
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	for _, item := range []struct {
+		method string
+		path   string
+		body   []byte
+	}{
+		{http.MethodGet, "/api/projects", nil},
+		{http.MethodPut, "/api/state/assets", []byte(`[]`)},
+		{http.MethodPut, "/api/blobs/bootstrap-probe", []byte("probe")},
+	} {
+		got := request(t, router, item.method, item.path, item.body)
+		if got.Code != http.StatusUnauthorized {
+			t.Fatalf("anonymous %s %s = %d %s, want 401", item.method, item.path, got.Code, got.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	req.Header.Set("Authorization", "Bearer bootstrap-token")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("token data-plane read = %d %s", rec.Code, rec.Body.String())
 	}
 }
