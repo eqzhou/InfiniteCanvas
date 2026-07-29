@@ -31,7 +31,7 @@ import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
 import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
 import { ImageToolbarPreferencesEditor } from "@/components/layout/ImageToolbarPreferencesEditor";
-import { useSharedChannels } from "@/services/shared-channels";
+import { resolveActiveAIChannel, useSharedChannels } from "@/services/shared-channels";
 import {
   AudioLines,
   CloudDownload,
@@ -71,9 +71,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   useEffect(() => {
     if (!open) return;
-    const active =
-      config.channels.find((c) => c.id === config.activeChannelId) ??
-      config.channels[0];
+    const active = resolveActiveAIChannel(
+      config.channels,
+      config.activeChannelId,
+      sharedChannels,
+      config.activeSharedChannelId,
+    );
     if (!active) {
       setModels({});
       return;
@@ -84,7 +87,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       if (cached?.length) next[kind] = [...cached];
     }
     setModels(next);
-  }, [open, config.activeChannelId, config.channels]);
+  }, [open, config.activeChannelId, config.activeSharedChannelId, config.channels, sharedChannels]);
 
   useEffect(() => {
     if (!open) return;
@@ -151,10 +154,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   useEscapeDismiss(open, requestClose);
 
   if (!open) return null;
-  const channel =
-    config.channels.find((c) => c.id === config.activeChannelId) ?? config.channels[0];
+  const channel = resolveActiveAIChannel(
+    config.channels,
+    config.activeChannelId,
+    sharedChannels,
+    config.activeSharedChannelId,
+  ) ?? config.channels[0];
+  const sharedChannelSelected = Boolean(config.activeSharedChannelId);
 
   const updateChannel = (patch: Partial<typeof channel>) => {
+    if (sharedChannelSelected) return;
     setConfig({
       ...config,
       channels: config.channels.map((c) =>
@@ -172,13 +181,11 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     setBusyKind(kind);
     setError(null);
     try {
+      await flushConfig();
       const list = await listModels(channel, kind);
       setModels((current) => ({ ...current, [kind]: list }));
       if (!list.length) {
         setError("未拉取到模型（该服务可能不支持模型列表，请手动填写）");
-        // Still clear a stale cached list so the node dialog cannot keep offering
-        // models the channel no longer advertises after a failed pull.
-        updateProvider(kind, { models: [] });
         return;
       }
       // Now that the channel has told us what it serves, apply the tenant
@@ -251,6 +258,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <input
                   className="ob-field"
                   value={channel.name}
+                  disabled={sharedChannelSelected}
                   onChange={(e) => updateChannel({ name: e.target.value })}
                 />
               </Field>
@@ -292,7 +300,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   provider={getProvider(channel, kind)}
                   models={resolveSelectableModels(sitePolicy, models[kind] ?? getProvider(channel, kind).models ?? [])}
                   busy={busyKind === kind}
-                  disabled={busyKind !== null}
+                  disabled={busyKind !== null || sharedChannelSelected}
                   onPull={() => void pullModels(kind)}
                   onChange={(patch) => updateProvider(kind, patch)}
                 />
@@ -702,7 +710,7 @@ function ProviderRow({
       <div className="grid gap-2 md:grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] md:items-center">
         <div className="flex items-center gap-2 font-medium"><Icon size={16} className="text-[var(--ob-accent)]" />{label}</div>
         <CompactField label="协议">
-          <select className="ob-field" aria-label={`${label}协议`} value={provider.protocol} onChange={(e) => onChange({ protocol: e.target.value as typeof provider.protocol })}>
+          <select className="ob-field" aria-label={`${label}协议`} value={provider.protocol} disabled={disabled} onChange={(e) => onChange({ protocol: e.target.value as typeof provider.protocol })}>
             <option value="openai">OpenAI</option>
             <option value="ark">Ark / Seedance</option>
             <option value="gemini">Gemini</option>
@@ -712,13 +720,13 @@ function ProviderRow({
           </select>
         </CompactField>
         <CompactField label="服务 URL">
-          <input className="ob-field" aria-label={`${label} URL`} value={provider.baseUrl} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder="服务 URL" />
+          <input className="ob-field" aria-label={`${label} URL`} value={provider.baseUrl} disabled={disabled} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder="服务 URL" />
         </CompactField>
         <CompactField label="API Key">
-          <input className="ob-field" aria-label={`${label} API Key`} type="password" value={provider.apiKey} onChange={(e) => onChange({ apiKey: e.target.value })} placeholder="API Key" />
+          <input className="ob-field" aria-label={`${label} API Key`} type="password" value={provider.apiKey} disabled={disabled} onChange={(e) => onChange({ apiKey: e.target.value })} placeholder="API Key" />
         </CompactField>
         <CompactField label="模型">
-          <input className="ob-field" aria-label={`${label}模型`} value={provider.model} onChange={(e) => onChange({ model: e.target.value })} placeholder="模型名称" />
+          <input className="ob-field" aria-label={`${label}模型`} value={provider.model} disabled={disabled} onChange={(e) => onChange({ model: e.target.value })} placeholder="模型名称" />
         </CompactField>
         <button type="button" className="ob-icon-btn disabled:opacity-50" aria-label={`拉取${label}模型`} title={`拉取${label}模型`} disabled={disabled} onClick={onPull}>
           <RefreshCw size={16} className={busy ? "animate-spin" : ""} />
@@ -731,6 +739,7 @@ function ProviderRow({
             <button
               key={model}
               type="button"
+              disabled={disabled}
               className="ob-chip cursor-pointer transition-colors hover:border-[var(--ob-accent)] hover:text-[var(--ob-accent)]"
               onClick={() => onChange({ model })}
             >

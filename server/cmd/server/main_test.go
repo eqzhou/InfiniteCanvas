@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+func TestServerTimeoutsCoverSlowTextGeneration(t *testing.T) {
+	if requestHandlingTimeout < 125*time.Second {
+		t.Fatalf("request timeout=%v", requestHandlingTimeout)
+	}
+	if serverWriteTimeout <= requestHandlingTimeout {
+		t.Fatalf("write timeout=%v request timeout=%v", serverWriteTimeout, requestHandlingTimeout)
+	}
+}
+
 func TestBlobStorageConfigFromEnv(t *testing.T) {
 	t.Run("filesystem default", func(t *testing.T) {
 		t.Setenv("OPENBOARD_BLOB_BACKEND", "")

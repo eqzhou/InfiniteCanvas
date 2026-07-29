@@ -12,10 +12,12 @@ import type { AiChannel } from "@/types/board";
 import { sharedChannelAsAI } from "@/services/shared-channels";
 
 const originalFetch = globalThis.fetch;
+const originalStorageMode = import.meta.env.VITE_OPENBOARD_STORAGE;
 const fixtureCredential = ["test", "credential"].join("-");
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  import.meta.env.VITE_OPENBOARD_STORAGE = originalStorageMode;
 });
 
 test("uses an inline image when persistent blob storage is unavailable", async () => {
@@ -92,6 +94,77 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("generateVideo provider contracts", () => {
+  test("routes remote text generation through the same-origin provider gateway", async () => {
+    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
+    const requests: Array<{ url: string; headers: Headers; body: unknown }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const url = String(input);
+      requests.push({
+        url,
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body ?? "{}")),
+      });
+      if (!url.startsWith("/api/")) throw new TypeError("Failed to fetch");
+      return json({ text: "gateway response" });
+    }) as typeof fetch;
+
+    await expect(generateText({
+      channel: channel("https://api.example/v1"),
+      model: "text",
+      prompt: "hello",
+      systemPrompt: "Be concise",
+    })).resolves.toBe("gateway response");
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe("/api/provider-text");
+    expect(requests[0]?.headers.has("Authorization")).toBe(false);
+    expect(requests[0]?.body).toEqual({
+      channelId: "video-channel",
+      model: "text",
+      prompt: "hello",
+      images: [],
+      systemPromptProfile: "global",
+    });
+  });
+
+  test("does not fall back to a remote browser request when the text gateway fails", async () => {
+    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
+    const requests: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      requests.push(String(input));
+      return new Response("文本模型服务暂时不可用", { status: 503 });
+    }) as typeof fetch;
+
+    await expect(generateText({
+      channel: channel("https://api.example/v1"),
+      model: "text",
+      prompt: "hello",
+    })).rejects.toThrow("文本模型服务暂时不可用");
+    expect(requests).toEqual(["/api/provider-text"]);
+  });
+
+  test("keeps loopback text providers browser-direct in server storage mode", async () => {
+    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get("Authorization"),
+      });
+      return json({ output_text: "local response" });
+    }) as typeof fetch;
+
+    await expect(generateText({
+      channel: channel("http://127.0.0.1:11434/v1"),
+      model: "local-model",
+      prompt: "hello",
+    })).resolves.toBe("local response");
+    expect(requests).toEqual([{
+      url: "http://127.0.0.1:11434/v1/responses",
+      authorization: "Bearer secret",
+    }]);
+  });
+
   test("applies a global system prompt to OpenAI text and image requests", async () => {
     const bodies: unknown[] = [];
     globalThis.fetch = mock(async (_input, init) => {
@@ -219,10 +292,13 @@ describe("generateVideo provider contracts", () => {
     });
   });
   test("lists models from the selected provider endpoint and credentials", async () => {
-    const requests: Array<{ url: string; auth: string | null }> = [];
+    const requests: Array<{ url: string; body: unknown }> = [];
     globalThis.fetch = mock(async (input, init) => {
-      requests.push({ url: String(input), auth: new Headers(init?.headers).get("Authorization") });
-      return json({ data: [{ id: "video-z" }, { id: "video-a" }] });
+      requests.push({
+        url: String(input),
+        body: JSON.parse(String(init?.body ?? "{}")),
+      });
+      return json({ models: ["video-z", "video-a"] });
     }) as typeof fetch;
     const c = { ...channel("https://legacy.example/v1"), providers: {
       text: { baseUrl: "https://text.example/v1", apiKey: "text-key", model: "text" },
@@ -232,7 +308,48 @@ describe("generateVideo provider contracts", () => {
     } };
 
     await expect(listModels(c, "video")).resolves.toEqual(["video-a", "video-z"]);
-    expect(requests).toEqual([{ url: "https://video.example/v1/models", auth: "Bearer video-key" }]);
+    expect(requests).toEqual([{
+      url: "/api/provider-models",
+      body: {
+        channelId: "video-channel",
+        kind: "video",
+      },
+    }]);
+  });
+
+  test("preserves model discovery failures instead of reporting an empty catalog", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response("provider authentication failed", { status: 422 })
+    ) as typeof fetch;
+
+    await expect(listModels(channel("https://api.example/v1"), "text"))
+      .rejects.toThrow("provider authentication failed");
+  });
+
+  test("does not fall back to a cross-origin model request when the server gateway is unavailable", async () => {
+    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
+    const requests: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      requests.push(String(input));
+      if (String(input).startsWith("/api/")) throw new TypeError("Failed to fetch");
+      return json({ data: [{ id: "should-not-be-requested" }] });
+    }) as typeof fetch;
+
+    await expect(listModels(channel("https://api.example/v1"), "text"))
+      .rejects.toThrow("模型列表服务不可用");
+    expect(requests).toEqual(["/api/provider-models"]);
+  });
+
+  test("discovers loopback provider models in the browser without proxying through the server", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      requests.push(String(input));
+      return json({ data: [{ id: "local-model" }] });
+    }) as typeof fetch;
+    const local = channel("http://127.0.0.1:11434/v1");
+
+    await expect(listModels(local, "text")).resolves.toEqual(["local-model"]);
+    expect(requests).toEqual(["http://127.0.0.1:11434/v1/models"]);
   });
 
   test("routes each generation kind to its own URL and API key", async () => {
@@ -260,6 +377,40 @@ describe("generateVideo provider contracts", () => {
       "https://audio.example/v1/audio/speech",
     ]);
     expect(requests.map((r) => r.auth)).toEqual(["Bearer text-key", "Bearer image-key", "Bearer audio-key"]);
+  });
+
+  test("does not retry text generation after an authentication failure", async () => {
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls += 1;
+      return new Response("invalid key", { status: 401 });
+    }) as typeof fetch;
+
+    await expect(generateText({
+      channel: channel("https://api.example/v1"),
+      model: "text",
+      prompt: "hello",
+    })).rejects.toThrow("401");
+    expect(calls).toBe(1);
+  });
+
+  test("falls back to chat completions only when the responses endpoint is unsupported", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      urls.push(String(input));
+      if (urls.length === 1) return new Response("not found", { status: 404 });
+      return json({ choices: [{ message: { content: "fallback" } }] });
+    }) as typeof fetch;
+
+    await expect(generateText({
+      channel: channel("https://api.example/v1"),
+      model: "text",
+      prompt: "hello",
+    })).resolves.toBe("fallback");
+    expect(urls).toEqual([
+      "https://api.example/v1/responses",
+      "https://api.example/v1/chat/completions",
+    ]);
   });
 
   test("forwards audio speed and instructions and rejects out-of-range speed", async () => {

@@ -55,4 +55,34 @@ describe("configuration-node text batches", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("limits one batch to two concurrent text requests", async () => {
+    const channel = createDefaultChannel();
+    const originalFetch = globalThis.fetch;
+    let active = 0;
+    let maximumActive = 0;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      const call = ++calls;
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return new Response(JSON.stringify({ output_text: `result-${call}` }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      await expect(generateTextBatch({
+        channel,
+        model: "batch-text-model",
+        prompt: "eight alternatives",
+        count: 8,
+      })).resolves.toHaveLength(8);
+      expect(maximumActive).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

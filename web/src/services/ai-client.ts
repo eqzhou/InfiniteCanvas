@@ -13,9 +13,13 @@ import { applySystemPrompt } from "@/lib/app-config";
 import { runTrackedGeneration } from "@/services/generation-activity";
 import { readBoundedProviderJson, readBoundedProviderText } from "@/services/bounded-provider-json";
 import { decodeBoundedDataUrl } from "@/services/remote-content";
+import { authFetch as apiFetch } from "@/services/auth-session";
+import { isServerManagedChannel } from "@/services/shared-channels";
+import { providerFetch, providerFetchUrl, ProviderHttpError } from "@/services/provider-http";
 
 const MAX_IMAGE_PROVIDER_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_PROVIDER_ERROR_BYTES = 64 * 1024;
+const MAX_TEXT_GATEWAY_RESPONSE_BYTES = 4 * 1024 * 1024;
 export {
   resolveMediaRefs,
   resolveNodeImageDataUrl,
@@ -26,45 +30,14 @@ function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function joinUrl(baseUrl: string, path: string): string {
-  const base = normalizeBase(baseUrl);
-  if (
-    base.endsWith("/v1") ||
-    base.endsWith("/api/v3") ||
-    base.endsWith("/api/plan/v3")
-  ) {
-    return `${base}${path.startsWith("/") ? path : `/${path}`}`;
-  }
-  if (path.startsWith("/v1")) return `${base}${path}`;
-  return `${base}/v1${path.startsWith("/") ? path : `/${path}`}`;
-}
-
 async function authFetch(
   channel: AiChannel,
   path: string,
   init: RequestInit = {},
   kind: AiProviderKind = "text",
 ): Promise<Response> {
-  if (init.signal?.aborted) {
-    throw init.signal.reason ?? new DOMException("Aborted", "AbortError");
-  }
-  const headers = new Headers(init.headers);
   const provider = getProvider(channel, kind);
-  if (provider.apiKey) {
-    if (provider.protocol === "gemini") headers.set("x-goog-api-key", provider.apiKey);
-    else if (provider.protocol === "template" && provider.template?.auth === "x-api-key") {
-      headers.set("x-api-key", provider.apiKey);
-    } else headers.set("Authorization", `Bearer ${provider.apiKey}`);
-  }
-  if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
-    headers.set("Content-Type", "application/json");
-  }
-  const res = await fetch(joinUrl(provider.baseUrl, path), { ...init, headers, redirect: "error" });
-  if (!res.ok) {
-    const text = await readBoundedProviderText(res, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
-    throw new Error(`AI ${res.status}: ${text || res.statusText}`);
-  }
-  return res;
+  return providerFetch(provider, path, init, { maxErrorBytes: MAX_PROVIDER_ERROR_BYTES });
 }
 
 async function readImageProviderResults(response: Response, expectedMaximum: number): Promise<string[]> {
@@ -87,24 +60,74 @@ async function readImageProviderResults(response: Response, expectedMaximum: num
 
 export async function listModels(channel: AiChannel, kind: AiProviderKind = "text"): Promise<string[]> {
   const provider = getProvider(channel, kind);
+	const serverStorage = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
   if (provider.protocol === "template") return [];
-  try {
-    if (provider.protocol === "gemini") {
-      const data = await providerJsonFetch(
-        `${normalizeBase(provider.baseUrl)}/models`,
-        provider.apiKey,
-        "x-goog-api-key",
-        {},
-      ) as { models?: Array<{ name?: string }> };
-      return (data.models ?? []).map((item) => item.name?.replace(/^models\//, ""))
-        .filter((item): item is string => Boolean(item)).sort();
-    }
-    const res = await authFetch(channel, "/models", {}, kind);
-    const data = (await res.json()) as { data?: Array<{ id: string }> };
-    return (data.data ?? []).map((m) => m.id).sort();
-  } catch {
-    return [];
+  if (isServerManagedChannel(channel, kind)) {
+    return [...(provider.models ?? [])].sort();
   }
+  if (isLoopbackProviderUrl(provider.baseUrl)) {
+    return listModelsDirect(provider);
+  }
+  let response: Response;
+  try {
+    response = await apiFetch("provider-models", {
+      method: "POST",
+      body: JSON.stringify({ channelId: channel.id, kind }),
+    });
+  } catch {
+    if (serverStorage) throw new Error("模型列表服务不可用，请检查 OpenBoard 服务连接");
+    return listModelsDirect(provider);
+  }
+  if (response.status === 404 || response.status === 503) {
+    if (serverStorage) {
+      const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
+      throw new Error(detail.trim() || "模型列表服务不可用，请检查 OpenBoard 服务连接");
+    }
+    return listModelsDirect(provider);
+  }
+  if (!response.ok) {
+    const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
+    throw new Error(detail.trim() || `模型列表拉取失败（HTTP ${response.status}）`);
+  }
+  const payload = await readBoundedProviderJson(response, 2 * 1024 * 1024) as { models?: unknown };
+  if (!Array.isArray(payload.models) || payload.models.some((model) => typeof model !== "string")) {
+    throw new Error("模型列表响应格式无效");
+  }
+  return [...new Set(payload.models.map((model) => model.trim()).filter(Boolean))].sort();
+}
+
+function isLoopbackProviderUrl(baseUrl: string): boolean {
+  try {
+    const hostname = new URL(baseUrl).hostname;
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+async function listModelsDirect(provider: ReturnType<typeof getProvider>): Promise<string[]> {
+  const response = provider.protocol === "gemini"
+    ? await providerFetchUrl(
+      `${normalizeBase(provider.baseUrl)}/models`,
+      provider.apiKey,
+      "x-goog-api-key",
+    )
+    : await providerFetch(provider, "/models");
+  const payload = await readBoundedProviderJson(response, 2 * 1024 * 1024) as {
+    data?: Array<{ id?: unknown }>;
+    models?: Array<string | { id?: unknown; name?: unknown }>;
+  };
+  const candidates: unknown[] = [
+    ...(payload.data ?? []).map((item) => item.id),
+    ...(payload.models ?? []).map((item) =>
+      typeof item === "string" ? item : item.id ?? item.name
+    ),
+  ];
+  return [...new Set(candidates
+    .filter((model): model is string => typeof model === "string")
+    .map((model) => model.trim().replace(/^models\//, ""))
+    .filter(Boolean))]
+    .sort();
 }
 
 type TextGenerationOptions = {
@@ -113,21 +136,36 @@ type TextGenerationOptions = {
   prompt: string;
   images?: string[];
   systemPrompt?: string;
+  systemPromptProfile?: "global" | "workflow";
 };
 
 export async function generateText(options: TextGenerationOptions): Promise<string> {
 	assertNotManagedBrowserProvider(options.channel, "text");
+  const provider = getProvider(options.channel, "text");
+  const serverProxied = import.meta.env.VITE_OPENBOARD_STORAGE === "server" &&
+    !isLoopbackProviderUrl(provider.baseUrl);
   return runTrackedGeneration({
     kind: "text",
     prompt: options.prompt,
     model: options.model,
     providerId: options.channel.id,
+    reportClient: !serverProxied,
   }, () => generateTextRequest(options));
 }
 
 async function generateTextRequest(options: TextGenerationOptions): Promise<string> {
   const { channel, model, prompt, images = [], systemPrompt = "" } = options;
   const provider = getProvider(channel, "text");
+  if (import.meta.env.VITE_OPENBOARD_STORAGE === "server" &&
+      !isLoopbackProviderUrl(provider.baseUrl)) {
+    return generateTextThroughServer(
+      channel.id,
+      model,
+      prompt,
+      images,
+      options.systemPromptProfile ?? "global",
+    );
+  }
   if (provider.protocol === "gemini") {
     return generateGeminiText(
       provider.baseUrl,
@@ -168,8 +206,10 @@ async function generateTextRequest(options: TextGenerationOptions): Promise<stri
         .filter(Boolean) ?? [];
     if (chunks.length) return chunks.join("\n");
     if (data.choices?.[0]?.message?.content) return data.choices[0].message.content;
-  } catch {
-    // fall through
+  } catch (error) {
+    if (!(error instanceof ProviderHttpError) || ![404, 405, 501].includes(error.status)) {
+      throw error;
+    }
   }
 
   const messages: Array<{ role: string; content: unknown }> = [
@@ -195,6 +235,35 @@ async function generateTextRequest(options: TextGenerationOptions): Promise<stri
     choices?: Array<{ message?: { content?: string } }>;
   };
   return data.choices?.[0]?.message?.content ?? "";
+}
+
+async function generateTextThroughServer(
+  channelId: string,
+  model: string,
+  prompt: string,
+  images: string[],
+  systemPromptProfile: "global" | "workflow",
+): Promise<string> {
+  let response: Response;
+  try {
+    response = await apiFetch("provider-text", {
+      method: "POST",
+      body: JSON.stringify({ channelId, model, prompt, images, systemPromptProfile }),
+    });
+  } catch {
+    throw new Error("文本生成服务不可用，请检查 OpenBoard 服务连接");
+  }
+  if (!response.ok) {
+    const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
+    throw new Error(detail.trim() || `文本生成失败（HTTP ${response.status}）`);
+  }
+  const payload = await readBoundedProviderJson(response, MAX_TEXT_GATEWAY_RESPONSE_BYTES) as {
+    text?: unknown;
+  };
+  if (typeof payload.text !== "string") {
+    throw new Error("文本生成响应格式无效");
+  }
+  return payload.text;
 }
 
 type ImageGenerationOptions = {

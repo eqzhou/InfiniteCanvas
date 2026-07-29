@@ -2,6 +2,7 @@ import type { AiChannel } from "@/types/board";
 import { getProvider } from "@/lib/ai-config";
 import { normalizeExternalHttpsUrl } from "@/lib/remote-url";
 import { readBoundedResponse } from "@/services/remote-content";
+import { providerFetch } from "@/services/provider-http";
 import {
   IMAGE_TRANSFORM_LIMITS,
   progressReporter,
@@ -31,35 +32,9 @@ export function supportsOpenAIImageTransforms(channel: AiChannel): boolean {
   return protocol === undefined || protocol === "openai";
 }
 
-function endpoint(baseUrl: string, path: string): string {
-  let base: URL;
-  try {
-    base = new URL(baseUrl);
-  } catch {
-    throw new Error("Image provider URL is invalid");
-  }
-  if (base.username || base.password || base.hash) throw new Error("Image provider URL contains forbidden credentials or fragment");
-  const loopback = base.hostname === "localhost" || base.hostname === "127.0.0.1" || base.hostname === "::1";
-  if (base.protocol !== "https:" && !(base.protocol === "http:" && loopback)) {
-    throw new Error("Image provider URL must use HTTPS (HTTP is allowed only on loopback)");
-  }
-  const pathname = base.pathname.replace(/\/+$/, "");
-  const versionedBase = pathname.endsWith("/v1") ? pathname : `${pathname}/v1`;
-  base.pathname = `${versionedBase}/${path.replace(/^\/+/, "")}`;
-  base.search = "";
-  return base.toString();
-}
-
 function imageFileName(blob: Blob, stem: string): string {
   const extension = blob.type === "image/jpeg" ? "jpg" : blob.type.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || "png";
   return `${stem}.${extension}`;
-}
-
-function requestHeaders(channel: AiChannel): Headers {
-  const headers = new Headers({ Accept: "application/json, image/*" });
-  const provider = getProvider(channel, "image");
-  if (provider.apiKey) headers.set("Authorization", `Bearer ${provider.apiKey}`);
-  return headers;
 }
 
 async function postForm(
@@ -70,24 +45,15 @@ async function postForm(
   context: ImageTransformContext,
 ): Promise<Response> {
   throwIfAborted(context.signal);
-  const response = await fetcher(endpoint(getProvider(channel, "image").baseUrl, path), {
+  return providerFetch(getProvider(channel, "image"), path, {
     method: "POST",
-    headers: requestHeaders(channel),
+    headers: { Accept: "application/json, image/*" },
     body: form,
-    redirect: "error",
     signal: context.signal,
+  }, {
+    fetcher,
+    errorPrefix: "Image provider HTTP",
   });
-  if (response.redirected || (response.status >= 300 && response.status < 400)) {
-    await response.body?.cancel();
-    throw new Error("Image provider redirect was rejected");
-  }
-  return response;
-}
-
-async function requireSuccess(response: Response): Promise<void> {
-  if (response.ok) return;
-  await response.body?.cancel();
-  throw new Error(`Image provider HTTP ${response.status} ${response.statusText}`.trim());
 }
 
 function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
@@ -146,7 +112,10 @@ async function parseOutput(
     await outputResponse.body?.cancel();
     throw new Error("Remote image redirect was rejected");
   }
-  await requireSuccess(outputResponse);
+  if (!outputResponse.ok) {
+    await outputResponse.body?.cancel();
+    throw new Error(`Remote image HTTP ${outputResponse.status}`);
+  }
   const remote = await readBoundedResponse(outputResponse, {
     maxBytes: IMAGE_TRANSFORM_LIMITS.maxOutputBytes,
     mimeTypes: IMAGE_MIME_TYPES,
@@ -197,7 +166,6 @@ export function createOpenAIImageTransformProvider(
       const progress = progressReporter(context.onProgress);
       progress(0);
       const response = await postForm(fetcher, channel, "/images/edits", editForm(channel, request.image, prompt, request.mask), context);
-      await requireSuccess(response);
       progress(0.55);
       const result = await parseOutput(response, fetcher, context, progress);
       return { ...result, model: getProvider(channel, "image").model };
@@ -212,7 +180,6 @@ export function createOpenAIImageTransformProvider(
       form.set("image", request.image, imageFileName(request.image, "image"));
       form.set("scale", String(request.scale));
       const response = await postForm(fetcher, channel, "/images/upscales", form, context);
-      await requireSuccess(response);
       progress(0.55);
       const result = await parseOutput(response, fetcher, context, progress);
       return {

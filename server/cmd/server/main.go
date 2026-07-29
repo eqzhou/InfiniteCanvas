@@ -23,6 +23,11 @@ import (
 	"github.com/openboard/openboard/server/internal/store"
 )
 
+const (
+	requestHandlingTimeout = 125 * time.Second
+	serverWriteTimeout     = 130 * time.Second
+)
+
 func main() {
 	addr := env("OPENBOARD_ADDR", "127.0.0.1:8790")
 	dataDir := env("OPENBOARD_DATA", appdir.DefaultDataDir())
@@ -40,7 +45,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(timeoutRequests(60 * time.Second))
+	r.Use(timeoutRequests(requestHandlingTimeout))
 	r.Use(cors(origins))
 	r.Use(rateLimitRequests(1_200, time.Minute))
 	r.Use(requireToken(token))
@@ -82,7 +87,7 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       65 * time.Second,
-		WriteTimeout:      65 * time.Second,
+		WriteTimeout:      serverWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}

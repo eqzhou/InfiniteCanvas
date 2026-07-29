@@ -31,24 +31,8 @@ type openAIImageExecutor struct {
 }
 
 func newOpenAIImageExecutor() *openAIImageExecutor {
-	transport := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           safeGenerationDialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          16,
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		ExpectContinueTimeout: time.Second,
-	}
-	return &openAIImageExecutor{client: &http.Client{
-		Transport: transport,
-		Timeout:   3 * time.Minute,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}, apimartPollInterval: 3 * time.Second, apimartMaxDuration: 5 * time.Minute,
+	return &openAIImageExecutor{client: newProviderHTTPClient(3 * time.Minute),
+		apimartPollInterval: 3 * time.Second, apimartMaxDuration: 5 * time.Minute,
 		kiePollInterval: 3 * time.Second, kieMaxDuration: 15 * time.Minute}
 }
 

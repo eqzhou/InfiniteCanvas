@@ -21,7 +21,13 @@ export async function generateTextBatch(options: TextBatchOptions): Promise<stri
     images: [...(options.images ?? [])],
     systemPrompt: options.systemPrompt,
   };
-  return Promise.all(
-    Array.from({ length: options.count }, () => generateText(request)),
-  );
+  let results: string[] = [];
+  for (let offset = 0; offset < options.count; offset += 2) {
+    const waveSize = Math.min(2, options.count - offset);
+    const wave = await Promise.all(
+      Array.from({ length: waveSize }, () => generateText(request)),
+    );
+    results = [...results, ...wave];
+  }
+  return results;
 }

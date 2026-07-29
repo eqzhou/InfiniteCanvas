@@ -116,6 +116,19 @@ export function mergeSharedChannelChoices(personal: readonly AiChannel[], shared
   return [...personal, ...shared.filter((channel) => !personalIds.has(channel.id)).map(sharedChannelAsAI)];
 }
 
+export function resolveActiveAIChannel(
+  personal: readonly AiChannel[],
+  activePersonalId: string | null | undefined,
+  shared: readonly SharedChannel[],
+  activeSharedId: string | null | undefined,
+): AiChannel | undefined {
+  if (activeSharedId) {
+    const selectedShared = shared.find((channel) => channel.id === activeSharedId);
+    if (selectedShared) return sharedChannelAsAI(selectedShared);
+  }
+  return personal.find((channel) => channel.id === activePersonalId) ?? personal[0];
+}
+
 export function useSharedChannels(): SharedChannel[] {
   const [channels, setChannels] = useState<SharedChannel[]>(sharedChannelCatalogSnapshot);
   useEffect(() => {

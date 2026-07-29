@@ -104,6 +104,7 @@ type storedImageProvider struct {
 type storedImageChannel struct {
 	ID                string                         `json:"id"`
 	BaseURL           string                         `json:"baseUrl"`
+	DefaultTextModel  string                         `json:"defaultTextModel"`
 	DefaultImageModel string                         `json:"defaultImageModel"`
 	DefaultVideoModel string                         `json:"defaultVideoModel"`
 	DefaultAudioModel string                         `json:"defaultAudioModel"`
@@ -111,9 +112,10 @@ type storedImageChannel struct {
 }
 
 type storedImageConfig struct {
-	Channels        []storedImageChannel `json:"channels"`
-	ActiveChannelID string               `json:"activeChannelId"`
-	SystemPrompt    string               `json:"systemPrompt"`
+	Channels                  []storedImageChannel `json:"channels"`
+	ActiveChannelID           string               `json:"activeChannelId"`
+	SystemPrompt              string               `json:"systemPrompt"`
+	WorkflowAgentSystemPrompt string               `json:"workflowAgentSystemPrompt"`
 }
 
 type storedConfigSecrets struct {

@@ -23,6 +23,7 @@ export type GenerationActivity = {
 type StartGenerationActivity = Pick<GenerationActivity, "kind" | "prompt"> &
   Partial<Pick<GenerationActivity, "id" | "surface" | "model" | "providerId">> & {
     deferSuccess?: boolean;
+    reportClient?: boolean;
   };
 
 const MAX_ACTIVITIES = 100;
@@ -160,7 +161,9 @@ export async function runTrackedGeneration<T>(
     const result = await operation();
     if (!input.deferSuccess) {
       publish({ ...activity, status: "succeeded", updatedAt: nowIso() });
-      maybeReportClientAICall(activity, "succeeded", startedMs);
+      if (input.reportClient !== false) {
+        maybeReportClientAICall(activity, "succeeded", startedMs);
+      }
     }
     return result;
   } catch (cause) {
@@ -173,7 +176,9 @@ export async function runTrackedGeneration<T>(
       updatedAt: nowIso(),
       error,
     });
-    maybeReportClientAICall(activity, status, startedMs, error);
+    if (input.reportClient !== false) {
+      maybeReportClientAICall(activity, status, startedMs, error);
+    }
     throw cause;
   }
 }

@@ -5,6 +5,7 @@ import {
   isServerManagedChannel,
   loadSharedChannelsCached,
   mergeSharedChannelChoices,
+	resolveActiveAIChannel,
 	refreshSharedChannelCatalog,
 	resetSharedChannelCatalog,
   sharedChannelAsAI,
@@ -31,6 +32,18 @@ describe("shared channel catalog", () => {
     expect(channel.providers?.image.models).toEqual(["image-1", "video-1"]);
     expect(channel.providers?.video.models).toEqual(["image-1", "video-1"]);
   });
+
+	test("resolves an explicitly selected shared channel before personal fallbacks", () => {
+		const personal = { ...createDefaultChannel(), id: "personal", name: "Personal" };
+		const resolved = resolveActiveAIChannel(
+			[personal],
+			"personal",
+			[{ id: "shared", name: "Shared", protocol: "openai", models: ["shared-model"] }],
+			"shared",
+		);
+		expect(resolved?.id).toBe("shared");
+		expect(resolved?.providers?.image.models).toEqual(["shared-model"]);
+	});
 
   test("personal channel IDs take precedence over ambiguous shared IDs", () => {
     const personal = { ...createDefaultChannel(), id: "same", name: "Personal" };

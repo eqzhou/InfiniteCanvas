@@ -680,68 +680,14 @@ func (s *Server) fetchAdminChannelModels(ctx context.Context, tenantID, id strin
 	if err != nil || strings.TrimSpace(secrets[id]) == "" {
 		return nil, errors.New("channel secret is not configured")
 	}
-	endpoint, err := generationProviderEndpoint(channel.BaseURL, "/models")
-	if err != nil {
-		return nil, err
-	}
 	timeout := time.Duration(channel.TimeoutSeconds) * time.Second
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, errors.New("failed to create model request")
-	}
-	request.Header.Set("Authorization", "Bearer "+secrets[id])
-	response, err := newOpenAIImageExecutor().client.Do(request)
-	if err != nil {
-		return nil, errors.New("channel connection failed")
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 2048))
-		return nil, errors.New("channel returned an unsuccessful status")
-	}
-	limited := io.LimitReader(response.Body, maxAdminModelsResponseBytes+1)
-	body, err := io.ReadAll(limited)
-	if err != nil || len(body) > maxAdminModelsResponseBytes {
-		return nil, errors.New("channel model response exceeds limits")
-	}
-	var payload struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-		Models []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if json.Unmarshal(body, &payload) != nil || len(payload.Data)+len(payload.Models) > 1000 {
-		return nil, errors.New("invalid channel model response")
-	}
-	seen := map[string]struct{}{}
-	models := make([]string, 0, len(payload.Data)+len(payload.Models))
-	add := func(value string) {
-		value = strings.TrimSpace(strings.TrimPrefix(value, "models/"))
-		if value == "" || len(value) > 500 {
-			return
-		}
-		if _, exists := seen[value]; !exists {
-			seen[value] = struct{}{}
-			models = append(models, value)
-		}
-	}
-	for _, item := range payload.Data {
-		add(item.ID)
-	}
-	for _, item := range payload.Models {
-		if item.ID != "" {
-			add(item.ID)
-		} else {
-			add(item.Name)
-		}
-	}
-	sort.Strings(models)
-	return models, nil
+	return fetchProviderModelsWithClient(requestCtx, providerModelConnection{
+		BaseURL:  channel.BaseURL,
+		APIKey:   secrets[id],
+		Protocol: channel.Protocol,
+	}, providerModelHTTPClient, true)
 }
 
 func (s *Server) getAdminChannelModels(w http.ResponseWriter, r *http.Request) {

@@ -207,6 +207,7 @@ export function WorkflowWorkbench() {
         channel,
         model: provider.model,
         systemPrompt: resolveWorkflowAgentSystemPrompt(config.workflowAgentSystemPrompt),
+        systemPromptProfile: "workflow",
         prompt: agentPrompt.trim(),
       });
       const candidate = extractJSONObject(output) as Record<string, unknown>;

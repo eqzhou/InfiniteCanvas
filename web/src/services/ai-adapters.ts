@@ -5,7 +5,8 @@ import {
   resolveTemplateEndpoint,
   validateProviderTemplate,
 } from "@/lib/provider-template";
-import { readBoundedProviderJson, readBoundedProviderText } from "@/services/bounded-provider-json";
+import { readBoundedProviderJson } from "@/services/bounded-provider-json";
+import { providerFetchUrl, type ProviderAuth } from "@/services/provider-http";
 
 const MAX_PROVIDER_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_PROVIDER_ERROR_BYTES = 64 * 1024;
@@ -17,22 +18,12 @@ function normalizeBase(baseUrl: string): string {
 export async function providerJsonFetch(
   url: string,
   apiKey: string,
-  auth: "bearer" | "x-api-key" | "x-goog-api-key",
+  auth: ProviderAuth,
   init: RequestInit,
 ): Promise<unknown> {
-  const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
-  if (apiKey) {
-    headers.set(
-      auth === "bearer" ? "Authorization" : auth,
-      auth === "bearer" ? `Bearer ${apiKey}` : apiKey,
-    );
-  }
-  const response = await fetch(url, { ...init, headers, redirect: "error" });
-  if (!response.ok) {
-    const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
-    throw new Error(`AI ${response.status}: ${detail || response.statusText}`);
-  }
+  const response = await providerFetchUrl(url, apiKey, auth, init, {
+    maxErrorBytes: MAX_PROVIDER_ERROR_BYTES,
+  });
   return readBoundedProviderJson(response, MAX_PROVIDER_JSON_BYTES);
 }
 
