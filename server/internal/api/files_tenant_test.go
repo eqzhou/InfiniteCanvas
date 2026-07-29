@@ -151,4 +151,3 @@ func TestRuntimeFileDownloadHeaders(t *testing.T) {
 		t.Fatalf("Cache-Control=%q", got.Header().Get("Cache-Control"))
 	}
 }
-

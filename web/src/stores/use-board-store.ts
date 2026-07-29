@@ -57,7 +57,7 @@ import {
   uploadMedia,
   resolveObjectUrl,
 } from "@/services/storage";
-import { SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
+import { ConfigPreconditionError, SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
 import type { GenerationDefaults } from "@/lib/generation-defaults";
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
@@ -264,8 +264,14 @@ const projectWrites = new LatestWrite(async (projects: BoardProject[]) => {
   const gone = await saveProjects(projects);
   if (gone.length) dropTombstonedProjects(gone);
 }, (error) => console.error("OpenBoard project persistence failed", error));
-const configWrites = new LatestWrite(saveConfig, (error) =>
-  console.error("OpenBoard config persistence failed", error));
+const configWrites = new LatestWrite(saveConfig, (error) => {
+  console.error("OpenBoard config persistence failed", error);
+  if (error instanceof ConfigPreconditionError && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("openboard:config-conflict", {
+      detail: { message: error.message },
+    }));
+  }
+});
 const assetWrites = new LatestWrite(saveAssets, (error) =>
   console.error("OpenBoard asset persistence failed", error));
 const promptWrites = new LatestWrite(savePrompts, (error) =>
@@ -381,10 +387,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           saveProjects(nextProjects),
           saveAssets(assets),
           savePrompts(personalPrompts),
-          // Persist merged built-in prompt sources so reloads and formal storage keep them.
-          saveConfig(hydratedConfig).catch((error) => {
-            if (!(error instanceof TenantConfigAdminRequiredError) && !(error instanceof SecretAuthRequiredError)) throw error;
-          }),
         ]);
         // A tombstone is authoritative. Drop those ids before the first paint so a
         // tab that still held the pre-delete document does not resurrect them in UI.

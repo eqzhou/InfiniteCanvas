@@ -263,4 +263,3 @@ func TestRuntimeWebSocketRejectsAnonymousMissingTicketWhenUsersExist(t *testing.
 		t.Fatalf("missing ticket body = %q", wsRec.Body.String())
 	}
 }
-

@@ -110,6 +110,115 @@ describe("server project persistence isolation", () => {
   });
 });
 
+describe("config compare-and-swap transport", () => {
+  const version = `"m1-${"b".repeat(64)}"`;
+
+  test("loads config and credentials atomically from one response", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({
+        config: { channels: [{ id: "personal" }] },
+        secrets: { apiKeys: { personal: { image: "sk-private" } } },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ETag: version },
+      });
+    }) as typeof fetch;
+
+    const { loadServerConfigBundle } = await import("./server-storage");
+    const bundle = await loadServerConfigBundle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.endsWith("/api/config")).toBe(true);
+    expect(bundle).toEqual({
+      config: { channels: [{ id: "personal" }] },
+      secrets: { apiKeys: { personal: { image: "sk-private" } } },
+    });
+  });
+
+  test("uses the version loaded with config for the next save", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      calls.push(init ?? {});
+      if (method === "GET") {
+        return new Response(JSON.stringify({ channels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ETag: version },
+        });
+      }
+      return new Response(null, { status: 204, headers: { ETag: `"m1-${"c".repeat(64)}"` } });
+    }) as typeof fetch;
+
+    const { loadServerState, saveServerState } = await import("./server-storage");
+    await loadServerState("config");
+    await saveServerState("config", { channels: [] } as never);
+
+    expect(new Headers(calls[1]?.headers).get("If-Match")).toBe(version);
+    expect(new Headers(calls[1]?.headers).has("If-None-Match")).toBe(false);
+  });
+
+  test("uses create-only semantics when config did not exist", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(init ?? {});
+      if ((init?.method ?? "GET").toUpperCase() === "GET") return new Response(null, { status: 404 });
+      return new Response(null, { status: 204, headers: { ETag: version } });
+    }) as typeof fetch;
+
+    const { loadServerState, saveServerState } = await import("./server-storage");
+    await loadServerState("config");
+    await saveServerState("config", { channels: [] } as never);
+
+    expect(new Headers(calls[1]?.headers).get("If-None-Match")).toBe("*");
+  });
+
+  test("surfaces a stale config save instead of overwriting another tab", async () => {
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "GET") {
+        return new Response(JSON.stringify({ channels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ETag: version },
+        });
+      }
+      return new Response(null, { status: 412 });
+    }) as typeof fetch;
+
+    const { ConfigPreconditionError, loadServerState, saveServerState } = await import("./server-storage");
+    await loadServerState("config");
+    await expect(saveServerState("config", { channels: [] } as never))
+      .rejects.toBeInstanceOf(ConfigPreconditionError);
+  });
+
+  test("saves config and credentials in one conditional request", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init: init ?? {} });
+      if ((init?.method ?? "GET").toUpperCase() === "GET") {
+        return new Response(JSON.stringify({ channels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ETag: version },
+        });
+      }
+      return new Response(null, { status: 204, headers: { ETag: `"m1-${"d".repeat(64)}"` } });
+    }) as typeof fetch;
+
+    const { loadServerState, saveServerConfigBundle } = await import("./server-storage");
+    await loadServerState("config");
+    await saveServerConfigBundle({ channels: [] } as never, {
+      apiKeys: { personal: { image: "sk-private" } },
+    });
+
+    expect(calls[1]?.url.endsWith("/api/config")).toBe(true);
+    expect(new Headers(calls[1]?.init.headers).get("If-Match")).toBe(version);
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      config: { channels: [] },
+      secrets: { apiKeys: { personal: { image: "sk-private" } } },
+    });
+  });
+});
+
 describe("migration compare-and-swap transport", () => {
   const version = `m1-${"a".repeat(64)}`;
 
@@ -227,5 +336,28 @@ describe("secret bag auth boundaries", () => {
       expect(await loadServerSecrets()).toBeNull();
     }
   });
-});
 
+  test("authorized secret-only updates use and advance the composite version", async () => {
+    const firstVersion = `"m1-${"e".repeat(64)}"`;
+    const nextVersion = `"m1-${"f".repeat(64)}"`;
+    const calls: RequestInit[] = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(init ?? {});
+      if ((init?.method ?? "GET").toUpperCase() === "GET") {
+        return new Response(JSON.stringify({ channels: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ETag: firstVersion },
+        });
+      }
+      return new Response(null, { status: 204, headers: { ETag: nextVersion } });
+    }) as typeof fetch;
+
+    const { loadServerState, saveServerSecrets, saveServerConfigBundle } = await import("./server-storage");
+    await loadServerState("config");
+    await saveServerSecrets({ apiKeys: {}, webdavPass: "" });
+    await saveServerConfigBundle({ channels: [] } as never, { apiKeys: {}, webdavPass: "" });
+
+    expect(new Headers(calls[1]?.headers).get("If-Match")).toBe(firstVersion);
+    expect(new Headers(calls[2]?.headers).get("If-Match")).toBe(nextVersion);
+  });
+});

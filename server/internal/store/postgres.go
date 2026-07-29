@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -903,6 +904,26 @@ func (s *PostgresStore) GetState(ctx context.Context, tenantID, key string) ([]b
 	return value, nil
 }
 
+func (s *PostgresStore) GetStates(ctx context.Context, tenantID string, keys []string) (map[string][]byte, error) {
+	tenantID = normalizeTenantID(tenantID)
+	rows, err := s.pool.Query(ctx, `SELECT key, value FROM openboard_state
+		WHERE tenant_id=$1 AND key=ANY($2)`, tenantID, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make(map[string][]byte, len(keys))
+	for rows.Next() {
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		values[key] = value
+	}
+	return values, rows.Err()
+}
+
 func (s *PostgresStore) ListStateTenants(ctx context.Context, key string) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT tenant_id FROM openboard_state WHERE key=$1 ORDER BY tenant_id`, key)
 	if err != nil {
@@ -952,6 +973,51 @@ func (s *PostgresStore) CompareAndSwapState(ctx context.Context, tenantID, key s
 		return ErrConflict
 	}
 	return nil
+}
+
+func (s *PostgresStore) CompareAndSwapStates(ctx context.Context, tenantID string, mutations []StateMutation) error {
+	tenantID = normalizeTenantID(tenantID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, mutation := range mutations {
+		var current []byte
+		err := tx.QueryRow(ctx, `SELECT value FROM openboard_state
+			WHERE tenant_id=$1 AND key=$2 FOR UPDATE`, tenantID, mutation.Key).Scan(&current)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if mutation.Expected != nil {
+				return ErrConflict
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if mutation.Expected == nil || !bytes.Equal(current, mutation.Expected) {
+			return ErrConflict
+		}
+	}
+	for _, mutation := range mutations {
+		var result pgconn.CommandTag
+		if mutation.Expected == nil {
+			result, err = tx.Exec(ctx, `INSERT INTO openboard_state (tenant_id,key,value,updated_at)
+				VALUES ($1,$2,$3,now()) ON CONFLICT (tenant_id,key) DO NOTHING`,
+				tenantID, mutation.Key, string(mutation.Value))
+		} else {
+			result, err = tx.Exec(ctx, `UPDATE openboard_state SET value=$4, updated_at=now()
+				WHERE tenant_id=$1 AND key=$2 AND value=$3::jsonb`,
+				tenantID, mutation.Key, string(mutation.Expected), string(mutation.Value))
+		}
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() == 0 {
+			return ErrConflict
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string, query GenerationJobQuery) (GenerationJobPage, error) {

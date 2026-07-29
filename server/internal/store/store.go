@@ -274,6 +274,12 @@ type CreditLogPage struct {
 	Total    int         `json:"total"`
 }
 
+type StateMutation struct {
+	Key      string
+	Expected []byte
+	Value    []byte
+}
+
 type Store interface {
 	Close()
 	Ping(context.Context) error
@@ -283,8 +289,10 @@ type Store interface {
 	CompareAndSwapProject(ctx context.Context, tenantID, id string, expected, document []byte) error
 	DeleteProject(ctx context.Context, tenantID, id string) error
 	GetState(ctx context.Context, tenantID, key string) ([]byte, error)
+	GetStates(ctx context.Context, tenantID string, keys []string) (map[string][]byte, error)
 	PutState(ctx context.Context, tenantID, key string, value []byte) error
 	CompareAndSwapState(ctx context.Context, tenantID, key string, expected, value []byte) error
+	CompareAndSwapStates(ctx context.Context, tenantID string, mutations []StateMutation) error
 	ListGenerationJobs(ctx context.Context, tenantID string, query GenerationJobQuery) (GenerationJobPage, error)
 	GetGenerationJob(ctx context.Context, tenantID, id string) (GenerationJob, error)
 	CreateGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error

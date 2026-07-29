@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -71,32 +72,65 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	expectedVersion, createOnly, ok := migrationExpectedVersion(w, r)
+	if !ok {
+		return
+	}
+	if createOnly {
+		http.Error(w, "secrets require an existing config version", http.StatusPreconditionFailed)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	plain, err := io.ReadAll(r.Body)
 	if err != nil || !json.Valid(plain) {
 		http.Error(w, "invalid secrets json", http.StatusBadRequest)
 		return
 	}
-	nonce := make([]byte, s.secrets.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
+	envelope, err := s.encryptSecrets(plain)
+	if err != nil {
 		http.Error(w, "failed to encrypt secrets", 500)
 		return
 	}
-	envelope, _ := json.Marshal(secretEnvelope{
-		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
-		Ciphertext: base64.RawStdEncoding.EncodeToString(s.secrets.Seal(nil, nonce, plain, nil)),
-	})
 	tenantID := tenantIDFrom(r)
 	storageKey, tenantWide := secretStorageKey(r)
-	if err := s.store.PutState(r.Context(), tenantID, storageKey, envelope); err != nil {
-		http.Error(w, "failed to store secrets", 500)
+	_, configKey, _, _, config, configExpected, currentSecrets, err := s.currentConfigBundle(r)
+	if err != nil {
+		http.Error(w, "failed to read config bundle", http.StatusInternalServerError)
+		return
+	}
+	if config == nil || configStateVersion(config, currentSecrets) != expectedVersion {
+		http.Error(w, "config precondition failed", http.StatusPreconditionFailed)
+		return
+	}
+	mutations := []store.StateMutation{
+		{Key: configKey, Expected: configExpected, Value: bytes.Clone(config)},
+		{Key: storageKey, Expected: bytes.Clone(currentSecrets), Value: envelope},
+	}
+	if err := s.store.CompareAndSwapStates(r.Context(), tenantID, mutations); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			http.Error(w, "config precondition failed", http.StatusPreconditionFailed)
+		} else {
+			http.Error(w, "failed to store secrets", http.StatusInternalServerError)
+		}
 		return
 	}
 	// Only tenant-wide credentials affect the shared object-storage client.
 	if tenantWide {
 		s.InvalidateTenantBlobStore(tenantID)
 	}
+	setMigrationETag(w, configStateVersion(config, envelope))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) encryptSecrets(plain []byte) ([]byte, error) {
+	nonce := make([]byte, s.secrets.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return json.Marshal(secretEnvelope{
+		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
+		Ciphertext: base64.RawStdEncoding.EncodeToString(s.secrets.Seal(nil, nonce, plain, nil)),
+	})
 }
 
 func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {

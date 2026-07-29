@@ -398,6 +398,19 @@ func request(t *testing.T, handler http.Handler, method, path string, body []byt
 	return recorder
 }
 
+func putConfigSecrets(t *testing.T, handler http.Handler, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	config := request(t, handler, http.MethodGet, "/api/state/config", nil)
+	req := httptest.NewRequest(http.MethodPut, "/api/secrets/config", bytes.NewReader(body))
+	req.Header.Set("If-Match", config.Header().Get("ETag"))
+	if token := strings.TrimSpace(os.Getenv("OPENBOARD_TOKEN")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
 func TestProjectLifecycle(t *testing.T) {
 	handler := testHandler(t)
 	project := []byte(`{"id":"board-1","title":"First","createdAt":"2026-07-15T00:00:00Z","updatedAt":"2026-07-15T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)

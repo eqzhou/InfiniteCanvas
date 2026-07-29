@@ -35,6 +35,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [urlCredentialError, setUrlCredentialError] = useState<string | null>(null);
   const [promptSourceError, setPromptSourceError] = useState<string | null>(null);
+  const [configConflict, setConfigConflict] = useState<string | null>(null);
   const [urlCredentials] = useState(() =>
     consumeUrlCredentials(window.location.href));
   const urlCredentialsAppliedRef = useRef(false);
@@ -81,6 +82,15 @@ export function App() {
     if (window.matchMedia("(max-width: 767px)").matches) {
       useBoardStore.getState().setShowAssistant(false);
     }
+  }, []);
+
+  useEffect(() => {
+    const report = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: unknown }>).detail;
+      if (typeof detail?.message === "string") setConfigConflict(detail.message);
+    };
+    window.addEventListener("openboard:config-conflict", report);
+    return () => window.removeEventListener("openboard:config-conflict", report);
   }, []);
 
   useEffect(() => {
@@ -135,6 +145,14 @@ export function App() {
           <div role="alert" className="ob-banner" data-tone="warning">
             <span className="min-w-0 flex-1 truncate">提示词来源自动刷新失败：{promptSourceError}</span>
             <button type="button" className="ob-banner-close" onClick={() => setPromptSourceError(null)}>关闭</button>
+          </div>
+        ) : null}
+        {configConflict ? (
+          <div role="alert" className="ob-banner" data-tone="warning">
+            <span className="min-w-0 flex-1 truncate">{configConflict}，当前修改尚未保存。</span>
+            <button type="button" className="ob-banner-close" onClick={() => window.location.reload()}>
+              刷新并载入最新配置
+            </button>
           </div>
         ) : null}
         <main className="min-h-0 flex-1">

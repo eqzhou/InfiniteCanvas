@@ -129,6 +129,18 @@ func (m *memoryStore) GetState(_ context.Context, tenantID, key string) ([]byte,
 	return append([]byte(nil), value...), nil
 }
 
+func (m *memoryStore) GetStates(_ context.Context, tenantID string, keys []string) (map[string][]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	values := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		if value, ok := m.state[tenantKey(tenantID, key)]; ok {
+			values[key] = append([]byte(nil), value...)
+		}
+	}
+	return values, nil
+}
+
 func (m *memoryStore) ListStateTenants(_ context.Context, key string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -168,6 +180,25 @@ func (m *memoryStore) CompareAndSwapState(_ context.Context, tenantID, key strin
 		return store.ErrConflict
 	}
 	m.state[storageKey] = append([]byte(nil), value...)
+	return nil
+}
+
+func (m *memoryStore) CompareAndSwapStates(_ context.Context, tenantID string, mutations []store.StateMutation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.compareAndSwapStateErr != nil {
+		return m.compareAndSwapStateErr
+	}
+	for _, mutation := range mutations {
+		current, exists := m.state[tenantKey(tenantID, mutation.Key)]
+		if (!exists && mutation.Expected != nil) ||
+			(exists && (mutation.Expected == nil || !bytes.Equal(current, mutation.Expected))) {
+			return store.ErrConflict
+		}
+	}
+	for _, mutation := range mutations {
+		m.state[tenantKey(tenantID, mutation.Key)] = append([]byte(nil), mutation.Value...)
+	}
 	return nil
 }
 
@@ -1241,7 +1272,7 @@ func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	secretBody := []byte(`{"apiKeys":{"primary":{"image":"sk-tenant-private"}},"webdavPass":""}`)
-	if got := request(t, withMigrationActor(router, admin), http.MethodPut, "/api/secrets/config", secretBody); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, withMigrationActor(router, admin), secretBody); got.Code != http.StatusNoContent {
 		t.Fatalf("seed secret = %d %s", got.Code, got.Body.String())
 	}
 
@@ -1250,7 +1281,9 @@ func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
 		t.Fatalf("member config read = %d %s", got.Code, got.Body.String())
 	}
 	attackerConfig := []byte(`{"channels":[{"id":"primary","name":"Primary","baseUrl":"https://attacker.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://attacker.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"stolen"}`)
-	if got := request(t, memberHandler, http.MethodPut, "/api/state/config", attackerConfig); got.Code != http.StatusNoContent {
+	if got := migrationRequest(t, memberHandler, http.MethodPut, "/api/state/config", attackerConfig, map[string]string{
+		"If-Match": `"` + configStateVersion(safeConfig, nil) + `"`,
+	}); got.Code != http.StatusNoContent {
 		t.Fatalf("member config write = %d %s", got.Code, got.Body.String())
 	}
 	memberConfig := request(t, memberHandler, http.MethodGet, "/api/state/config", nil)
@@ -1281,8 +1314,128 @@ func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
 	}
 
 	adminConfig := []byte(`{"channels":[{"id":"primary","name":"Primary","baseUrl":"https://safe.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://safe.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"admin update"}`)
-	if got := request(t, withMigrationActor(router, admin), http.MethodPut, "/api/state/config", adminConfig); got.Code != http.StatusNoContent {
+	adminHandler := withMigrationActor(router, admin)
+	adminRead := request(t, adminHandler, http.MethodGet, "/api/state/config", nil)
+	adminBundle, _ := json.Marshal(map[string]json.RawMessage{"config": adminConfig, "secrets": secretBody})
+	if got := migrationRequest(t, adminHandler, http.MethodPut, "/api/config", adminBundle, map[string]string{
+		"If-Match": adminRead.Header().Get("ETag"),
+	}); got.Code != http.StatusNoContent {
 		t.Fatalf("admin config write = %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestConfigStateRejectsStaleConditionalWriteWithoutOverwritingCurrentValue(t *testing.T) {
+	handler := persistentHandler(t)
+	original := []byte(`{"theme":"light","channels":[]}`)
+	updated := []byte(`{"theme":"dark","channels":[]}`)
+	stale := []byte(`{"theme":"system","channels":[]}`)
+
+	if got := migrationRequest(t, handler, http.MethodPut, "/api/state/config", original, map[string]string{
+		"If-None-Match": "*",
+		"Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("create config = %d %s", got.Code, got.Body.String())
+	}
+	read := migrationRequest(t, handler, http.MethodGet, "/api/state/config", nil, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	etag := read.Header().Get("ETag")
+	if read.Code != http.StatusOK || etag != `"`+configStateVersion(original, nil)+`"` {
+		t.Fatalf("read config = %d etag=%q body=%s", read.Code, etag, read.Body.String())
+	}
+	updateResponse := migrationRequest(t, handler, http.MethodPut, "/api/state/config", updated, map[string]string{
+		"If-Match":      etag,
+		"Authorization": "Bearer test-token",
+	})
+	if updateResponse.Code != http.StatusNoContent {
+		t.Fatalf("update config = %d %s", updateResponse.Code, updateResponse.Body.String())
+	}
+	if got := migrationRequest(t, handler, http.MethodPut, "/api/state/config", stale, map[string]string{
+		"If-Match":      etag,
+		"Authorization": "Bearer test-token",
+	}); got.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale config = %d %s", got.Code, got.Body.String())
+	}
+	after := migrationRequest(t, handler, http.MethodGet, "/api/state/config", nil, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	if after.Code != http.StatusOK || !bytes.Equal(after.Body.Bytes(), updated) {
+		t.Fatalf("stale write replaced config = %d %s", after.Code, after.Body.String())
+	}
+	if after.Header().Get("ETag") != updateResponse.Header().Get("ETag") {
+		t.Fatalf("saved etag=%q, read etag=%q", updateResponse.Header().Get("ETag"), after.Header().Get("ETag"))
+	}
+	if got := migrationRequest(t, handler, http.MethodPut, "/api/state/config", updated, map[string]string{
+		"If-Match":      updateResponse.Header().Get("ETag"),
+		"Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("second config update = %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestConfigStateVersionPreservesLargeIntegerPrecision(t *testing.T) {
+	first := []byte(`{"pluginValue":9007199254740992}`)
+	second := []byte(`{"pluginValue":9007199254740993}`)
+	if configStateVersion(first, nil) == configStateVersion(second, nil) {
+		t.Fatal("different large integers produced the same config version")
+	}
+}
+
+func TestConfigBundleAtomicallyRejectsStaleConfigAndSecretWrites(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	originalConfig := []byte(`{"theme":"light","channels":[]}`)
+	originalSecrets := []byte(`{"apiKeys":{"old":{"text":"sk-old"}}}`)
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, "config", originalConfig); err != nil {
+		t.Fatal(err)
+	}
+	if got := putConfigSecrets(t, router, originalSecrets); got.Code != http.StatusNoContent {
+		t.Fatalf("seed secrets = %d %s", got.Code, got.Body.String())
+	}
+	read := request(t, router, http.MethodGet, "/api/state/config", nil)
+	etag := read.Header().Get("ETag")
+
+	updatedConfig := []byte(`{"theme":"dark","channels":[]}`)
+	updatedSecrets := []byte(`{"apiKeys":{"new":{"text":"sk-new"}}}`)
+	updatedBundle, _ := json.Marshal(map[string]json.RawMessage{"config": updatedConfig, "secrets": updatedSecrets})
+	updateResponse := migrationRequest(t, router, http.MethodPut, "/api/config", updatedBundle, map[string]string{
+		"If-Match": etag, "Authorization": "Bearer test-token",
+	})
+	if updateResponse.Code != http.StatusNoContent {
+		t.Fatalf("update bundle = %d %s", updateResponse.Code, updateResponse.Body.String())
+	}
+	loadedBundle := request(t, router, http.MethodGet, "/api/config", nil)
+	if loadedBundle.Code != http.StatusOK || loadedBundle.Header().Get("ETag") != updateResponse.Header().Get("ETag") ||
+		!bytes.Contains(loadedBundle.Body.Bytes(), []byte("sk-new")) {
+		t.Fatalf("load bundle = %d etag=%q body=%s", loadedBundle.Code, loadedBundle.Header().Get("ETag"), loadedBundle.Body.String())
+	}
+
+	staleBundle := []byte(`{"config":{"theme":"stale","channels":[]},"secrets":{"apiKeys":{}}}`)
+	if got := migrationRequest(t, router, http.MethodPut, "/api/config", staleBundle, map[string]string{
+		"If-Match": etag, "Authorization": "Bearer test-token",
+	}); got.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale bundle = %d %s", got.Code, got.Body.String())
+	}
+	storedConfig, _ := backend.GetState(t.Context(), store.DefaultTenantID, "config")
+	storedSecrets, _ := server.decryptSecrets(t.Context(), store.DefaultTenantID)
+	if !bytes.Equal(storedConfig, updatedConfig) || !bytes.Equal(storedSecrets, updatedSecrets) {
+		t.Fatalf("stale bundle changed state: config=%s secrets=%s", storedConfig, storedSecrets)
+	}
+	reorderedBundle := []byte(`{"config":{"channels":[],"theme":"dark"},"secrets":{"apiKeys":{"new":{"text":"sk-new"}}}}`)
+	if got := migrationRequest(t, router, http.MethodPut, "/api/config", reorderedBundle, map[string]string{
+		"If-Match": updateResponse.Header().Get("ETag"), "Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("semantic second bundle save = %d %s", got.Code, got.Body.String())
 	}
 }
 
@@ -1334,8 +1487,11 @@ func TestEncryptedSecretLifecycle(t *testing.T) {
 	}
 	r := chi.NewRouter()
 	MountServer(r, server)
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, "config", []byte(`{"channels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
 	plain := []byte(`{"apiKeys":{"channel":{"text":"sk-secret"}},"webdavPass":"dav-secret"}`)
-	if got := request(t, r, http.MethodPut, "/api/secrets/config", plain); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, r, plain); got.Code != http.StatusNoContent {
 		t.Fatalf("put secrets: %d %s", got.Code, got.Body.String())
 	}
 	backend.mu.RLock()
@@ -1383,13 +1539,16 @@ func TestMemberPersonalSecretsAreIsolatedFromTenantBag(t *testing.T) {
 	admin := store.AuthUser{ID: "admin-1", TenantID: store.DefaultTenantID, Role: "admin", Status: "active"}
 	memberA := store.AuthUser{ID: "member-a", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
 	memberB := store.AuthUser{ID: "member-b", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, "config", []byte(`{"channels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
 
 	adminPlain := []byte(`{"apiKeys":{"tenant":{"image":"sk-tenant"}},"webdavPass":""}`)
-	if got := request(t, withMigrationActor(router, admin), http.MethodPut, "/api/secrets/config", adminPlain); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, withMigrationActor(router, admin), adminPlain); got.Code != http.StatusNoContent {
 		t.Fatalf("admin put: %d %s", got.Code, got.Body.String())
 	}
 	memberPlain := []byte(`{"apiKeys":{"personal":{"image":"sk-member-a"}},"webdavPass":"","objectStorageSecretAccessKey":"user-s3"}`)
-	if got := request(t, withMigrationActor(router, memberA), http.MethodPut, "/api/secrets/config", memberPlain); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, withMigrationActor(router, memberA), memberPlain); got.Code != http.StatusNoContent {
 		t.Fatalf("member put: %d %s", got.Code, got.Body.String())
 	}
 

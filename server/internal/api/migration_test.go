@@ -72,7 +72,8 @@ func TestMigrationRequiresProcessTokenOrAuthenticatedUser(t *testing.T) {
 
 func TestMigrationSecretResourcesRequireTenantAdmin(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
-	server := NewServerWithStore(t.TempDir(), newMemoryStore())
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
 	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +81,9 @@ func TestMigrationSecretResourcesRequireTenantAdmin(t *testing.T) {
 	MountServer(handler, server)
 	body := []byte(`{"resources":[{"kind":"secret","id":"config"}]}`)
 	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
+	if err := backend.PutState(t.Context(), member.TenantID, "config", []byte(`{"channels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
 	// Tenant-wide secret migration remains admin-only.
 	if got := migrationRequest(t, withMigrationActor(handler, member), http.MethodPost, "/api/migration/versions", body, map[string]string{"Content-Type": "application/json"}); got.Code != http.StatusForbidden {
 		t.Fatalf("member secret preflight = %d: %s", got.Code, got.Body.String())
@@ -88,7 +92,7 @@ func TestMigrationSecretResourcesRequireTenantAdmin(t *testing.T) {
 		t.Fatalf("member migration put secrets = %d: %s", got.Code, got.Body.String())
 	}
 	// Personal secret bags are writable by members (separate from the tenant bag).
-	if got := migrationRequest(t, withMigrationActor(handler, member), http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"direct":{"image":"sk-member"}},"webdavPass":""}`), map[string]string{"Content-Type": "application/json"}); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, withMigrationActor(handler, member), []byte(`{"apiKeys":{"direct":{"image":"sk-member"}},"webdavPass":""}`)); got.Code != http.StatusNoContent {
 		t.Fatalf("member put personal secrets = %d: %s", got.Code, got.Body.String())
 	}
 	if got := migrationRequest(t, withMigrationActor(handler, member), http.MethodGet, "/api/secrets/config", nil, map[string]string{}); got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte("sk-member")) {

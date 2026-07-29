@@ -551,6 +551,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               <Field label="Access Key ID">
                 <input
                   className="ob-field"
+                  name="openboard-object-storage-access-key-id"
+                  autoComplete="off"
                   value={config.objectStorage?.accessKeyId ?? ""}
                   onChange={(e) => setConfig({
                     ...config,
@@ -562,6 +564,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <input
                   className="ob-field"
                   type="password"
+                  name="openboard-object-storage-secret-access-key"
+                  autoComplete="new-password"
                   value={config.objectStorage?.secretAccessKey ?? ""}
                   onChange={(e) => setConfig({
                     ...config,
@@ -573,6 +577,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <input
                   className="ob-field"
                   type="password"
+                  name="openboard-object-storage-session-token"
+                  autoComplete="new-password"
                   value={config.objectStorage?.sessionToken ?? ""}
                   onChange={(e) => setConfig({
                     ...config,
@@ -604,10 +610,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <input className="ob-field" value={config.webdavUrl ?? ""} onChange={(e) => setConfig({ ...config, webdavUrl: e.target.value })} placeholder="https://example.com/dav/openboard" />
               </Field>
               <Field label="用户名">
-                <input className="ob-field" value={config.webdavUser ?? ""} onChange={(e) => setConfig({ ...config, webdavUser: e.target.value })} />
+                <input className="ob-field" name="openboard-webdav-user" autoComplete="off" value={config.webdavUser ?? ""} onChange={(e) => setConfig({ ...config, webdavUser: e.target.value })} />
               </Field>
               <Field label="密码">
-                <input className="ob-field" type="password" value={config.webdavPass ?? ""} onChange={(e) => setConfig({ ...config, webdavPass: e.target.value })} />
+                <input className="ob-field" name="openboard-webdav-password" autoComplete="new-password" type="password" value={config.webdavPass ?? ""} onChange={(e) => setConfig({ ...config, webdavPass: e.target.value })} />
               </Field>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -756,7 +762,17 @@ function ProviderRow({
           <input className="ob-field" aria-label={`${label} URL`} value={provider.baseUrl} disabled={disabled} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder="服务 URL" />
         </CompactField>
         <CompactField label="API Key">
-          <input className="ob-field" aria-label={`${label} API Key`} type="password" value={provider.apiKey} disabled={disabled} onChange={(e) => onChange({ apiKey: e.target.value })} placeholder="API Key" />
+          <input
+            className="ob-field"
+            aria-label={`${label} API Key`}
+            name={`openboard-${kind}-api-key`}
+            type="password"
+            autoComplete="new-password"
+            value={provider.apiKey}
+            disabled={disabled}
+            onChange={(e) => onChange({ apiKey: e.target.value })}
+            placeholder="API Key"
+          />
         </CompactField>
         <CompactField label="模型">
           <input className="ob-field" aria-label={`${label}模型`} value={provider.model} disabled={disabled} onChange={(e) => onChange({ model: e.target.value })} placeholder="模型名称" />

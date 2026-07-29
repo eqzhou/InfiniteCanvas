@@ -102,7 +102,7 @@ func TestUserObjectStorageRoutesProtectedBlobs(t *testing.T) {
 	})
 	r := chi.NewRouter()
 	MountServer(r, server)
-	if got := request(t, r, http.MethodPut, "/api/secrets/config", secrets); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, r, secrets); got.Code != http.StatusNoContent {
 		t.Fatalf("put secrets: %d %s", got.Code, got.Body.String())
 	}
 

@@ -35,6 +35,39 @@ export class TenantConfigAdminRequiredError extends Error {
   }
 }
 
+export class ConfigPreconditionError extends Error {
+  constructor() {
+    super("配置已在另一个页面更新，请刷新后重新修改");
+    this.name = "ConfigPreconditionError";
+  }
+}
+
+let configETag: string | null | undefined;
+
+export function resetServerStateVersions(): void {
+  configETag = undefined;
+}
+
+export async function loadServerConfigBundle<T>(): Promise<{ config: AppConfig; secrets: T } | null> {
+  const response = await request("config");
+  if (response.status === 404) {
+    configETag = null;
+    return null;
+  }
+  if (response.status === 401) throw new SecretAuthRequiredError();
+  if (response.status === 403) throw new TenantConfigAdminRequiredError();
+  if (!response.ok) throw new Error(`Config load failed: HTTP ${response.status}`);
+  const etag = response.headers.get("ETag");
+  if (!etag) throw new Error("Config load response is missing ETag");
+  const value = await response.json() as { config?: unknown; secrets?: unknown };
+  if (!value || typeof value !== "object" || !value.config || typeof value.config !== "object" ||
+      !value.secrets || typeof value.secrets !== "object") {
+    throw new Error("Config load response is invalid");
+  }
+  configETag = etag;
+  return value as { config: AppConfig; secrets: T };
+}
+
 /**
  * Secrets require a real signed-in account (or auth_mode=off + process token).
  * Callers that only persist non-secret state should catch this and continue.
@@ -202,7 +235,11 @@ export async function replaceServerProjects(projects: BoardProject[]): Promise<v
 
 export async function loadServerState<T>(key: "config" | "assets" | "prompts"): Promise<T | null> {
   const response = await request(`state/${key}`);
-  if (response.status === 404) return null;
+  if (response.status === 404) {
+    if (key === "config") configETag = null;
+    return null;
+  }
+  if (key === "config" && response.ok) configETag = response.headers.get("ETag");
   return readJSON<T>(response);
 }
 
@@ -210,13 +247,47 @@ export async function saveServerState(
   key: "config" | "assets" | "prompts",
   value: AppConfig | AssetItem[] | PromptItem[],
 ): Promise<void> {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (key === "config") {
+    if (configETag === undefined) throw new ConfigPreconditionError();
+    if (configETag === null) headers.set("If-None-Match", "*");
+    else headers.set("If-Match", configETag);
+  }
   const response = await request(`state/${key}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(value),
   });
 	if (key === "config" && response.status === 403) throw new TenantConfigAdminRequiredError();
+  if (key === "config" && (response.status === 412 || response.status === 428)) throw new ConfigPreconditionError();
   if (!response.ok) throw new Error(`State save failed: HTTP ${response.status}`);
+  if (key === "config") {
+    const nextETag = response.headers.get("ETag");
+    if (!nextETag) throw new Error("Config save response is missing ETag");
+    configETag = nextETag;
+  }
+}
+
+export async function saveServerConfigBundle<T>(
+  config: AppConfig,
+  secrets: T,
+): Promise<void> {
+  if (configETag === undefined) throw new ConfigPreconditionError();
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (configETag === null) headers.set("If-None-Match", "*");
+  else headers.set("If-Match", configETag);
+  const response = await request("config", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ config, secrets }),
+  });
+  if (response.status === 401) throw new SecretAuthRequiredError();
+  if (response.status === 403) throw new TenantConfigAdminRequiredError();
+  if (response.status === 412 || response.status === 428) throw new ConfigPreconditionError();
+  if (!response.ok) throw new Error(`Config save failed: HTTP ${response.status}`);
+  const nextETag = response.headers.get("ETag");
+  if (!nextETag) throw new Error("Config save response is missing ETag");
+  configETag = nextETag;
 }
 
 export async function loadServerSecrets<T>(): Promise<T | null> {
@@ -228,15 +299,21 @@ export async function loadServerSecrets<T>(): Promise<T | null> {
 }
 
 export async function saveServerSecrets<T>(value: T): Promise<void> {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (configETag) headers.set("If-Match", configETag);
   const response = await request("secrets/config", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(value),
   });
   // 401 = no real account session. Prompt/catalog sync must not die on this.
-  if (response.status === 401) throw new SecretAuthRequiredError();
+	if (response.status === 401) throw new SecretAuthRequiredError();
 	if (response.status === 403) throw new TenantConfigAdminRequiredError();
+  if (response.status === 412 || response.status === 428) throw new ConfigPreconditionError();
   if (!response.ok) throw new Error(`Secret save failed: HTTP ${response.status}`);
+  const nextETag = response.headers.get("ETag");
+  if (!nextETag) throw new Error("Secret save response is missing ETag");
+  configETag = nextETag;
 }
 
 export async function putServerBlob(key: string, blob: Blob): Promise<void> {

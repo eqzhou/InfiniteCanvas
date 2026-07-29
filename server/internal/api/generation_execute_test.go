@@ -92,7 +92,7 @@ func imageExecutionHandler(t *testing.T, executor imageExecutor) (*Server, *memo
 	router := chi.NewRouter()
 	MountServer(router, server)
 	secrets := []byte(`{"apiKeys":{"image-main":{"image":"sk-private"}},"webdavPass":""}`)
-	if got := request(t, router, http.MethodPut, "/api/secrets/config", secrets); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, router, secrets); got.Code != http.StatusNoContent {
 		t.Fatalf("store secrets: %d %s", got.Code, got.Body.String())
 	}
 	return server, backend, router
@@ -397,7 +397,7 @@ func TestServerImageWorkersRecoverQueuedAndExpiredRunningJobs(t *testing.T) {
 	}
 	seedRouter := chi.NewRouter()
 	MountServer(seedRouter, seed)
-	if got := request(t, seedRouter, http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"image-main":{"image":"sk-private"}},"webdavPass":""}`)); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, seedRouter, []byte(`{"apiKeys":{"image-main":{"image":"sk-private"}},"webdavPass":""}`)); got.Code != http.StatusNoContent {
 		t.Fatalf("store secrets: %d %s", got.Code, got.Body.String())
 	}
 	seed.Close()
@@ -509,7 +509,7 @@ func TestTwoServersClaimOnceAndPropagateCancellation(t *testing.T) {
 	}
 	serverA, routerA := newInstance()
 	t.Cleanup(serverA.Close)
-	if got := request(t, routerA, http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"image-main":{"image":"sk-private"}},"webdavPass":""}`)); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, routerA, []byte(`{"apiKeys":{"image-main":{"image":"sk-private"}},"webdavPass":""}`)); got.Code != http.StatusNoContent {
 		t.Fatalf("store secrets: %d %s", got.Code, got.Body.String())
 	}
 	serverB, routerB := newInstance()

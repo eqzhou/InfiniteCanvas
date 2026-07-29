@@ -11,13 +11,15 @@ import {
   deleteServerProject,
   getServerBlob,
   loadServerProjects,
+  loadServerConfigBundle,
   loadServerSecrets,
   loadServerState,
   loadMigrationResourceVersions,
   putServerBlob,
   replaceServerProjects,
+  resetServerStateVersions,
   saveServerProjects,
-  saveServerSecrets,
+  saveServerConfigBundle,
   saveServerState,
   saveMigrationBlob,
   saveMigrationGenerationHistory,
@@ -380,6 +382,7 @@ const objectUrls = new Map<string, string>();
 export function resetStorageScopeState(): void {
   serverMigration = undefined;
   serverMigrationSuppressed = false;
+  resetServerStateVersions();
   if (typeof URL !== "undefined") {
     for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   }
@@ -450,6 +453,10 @@ export type ConfigSecrets = {
   objectStorageSecretAccessKey?: string;
   objectStorageSessionToken?: string;
 };
+
+export function hasConfigSecrets(secrets: ConfigSecrets): boolean {
+  return summarizeMigrationCredentials(secrets).present;
+}
 
 export function mergeConfigSecrets(
 	session: ConfigSecrets,
@@ -553,19 +560,34 @@ function writeSessionConfigSecrets(secrets: ConfigSecrets): void {
 
 export async function loadConfig(): Promise<AppConfig | null> {
   await ensureServerMigration();
+  let serverBundle: { config: AppConfig; secrets: ConfigSecrets } | null = null;
+  if (SERVER_STORAGE) {
+    try {
+      serverBundle = await loadServerConfigBundle<ConfigSecrets>();
+    } catch (error) {
+      if (!(error instanceof SecretAuthRequiredError) && !(error instanceof TenantConfigAdminRequiredError)) throw error;
+      const config = await loadServerState<AppConfig>("config");
+      if (config) {
+        serverBundle = {
+          config,
+          secrets: { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" },
+        };
+      }
+    }
+  }
   const stored = SERVER_STORAGE
-    ? await loadServerState<AppConfig>("config")
+    ? serverBundle?.config ?? null
     : (await get<AppConfig>(CONFIG_KEY, appStore)) ?? null;
   if (!stored) return null;
   const sessionSecrets = SERVER_STORAGE
-    ? (await loadServerSecrets<ConfigSecrets>()) ?? { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" }
+    ? serverBundle?.secrets ?? { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" }
     : readSessionConfigSecrets();
   const persistedSecrets = extractConfigSecrets(stored);
 	const secrets = mergeConfigSecrets(sessionSecrets, persistedSecrets);
   if (!SERVER_STORAGE) writeSessionConfigSecrets(secrets);
 
   const sanitized = sanitizeConfigForPersistence(stored);
-  if (Object.values(persistedSecrets.apiKeys).some(Boolean) || persistedSecrets.webdavPass || persistedSecrets.objectStorageAccessKeyId || persistedSecrets.objectStorageSecretAccessKey || persistedSecrets.objectStorageSessionToken) {
+  if (hasConfigSecrets(persistedSecrets)) {
     if (SERVER_STORAGE) {
       try {
         await saveServerState("config", sanitized);
@@ -597,27 +619,22 @@ export async function loadConfig(): Promise<AppConfig | null> {
 export async function saveConfig(config: AppConfig): Promise<void> {
   const secrets = extractConfigSecrets(config);
   const hasSecrets = summarizeMigrationCredentials(secrets).present;
+  const sanitized = sanitizeConfigForPersistence(config);
 	if (SERVER_STORAGE) {
-		try {
-			await saveServerSecrets(secrets);
-		} catch (error) {
-      // Capability model:
-      // - guests may persist non-secret config / prompt sources
-      // - secrets require a signed-in account
-      // - empty secret bags never block catalog/prompt sync
-      if (error instanceof SecretAuthRequiredError) {
-        if (hasSecrets) throw error;
-      } else if (error instanceof TenantConfigAdminRequiredError) {
-        if (hasSecrets) throw error;
+    // One conditional server transaction keeps destinations and credentials
+    // paired and prevents a stale tab from overwriting either half.
+    try {
+      await saveServerConfigBundle(sanitized, secrets);
+    } catch (error) {
+      if ((error instanceof SecretAuthRequiredError || error instanceof TenantConfigAdminRequiredError) && !hasSecrets) {
+        await saveServerState("config", sanitized);
       } else {
         throw error;
       }
-		}
+    }
 	}
   else writeSessionConfigSecrets(secrets);
-  const sanitized = sanitizeConfigForPersistence(config);
-  if (SERVER_STORAGE) await saveServerState("config", sanitized);
-  else await set(CONFIG_KEY, sanitized, appStore);
+  if (!SERVER_STORAGE) await set(CONFIG_KEY, sanitized, appStore);
 }
 
 export async function loadAssets(): Promise<AssetItem[]> {

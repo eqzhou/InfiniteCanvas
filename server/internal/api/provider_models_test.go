@@ -84,10 +84,12 @@ func TestProviderModelsProxyReturnsAUsefulUpstreamError(t *testing.T) {
 func TestProviderModelsEndpointRejectsServerLoopback(t *testing.T) {
 	_, _, handler := sharedChannelHandler(t)
 	config := []byte(`{"channels":[{"id":"local","baseUrl":"http://127.0.0.1:9999","providers":{"text":{"baseUrl":"http://127.0.0.1:9999","model":"x","protocol":"openai"}}}]}`)
-	if got := request(t, handler, http.MethodPut, "/api/state/config", config); got.Code != http.StatusNoContent {
+	if got := migrationRequest(t, handler, http.MethodPut, "/api/state/config", config, map[string]string{
+		"If-None-Match": "*", "Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
 		t.Fatalf("config status=%d body=%s", got.Code, got.Body.String())
 	}
-	if got := request(t, handler, http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"local":{"text":"test-key"}}}`)); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, handler, []byte(`{"apiKeys":{"local":{"text":"test-key"}}}`)); got.Code != http.StatusNoContent {
 		t.Fatalf("secret status=%d body=%s", got.Code, got.Body.String())
 	}
 	response := request(t, handler, http.MethodPost, "/api/provider-models", []byte(`{"channelId":"local","kind":"text"}`))

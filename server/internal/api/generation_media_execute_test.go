@@ -101,7 +101,7 @@ func mediaExecutionServer(t *testing.T, backend *memoryStore, video videoExecuto
 	router := chi.NewRouter()
 	MountServer(router, server)
 	secrets := []byte(`{"apiKeys":{"media-main":{"video":"sk-video-private","audio":"sk-audio-private"}},"webdavPass":""}`)
-	if got := request(t, router, http.MethodPut, "/api/secrets/config", secrets); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, router, secrets); got.Code != http.StatusNoContent {
 		t.Fatalf("store secrets: %d %s", got.Code, got.Body.String())
 	}
 	return server, router

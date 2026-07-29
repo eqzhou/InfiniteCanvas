@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   collectBoardContentStorageKeys,
+  hasConfigSecrets,
   MEDIA_UPLOAD_LIMITS,
 	mergeConfigSecrets,
   repairInvalidPanoramaBatches,
@@ -19,6 +20,16 @@ afterEach(() => {
 });
 
 describe("config credential persistence", () => {
+  test("does not treat empty per-provider credential maps as persisted secrets", () => {
+    expect(hasConfigSecrets({
+      apiKeys: { channel: { text: "", image: "", video: "", audio: "" } },
+      webdavPass: "",
+      objectStorageAccessKeyId: "",
+      objectStorageSecretAccessKey: "",
+      objectStorageSessionToken: "",
+    })).toBe(false);
+  });
+
 	test("does not let sanitized empty keys overwrite encrypted server secrets", () => {
 		expect(mergeConfigSecrets(
 			{ apiKeys: { channel: { image: testCredential("encrypted-image") } }, webdavPass: testCredential("encrypted-dav"), objectStorageAccessKeyId: testCredential("s3-ak"), objectStorageSecretAccessKey: testCredential("s3-sk"), objectStorageSessionToken: "" },

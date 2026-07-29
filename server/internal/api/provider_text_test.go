@@ -177,10 +177,12 @@ func TestProviderTextUsesGeminiContract(t *testing.T) {
 func TestProviderTextEndpointResolvesTheSavedChannelAndSecret(t *testing.T) {
 	_, _, handler := sharedChannelHandler(t)
 	config := []byte(`{"channels":[{"id":"personal","timeoutSeconds":90,"baseUrl":"https://provider.example/v1","defaultTextModel":"gpt-test","providers":{"text":{"baseUrl":"https://provider.example/v1","model":"gpt-test","protocol":"openai"}}}],"systemPrompt":"tenant instruction"}`)
-	if got := request(t, handler, http.MethodPut, "/api/state/config", config); got.Code != http.StatusNoContent {
+	if got := migrationRequest(t, handler, http.MethodPut, "/api/state/config", config, map[string]string{
+		"If-None-Match": "*", "Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
 		t.Fatalf("config status=%d body=%s", got.Code, got.Body.String())
 	}
-	if got := request(t, handler, http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"personal":{"text":"test-provider-key"}}}`)); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, handler, []byte(`{"apiKeys":{"personal":{"text":"test-provider-key"}}}`)); got.Code != http.StatusNoContent {
 		t.Fatalf("secret status=%d body=%s", got.Code, got.Body.String())
 	}
 
@@ -228,10 +230,12 @@ func TestProviderTextEndpointUsesTheCallingMembersSystemPrompt(t *testing.T) {
 	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
 	handler := withMigrationActor(router, member)
 	config := []byte(`{"channels":[{"id":"personal","baseUrl":"https://provider.example/v1","defaultTextModel":"gpt-test","providers":{"text":{"baseUrl":"https://provider.example/v1","model":"gpt-test","protocol":"openai"}}}],"systemPrompt":"member instruction"}`)
-	if got := request(t, handler, http.MethodPut, "/api/state/config", config); got.Code != http.StatusNoContent {
+	if got := migrationRequest(t, handler, http.MethodPut, "/api/state/config", config, map[string]string{
+		"If-None-Match": "*", "Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
 		t.Fatalf("config status=%d body=%s", got.Code, got.Body.String())
 	}
-	if got := request(t, handler, http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"personal":{"text":"member-provider-key"}}}`)); got.Code != http.StatusNoContent {
+	if got := putConfigSecrets(t, handler, []byte(`{"apiKeys":{"personal":{"text":"member-provider-key"}}}`)); got.Code != http.StatusNoContent {
 		t.Fatalf("secret status=%d body=%s", got.Code, got.Body.String())
 	}
 

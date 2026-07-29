@@ -117,8 +117,82 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read state", http.StatusInternalServerError)
 		return
 	}
+	if key == "config" {
+		secretsKey, _ := secretStorageKey(r)
+		secrets, secretErr := s.store.GetState(r.Context(), tenantIDFrom(r), secretsKey)
+		if secretErr != nil && !errors.Is(secretErr, store.ErrNotFound) {
+			http.Error(w, "failed to read config version", http.StatusInternalServerError)
+			return
+		}
+		if errors.Is(secretErr, store.ErrNotFound) {
+			secrets = nil
+		}
+		setMigrationETag(w, configStateVersion(value, secrets))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(value)
+}
+
+func (s *Server) compareAndSwapConfigState(
+	w http.ResponseWriter,
+	r *http.Request,
+	tenantID string,
+	storageKey string,
+	tenantWide bool,
+	value []byte,
+) bool {
+	expectedVersion, createOnly, ok := migrationExpectedVersion(w, r)
+	if !ok {
+		return false
+	}
+	current, err := s.store.GetState(r.Context(), tenantID, storageKey)
+	secretsKey, _ := secretStorageKey(r)
+	currentSecrets, secretsErr := s.store.GetState(r.Context(), tenantID, secretsKey)
+	if secretsErr == nil || !errors.Is(secretsErr, store.ErrNotFound) {
+		if secretsErr != nil {
+			http.Error(w, "failed to read config secrets", http.StatusInternalServerError)
+		} else {
+			http.Error(w, "config and secrets must be saved together", http.StatusConflict)
+		}
+		return false
+	}
+	matchedFallback := false
+	if errors.Is(err, store.ErrNotFound) && !tenantWide && !createOnly {
+		current, err = s.store.GetState(r.Context(), tenantID, "config")
+		if err == nil && configStateVersion(current, currentSecrets) == expectedVersion {
+			current = nil
+			matchedFallback = true
+		}
+	}
+	if createOnly {
+		if err == nil {
+			http.Error(w, "config precondition failed", http.StatusPreconditionFailed)
+			return false
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "failed to read config state", http.StatusInternalServerError)
+			return false
+		}
+		current = nil
+	} else if !matchedFallback && (err != nil || configStateVersion(current, currentSecrets) != expectedVersion) {
+		http.Error(w, "config precondition failed", http.StatusPreconditionFailed)
+		return false
+	}
+	if err := s.store.CompareAndSwapState(r.Context(), tenantID, storageKey, current, value); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			http.Error(w, "config precondition failed", http.StatusPreconditionFailed)
+		} else {
+			http.Error(w, "failed to store state", http.StatusInternalServerError)
+		}
+		return false
+	}
+	stored, err := s.store.GetState(r.Context(), tenantID, storageKey)
+	if err != nil {
+		http.Error(w, "failed to read stored config state", http.StatusInternalServerError)
+		return false
+	}
+	setMigrationETag(w, configStateVersion(stored, nil))
+	return true
 }
 
 func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
@@ -150,9 +224,15 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.store.PutState(r.Context(), tenantID, storageKey, value); err != nil {
-		http.Error(w, "failed to store state", http.StatusInternalServerError)
-		return
+	if key == "config" {
+		if !s.compareAndSwapConfigState(w, r, tenantID, storageKey, tenantWide, value) {
+			return
+		}
+	} else {
+		if err := s.store.PutState(r.Context(), tenantID, storageKey, value); err != nil {
+			http.Error(w, "failed to store state", http.StatusInternalServerError)
+			return
+		}
 	}
 	if key == "config" && tenantWide {
 		s.InvalidateTenantBlobStore(tenantID)

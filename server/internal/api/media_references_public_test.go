@@ -206,4 +206,3 @@ func TestCreateMediaReferencesRejectsForeignTenantKeys(t *testing.T) {
 		t.Fatalf("foreign key mint status=%d body=%s, want 404", got.Code, got.Body.String())
 	}
 }
-
