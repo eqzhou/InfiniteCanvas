@@ -323,7 +323,7 @@ func sharedChannelStoredValue(channel adminChannelPublic) storedImageChannel {
 		}
 	}
 	return storedImageChannel{
-		ID: channel.ID, BaseURL: channel.BaseURL,
+		ID: channel.ID, BaseURL: channel.BaseURL, TimeoutSeconds: channel.TimeoutSeconds,
 		DefaultImageModel: channel.DefaultImageModel, DefaultVideoModel: channel.DefaultVideoModel,
 		DefaultAudioModel: channel.DefaultAudioModel, Providers: providers,
 	}

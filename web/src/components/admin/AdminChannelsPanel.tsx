@@ -93,7 +93,7 @@ export function AdminChannelsPanel() {
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface)] p-4 text-sm text-[var(--ob-muted)]">
-        启用且允许用户使用的渠道可由服务端执行图片、视频或音频任务；请求渠道 <code>shared-auto</code> 时按权重确定性选择并将具体渠道写入任务快照。填写「可用模型」后，自动路由只会选中列表内包含请求模型的渠道；留空表示不限制。共享密钥只可覆盖写入，不会返回浏览器。模型拉取目前支持 OpenAI/APIMart 兼容接口。
+        此处管理租户共享渠道，与工作区设置中的个人渠道相互独立。启用且允许用户使用的渠道可由服务端执行图片、视频或音频任务；请求渠道 <code>shared-auto</code> 时按权重确定性选择并将具体渠道写入任务快照。填写「可用模型」后，自动路由只会选中列表内包含请求模型的渠道；留空表示不限制。共享密钥只可覆盖写入，不会返回浏览器。模型拉取目前支持 OpenAI/APIMart 兼容接口。
       </div>
       {channels.map((channel) => (
         <section key={channel.id} className="space-y-3 rounded-xl border border-[var(--ob-line)] p-4">

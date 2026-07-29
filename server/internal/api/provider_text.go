@@ -41,10 +41,7 @@ type providerTextResult struct {
 	Text string `json:"text"`
 }
 
-var providerTextHTTPClient = newProviderHTTPClientWithResponseHeaderTimeout(
-	125*time.Second,
-	120*time.Second,
-)
+var providerTextHTTPClient = newProviderHTTPClient(10 * time.Minute)
 
 type providerTextAdmissionGate struct {
 	mu             sync.Mutex
@@ -357,7 +354,11 @@ func fetchProviderTextWithClient(
 	if err := validateProviderTextRequest(input); err != nil {
 		return "", err
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	timeout := connection.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if connection.Protocol == "gemini" {
 		endpoint, err := providerTextEndpoint(connection.BaseURL, "gemini", input.Model, "", allowLoopback)

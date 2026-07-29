@@ -667,6 +667,7 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 	apiKey := ""
 	systemPrompt := config.SystemPrompt
 	providerTimeout := time.Duration(0)
+	personalChannel := channel != nil
 	if parameters.SharedChannel != nil {
 		snapshot := parameters.SharedChannel
 		if snapshot.ProviderID != job.ProviderID {
@@ -691,6 +692,10 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 		if sharedErr != nil {
 			return resolvedMediaRequest{}, errors.New("channel not found")
 		}
+		providerTimeout, err = personalChannelTimeout(shared.TimeoutSeconds)
+		if err != nil {
+			return resolvedMediaRequest{}, err
+		}
 		value := sharedChannelStoredValue(shared)
 		channel, apiKey = &value, sharedSecret
 	} else {
@@ -703,6 +708,12 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 			return resolvedMediaRequest{}, errors.New("invalid secrets")
 		}
 		apiKey = secrets.APIKeys[job.ProviderID][job.Kind]
+	}
+	if personalChannel {
+		providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
+		if err != nil {
+			return resolvedMediaRequest{}, err
+		}
 	}
 	provider, ok := channel.Providers[job.Kind]
 	if !ok {

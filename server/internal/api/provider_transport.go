@@ -34,13 +34,14 @@ type providerModelConnection struct {
 	Protocol                  string
 	SystemPrompt              string
 	WorkflowAgentSystemPrompt string
+	Timeout                   time.Duration
 }
 
-var providerModelHTTPClient = newProviderHTTPClient(35 * time.Second)
+var providerModelHTTPClient = newProviderHTTPClient(10 * time.Minute)
 var providerModelRequestSlots = make(chan struct{}, 8)
 
 func newProviderHTTPClient(timeout time.Duration) *http.Client {
-	return newProviderHTTPClientWithResponseHeaderTimeout(timeout, 30*time.Second)
+	return newProviderHTTPClientWithResponseHeaderTimeout(timeout, 0)
 }
 
 func newProviderHTTPClientWithResponseHeaderTimeout(
@@ -155,7 +156,11 @@ func fetchProviderModelsWithClient(
 	if err != nil {
 		return nil, err
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeout := input.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -242,12 +247,17 @@ func (s *Server) resolveProviderModelConnection(r *http.Request, input providerM
 	if json.Unmarshal(secretValue, &secrets) != nil {
 		return providerModelConnection{}, errors.New("invalid provider credentials")
 	}
+	timeout, err := personalChannelTimeout(selected.TimeoutSeconds)
+	if err != nil {
+		return providerModelConnection{}, err
+	}
 	return providerModelConnection{
 		BaseURL:                   provider.BaseURL,
 		APIKey:                    secrets.APIKeys[input.ChannelID][input.Kind],
 		Protocol:                  provider.Protocol,
 		SystemPrompt:              config.SystemPrompt,
 		WorkflowAgentSystemPrompt: config.WorkflowAgentSystemPrompt,
+		Timeout:                   timeout,
 	}, nil
 }
 

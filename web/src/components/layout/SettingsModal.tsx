@@ -235,7 +235,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 text-sm sm:px-6">
           <section className="mb-6">
             <SectionTitle title="渠道" />
-            <div className="grid gap-3 sm:grid-cols-[minmax(180px,0.8fr)_minmax(240px,1.2fr)_40px]">
+            <p className="mb-3 text-xs text-[var(--ob-muted)]">
+              个人渠道仅供当前工作区使用；共享渠道由管理员托管，可在管理后台统一配置。
+            </p>
+            <div className="grid gap-3 sm:grid-cols-[minmax(180px,0.8fr)_minmax(220px,1.1fr)_minmax(130px,0.5fr)_40px]">
               <Field label="当前渠道">
                 <select
                   className="ob-field"
@@ -260,6 +263,20 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   value={channel.name}
                   disabled={sharedChannelSelected}
                   onChange={(e) => updateChannel({ name: e.target.value })}
+                />
+              </Field>
+              <Field label="请求超时（秒）">
+                <input
+                  className="ob-field"
+                  type="number"
+                  min={1}
+                  max={600}
+                  step={1}
+                  value={sharedChannelSelected ? (channel.timeoutSeconds ?? "") : (channel.timeoutSeconds ?? 60)}
+                  placeholder={sharedChannelSelected ? "管理员配置" : "60"}
+                  disabled={sharedChannelSelected}
+                  title={sharedChannelSelected ? "共享渠道超时由管理员在管理后台配置" : "整个请求的最长等待时间"}
+                  onChange={(e) => updateChannel({ timeoutSeconds: Number(e.target.value) })}
                 />
               </Field>
               <button

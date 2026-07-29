@@ -1,5 +1,13 @@
 import type { AiChannel, AiEndpointConfig, AiProviderKind, AiProviders } from "@/types/board";
 
+export const DEFAULT_CHANNEL_TIMEOUT_SECONDS = 60;
+
+export function normalizeChannelTimeout(value: unknown): number {
+  return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 600
+    ? Number(value)
+    : DEFAULT_CHANNEL_TIMEOUT_SECONDS;
+}
+
 export function defaultProviders(channel: AiChannel): AiProviders {
   const base = { baseUrl: channel.baseUrl, apiKey: channel.apiKey, model: "", protocol: "openai" as const };
   return {
@@ -25,6 +33,7 @@ export function normalizeChannel(channel: AiChannel): AiChannel {
   };
   return {
     ...channel,
+    timeoutSeconds: normalizeChannelTimeout(channel.timeoutSeconds),
     providers,
     baseUrl: providers.text.baseUrl,
     apiKey: providers.text.apiKey,

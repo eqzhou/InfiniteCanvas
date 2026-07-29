@@ -27,6 +27,7 @@ export function createDefaultChannel(): AiChannel {
   return {
     id: uid("ch"),
     name: "OpenAI Compatible",
+    timeoutSeconds: 60,
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
     defaultTextModel: "gpt-4o-mini",

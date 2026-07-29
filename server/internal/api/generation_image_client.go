@@ -31,7 +31,7 @@ type openAIImageExecutor struct {
 }
 
 func newOpenAIImageExecutor() *openAIImageExecutor {
-	return &openAIImageExecutor{client: newProviderHTTPClient(3 * time.Minute),
+	return &openAIImageExecutor{client: newProviderHTTPClient(10 * time.Minute),
 		apimartPollInterval: 3 * time.Second, apimartMaxDuration: 5 * time.Minute,
 		kiePollInterval: 3 * time.Second, kieMaxDuration: 15 * time.Minute}
 }

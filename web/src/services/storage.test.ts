@@ -37,6 +37,7 @@ describe("config credential persistence", () => {
       channels: [{
         id: "channel",
         name: "Provider",
+        timeoutSeconds: 95,
         baseUrl: "https://api.example/v1",
         apiKey: testCredential("legacy"),
         defaultTextModel: "text",
@@ -75,6 +76,7 @@ describe("config credential persistence", () => {
     expect(persisted.channels[0]?.apiKey).toBe("");
     expect(Object.values(persisted.channels[0]?.providers ?? {}).every((provider) => provider.apiKey === "")).toBe(true);
     expect(persisted.channels[0]?.providers?.image.baseUrl).toBe("https://image.example/v1");
+    expect(persisted.channels[0]?.timeoutSeconds).toBe(95);
     expect(persisted.webdavPass).toBe("");
     expect(persisted.objectStorage?.accessKeyId).toBe("");
     expect(persisted.objectStorage?.secretAccessKey).toBe("");
@@ -82,6 +84,7 @@ describe("config credential persistence", () => {
     expect(persisted.objectStorage?.endpoint).toBe("https://account.r2.cloudflarestorage.com");
     expect(persisted.preferredModels).toEqual({ channel: { image: "image-v2", video: "video-v2" } });
     expect(config.channels[0]?.apiKey).toBe(testCredential("legacy"));
+    expect(config.channels[0]?.timeoutSeconds).toBe(95);
     expect(config.webdavPass).toBe("dav-secret");
     expect(config.objectStorage?.secretAccessKey).toBe(testCredential("s3-sk"));
   });

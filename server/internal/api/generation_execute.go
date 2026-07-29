@@ -103,12 +103,23 @@ type storedImageProvider struct {
 
 type storedImageChannel struct {
 	ID                string                         `json:"id"`
+	TimeoutSeconds    int                            `json:"timeoutSeconds"`
 	BaseURL           string                         `json:"baseUrl"`
 	DefaultTextModel  string                         `json:"defaultTextModel"`
 	DefaultImageModel string                         `json:"defaultImageModel"`
 	DefaultVideoModel string                         `json:"defaultVideoModel"`
 	DefaultAudioModel string                         `json:"defaultAudioModel"`
 	Providers         map[string]storedImageProvider `json:"providers"`
+}
+
+func personalChannelTimeout(seconds int) (time.Duration, error) {
+	if seconds == 0 {
+		return 60 * time.Second, nil
+	}
+	if seconds < 1 || seconds > 600 {
+		return 0, errors.New("invalid personal channel timeout")
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 type storedImageConfig struct {
@@ -568,6 +579,7 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	apiKey := ""
 	systemPrompt := config.SystemPrompt
 	providerTimeout := time.Duration(0)
+	personalChannel := channel != nil
 	if parameters.SharedChannel != nil {
 		snapshot := parameters.SharedChannel
 		if snapshot.ProviderID != job.ProviderID {
@@ -591,6 +603,10 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 		if sharedErr != nil {
 			return imageGenerationRequest{}, errors.New("channel not found")
 		}
+		providerTimeout, err = personalChannelTimeout(shared.TimeoutSeconds)
+		if err != nil {
+			return imageGenerationRequest{}, err
+		}
 		value := sharedChannelStoredValue(shared)
 		channel, apiKey = &value, sharedSecret
 	} else {
@@ -603,6 +619,12 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 			return imageGenerationRequest{}, errors.New("invalid secrets")
 		}
 		apiKey = secrets.APIKeys[job.ProviderID]["image"]
+	}
+	if personalChannel {
+		providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
+		if err != nil {
+			return imageGenerationRequest{}, err
+		}
 	}
 	provider, ok := channel.Providers["image"]
 	if !ok {

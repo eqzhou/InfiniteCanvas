@@ -15,7 +15,22 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestImageProviderTransportUsesRequestContextDeadline(t *testing.T) {
+	executor := newOpenAIImageExecutor()
+	transport, ok := executor.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T", executor.client.Transport)
+	}
+	if transport.ResponseHeaderTimeout != 0 {
+		t.Fatalf("response header timeout = %s, want request context deadline", transport.ResponseHeaderTimeout)
+	}
+	if executor.client.Timeout != 10*time.Minute {
+		t.Fatalf("client timeout = %s, want defensive 10 minute cap", executor.client.Timeout)
+	}
+}
 
 func onePixelPNGBase64() string {
 	var output bytes.Buffer

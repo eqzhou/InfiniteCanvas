@@ -22,6 +22,30 @@ type scriptedImageResult struct {
 	err    error
 }
 
+func TestPersonalChannelTimeout(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		seconds int
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "legacy default", seconds: 0, want: 60 * time.Second},
+		{name: "custom", seconds: 90, want: 90 * time.Second},
+		{name: "too large", seconds: 601, wantErr: true},
+		{name: "negative", seconds: -1, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := personalChannelTimeout(test.seconds)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
+			}
+			if got != test.want {
+				t.Fatalf("timeout = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
 type scriptedImageExecutor struct {
 	started   chan imageGenerationRequest
 	release   chan scriptedImageResult
@@ -61,7 +85,7 @@ func imageExecutionHandler(t *testing.T, executor imageExecutor) (*Server, *memo
 		t.Fatal(err)
 	}
 	server.imageExecutor = executor
-	config := []byte(`{"channels":[{"id":"image-main","name":"Images","baseUrl":"https://images.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://images.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"be concise"}`)
+	config := []byte(`{"channels":[{"id":"image-main","name":"Images","timeoutSeconds":90,"baseUrl":"https://images.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://images.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"be concise"}`)
 	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", config); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +166,8 @@ func TestServerImageJobIsIdempotentAndPersistsResult(t *testing.T) {
 		t.Fatalf("create image job: %d %s", created.code, created.body)
 	}
 	upstream := awaitExecutorStart(t, executor)
-	if upstream.APIKey != "sk-private" || upstream.BaseURL != "https://images.example/v1" || upstream.Prompt != "be concise\n\na red square" {
+	if upstream.APIKey != "sk-private" || upstream.BaseURL != "https://images.example/v1" ||
+		upstream.Prompt != "be concise\n\na red square" || upstream.ProviderTimeout != 90*time.Second {
 		t.Fatalf("resolved upstream request = %#v", upstream)
 	}
 

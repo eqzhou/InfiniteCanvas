@@ -332,6 +332,8 @@ export type PromptSourceConfig = {
 export type AiChannel = {
   id: string;
   name: string;
+  /** Total provider request deadline for this personal channel. */
+  timeoutSeconds?: number;
   baseUrl: string;
   apiKey: string;
   defaultTextModel: string;

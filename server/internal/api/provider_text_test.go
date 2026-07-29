@@ -21,10 +21,13 @@ func (function providerTextRoundTripFunc) RoundTrip(request *http.Request) (*htt
 	return function(request)
 }
 
-func TestProviderTextClientAllowsSlowModelResponseHeaders(t *testing.T) {
+func TestProviderTextClientUsesConfiguredRequestDeadline(t *testing.T) {
 	transport, ok := providerTextHTTPClient.Transport.(*http.Transport)
-	if !ok || transport.ResponseHeaderTimeout < 120*time.Second {
+	if !ok || transport.ResponseHeaderTimeout != 0 {
 		t.Fatalf("response header timeout=%v", transport.ResponseHeaderTimeout)
+	}
+	if providerTextHTTPClient.Timeout != 10*time.Minute {
+		t.Fatalf("client timeout=%v", providerTextHTTPClient.Timeout)
 	}
 }
 
@@ -173,7 +176,7 @@ func TestProviderTextUsesGeminiContract(t *testing.T) {
 
 func TestProviderTextEndpointResolvesTheSavedChannelAndSecret(t *testing.T) {
 	_, _, handler := sharedChannelHandler(t)
-	config := []byte(`{"channels":[{"id":"personal","baseUrl":"https://provider.example/v1","defaultTextModel":"gpt-test","providers":{"text":{"baseUrl":"https://provider.example/v1","model":"gpt-test","protocol":"openai"}}}],"systemPrompt":"tenant instruction"}`)
+	config := []byte(`{"channels":[{"id":"personal","timeoutSeconds":90,"baseUrl":"https://provider.example/v1","defaultTextModel":"gpt-test","providers":{"text":{"baseUrl":"https://provider.example/v1","model":"gpt-test","protocol":"openai"}}}],"systemPrompt":"tenant instruction"}`)
 	if got := request(t, handler, http.MethodPut, "/api/state/config", config); got.Code != http.StatusNoContent {
 		t.Fatalf("config status=%d body=%s", got.Code, got.Body.String())
 	}
@@ -186,6 +189,11 @@ func TestProviderTextEndpointResolvesTheSavedChannelAndSecret(t *testing.T) {
 		if r.URL.String() != "https://provider.example/v1/responses" ||
 			r.Header.Get("Authorization") != "Bearer test-provider-key" {
 			t.Fatalf("unexpected upstream request: %s", r.URL)
+		}
+		deadline, ok := r.Context().Deadline()
+		remaining := time.Until(deadline)
+		if !ok || remaining < 85*time.Second || remaining > 90*time.Second {
+			t.Fatalf("provider deadline remaining = %s, present=%v", remaining, ok)
 		}
 		var body map[string]any
 		if json.NewDecoder(r.Body).Decode(&body) != nil || body["instructions"] != "tenant instruction" {
