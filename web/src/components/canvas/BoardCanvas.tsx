@@ -149,6 +149,21 @@ export function BoardCanvas() {
     [setViewport],
   );
 
+  const flushScheduledViewport = useCallback(() => {
+    if (viewportFrameRef.current !== null) {
+      cancelAnimationFrame(viewportFrameRef.current);
+      viewportFrameRef.current = null;
+    }
+    const pending = pendingViewportRef.current;
+    pendingViewportRef.current = null;
+    if (pending) setViewport({ ...pending });
+  }, [setViewport]);
+
+  const commitScheduledViewport = useCallback(() => {
+    flushScheduledViewport();
+    commitViewportRun();
+  }, [commitViewportRun, flushScheduledViewport]);
+
   const commitPendingNodeMove = useCallback((reconcileRootIds?: string[]) => {
     if (nodeFrameRef.current !== null) {
       cancelAnimationFrame(nodeFrameRef.current);
@@ -244,8 +259,8 @@ export function BoardCanvas() {
     setDrag(null);
     // A pan or pinch is over, so the next viewport write starts a new undo step
     // instead of merging into the gesture that just finished.
-    commitViewportRun();
-  }, [commitViewportRun, releaseCanvasPointer]);
+    commitScheduledViewport();
+  }, [commitScheduledViewport, releaseCanvasPointer]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -392,6 +407,7 @@ export function BoardCanvas() {
 
   const onPointerDownBackground = (e: ReactPointerEvent) => {
     if (!project) return;
+    if (e.target instanceof Element && e.target.closest("[data-canvas-control]")) return;
     if (e.pointerType === "touch") return;
     if (e.button !== 0) return;
     const p = localPoint(e);
@@ -421,6 +437,7 @@ export function BoardCanvas() {
 
   const onTouchPointerDownCapture = (e: ReactPointerEvent) => {
     if (!project || e.pointerType !== "touch") return;
+    if (e.target instanceof Element && e.target.closest("[data-canvas-control]")) return;
     captureCanvasPointer(e.pointerId);
     const current = touchGestureRef.current ?? createGestureState(project.viewport);
     const next = reduceGesture(current, {
@@ -952,14 +969,17 @@ export function BoardCanvas() {
           k={project.viewport.k}
           onChange={(k) => {
             const center = { x: size.w / 2, y: size.h / 2 };
-            const world = screenToWorld(center, project.viewport);
-            setViewport({
+            const currentViewport = useBoardStore.getState().getActive()?.viewport ?? project.viewport;
+            const world = screenToWorld(center, currentViewport);
+            scheduleViewport({
               k,
               x: center.x - world.x * k,
               y: center.y - world.y * k,
             });
           }}
+          onCommit={commitScheduledViewport}
           onReset={() => {
+            flushScheduledViewport();
             setViewport({ x: size.w / 2, y: size.h / 2, k: 1 });
             commitViewportRun();
           }}

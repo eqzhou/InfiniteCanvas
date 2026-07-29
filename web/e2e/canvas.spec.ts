@@ -4815,6 +4815,34 @@ test("mobile canvas controls stay compact and do not overlap", async ({ page }) 
   expect(overlaps).toBe(false);
 });
 
+test("zoom slider supports continuous pointer dragging", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) < 768, "The zoom slider is shown on tablet and desktop.");
+  await openFreshBoard(page);
+  await page.getByTitle("重置视图").click();
+
+  const slider = page.getByLabel("缩放比例");
+  await slider.evaluate((element) => {
+    const input = element as HTMLInputElement & { recordedValues?: string[] };
+    input.recordedValues = [];
+    input.addEventListener("input", () => input.recordedValues?.push(input.value));
+  });
+  const box = await slider.boundingBox();
+  expect(box).not.toBeNull();
+
+  await page.mouse.move(box!.x + box!.width * 0.3, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * 0.8, box!.y + box!.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  const recorded = await slider.evaluate((element) => {
+    const input = element as HTMLInputElement & { recordedValues?: string[] };
+    return input.recordedValues ?? [];
+  });
+  expect(new Set(recorded).size).toBeGreaterThan(2);
+  await expect(slider).toHaveValue(recorded.at(-1)!);
+  await expect(page.getByRole("group", { name: "缩放控制" })).toContainText(`${recorded.at(-1)}%`);
+});
+
 for (const viewport of [
   { label: "tablet", width: 768, height: 900 },
   { label: "compact desktop", width: 1024, height: 900 },
