@@ -11,6 +11,61 @@ async function readJSON<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function isTransientMediaUrl(value: unknown): value is string {
+  return typeof value === "string" &&
+    (value.startsWith("blob:") || value.startsWith("/api/media/references/"));
+}
+
+function stripTransientProjectMedia(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const project = value as Record<string, unknown>;
+  const nodes = Array.isArray(project.nodes)
+    ? project.nodes.map((rawNode) => {
+        if (!rawNode || typeof rawNode !== "object" || Array.isArray(rawNode)) return rawNode;
+        const node = rawNode as Record<string, unknown>;
+        if (!node.metadata || typeof node.metadata !== "object" || Array.isArray(node.metadata)) return rawNode;
+        const metadata = node.metadata as Record<string, unknown>;
+        if (typeof metadata.storageKey !== "string" || !isTransientMediaUrl(metadata.content)) return rawNode;
+        const { content: _content, ...persistedMetadata } = metadata;
+        return { ...node, metadata: persistedMetadata };
+      })
+    : project.nodes;
+  const chatSessions = Array.isArray(project.chatSessions)
+    ? project.chatSessions.map((rawSession) => {
+        if (!rawSession || typeof rawSession !== "object" || Array.isArray(rawSession)) return rawSession;
+        const session = rawSession as Record<string, unknown>;
+        if (!Array.isArray(session.messages)) return rawSession;
+        const messages = session.messages.map((rawMessage) => {
+          if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) return rawMessage;
+          const message = rawMessage as Record<string, unknown>;
+          const images = Array.isArray(message.images)
+            ? message.images.map((rawImage) => {
+                if (!rawImage || typeof rawImage !== "object" || Array.isArray(rawImage)) return rawImage;
+                const image = rawImage as Record<string, unknown>;
+                return typeof image.storageKey === "string" && isTransientMediaUrl(image.url)
+                  ? { ...image, url: "" }
+                  : rawImage;
+              })
+            : message.images;
+          const references = Array.isArray(message.references)
+            ? message.references.map((rawReference) => {
+                if (!rawReference || typeof rawReference !== "object" || Array.isArray(rawReference)) return rawReference;
+                const reference = rawReference as Record<string, unknown>;
+                if (typeof reference.storageKey !== "string" || !isTransientMediaUrl(reference.preview)) {
+                  return rawReference;
+                }
+                const { preview: _preview, ...persistedReference } = reference;
+                return persistedReference;
+              })
+            : message.references;
+          return { ...message, images, references };
+        });
+        return { ...session, messages };
+      })
+    : project.chatSessions;
+  return { ...project, nodes, chatSessions };
+}
+
 export type MigrationResourceRef = {
   kind: "project" | "state" | "secret" | "blob" | "generation-history";
   id: string;
@@ -160,7 +215,12 @@ async function migrationWrite(path: string, body: BodyInit, contentType: string,
 }
 
 export function saveMigrationProject(project: BoardProject, expectedVersion: string | null): Promise<void> {
-  return migrationWrite(`projects/${encodeURIComponent(project.id)}`, JSON.stringify(project), "application/json", expectedVersion);
+  return migrationWrite(
+    `projects/${encodeURIComponent(project.id)}`,
+    JSON.stringify(stripTransientProjectMedia(project)),
+    "application/json",
+    expectedVersion,
+  );
 }
 
 export function saveMigrationState(
@@ -185,9 +245,10 @@ export function saveMigrationGenerationHistory(jobs: GenerationJob[], expectedVe
 
 export async function loadServerProjects(): Promise<BoardProject[]> {
   const summaries = await readJSON<Array<{ id: string }>>(await request("projects"));
-  return Promise.all(summaries.map(async ({ id }) =>
-    parseBoardProject(await readJSON<unknown>(await request(`projects/${encodeURIComponent(id)}`))),
-  ));
+  return Promise.all(summaries.map(async ({ id }) => {
+    const raw = await readJSON<unknown>(await request(`projects/${encodeURIComponent(id)}`));
+    return parseBoardProject(stripTransientProjectMedia(raw));
+  }));
 }
 
 /**
@@ -201,7 +262,7 @@ export async function saveServerProjects(projects: BoardProject[]): Promise<stri
     const response = await request(`projects/${encodeURIComponent(project.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(project),
+      body: JSON.stringify(stripTransientProjectMedia(project)),
     });
     if (response.status === 410) return project.id;
     if (!response.ok) throw new Error(`Project save failed: HTTP ${response.status}`);

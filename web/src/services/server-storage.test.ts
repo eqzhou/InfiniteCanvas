@@ -24,6 +24,51 @@ function project(id: string): BoardProject {
 }
 
 describe("server project persistence isolation", () => {
+  const projectWithTransientImage = (): BoardProject => ({
+    ...project("canvas"),
+    nodes: [{
+      id: "node-large",
+      type: "image",
+      title: "large",
+      position: { x: 0, y: 0 },
+      width: 320,
+      height: 240,
+      metadata: {
+        storageKey: "image:large",
+        content: `/api/media/references/${"a".repeat(64)}`,
+      },
+    }],
+  });
+
+  test("repairs an accidentally persisted display URL before project validation", async () => {
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      return url.endsWith("/api/projects")
+        ? Response.json([{ id: "canvas" }])
+        : Response.json(projectWithTransientImage());
+    }) as typeof fetch;
+
+    const { loadServerProjects } = await import("./server-storage");
+    const [loaded] = await loadServerProjects();
+
+    expect(loaded?.nodes[0]?.metadata.storageKey).toBe("image:large");
+    expect(loaded?.nodes[0]?.metadata.content).toBeUndefined();
+  });
+
+  test("never persists a temporary display URL with the project document", async () => {
+    let saved: BoardProject | undefined;
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      saved = JSON.parse(String(init?.body)) as BoardProject;
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    const { saveServerProjects } = await import("./server-storage");
+    await saveServerProjects([projectWithTransientImage()]);
+
+    expect(saved?.nodes[0]?.metadata.storageKey).toBe("image:large");
+    expect(saved?.nodes[0]?.metadata.content).toBeUndefined();
+  });
+
   test("saveServerProjects only upserts and never deletes remote projects", async () => {
     const calls: Array<{ method: string; url: string }> = [];
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
