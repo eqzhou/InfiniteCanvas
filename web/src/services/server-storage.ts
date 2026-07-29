@@ -332,6 +332,36 @@ export async function getServerBlob(key: string): Promise<Blob | undefined> {
   return response.blob();
 }
 
+export async function createServerBlobDisplayUrls(
+  storageKeys: readonly string[],
+): Promise<Map<string, string>> {
+  const keys = Array.from(new Set(storageKeys.map((key) => key.trim()).filter(Boolean)));
+  const urls = new Map<string, string>();
+  for (let offset = 0; offset < keys.length; offset += 20) {
+    const batch = keys.slice(offset, offset + 20);
+    const response = await request("media/references", {
+      method: "POST",
+      body: JSON.stringify({ storageKeys: batch, ttlSeconds: 3600 }),
+    });
+    if (!response.ok) throw new Error(`Blob display URL creation failed: HTTP ${response.status}`);
+    const payload = await response.json() as { items?: unknown };
+    if (!Array.isArray(payload.items)) throw new Error("Blob display URL response is invalid");
+    const expected = new Set(batch);
+    for (const raw of payload.items) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new Error("Blob display URL response is invalid");
+      }
+      const item = raw as { token?: unknown; storageKey?: unknown };
+      if (typeof item.token !== "string" || !item.token || item.token.length > 256 ||
+          typeof item.storageKey !== "string" || !expected.has(item.storageKey)) {
+        throw new Error("Blob display URL response is invalid");
+      }
+      urls.set(item.storageKey, `/api/media/references/${encodeURIComponent(item.token)}`);
+    }
+  }
+  return urls;
+}
+
 export async function deleteServerBlob(key: string): Promise<void> {
   const response = await request(`blobs/${encodeURIComponent(key)}`, { method: "DELETE" });
   if (!response.ok) throw new Error(`Blob delete failed: HTTP ${response.status}`);

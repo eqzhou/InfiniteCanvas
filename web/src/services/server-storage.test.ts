@@ -110,6 +110,29 @@ describe("server project persistence isolation", () => {
   });
 });
 
+describe("server blob display URLs", () => {
+  test("mints authenticated short-lived URLs so large images can stream without a JS Blob copy", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+      return Response.json({
+        items: [
+          { token: ["display", "reference"].join("-"), storageKey: "image:large", expiresAt: "2026-07-30T02:00:00Z" },
+        ],
+        expiresAt: "2026-07-30T02:00:00Z",
+      }, { status: 201 });
+    }) as typeof fetch;
+
+    const { createServerBlobDisplayUrls } = await import("./server-storage");
+    const urls = await createServerBlobDisplayUrls(["image:large", "image:large"]);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url.endsWith("/api/media/references")).toBe(true);
+    expect(calls[0]?.body).toEqual({ storageKeys: ["image:large"], ttlSeconds: 3600 });
+    expect(urls.get("image:large")).toBe("/api/media/references/display-reference");
+  });
+});
+
 describe("config compare-and-swap transport", () => {
   const version = `"m1-${"b".repeat(64)}"`;
 
