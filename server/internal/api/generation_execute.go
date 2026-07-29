@@ -34,6 +34,58 @@ var imageSizePattern = regexp.MustCompile(`^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$`)
 var geminiImageModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,499}$`)
 var generatedImageDecodeSlot = make(chan struct{}, 1)
 
+func imageProviderStatusCode(err error) (int, bool) {
+	var imageErr *imageProviderHTTPError
+	if errors.As(err, &imageErr) {
+		return imageErr.StatusCode, true
+	}
+	var apimartErr *apimartHTTPError
+	if errors.As(err, &apimartErr) {
+		return apimartErr.StatusCode, true
+	}
+	var kieErr *kieHTTPError
+	if errors.As(err, &kieErr) {
+		return kieErr.StatusCode, true
+	}
+	return 0, false
+}
+
+func imageGenerationFailureMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "图片生成请求超时，请稍后重试或增大渠道超时时间"
+	}
+	statusCode, ok := imageProviderStatusCode(err)
+	if !ok {
+		return "图片生成失败，请检查模型服务配置后重试"
+	}
+	switch statusCode {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
+		return fmt.Sprintf("模型服务拒绝了图片请求（HTTP %d），请检查模型、尺寸和参数", statusCode)
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Sprintf("模型服务鉴权失败（HTTP %d），请检查 API Key", statusCode)
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return fmt.Sprintf("图片生成请求超时（HTTP %d），请稍后重试或增大渠道超时时间", statusCode)
+	case http.StatusRequestEntityTooLarge:
+		return "图片请求或参考素材过大（HTTP 413），请减小素材后重试"
+	case http.StatusTooManyRequests:
+		return "模型服务请求过于频繁（HTTP 429），请稍后重试"
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+		return fmt.Sprintf("模型服务暂时不可用（HTTP %d），请稍后重试", statusCode)
+	default:
+		return fmt.Sprintf("图片生成失败（模型服务 HTTP %d）", statusCode)
+	}
+}
+
+func imageGenerationFailureLogDetail(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline exceeded"
+	}
+	if statusCode, ok := imageProviderStatusCode(err); ok {
+		return fmt.Sprintf("HTTP %d", statusCode)
+	}
+	return fmt.Sprintf("error type %T", err)
+}
+
 type imageGenerationRequest struct {
 	Protocol              string
 	BaseURL               string
@@ -422,8 +474,8 @@ func (s *Server) executeClaimedImageJob(claimed store.TenantGenerationJob) {
 			finish("cancelled", nil, "已取消")
 			return
 		}
-		log.Printf("server image job %s/%s provider failed: %v", tenantID, job.ID, err)
-		finish("failed", nil, "图片生成失败，请检查模型服务配置后重试")
+		log.Printf("server image job %s/%s provider failed: %s", tenantID, job.ID, imageGenerationFailureLogDetail(err))
+		finish("failed", nil, imageGenerationFailureMessage(err))
 		return
 	}
 	items, keys, err := s.persistGeneratedImages(ctx, tenantID, "", job.ID, job.LeaseOwner, images)

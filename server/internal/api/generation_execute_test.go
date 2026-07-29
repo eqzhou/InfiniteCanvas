@@ -311,6 +311,46 @@ func TestServerImageJobSanitizesFailure(t *testing.T) {
 	}
 }
 
+func TestServerImageJobSurfacesSafeProviderHTTPStatus(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	server, backend, handler := imageExecutionHandler(t, executor)
+	created := postImageJob(t, handler, "job-provider-unavailable-image", "fail upstream")
+	if created.code != http.StatusAccepted {
+		t.Fatalf("create: %d %s", created.code, created.body)
+	}
+	_ = awaitExecutorStart(t, executor)
+	executor.release <- scriptedImageResult{err: &imageProviderHTTPError{StatusCode: http.StatusBadGateway}}
+	server.generationWG.Wait()
+	job, err := backend.GetGenerationJob(context.Background(), store.DefaultTenantID, "job-provider-unavailable-image")
+	if err != nil || job.Status != "failed" || job.Error != "模型服务暂时不可用（HTTP 502），请稍后重试" {
+		t.Fatalf("failed job = %#v, %v", job, err)
+	}
+}
+
+func TestImageGenerationFailureMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "bad request", err: &imageProviderHTTPError{StatusCode: http.StatusBadRequest}, want: "模型服务拒绝了图片请求（HTTP 400），请检查模型、尺寸和参数"},
+		{name: "unauthorized", err: &imageProviderHTTPError{StatusCode: http.StatusUnauthorized}, want: "模型服务鉴权失败（HTTP 401），请检查 API Key"},
+		{name: "too large", err: &imageProviderHTTPError{StatusCode: http.StatusRequestEntityTooLarge}, want: "图片请求或参考素材过大（HTTP 413），请减小素材后重试"},
+		{name: "rate limited", err: &imageProviderHTTPError{StatusCode: http.StatusTooManyRequests}, want: "模型服务请求过于频繁（HTTP 429），请稍后重试"},
+		{name: "gateway timeout", err: &imageProviderHTTPError{StatusCode: http.StatusGatewayTimeout}, want: "图片生成请求超时（HTTP 504），请稍后重试或增大渠道超时时间"},
+		{name: "context deadline", err: context.DeadlineExceeded, want: "图片生成请求超时，请稍后重试或增大渠道超时时间"},
+		{name: "unknown status", err: &imageProviderHTTPError{StatusCode: http.StatusTeapot}, want: "图片生成失败（模型服务 HTTP 418）"},
+		{name: "unknown error stays private", err: errors.New("provider failed with sk-private"), want: "图片生成失败，请检查模型服务配置后重试"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := imageGenerationFailureMessage(tt.err); got != tt.want {
+				t.Fatalf("imageGenerationFailureMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestServerImageJobRequiresAuthenticationUnlessExplicitlyDisabled(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
 	backend := newMemoryStore()

@@ -21,6 +21,14 @@ import (
 
 const maxImageProviderResponseBytes = 40 << 20
 
+type imageProviderHTTPError struct {
+	StatusCode int
+}
+
+func (e *imageProviderHTTPError) Error() string {
+	return fmt.Sprintf("image provider returned HTTP %d", e.StatusCode)
+}
+
 type openAIImageExecutor struct {
 	client              *http.Client
 	apimartPollInterval time.Duration
@@ -87,7 +95,7 @@ func (e *openAIImageExecutor) generateTemplate(ctx context.Context, request imag
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 2048))
-		return nil, fmt.Errorf("image template provider returned HTTP %d", response.StatusCode)
+		return nil, &imageProviderHTTPError{StatusCode: response.StatusCode}
 	}
 	if response.ContentLength > maxImageProviderResponseBytes {
 		return nil, errors.New("image template provider response exceeds size limit")
@@ -208,7 +216,7 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 2048))
-		return nil, fmt.Errorf("image provider returned HTTP %d", response.StatusCode)
+		return nil, &imageProviderHTTPError{StatusCode: response.StatusCode}
 	}
 	if response.ContentLength > maxImageProviderResponseBytes {
 		return nil, errors.New("image provider response exceeds size limit")
@@ -321,7 +329,7 @@ func (e *openAIImageExecutor) generateGeminiBatch(ctx context.Context, endpoint,
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 2048))
-		return nil, fmt.Errorf("Gemini image provider returned HTTP %d", response.StatusCode)
+		return nil, &imageProviderHTTPError{StatusCode: response.StatusCode}
 	}
 	if response.ContentLength > maxImageProviderResponseBytes {
 		return nil, errors.New("Gemini image response exceeds size limit")

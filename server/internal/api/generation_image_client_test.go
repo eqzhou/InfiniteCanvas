@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -66,6 +67,25 @@ func TestOpenAIImageExecutorGenerationsRequestAndBase64Result(t *testing.T) {
 	})
 	if err != nil || len(images) != 1 || images[0].MIMEType != "image/png" {
 		t.Fatalf("images = %#v, %v", images, err)
+	}
+}
+
+func TestOpenAIImageExecutorReturnsTypedHTTPError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "upstream secret detail", http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	_, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
+		BaseURL: upstream.URL + "/v1", Model: "gpt-image-1",
+		Prompt: "draw a square", Size: "1024x1024", Quality: "auto", Count: 1,
+	})
+	var providerErr *imageProviderHTTPError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("error = %#v, want typed HTTP 502", err)
+	}
+	if strings.Contains(err.Error(), "upstream secret detail") {
+		t.Fatalf("provider response leaked into error: %q", err)
 	}
 }
 
