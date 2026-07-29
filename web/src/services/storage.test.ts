@@ -3,8 +3,9 @@ import {
   collectBoardContentStorageKeys,
   hasConfigSecrets,
   MEDIA_UPLOAD_LIMITS,
-	mergeConfigSecrets,
+  mergeConfigSecrets,
   repairInvalidPanoramaBatches,
+  resolveHydratedMediaUrl,
   sanitizeConfigForPersistence,
   uploadMedia,
   validatePersistedPanoramaBlob,
@@ -102,6 +103,15 @@ describe("config credential persistence", () => {
 });
 
 describe("retained board media", () => {
+  test("keeps the project fallback when one persisted media request fails", async () => {
+    await expect(resolveHydratedMediaUrl(
+      "blob:previous-session-preview",
+      async () => {
+        throw new TypeError("Failed to fetch");
+      },
+    )).resolves.toBe("blob:previous-session-preview");
+  });
+
   test("collects node and chat media from history-shaped snapshots", () => {
     const node = createNode("panorama", { x: 0, y: 0 }, { metadata: {
       storageKey: "image:panorama-old",

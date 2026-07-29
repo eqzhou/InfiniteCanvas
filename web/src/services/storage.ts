@@ -750,6 +750,17 @@ export async function resolveObjectUrl(
   return url;
 }
 
+export async function resolveHydratedMediaUrl(
+  fallback: string | undefined,
+  load: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  try {
+    return await load();
+  } catch {
+    return fallback;
+  }
+}
+
 function mediaKindFromKey(storageKey: string): "image" | "media" {
   return storageKey.startsWith("media:") ? "media" : "image";
 }
@@ -1028,7 +1039,10 @@ export async function rehydrateProjects(
             };
           }
         } else {
-          const url = await resolveObjectUrl(kind, metadata.storageKey, metadata.content);
+          const url = await resolveHydratedMediaUrl(
+            metadata.content,
+            () => resolveObjectUrl(kind, metadata.storageKey!, metadata.content),
+          );
           if (url) metadata = { ...metadata, content: url };
         }
       } else if (metadata.content?.startsWith("data:")) {
@@ -1070,7 +1084,10 @@ export async function rehydrateProjects(
         const images = [];
         for (const img of msg.images ?? []) {
           if (img.storageKey) {
-            const url = await resolveObjectUrl("image", img.storageKey, img.url);
+            const url = await resolveHydratedMediaUrl(
+              img.url,
+              () => resolveObjectUrl("image", img.storageKey!, img.url),
+            );
             images.push({ ...img, url: url ?? img.url });
           } else if (img.url?.startsWith("data:")) {
             try {
@@ -1092,7 +1109,10 @@ export async function rehydrateProjects(
         for (const ref of msg.references ?? []) {
           if (ref.storageKey) {
             const kind = mediaKindFromKey(ref.storageKey);
-            const url = await resolveObjectUrl(kind, ref.storageKey, ref.preview);
+            const url = await resolveHydratedMediaUrl(
+              ref.preview,
+              () => resolveObjectUrl(kind, ref.storageKey!, ref.preview),
+            );
             references.push({ ...ref, preview: url ?? ref.preview });
           } else {
             references.push(ref);
@@ -1123,7 +1143,10 @@ export async function rehydrateAssets(assets: AssetItem[]): Promise<AssetItem[]>
   for (const asset of assets) {
     if (asset.storageKey) {
       const kind = mediaKindFromKey(asset.storageKey);
-      const url = await resolveObjectUrl(kind, asset.storageKey, asset.coverUrl);
+      const url = await resolveHydratedMediaUrl(
+        asset.coverUrl,
+        () => resolveObjectUrl(kind, asset.storageKey!, asset.coverUrl),
+      );
       out.push({ ...asset, coverUrl: url ?? asset.coverUrl });
     } else if (asset.coverUrl?.startsWith("data:")) {
       try {
