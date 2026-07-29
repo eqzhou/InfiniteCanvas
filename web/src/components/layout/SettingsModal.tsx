@@ -31,6 +31,11 @@ import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
 import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
 import { ImageToolbarPreferencesEditor } from "@/components/layout/ImageToolbarPreferencesEditor";
+import {
+  IMAGE_QUALITY_OPTIONS,
+  IMAGE_SIZE_OPTIONS,
+  optionsWithCurrentValue,
+} from "@/lib/image-generation-options";
 import { resolveActiveAIChannel, useSharedChannels } from "@/services/shared-channels";
 import {
   AudioLines,
@@ -370,14 +375,25 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
             <div className="grid content-start grid-cols-1 gap-3 sm:grid-cols-3 lg:mt-8 lg:grid-cols-1">
               <Field label="图片尺寸">
-                <input className="ob-field" value={config.imageSize} onChange={(e) => setConfig({ ...config, imageSize: e.target.value })} />
+                <select className="ob-field" value={config.imageSize} onChange={(e) => setConfig({ ...config, imageSize: e.target.value })}>
+                  {optionsWithCurrentValue(IMAGE_SIZE_OPTIONS, config.imageSize).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
               </Field>
               <Field label="图片质量">
-                <input className="ob-field" value={config.imageQuality} onChange={(e) => setConfig({ ...config, imageQuality: e.target.value })} />
+                <select className="ob-field" value={config.imageQuality} onChange={(e) => setConfig({ ...config, imageQuality: e.target.value })}>
+                  {optionsWithCurrentValue(IMAGE_QUALITY_OPTIONS, config.imageQuality).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
               </Field>
               <Field label="默认数量">
                 <input className="ob-field" type="number" min={1} max={8} value={config.imageCount} onChange={(e) => setConfig({ ...config, imageCount: Number(e.target.value) || 1 })} />
               </Field>
+              <p className="text-xs text-[var(--ob-muted)] sm:col-span-3 lg:col-span-1">
+                尺寸与质量会原样发送给模型服务；部分模型可能不支持全部预设。
+              </p>
             </div>
           </section>
 
