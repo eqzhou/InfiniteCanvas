@@ -39,6 +39,7 @@ import { applySystemPrompt } from "@/lib/app-config";
 import { getProvider } from "@/lib/ai-config";
 import { adjustFontSize } from "@/lib/node-format";
 import { filenameForMimeType } from "@/lib/download-filename";
+import { copyImageSourceToClipboard } from "@/lib/image-clipboard";
 import {
   assertResolvedImageReferences,
   createImageGenerationMetadata,
@@ -59,6 +60,7 @@ import {
   BookmarkPlus,
   BookmarkCheck,
   Camera,
+  Copy,
   Crop,
   Download,
   ImagePlus,
@@ -93,6 +95,7 @@ export function NodeActions({
   const [cameraOpen, setCameraOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [assetSaveState, setAssetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [imageCopyState, setImageCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const cameraAnchorRef = useRef<HTMLSpanElement>(null);
 	const sharedChannels = useSharedChannels();
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
@@ -964,6 +967,19 @@ export function NodeActions({
     }
   };
 
+  const copyImageNode = async () => {
+    setImageCopyState("copying");
+    try {
+      const source = resolveNodeImageDataUrl(node.metadata.storageKey, node.metadata.content)
+        .then((resolved) => resolved ?? node.metadata.content ?? null);
+      await copyImageSourceToClipboard(source);
+      setImageCopyState("copied");
+    } catch (cause) {
+      setImageCopyState("error");
+      alert(cause instanceof Error ? cause.message : "复制图片失败");
+    }
+  };
+
   const inspect = () => setInfoOpen(true);
 
   const generateOnAudio = async () => {
@@ -1073,6 +1089,8 @@ export function NodeActions({
       }
       case "split":
         return <IconBtn key={action} label={imageToolLabel("切分")} title="切分" onClick={() => setImageTool("split")}><span className="text-[10px] font-semibold">切</span></IconBtn>;
+      case "copy":
+        return <IconBtn key={action} label={imageToolLabel(imageCopyState === "copied" ? "已复制" : "复制")} title={imageCopyState === "copying" ? "正在复制图片" : imageCopyState === "copied" ? "图片已复制" : imageCopyState === "error" ? "复制失败，请重试" : "复制图片"} disabled={imageCopyState === "copying" || (!node.metadata.content && !node.metadata.storageKey)} onClick={() => void copyImageNode()}>{imageCopyState === "copied" ? <BookmarkCheck size={14} /> : <Copy size={14} />}</IconBtn>;
       case "download":
         return <IconBtn key={action} label={imageToolLabel("下载")} title="下载" onClick={() => void downloadNode()}><Download size={14} /></IconBtn>;
       case "aspect":

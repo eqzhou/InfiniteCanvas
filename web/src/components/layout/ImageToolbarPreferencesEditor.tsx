@@ -17,6 +17,7 @@ const labels: Record<ImageToolbarAction, string> = {
   resize: "本地尺寸放大",
   "ai-upscale": "AI 超分",
   split: "切分",
+  copy: "复制图片（必显）",
   download: "下载（必显）",
   aspect: "等比/自由缩放",
 };
@@ -68,8 +69,8 @@ export function ImageToolbarPreferencesEditor({
             <input
               aria-label={`显示${labels[action]}`}
               type="checkbox"
-              checked={action === "download" || !hidden.has(action)}
-              disabled={action === "download"}
+              checked={action === "copy" || action === "download" || !hidden.has(action)}
+              disabled={action === "copy" || action === "download"}
               onChange={(event) => onChange({
                 ...preferences,
                 hidden: event.target.checked

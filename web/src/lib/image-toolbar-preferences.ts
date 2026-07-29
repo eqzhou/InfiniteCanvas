@@ -9,6 +9,7 @@ export const IMAGE_TOOLBAR_ACTIONS = [
   "resize",
   "ai-upscale",
   "split",
+  "copy",
   "download",
   "aspect",
 ] as const;
@@ -23,7 +24,7 @@ export type ImageToolbarPreferences = {
 };
 
 const actionSet = new Set<string>(IMAGE_TOOLBAR_ACTIONS);
-const mandatoryActions = new Set<ImageToolbarAction>(["download"]);
+const mandatoryActions = new Set<ImageToolbarAction>(["copy", "download"]);
 export const IMAGE_TOOLBAR_PREFERENCES_VERSION = 1;
 // Bound hostile persisted input before iterating it.
 const maxPersistedActionEntries = IMAGE_TOOLBAR_ACTIONS.length * 4;

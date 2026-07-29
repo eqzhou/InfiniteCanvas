@@ -32,11 +32,12 @@ describe("image toolbar preferences", () => {
 
   test("keeps mandatory actions visible and respects configured order", () => {
     const visible = orderedVisibleImageActions({
-      order: ["download", "crop", ...IMAGE_TOOLBAR_ACTIONS.filter((id) => id !== "download" && id !== "crop")],
-      hidden: ["download", "crop", "mask"],
+      order: ["download", "copy", "crop", ...IMAGE_TOOLBAR_ACTIONS.filter((id) => id !== "download" && id !== "copy" && id !== "crop")],
+      hidden: ["download", "copy", "crop", "mask"],
       showLabels: true,
     });
     expect(visible[0]).toBe("download");
+    expect(visible[1]).toBe("copy");
     expect(visible).not.toContain("mask");
   });
 
