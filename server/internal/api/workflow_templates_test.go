@@ -44,6 +44,22 @@ func TestWorkflowTemplateCRUDAndBulkReplace(t *testing.T) {
 	}
 }
 
+func TestWorkflowTemplateResponsePreservesOptionalRequiredFlag(t *testing.T) {
+	handler := persistentHandler(t)
+	template := bytes.Replace(
+		[]byte(validPersonalWorkflowTemplate),
+		[]byte(`"variables":[{"id":"subject","kind":"textarea","label":"主体","required":true}]`),
+		[]byte(`"variables":[{"id":"reference","kind":"image","label":"参考图","required":false}]`),
+		1,
+	)
+	template = bytes.Replace(template, []byte(`{{subject}} `), nil, -1)
+
+	created := request(t, handler, http.MethodPut, "/api/workflow-templates/personal_story", template)
+	if created.Code != http.StatusOK || !bytes.Contains(created.Body.Bytes(), []byte(`"required": false`)) {
+		t.Fatalf("optional required flag was lost: %d %s", created.Code, created.Body.String())
+	}
+}
+
 func TestWorkflowTemplateRejectsPublicScopeAndCyclesWithoutMutation(t *testing.T) {
 	handler := persistentHandler(t)
 	public := bytes.Replace([]byte(validPersonalWorkflowTemplate), []byte(`"scope":"personal"`), []byte(`"scope":"public"`), 1)

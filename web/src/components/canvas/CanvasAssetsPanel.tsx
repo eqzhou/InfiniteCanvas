@@ -14,8 +14,7 @@ import {
 
 export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
   const assets = useBoardStore((state) => state.assets);
-  const setAssets = useBoardStore((state) => state.setAssets);
-  const flushAssets = useBoardStore((state) => state.flushAssets);
+  const commitAssetUpdate = useBoardStore((state) => state.commitAssetUpdate);
   const insertAsset = useBoardStore((state) => state.insertAsset);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -26,10 +25,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
     const state = useBoardStore.getState();
     const asset = state.assets.find((item) => item.id === assetId);
     if (!asset) return;
-    const nextAssets = state.assets.filter((item) => item.id !== assetId);
-    // Clone so LatestWrite/server PUT cannot share a mutated array reference.
-    setAssets(structuredClone(nextAssets));
-    await flushAssets();
+    await commitAssetUpdate((current) => current.filter((item) => item.id !== assetId));
     await deleteAssetBlobIfUnreferenced(
       asset.storageKey,
       useBoardStore.getState().projects,
@@ -75,8 +71,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
         createdAt: t,
         updatedAt: t,
       };
-      setAssets([item, ...useBoardStore.getState().assets]);
-      await flushAssets();
+      await commitAssetUpdate((current) => [item, ...current.filter((asset) => asset.id !== item.id)]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

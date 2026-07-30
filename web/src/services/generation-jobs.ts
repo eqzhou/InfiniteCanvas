@@ -80,8 +80,15 @@ export type GenerationJobPollingOptions = {
 	onUpdate?: (job: GenerationJob) => void;
 };
 
+export function usesBrowserE2EGeneration(): boolean {
+	const runtime = globalThis as typeof globalThis & { __OPENBOARD_E2E_BROWSER_GENERATION__?: boolean };
+	return runtime.__OPENBOARD_E2E_BROWSER_GENERATION__ === true &&
+		typeof location !== "undefined" &&
+		(location.hostname === "127.0.0.1" || location.hostname === "localhost");
+}
+
 export function usesServerGenerationJobs(): boolean {
-	return true;
+	return !usesBrowserE2EGeneration();
 }
 
 export function isServerOwnedGenerationJob(job: GenerationJob): boolean {

@@ -5,25 +5,43 @@ import { resolveE2EEnvironment } from "./environment";
 
 const { agentPort } = resolveE2EEnvironment();
 const agentUrl = `http://127.0.0.1:${agentPort}`;
+const e2eRunId = process.env.OPENBOARD_E2E_RUN_ID ?? `${Date.now()}-${process.pid}`;
+let activeE2ETenantId = "";
 const pngPixelBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWP8z8AARAjAhGBCWIQFAIPRAgYQO+IXAAAAAElFTkSuQmCC";
 const pngReplacementBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWNk+A+ESIAJiQ1mEhYAAILSAgahbK2jAAAAAElFTkSuQmCC";
 
 test.beforeEach(async ({ context, request }, testInfo) => {
   const tenantSuffix = createHash("sha256")
-    .update(`${testInfo.project.name}:${testInfo.testId}:${testInfo.retry}`)
+    .update(`${e2eRunId}:${testInfo.project.name}:${testInfo.testId}:${testInfo.retry}`)
     .digest("hex")
     .slice(0, 24);
   const tenantId = `e2e-${tenantSuffix}`;
+  activeE2ETenantId = tenantId;
   const response = await request.post("/api/e2e/tenant", {
     headers: { "X-OpenBoard-E2E-Token": "e2e-tenant-token" },
     data: { tenantId },
   });
   expect(response).toBeOK();
+  await context.addInitScript(() => {
+    Object.defineProperty(globalThis, "__OPENBOARD_E2E_BROWSER_GENERATION__", {
+      value: true,
+      configurable: false,
+      writable: false,
+    });
+  });
   await context.setExtraHTTPHeaders({
     "X-OpenBoard-E2E-Tenant": tenantId,
     "X-OpenBoard-E2E-Token": "e2e-tenant-token",
   });
 });
+
+function e2eAgentHeaders() {
+  return {
+    Authorization: "Bearer e2e-token",
+    "X-OpenBoard-E2E-Tenant": activeE2ETenantId,
+    "X-OpenBoard-E2E-Token": "e2e-tenant-token",
+  };
+}
 
 function triangleGlb(): Buffer {
   const manifest = {
@@ -98,6 +116,24 @@ async function readServerProjects(page: Page): Promise<any[]> {
       if (!response.ok) throw new Error(`project read failed: ${response.status}`);
       return response.json();
     }));
+  });
+}
+
+async function readServerState<T>(page: Page, key: "assets" | "prompts"): Promise<T> {
+  return page.evaluate(async (stateKey) => {
+    const response = await fetch(`/api/state/${stateKey}`);
+    if (!response.ok) throw new Error(`${stateKey} state read failed: ${response.status}`);
+    return response.json() as Promise<T>;
+  }, key);
+}
+
+async function readServerConfig(page: Page): Promise<Record<string, any>> {
+  return page.evaluate(async () => {
+    const response = await fetch("/api/config");
+    if (!response.ok) throw new Error(`config read failed: ${response.status}`);
+    const value = await response.json() as { config?: Record<string, any> };
+    if (!value.config) throw new Error("config payload is missing");
+    return value.config;
   });
 }
 
@@ -226,33 +262,11 @@ async function downloadActiveProjectBundle(page: Page) {
 }
 
 async function expectPluginEnabledStateStored(page: Page, pluginId: string, enabled: boolean) {
-  const isStored = await page.evaluate(({ id, expectedEnabled }) => new Promise<boolean>((resolve, reject) => {
-    const request = indexedDB.open("openboard-app");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const database = request.result;
-      try {
-        const read = database.transaction("app_state", "readonly")
-          .objectStore("app_state")
-          .get("openboard:config");
-        read.onerror = () => {
-          database.close();
-          reject(read.error);
-        };
-        read.onsuccess = () => {
-          const disabled = Array.isArray(read.result?.disabledPluginIds)
-            ? read.result.disabledPluginIds
-            : [];
-          database.close();
-          resolve(disabled.includes(id) !== expectedEnabled);
-        };
-      } catch (error) {
-        database.close();
-        reject(error);
-      }
-    };
-  }), { id: pluginId, expectedEnabled: enabled });
-  expect(isStored).toBe(true);
+  await expect.poll(async () => {
+    const config = await readServerConfig(page);
+    const disabled = Array.isArray(config.disabledPluginIds) ? config.disabledPluginIds : [];
+    return disabled.includes(pluginId) !== enabled;
+  }).toBe(true);
 }
 
 async function setPluginEnabledAndWaitForSave(toggle: Locator, enabled: boolean) {
@@ -663,17 +677,22 @@ test("director imports local GLB models, restores transforms, and relinks missin
   await expect(dialog.getByLabel("缩放 X")).toHaveValue("2");
   await dialog.getByRole("button", { name: "关闭导演台" }).click();
 
-  await page.evaluate(() => new Promise<void>((resolve, reject) => {
-    const request = indexedDB.open("openboard-director-models");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const database = request.result;
-      const transaction = database.transaction("models", "readwrite");
-      transaction.objectStore("models").clear();
-      transaction.oncomplete = () => { database.close(); resolve(); };
-      transaction.onerror = () => reject(transaction.error);
-    };
-  }));
+  const projects = await readServerProjects(page);
+  const importedModel = projects
+    .flatMap((project) => project?.nodes ?? [])
+    .find((candidate: { type?: string; metadata?: { directorScene?: { objects?: Array<{ modelAsset?: { assetId?: string } }> } } }) =>
+      candidate.type === "director" &&
+      candidate.metadata?.directorScene?.objects?.some((object) => object.modelAsset?.assetId),
+    )
+    ?.metadata?.directorScene?.objects?.find((object: { modelAsset?: { assetId?: string } }) => object.modelAsset?.assetId)
+    ?.modelAsset;
+  expect(importedModel?.assetId).toBeTruthy();
+  await page.evaluate(async (assetId) => {
+    const response = await fetch(`/api/blobs/${encodeURIComponent(`director-model:${assetId}`)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error(`model blob delete failed: ${response.status}`);
+  }, importedModel!.assetId);
   await page.reload();
   await directorNode.getByRole("button", { name: "打开导演台" }).click();
   await expect(modelRow).toContainText("缺失");
@@ -1131,30 +1150,12 @@ test("browser workflow reload marks an in-flight child interrupted without repla
   });
   await openFreshBoard(page, { requireProjectPanel: false });
   await page.goto("/workbench/workflows");
+  await expect(page.getByRole("heading", { name: "图片创作工作流" })).toBeVisible();
   const timestamp = new Date().toISOString();
   await page.evaluate(async ({ timestamp }) => {
-    const read = <T,>(database: string, store: string, key: IDBValidKey) => new Promise<T>((resolve, reject) => {
-      const request = indexedDB.open(database);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const transaction = request.result.transaction(store, "readonly");
-        const get = transaction.objectStore(store).get(key);
-        get.onerror = () => reject(get.error);
-        get.onsuccess = () => resolve(get.result as T);
-      };
-    });
-    const write = (database: string, store: string, values: Array<[IDBValidKey, unknown]>) =>
-      new Promise<void>((resolve, reject) => {
-        const request = indexedDB.open(database);
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          const transaction = request.result.transaction(store, "readwrite");
-          transaction.onerror = () => reject(transaction.error);
-          transaction.oncomplete = () => resolve();
-          for (const [key, value] of values) transaction.objectStore(store).put(value, key);
-        };
-      });
-    const projects = await read<Array<{ id: string }>>("openboard-app", "app_state", "openboard:projects");
+    const projectResponse = await fetch("/api/projects");
+    if (!projectResponse.ok) throw new Error(`project list failed: ${projectResponse.status}`);
+    const projects = await projectResponse.json() as Array<{ id: string }>;
     const projectId = projects[0]!.id;
     const template = {
       schemaVersion: 1, id: "personal_reload", revision: 1, scope: "personal",
@@ -1180,7 +1181,14 @@ test("browser workflow reload marks an in-flight child interrupted without repla
       parameters: { ownerClientId: "workflow-browser", workflowRunId: parent.id, workflowStepId: "render" },
       result: {}, createdAt: timestamp, updatedAt: timestamp,
     };
-    await write("openboard-generation-jobs", "jobs", [[parent.id, parent], [child.id, child]]);
+    for (const job of [parent, child]) {
+      const response = await fetch("/api/generation-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(job),
+      });
+      if (!response.ok) throw new Error(`job create failed: ${response.status}`);
+    }
   }, { timestamp });
 
   await page.reload();
@@ -2013,23 +2021,12 @@ test("config node preserves blank-line prompts across reload and uses them for g
   const prompt = node.getByLabel("配置节点提示词");
   await prompt.fill("first line\n\nthird line");
   await expect(prompt).toHaveValue("first line\n\nthird line");
-  await expect.poll(() => page.evaluate(() => new Promise<string>((resolve, reject) => {
-    const request = indexedDB.open("openboard-app");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const database = request.result;
-      const read = database.transaction("app_state", "readonly")
-        .objectStore("app_state").get("openboard:projects");
-      read.onerror = () => reject(read.error);
-      read.onsuccess = () => {
-        const projects = Array.isArray(read.result) ? read.result : [];
-        const project = projects.find((item) => item?.title === "我的第一个画布") ?? projects[0];
-        const config = project?.nodes?.find((item: { type?: string }) => item.type === "config");
-        database.close();
-        resolve(config?.metadata?.prompt ?? "");
-      };
-    };
-  }))).toBe("first line\n\nthird line");
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    const project = projects.find((item) => item?.title === "我的第一个画布") ?? projects[0];
+    const config = project?.nodes?.find((item: { type?: string }) => item.type === "config");
+    return config?.metadata?.prompt ?? "";
+  }).toBe("first line\n\nthird line");
   await page.reload();
   await node.locator("[data-node-header]").click();
   await expect(node.getByLabel("配置节点提示词")).toHaveValue("first line\n\nthird line");
@@ -2125,40 +2122,26 @@ test("text-to-image creates a connected blank config that reads its upstream tex
     model: "mock-image-model",
     prompt: "Use a crisp editorial style.\n\na red square",
   });
-  await expect.poll(() => page.evaluate(
-    () => new Promise<boolean>((resolve, reject) => {
-      const open = indexedDB.open("openboard-app");
-      open.onerror = () => reject(open.error);
-      open.onsuccess = () => {
-        const database = open.result;
-        const request = database.transaction("app_state", "readonly")
-          .objectStore("app_state")
-          .get("openboard:projects");
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          const projects = Array.isArray(request.result) ? request.result : [];
-          resolve(projects.some((project) => {
-            const config = project?.nodes?.find((item: { id?: string; type?: string }) => item.type === "config");
-            const images = project?.nodes?.filter((item: { type?: string }) => item.type === "image") ?? [];
-            const run = images.find((item: { metadata?: Record<string, unknown> }) =>
-              item.metadata?.generationConfigId === config?.id && item.metadata?.isBatchRoot,
-            );
-            return !config?.metadata?.batchChildIds && config?.metadata?.generationOutputRootId === run?.id &&
-              run?.metadata?.batchChildIds?.length === 2 && images.length === 3 &&
-              images.every((item: { metadata?: Record<string, unknown> }) =>
-                item.metadata?.status === "success" &&
-                item.metadata?.generationType === "text-to-image" &&
-                item.metadata?.model === "mock-image-model" &&
-                item.metadata?.size === "1024x1024" &&
-                item.metadata?.quality === "auto" &&
-                item.metadata?.count === 2 &&
-                Array.isArray(item.metadata?.referenceStorageKeys));
-          }));
-          database.close();
-        };
-      };
-    }),
-  )).toBe(true);
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    return projects.some((project) => {
+      const config = project?.nodes?.find((item: { id?: string; type?: string }) => item.type === "config");
+      const images = project?.nodes?.filter((item: { type?: string }) => item.type === "image") ?? [];
+      const run = images.find((item: { metadata?: Record<string, unknown> }) =>
+        item.metadata?.generationConfigId === config?.id && item.metadata?.isBatchRoot,
+      );
+      return !config?.metadata?.batchChildIds && config?.metadata?.generationOutputRootId === run?.id &&
+        run?.metadata?.batchChildIds?.length === 2 && images.length === 3 &&
+        images.every((item: { metadata?: Record<string, unknown> }) =>
+          item.metadata?.status === "success" &&
+          item.metadata?.generationType === "text-to-image" &&
+          item.metadata?.model === "mock-image-model" &&
+          item.metadata?.size === "1024x1024" &&
+          item.metadata?.quality === "auto" &&
+          item.metadata?.count === 2 &&
+          Array.isArray(item.metadata?.referenceStorageKeys));
+    });
+  }).toBe(true);
 });
 
 test("failed text-to-image keeps its config and can retry successfully", async ({ page }) => {
@@ -2421,7 +2404,7 @@ test("Agent sees one unified running generation task from the image workbench", 
   await openLocalAgentPanel(page);
   await expect(page.getByRole("region", { name: "正在运行的生成任务" })).toContainText("tracked workbench generation");
   const response = await request.post(`${agentUrl}/api/runtime/command`, {
-    headers: { Authorization: "Bearer e2e-token" },
+    headers: e2eAgentHeaders(),
     data: { method: "board.get_state", params: {}, timeoutMs: 10_000 },
   });
   expect(response.ok(), await response.text()).toBe(true);
@@ -2434,7 +2417,7 @@ test("Agent sees one unified running generation task from the image workbench", 
   });
   const taskId = String(state.generationTasks?.[0]?.id);
   const statusResponse = await request.post(`${agentUrl}/api/runtime/command`, {
-    headers: { Authorization: "Bearer e2e-token" },
+    headers: e2eAgentHeaders(),
     data: {
       method: "generation_get_status",
       params: { taskId },
@@ -2461,13 +2444,13 @@ test("Agent sees one unified running generation task from the image workbench", 
   await second.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect.poll(async () => {
     const active = await request.post(`${agentUrl}/api/runtime/command`, {
-      headers: { Authorization: "Bearer e2e-token" },
+      headers: e2eAgentHeaders(),
       data: { method: "board.get_state", params: {}, timeoutMs: 10_000 },
     });
     return (await active.json() as { route?: string }).route;
   }).toBe("/prompts");
   const denied = await request.post(`${agentUrl}/api/runtime/command`, {
-    headers: { Authorization: "Bearer e2e-token" },
+    headers: e2eAgentHeaders(),
     data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
   });
   expect(await denied.json()).toEqual({ task: { id: taskId, status: "not_found" } });
@@ -2475,7 +2458,7 @@ test("Agent sees one unified running generation task from the image workbench", 
   await page.bringToFront();
   await expect.poll(async () => {
     const fallback = await request.post(`${agentUrl}/api/runtime/command`, {
-      headers: { Authorization: "Bearer e2e-token" },
+      headers: e2eAgentHeaders(),
       data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
     });
     if (!fallback.ok()) return undefined;
@@ -2487,7 +2470,7 @@ test("Agent sees one unified running generation task from the image workbench", 
   await expect(page.locator("article").filter({ hasText: "tracked workbench generation" }))
     .toHaveAttribute("data-generation-status", "succeeded");
   const completed = await request.post(`${agentUrl}/api/runtime/command`, {
-    headers: { Authorization: "Bearer e2e-token" },
+    headers: e2eAgentHeaders(),
     data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
   });
   expect(await completed.json()).toMatchObject({ task: { id: taskId, status: "succeeded" } });
@@ -2496,7 +2479,7 @@ test("Agent sees one unified running generation task from the image workbench", 
   await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
   await expect.poll(async () => {
     const afterReload = await request.post(`${agentUrl}/api/runtime/command`, {
-      headers: { Authorization: "Bearer e2e-token" },
+      headers: e2eAgentHeaders(),
       data: { method: "generation_get_status", params: { taskId }, timeoutMs: 10_000 },
     });
     if (!afterReload.ok()) return undefined;
@@ -2554,32 +2537,20 @@ test("image workbench refuses retry when a recorded reference is missing", async
   await closeSettings(page);
 
   await page.goto("/workbench/image");
-  await page.evaluate(() => new Promise<{ projectId: string; providerId: string }>((resolve, reject) => {
-    const open = indexedDB.open("openboard-app");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const database = open.result;
-      const transaction = database.transaction("app_state", "readonly");
-      const store = transaction.objectStore("app_state");
-      const projectsRequest = store.get("openboard:projects");
-      const configRequest = store.get("openboard:config");
-      transaction.onerror = () => reject(transaction.error);
-      transaction.oncomplete = () => {
-        const projectId = Array.isArray(projectsRequest.result) ? projectsRequest.result[0]?.id : undefined;
-        const providerId = configRequest.result?.activeChannelId;
-        database.close();
-        if (typeof projectId === "string" && typeof providerId === "string") resolve({ projectId, providerId });
-        else reject(new Error("active test project or provider is missing"));
-      };
-    };
-  }).then(({ projectId, providerId }) => new Promise<void>((resolve, reject) => {
-    const open = indexedDB.open("openboard-generation-jobs");
-    open.onerror = () => reject(open.error);
-    open.onupgradeneeded = () => open.result.createObjectStore("jobs");
-    open.onsuccess = () => {
-      const database = open.result;
-      const transaction = database.transaction("jobs", "readwrite");
-      transaction.objectStore("jobs").put({
+  await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
+  await page.evaluate(async () => {
+    const projectsResponse = await fetch("/api/projects");
+    const configResponse = await fetch("/api/config");
+    if (!projectsResponse.ok || !configResponse.ok) throw new Error("active test project or provider is missing");
+    const projects = await projectsResponse.json() as Array<{ id: string }>;
+    const configBundle = await configResponse.json() as { config?: { activeChannelId?: string } };
+    const projectId = projects[0]?.id;
+    const providerId = configBundle.config?.activeChannelId;
+    if (!projectId || !providerId) throw new Error("active test project or provider is missing");
+    const response = await fetch("/api/generation-jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         id: "job-missing-reference",
         projectId,
         kind: "image",
@@ -2592,11 +2563,10 @@ test("image workbench refuses retry when a recorded reference is missing", async
         error: "previous failure",
         createdAt: "2026-07-18T00:00:00.000Z",
         updatedAt: "2026-07-18T00:00:00.000Z",
-      }, "job-missing-reference");
-      transaction.oncomplete = () => { database.close(); resolve(); };
-      transaction.onerror = () => reject(transaction.error);
-    };
-  })));
+      }),
+    });
+    if (!response.ok) throw new Error(`job seed failed: ${response.status}`);
+  });
   await page.reload();
 
   const history = page.locator("article").filter({ hasText: "missing reference retry" });
@@ -2789,24 +2759,12 @@ test("image split supports draggable guides and persists normalized lineage", as
   await page.getByRole("button", { name: "删除选中线" }).click();
   await page.getByRole("button", { name: "重置", exact: true }).click();
   await page.getByRole("button", { name: "应用" }).click();
-  await expect.poll(() => page.evaluate(
-    () => new Promise<boolean>((resolve, reject) => {
-      const open = indexedDB.open("openboard-app");
-      open.onerror = () => reject(open.error);
-      open.onsuccess = () => {
-        const database = open.result;
-        const request = database.transaction("app_state", "readonly").objectStore("app_state").get("openboard:projects");
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          const projects = Array.isArray(request.result) ? request.result : [];
-          resolve(projects.some((project) => project?.nodes?.some((node: { metadata?: { transformOperation?: string; splitVertical?: number[]; splitHorizontal?: number[] } }) =>
-            node.metadata?.transformOperation === "split" && node.metadata.splitVertical?.[0] === 0.5 && node.metadata.splitHorizontal?.[0] === 0.5,
-          )));
-          database.close();
-        };
-      };
-    }),
-  )).toBe(true);
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    return projects.some((project) => project?.nodes?.some((node: { metadata?: { transformOperation?: string; splitVertical?: number[]; splitHorizontal?: number[] } }) =>
+      node.metadata?.transformOperation === "split" && node.metadata.splitVertical?.[0] === 0.5 && node.metadata.splitHorizontal?.[0] === 0.5,
+    ));
+  }).toBe(true);
 });
 
 test("a sandboxed plugin node persists its state across reloads", async ({ page }) => {
@@ -2943,21 +2901,11 @@ test("Three.js panorama renders nonblank pixels on desktop and mobile", async ({
   const canvas = page.locator('canvas[data-panorama-canvas="true"]');
   await expect(canvas).toBeVisible({ timeout: 15_000 });
   await page.getByLabel("选择全景图片").selectOption({ label: "画布 · 图片" });
-  await expect.poll(() => page.evaluate(() => new Promise<boolean>((resolve, reject) => {
-    const open = indexedDB.open("openboard-app");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const database = open.result;
-      const request = database.transaction("app_state", "readonly").objectStore("app_state").get("openboard:projects");
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const projects = Array.isArray(request.result) ? request.result : [];
-        resolve(projects.some((project) => project?.nodes?.some((node: { metadata?: { pluginId?: string; pluginState?: { storageKey?: string } } }) =>
-          node.metadata?.pluginId === "openboard.panorama" && Boolean(node.metadata.pluginState?.storageKey))));
-        database.close();
-      };
-    };
-  }))).toBe(true);
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    return projects.some((project) => project?.nodes?.some((node: { metadata?: { pluginId?: string; pluginState?: { storageKey?: string } } }) =>
+      node.metadata?.pluginId === "openboard.panorama" && Boolean(node.metadata.pluginState?.storageKey)));
+  }).toBe(true);
   await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => {
     if (element.width < 2 || element.height < 2) return 0;
     if (element.dataset.panoramaRenderer === "2d") {
@@ -3089,27 +3037,51 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await page.locator('nav a[href="/assets"]').click();
   const asset = page.locator("article").filter({ hasText: "图片" });
   await expect(asset).toBeVisible();
-  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
-    const open = indexedDB.open("openboard-app");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const database = open.result;
-      const request = database.transaction("app_state", "readonly")
-        .objectStore("app_state")
-        .get("openboard:assets");
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        resolve(Array.isArray(request.result) ? request.result.length : 0);
-        database.close();
-      };
-    };
-  }))).toBe(1);
+  await expect.poll(async () => {
+    const assets = await readServerState<any[]>(page, "assets");
+    return assets.length;
+  }).toBe(1);
   await page.reload();
   await expect(asset).toBeVisible();
   await asset.getByRole("button", { name: "插入画布" }).click();
   await page.locator('nav a[href="/"]').click();
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(4);
+});
+
+test("an image can continue into a durable connected result through the in-app dialog", async ({ page }) => {
+  let editRequests = 0;
+  await page.route("https://continue.example/v1/images/edits", async (route) => {
+    editRequests += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data: [{ b64_json: pngPixelBase64 }] }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://continue.example/v1");
+  await page.getByLabel("生图 API Key").fill("continue-test-key");
+  await page.getByLabel("生图模型", { exact: true }).fill("continue-image-model");
+  await closeSettings(page);
+
+  await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    name: "continue-source.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(pngReplacementBase64, "base64"),
+  });
+  const source = page.locator('[data-node-type="image"]').first();
+  await source.locator("[data-node-header]").click();
+  await source.getByTitle("基于此图继续创作").click();
+  const dialog = page.getByRole("dialog", { name: "基于此图继续创作" });
+  await dialog.getByLabel("创作要求").fill("extend the scene to the right");
+  await dialog.getByRole("button", { name: "生成新图片" }).click();
+
+  await expect.poll(() => editRequests).toBe(1);
+  await page.getByTitle("适应").click();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
+  await page.reload();
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
 });
 
 test("local video and audio nodes persist, render native players, and download", async ({ page, browserName }) => {
@@ -3132,6 +3104,7 @@ test("local video and audio nodes persist, render native players, and download",
   await expect(audioNode.locator("audio[controls]")).toHaveCount(1);
   await expect(audioNode).toContainText("audio/mpeg");
 
+  await page.getByTestId("canvas-surface").click({ position: { x: 16, y: 16 } });
   await videoNode.locator("[data-node-header]").click();
   if (browserName === "webkit") {
     await videoNode.getByTitle("下载").click();
@@ -3156,8 +3129,8 @@ test("local video and audio nodes persist, render native players, and download",
   await page.reload();
   const reloadedVideo = page.locator('[data-node-type="video"] video[controls]');
   const reloadedAudio = page.locator('[data-node-type="audio"] audio[controls]');
-  await expect(reloadedVideo).toHaveAttribute("src", /^(blob:|data:video\/)/);
-  await expect(reloadedAudio).toHaveAttribute("src", /^(blob:|data:audio\/)/);
+  await expect(reloadedVideo).toHaveAttribute("src", /^(blob:|data:video\/|\/api\/media\/references\/)/);
+  await expect(reloadedAudio).toHaveAttribute("src", /^(blob:|data:audio\/|\/api\/media\/references\/)/);
   expect(videoSrc).toMatch(/^(blob:|data:video\/)/);
   expect(audioSrc).toMatch(/^(blob:|data:audio\/)/);
   await expect(page.locator('[data-node-type="audio"]')).toContainText("audio/mpeg");
@@ -3209,8 +3182,10 @@ test("an image node can create a connected video with itself as reference", asyn
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
   });
-  page.once("dialog", async (dialog) => dialog.accept("animate this reference"));
   await page.getByTitle("生成视频").click();
+  const videoDialog = page.getByRole("dialog", { name: "生成视频" });
+  await videoDialog.getByLabel("视频提示词").fill("animate this reference");
+  await videoDialog.getByRole("button", { name: "生成视频" }).click();
 
   await expect.poll(() => requestBody).toMatchObject({
     model: "video-model",
@@ -3248,8 +3223,10 @@ test("node prompt media chips preserve and submit connected image references", a
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
   });
-  page.once("dialog", async (dialog) => dialog.accept("create the first clip"));
   await page.getByTitle("生成视频").click();
+  const firstVideoDialog = page.getByRole("dialog", { name: "生成视频" });
+  await firstVideoDialog.getByLabel("视频提示词").fill("create the first clip");
+  await firstVideoDialog.getByRole("button", { name: "生成视频" }).click();
   await expect.poll(() => requestBodies).toHaveLength(1);
 
   await page.getByTitle("适应").click();
@@ -3330,26 +3307,12 @@ test("local image resize creates a lineage-tracked derived node", async ({ page 
     height: image.naturalHeight,
   }))).toEqual({ width: 8, height: 8 });
 
-  const readLineage = () => page.evaluate(
-    () => new Promise<Record<string, unknown> | null>((resolve, reject) => {
-      const open = indexedDB.open("openboard-app");
-      open.onerror = () => reject(open.error);
-      open.onsuccess = () => {
-        const database = open.result;
-        const request = database.transaction("app_state", "readonly")
-          .objectStore("app_state")
-          .get("openboard:projects");
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          const projects = Array.isArray(request.result) ? request.result : [];
-          const derived = projects.flatMap((project) => project?.nodes ?? [])
-            .find((node) => node?.metadata?.transformOperation === "resize");
-          database.close();
-          resolve(derived?.metadata ?? null);
-        };
-      };
-    }),
-  );
+  const readLineage = async () => {
+    const projects = await readServerProjects(page);
+    const derived = projects.flatMap((project) => project?.nodes ?? [])
+      .find((node) => node?.metadata?.transformOperation === "resize");
+    return derived?.metadata ?? null;
+  };
   await expect.poll(readLineage).toMatchObject({
     transformOperation: "resize",
     transformProvider: "local-canvas",
@@ -3386,23 +3349,12 @@ test("AI upscale stays distinct from local resize and records cloud lineage", as
   await expect.poll(() => upscaleRequests).toBe(1);
   await expect(page.locator('img[alt="图片 · AI 超分 2x"]')).toHaveCount(1);
 
-  const lineage = () => page.evaluate(() => new Promise<Record<string, unknown> | null>((resolve, reject) => {
-    const open = indexedDB.open("openboard-app");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const database = open.result;
-      const request = database.transaction("app_state", "readonly")
-        .objectStore("app_state").get("openboard:projects");
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const projects = Array.isArray(request.result) ? request.result : [];
-        const derived = projects.flatMap((project) => project?.nodes ?? [])
-          .find((item) => item?.metadata?.transformOperation === "ai-upscale");
-        database.close();
-        resolve(derived?.metadata ?? null);
-      };
-    };
-  }));
+  const lineage = async () => {
+    const projects = await readServerProjects(page);
+    const derived = projects.flatMap((project) => project?.nodes ?? [])
+      .find((item) => item?.metadata?.transformOperation === "ai-upscale");
+    return derived?.metadata ?? null;
+  };
   await expect.poll(lineage).toMatchObject({
     transformOperation: "ai-upscale",
     transformProvider: "openai-compatible",
@@ -3447,21 +3399,10 @@ test("prompt details can insert their content into the active canvas", async ({ 
   );
   await page.locator('nav a[href="/assets"]').click();
   await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
-    const open = indexedDB.open("openboard-app");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const database = open.result;
-      const request = database.transaction("app_state", "readonly")
-        .objectStore("app_state")
-        .get("openboard:assets");
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        resolve(Array.isArray(request.result) ? request.result.length : 0);
-        database.close();
-      };
-    };
-  }))).toBe(1);
+  await expect.poll(async () => {
+    const assets = await readServerState<any[]>(page, "assets");
+    return assets.length;
+  }).toBe(1);
   await page.reload();
   await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
 });
@@ -3841,7 +3782,7 @@ test("node camera settings persist, stay screen-sized, and expand generation pro
   await configImageResult.locator("[data-node-header]").click();
   await expect(configImageResult.getByTitle("摄像机设置（已启用）")).toBeVisible();
   await expect(configImageResult.getByText("最终实际发送的提示词（只读）")).toHaveCount(0);
-  await expect(configImageResult.getByRole("textbox", { name: "节点生成提示词" })).toHaveValue("");
+  await expect(configImageResult.getByRole("textbox", { name: "节点生成提示词" })).toHaveText("");
 
   await configNode.locator("[data-node-header]").click();
   await configNode.getByLabel("模式").selectOption("text");
@@ -3878,8 +3819,10 @@ test("node camera settings persist, stay screen-sized, and expand generation pro
   await cameraPanel.getByLabel("启用摄像机提示词").check();
   await cameraPanel.getByLabel("相机").selectOption("action");
   await cameraPanel.getByTitle("关闭摄像机设置").click();
-  page.once("dialog", async (dialog) => dialog.accept("raw video camera scene"));
   await videoNode.getByTitle("生成视频").click();
+  const rawVideoDialog = page.getByRole("dialog", { name: "生成视频" });
+  await rawVideoDialog.getByLabel("视频提示词").fill("raw video camera scene");
+  await rawVideoDialog.getByRole("button", { name: "生成视频" }).click();
   await expect.poll(() => videoPrompts.length).toBe(2);
   expect(videoPrompts[1]).toContain("raw video camera scene");
   expect(videoPrompts[1]!.match(/Camera: action camera/g)).toHaveLength(1);
@@ -4118,21 +4061,10 @@ test("asset library supports persistence, search, type filters, pagination, copy
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
   });
   await expect(page.getByText("1 / 2 · 共 14", { exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
-    const open = indexedDB.open("openboard-app");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const database = open.result;
-      const request = database.transaction("app_state", "readonly")
-        .objectStore("app_state")
-        .get("openboard:assets");
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        resolve(Array.isArray(request.result) ? request.result.length : 0);
-        database.close();
-      };
-    };
-  }))).toBe(14);
+  await expect.poll(async () => {
+    const assets = await readServerState<any[]>(page, "assets");
+    return assets.length;
+  }).toBe(14);
   await page.reload();
   await expect(page.getByText("1 / 2 · 共 14", { exact: true })).toBeVisible();
 
@@ -4355,14 +4287,14 @@ test("browser runtime executes board commands, navigation, and protected snapsho
   await page.getByTitle("配置", { exact: true }).click();
   await expect.poll(async () => {
     const response = await request.get(`${agentUrl}/api/agent/status`, {
-      headers: { Authorization: "Bearer e2e-token" },
+      headers: e2eAgentHeaders(),
     });
     return (await response.json() as { runtime?: { connected?: boolean } }).runtime?.connected;
   }).toBe(true);
 
   const command = async (method: string, params: Record<string, unknown> = {}) => {
     const response = await request.post(`${agentUrl}/api/runtime/command`, {
-      headers: { Authorization: "Bearer e2e-token" },
+      headers: e2eAgentHeaders(),
       data: { method, params, timeoutMs: 10_000 },
     });
     expect(response.ok(), await response.text()).toBe(true);
@@ -4394,7 +4326,7 @@ test("browser runtime executes board commands, navigation, and protected snapsho
   const denied = await request.get(protectedUrl);
   expect(denied.status()).toBe(401);
   const image = await request.get(protectedUrl, {
-    headers: { Authorization: "Bearer e2e-token" },
+    headers: e2eAgentHeaders(),
   });
   expect(image.ok()).toBe(true);
   expect(image.headers()["content-type"]).toBe("image/png");
@@ -4501,6 +4433,10 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
   await page.route("**/api/projects/*", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
     await route.fulfill({
       status: 503,
       contentType: "application/json",
@@ -4614,7 +4550,6 @@ test("Codex session and running state stay synchronized across browser tabs", as
         ].map((event) => `event: notification\ndata: ${JSON.stringify(event)}\n\n`).join(""),
       });
     });
-    await target.route("**/api/projects/*", async (route) => route.fulfill({ status: 404, body: "not found" }));
   };
   const connectPanel = async (target: Page) => {
     const runtimeReady = target.waitForEvent("websocket", {
@@ -5050,35 +4985,21 @@ test("workbench history refills the form without generating", async ({ page }) =
   // real would need a provider, and the point here is the refill path.
   const timestamp = "2026-07-27T00:00:00.000Z";
   await page.evaluate(async (createdAt) => {
-    const read = <T,>(database: string, store: string, key: IDBValidKey) => new Promise<T>((resolve, reject) => {
-      const request = indexedDB.open(database);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const transaction = request.result.transaction(store, "readonly");
-        const get = transaction.objectStore(store).get(key);
-        get.onerror = () => reject(get.error);
-        get.onsuccess = () => resolve(get.result as T);
-      };
-    });
-    const write = (database: string, store: string, values: Array<[IDBValidKey, unknown]>) =>
-      new Promise<void>((resolve, reject) => {
-        const request = indexedDB.open(database);
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          const transaction = request.result.transaction(store, "readwrite");
-          transaction.onerror = () => reject(transaction.error);
-          transaction.oncomplete = () => resolve();
-          for (const [key, value] of values) transaction.objectStore(store).put(value, key);
-        };
-      });
-    const projects = await read<Array<{ id: string }>>("openboard-app", "app_state", "openboard:projects");
+    const projectsResponse = await fetch("/api/projects");
+    if (!projectsResponse.ok) throw new Error(`project list failed: ${projectsResponse.status}`);
+    const projects = await projectsResponse.json() as Array<{ id: string }>;
     const job = {
       id: "refill_probe_job", projectId: projects[0]!.id, kind: "image", status: "succeeded",
       prompt: "回填探针提示词", providerId: "", model: "probe-image-model",
       parameters: { size: "1536x1024", quality: "high", count: 3, category: "探针" },
       result: { items: [] }, createdAt, updatedAt: createdAt,
     };
-    await write("openboard-generation-jobs", "jobs", [[job.id, job]]);
+    const response = await fetch("/api/generation-jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(job),
+    });
+    if (!response.ok) throw new Error(`job seed failed: ${response.status}`);
   }, timestamp);
 
   await page.goto("/workbench/image");

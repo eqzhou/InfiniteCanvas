@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,6 +60,21 @@ func TestCORSMiddleware(t *testing.T) {
 
 		if got.Code != http.StatusTeapot || got.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
 			t.Fatalf("status = %d, allow-origin = %q", got.Code, got.Header().Get("Access-Control-Allow-Origin"))
+		}
+	})
+
+	t.Run("allows isolated browser test headers", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodOptions, "/api/projects", nil)
+		req.Header.Set("Origin", "http://localhost:5173")
+		req.Header.Set("Access-Control-Request-Headers", "x-openboard-e2e-tenant,x-openboard-e2e-token")
+		got := httptest.NewRecorder()
+		handler.ServeHTTP(got, req)
+
+		allowed := got.Header().Get("Access-Control-Allow-Headers")
+		if got.Code != http.StatusNoContent ||
+			!strings.Contains(allowed, "X-OpenBoard-E2E-Tenant") ||
+			!strings.Contains(allowed, "X-OpenBoard-E2E-Token") {
+			t.Fatalf("status = %d, allow-headers = %q", got.Code, allowed)
 		}
 	})
 
@@ -136,5 +152,62 @@ func TestRateLimitMiddleware(t *testing.T) {
 	}
 	if limited.Header().Get("Retry-After") == "" {
 		t.Fatal("rate-limited response must include Retry-After")
+	}
+}
+
+func TestRateLimitMiddlewareExemptsE2ETenantProvisioning(t *testing.T) {
+	calls := 0
+	handler := rateLimitRequests(1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d", first.Code)
+	}
+
+	provision := httptest.NewRecorder()
+	handler.ServeHTTP(provision, httptest.NewRequest(http.MethodPost, "/api/e2e/tenant", nil))
+	if provision.Code != http.StatusNoContent {
+		t.Fatalf("provision status = %d", provision.Code)
+	}
+
+	limited := httptest.NewRecorder()
+	handler.ServeHTTP(limited, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("limited status = %d", limited.Code)
+	}
+	if calls != 2 {
+		t.Fatalf("handler calls = %d, want 2", calls)
+	}
+}
+
+func TestRateLimitMiddlewareExemptsAuthorizedLoopbackE2ERequests(t *testing.T) {
+	t.Setenv("OPENBOARD_E2E_TENANT_TOKEN", "test-only-token")
+	handler := rateLimitRequests(1, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+
+	e2eRequest := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	e2eRequest.Header.Set("X-OpenBoard-E2E-Token", "test-only-token")
+	e2eRequest.RemoteAddr = "127.0.0.1:43210"
+	e2eResponse := httptest.NewRecorder()
+	handler.ServeHTTP(e2eResponse, e2eRequest)
+	if e2eResponse.Code != http.StatusNoContent {
+		t.Fatalf("authorized e2e status = %d", e2eResponse.Code)
+	}
+
+	remoteRequest := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	remoteRequest.Header.Set("X-OpenBoard-E2E-Token", "test-only-token")
+	remoteRequest.RemoteAddr = "203.0.113.8:43210"
+	remoteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(remoteResponse, remoteRequest)
+	if remoteResponse.Code != http.StatusTooManyRequests {
+		t.Fatalf("remote e2e status = %d", remoteResponse.Code)
 	}
 }

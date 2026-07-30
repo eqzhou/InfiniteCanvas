@@ -15,6 +15,7 @@ import { readBoundedProviderJson, readBoundedProviderText } from "@/services/bou
 import { decodeBoundedDataUrl } from "@/services/remote-content";
 import { authFetch as apiFetch } from "@/services/auth-session";
 import { isServerManagedChannel } from "@/services/shared-channels";
+import { usesBrowserE2EGeneration } from "@/services/generation-jobs";
 import { providerFetch, providerFetchUrl, ProviderHttpError } from "@/services/provider-http";
 
 const MAX_IMAGE_PROVIDER_RESPONSE_BYTES = 64 * 1024 * 1024;
@@ -137,7 +138,7 @@ type TextGenerationOptions = {
 export async function generateText(options: TextGenerationOptions): Promise<string> {
 	assertNotManagedBrowserProvider(options.channel, "text");
   const provider = getProvider(options.channel, "text");
-  const serverProxied = !isLoopbackProviderUrl(provider.baseUrl);
+  const serverProxied = !usesBrowserE2EGeneration() && !isLoopbackProviderUrl(provider.baseUrl);
   return runTrackedGeneration({
     kind: "text",
     prompt: options.prompt,
@@ -150,7 +151,7 @@ export async function generateText(options: TextGenerationOptions): Promise<stri
 async function generateTextRequest(options: TextGenerationOptions): Promise<string> {
   const { channel, model, prompt, images = [], systemPrompt = "" } = options;
   const provider = getProvider(channel, "text");
-  if (!isLoopbackProviderUrl(provider.baseUrl)) {
+  if (!usesBrowserE2EGeneration() && !isLoopbackProviderUrl(provider.baseUrl)) {
     return generateTextThroughServer(
       channel.id,
       model,

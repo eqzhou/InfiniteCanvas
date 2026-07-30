@@ -141,6 +141,11 @@ func rateLimitRequests(limit int, window time.Duration) func(http.Handler) http.
 	count := 0
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if (r.Method == http.MethodPost && r.URL.Path == "/api/e2e/tenant") ||
+				authorizedLoopbackE2ERequest(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			now := time.Now()
 			mu.Lock()
 			if now.Sub(started) >= window {
@@ -163,6 +168,21 @@ func rateLimitRequests(limit int, window time.Duration) func(http.Handler) http.
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func authorizedLoopbackE2ERequest(r *http.Request) bool {
+	expected := strings.TrimSpace(os.Getenv("OPENBOARD_E2E_TENANT_TOKEN"))
+	provided := strings.TrimSpace(r.Header.Get("X-OpenBoard-E2E-Token"))
+	if expected == "" || len(expected) != len(provided) ||
+		subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func timeoutRequests(timeout time.Duration) func(http.Handler) http.Handler {
@@ -208,7 +228,10 @@ func cors(origins map[string]struct{}) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Add("Vary", "Origin")
 			}
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-OpenBoard-Session")
+			w.Header().Set(
+				"Access-Control-Allow-Headers",
+				"Content-Type, Authorization, X-OpenBoard-Session, X-OpenBoard-E2E-Tenant, X-OpenBoard-E2E-Token",
+			)
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

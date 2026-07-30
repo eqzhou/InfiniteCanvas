@@ -9,6 +9,7 @@ import { join } from "node:path";
  */
 export const DEPLOYMENT_ENV_EXEMPTIONS = Object.freeze({
   OPENBOARD_TEST_DATABASE_URL: "test-only; never read by a running deployment",
+  OPENBOARD_E2E_TENANT_TOKEN: "test-only; enables isolated Playwright tenants on loopback",
   OPENBOARD_DATA: "set by compose.yaml to the container data volume",
   OPENBOARD_ADDR: "set by compose.yaml to the in-container listen address",
   OPENBOARD_CODEX_BIN: "local developer agent bridge, not a deployment setting",

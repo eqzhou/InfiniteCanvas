@@ -107,12 +107,19 @@ export function BoardCanvas() {
     origins: Record<string, Point>;
     viewport: { x: number; y: number; k: number };
   } | null>(null);
+  const mediaImportQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [size, setSize] = useState({ w: 1200, h: 800 });
   const [drag, setDrag] = useState<DragMode | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const [menu, setMenu] = useState<ContextMenuState>(null);
   const [groupHoverId, setGroupHoverId] = useState<string | null>(null);
   const [assetPicker, setAssetPicker] = useState<{ open: boolean; at: Point | null }>({ open: false, at: null });
+
+  const enqueueMediaImport = (operation: () => Promise<void>): Promise<void> => {
+    const pending = mediaImportQueueRef.current.then(operation, operation);
+    mediaImportQueueRef.current = pending.catch(() => undefined);
+    return pending;
+  };
 
   useEffect(() => {
     const el = rootRef.current;
@@ -725,7 +732,7 @@ export function BoardCanvas() {
             DEFAULT_NODE_SIZE[type],
           ));
         }}
-        onImportImages={async (files) => {
+        onImportImages={(files) => enqueueMediaImport(async () => {
           const center = screenToWorld(
             { x: size.w / 2, y: size.h / 2 },
             project.viewport,
@@ -738,8 +745,8 @@ export function BoardCanvas() {
               DEFAULT_NODE_SIZE.image,
             ));
           }
-        }}
-        onImportVideos={async (files) => {
+        })}
+        onImportVideos={(files) => enqueueMediaImport(async () => {
           const center = screenToWorld(
             { x: size.w / 2, y: size.h / 2 },
             project.viewport,
@@ -752,8 +759,8 @@ export function BoardCanvas() {
               DEFAULT_NODE_SIZE.video,
             ));
           }
-        }}
-        onImportAudios={async (files) => {
+        })}
+        onImportAudios={(files) => enqueueMediaImport(async () => {
           const center = screenToWorld(
             { x: size.w / 2, y: size.h / 2 },
             project.viewport,
@@ -766,7 +773,7 @@ export function BoardCanvas() {
               DEFAULT_NODE_SIZE.audio,
             ));
           }
-        }}
+        })}
         onOpenAssets={() => {
           const center = screenToWorld(
             { x: size.w / 2, y: size.h / 2 },

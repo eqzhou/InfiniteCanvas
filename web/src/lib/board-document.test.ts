@@ -420,13 +420,17 @@ describe("parseBoardProject", () => {
     input.nodes = [root, child];
     expect(parseBoardProject(input).nodes).toHaveLength(2);
 
+    const persisted = structuredClone(input);
+    delete persisted.nodes[0].metadata.content;
+    delete persisted.nodes[1].metadata.content;
+    expect(parseBoardProject(persisted).nodes).toHaveLength(2);
+
     for (const mutate of [
       (project: any) => { project.nodes[0].metadata.batchChildIds = ["panorama_child", "panorama_child"]; },
       (project: any) => { project.nodes[0].metadata.primaryImageId = "missing"; },
       (project: any) => { project.nodes[1].metadata.batchRootId = "missing"; },
       (project: any) => { project.nodes[1].type = "image"; },
       (project: any) => { project.nodes[0].metadata.isBatchRoot = "yes"; },
-      (project: any) => { delete project.nodes[1].metadata.content; },
       (project: any) => { delete project.nodes[0].metadata.storageKey; },
       (project: any) => { project.nodes[1].metadata.mimeType = "image/svg+xml"; },
     ]) {

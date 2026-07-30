@@ -32,4 +32,12 @@ describe("AI provider boundary", () => {
       expect(source).not.toMatch(/\b(providerFetch|providerFetchUrl|fetch)\s*\(/);
     }
   });
+
+  test("keeps canvas generation inputs inside the application UI", async () => {
+    const source = await Bun.file(
+      new URL("../components/canvas/NodeActions.tsx", import.meta.url),
+    ).text();
+
+    expect(source).not.toMatch(/\bwindow\.(?:prompt|confirm)\s*\(/);
+  });
 });

@@ -422,7 +422,7 @@ export function parseBoardProject(value: unknown): BoardProject {
 
   const batchOwner = new Map<string, string>();
   const usablePanoramaBatchResult = (node: BoardNode) => node.type === "panorama" &&
-    Boolean(node.metadata.content && node.metadata.storageKey) &&
+    Boolean(node.metadata.storageKey) &&
     Boolean(Number.isSafeInteger(node.metadata.bytes) && (node.metadata.bytes ?? 0) > 0) &&
     node.metadata.panoramaProjection === "equirectangular" &&
     Boolean(node.metadata.mimeType && PANORAMA_BATCH_MIME_TYPES.has(node.metadata.mimeType));

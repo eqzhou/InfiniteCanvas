@@ -21,6 +21,7 @@ import {
 import { generateTextBatch } from "@/services/text-batch";
 import { makeCroppedNode, makeRotatedNode } from "@/lib/image-ops";
 import { createNode } from "@/lib/defaults";
+import { fitMediaDisplaySize } from "@/lib/geometry";
 import { nowIso, uid } from "@/lib/id";
 import { CropDialog } from "@/components/canvas/CropDialog";
 import { AngleDialog } from "@/components/canvas/AngleDialog";
@@ -59,6 +60,7 @@ import {
   type ImageToolbarAction,
 } from "@/lib/image-toolbar-preferences";
 import { CameraPromptPanel } from "@/components/canvas/CameraPromptPanel";
+import { TextEntryDialog } from "@/components/canvas/TextEntryDialog";
 import {
   BookmarkPlus,
   BookmarkCheck,
@@ -76,6 +78,18 @@ import {
   Type,
   Wand2,
 } from "lucide-react";
+
+type PromptDialogKind = "rewrite" | "image" | "video" | "audio";
+
+type PromptDialogState = {
+  kind: PromptDialogKind;
+  title: string;
+  label: string;
+  initialValue: string;
+  placeholder?: string;
+  submitLabel: string;
+  multiline?: boolean;
+};
 
 export function NodeActions({
   node,
@@ -102,6 +116,7 @@ export function NodeActions({
   const [assetSaveState, setAssetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [imageCopyState, setImageCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const [configGenerating, setConfigGenerating] = useState(false);
+  const [promptDialog, setPromptDialog] = useState<PromptDialogState | null>(null);
   const cameraAnchorRef = useRef<HTMLSpanElement>(null);
 	const sharedChannels = useSharedChannels();
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
@@ -300,8 +315,8 @@ export function NodeActions({
     const inputs = upstream();
     const usesUpstreamInputs = !(node.metadata.prompt ?? node.metadata.content ?? "").trim();
     const texts = usesUpstreamInputs ? inputs.texts : [];
-    const imageKeys = usesUpstreamInputs ? inputs.imageKeys : [];
-    const images = usesUpstreamInputs ? inputs.images : [];
+    const imageKeys = inputs.imageKeys;
+    const images = inputs.images;
     const prompt = resolveConfigPrompt({
       prompt: node.metadata.prompt ?? node.metadata.content,
       upstreamTexts: texts,
@@ -366,6 +381,7 @@ export function NodeActions({
         const created: BoardNode[] = [];
         for (const [i, url] of urls.entries()) {
           const uploaded = await uploadMedia(url, "image");
+          const display = fitMediaDisplaySize(uploaded.width, uploaded.height, 120, 360);
           created.push(
             createNode(
               "image",
@@ -385,24 +401,15 @@ export function NodeActions({
                   cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
                   ...generation,
                 },
-                width: Math.min(360, uploaded.width || 320),
-                height: Math.min(360, uploaded.height || 320),
+                width: display.width,
+                height: display.height,
               },
             ),
           );
         }
         placeImageBatch(node.id, created, generation);
       } else {
-		const videoInputs = usesUpstreamInputs ? inputs : {
-			...inputs,
-			images: [],
-			videos: [],
-			audios: [],
-			imageKeys: [],
-			videoKeys: [],
-			audioKeys: [],
-		};
-		const { images, videos, audios, imageKeys, videoKeys, audioKeys } = videoInputs;
+		const { images, videos, audios, imageKeys, videoKeys, audioKeys } = inputs;
 		const referenceCount = images.filter((value) => value.storageKey || value.content).length +
 			videos.filter((value) => value.storageKey || value.content).length +
 			audios.filter((value) => value.storageKey || value.content).length;
@@ -500,6 +507,7 @@ export function NodeActions({
       });
     } finally {
       setConfigGenerating(false);
+      await persistNow();
     }
   };
 
@@ -526,13 +534,11 @@ export function NodeActions({
     }));
   };
 
-  const rewriteText = async () => {
+  const rewriteText = async (instruction: string) => {
     if (!channel || !getProvider(channel, "text").apiKey) {
       alert("请先在设置中配置 API Key");
       return;
     }
-    const instruction = window.prompt("希望如何改写这段文本？", "更具体、更适合生图");
-    if (!instruction) return;
     updateNode(node.id, { metadata: { status: "loading" } });
     try {
       const out = await generateText({
@@ -562,16 +568,11 @@ export function NodeActions({
     }
   };
 
-  const continueFromImage = async () => {
+  const continueFromImage = async (prompt: string) => {
     if (!channelReady(channel, "image")) {
       alert("请先在设置中配置 API Key");
       return;
     }
-    const prompt = window.prompt(
-      node.metadata.content ? "描述如何基于当前图片继续创作" : "生图提示词",
-      node.metadata.content ? "" : node.metadata.prompt || "cinematic still",
-    ) || "";
-    if (!prompt) return;
     try {
       const referenceStorageKeys = node.metadata.storageKey ? [node.metadata.storageKey] : [];
       const generation = createImageGenerationMetadata({
@@ -606,6 +607,7 @@ export function NodeActions({
       const created: BoardNode[] = [];
       for (const [index, url] of urls.entries()) {
         const uploaded = await uploadMedia(url, "image");
+        const display = fitMediaDisplaySize(uploaded.width, uploaded.height, 120, 360);
         created.push(createNode("image", {
           x: node.position.x + node.width + 60,
           y: node.position.y + index * 36,
@@ -621,8 +623,8 @@ export function NodeActions({
             status: "success",
             ...generation,
           },
-          width: Math.min(360, uploaded.width || 320),
-          height: Math.min(360, uploaded.height || 320),
+          width: display.width,
+          height: display.height,
         }));
       }
       updateActive((current) => placeImageGenerationRun(current, {
@@ -636,6 +638,8 @@ export function NodeActions({
       } else {
         alert(err instanceof Error ? err.message : String(err));
       }
+    } finally {
+      await persistNow();
     }
   };
 
@@ -704,6 +708,8 @@ export function NodeActions({
       } });
     } catch (error) {
       updateNode(node.id, { metadata: { status: "error", errorDetails: error instanceof Error ? error.message : String(error) } });
+    } finally {
+      await persistNow();
     }
   };
 
@@ -744,20 +750,11 @@ export function NodeActions({
     }
   };
 
-  const generateOnVideo = async () => {
+  const generateOnVideo = async (prompt: string) => {
     if (!channel || !getProvider(channel, "video").apiKey) {
       alert("请先在设置中配置 API Key");
       return;
     }
-    const prompt =
-      window.prompt(
-        "视频提示词",
-        node.type === "text"
-          ? node.metadata.content || "cinematic short clip"
-          : node.metadata.prompt || "cinematic short clip",
-      ) ||
-      "";
-    if (!prompt) return;
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
     try {
       const upstreamRefs = project
@@ -945,15 +942,11 @@ export function NodeActions({
 
   const inspect = () => setInfoOpen(true);
 
-  const generateOnAudio = async () => {
+  const generateOnAudio = async (prompt: string) => {
     if (!channel || !getProvider(channel, "audio").apiKey) {
       alert("请先在设置中配置 API Key");
       return;
     }
-    const prompt =
-      window.prompt("语音文本", node.metadata.prompt || node.metadata.content || "你好，OpenBoard") ||
-      "";
-    if (!prompt) return;
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
     try {
 		if (serverProviderSupported("audio")) {
@@ -1022,15 +1015,84 @@ export function NodeActions({
     }
   };
 
+  const openRewriteDialog = () => {
+    if (!channel || !getProvider(channel, "text").apiKey) {
+      alert("请先在设置中配置 API Key");
+      return;
+    }
+    setPromptDialog({
+      kind: "rewrite",
+      title: "AI 改写",
+      label: "改写要求",
+      initialValue: "更具体、更适合生图",
+      submitLabel: "开始改写",
+    });
+  };
+
+  const openImageGenerationDialog = () => {
+    if (!channelReady(channel, "image")) {
+      alert("请先在设置中配置 API Key");
+      return;
+    }
+    const continuing = Boolean(node.metadata.content || node.metadata.storageKey);
+    setPromptDialog({
+      kind: "image",
+      title: continuing ? "基于此图继续创作" : "生成图片",
+      label: continuing ? "创作要求" : "生图提示词",
+      initialValue: continuing ? "" : node.metadata.prompt || "cinematic still",
+      placeholder: continuing ? "描述希望基于当前图片进行的修改或延展…" : "描述要生成的图片…",
+      submitLabel: continuing ? "生成新图片" : "生成图片",
+    });
+  };
+
+  const openVideoGenerationDialog = () => {
+    if (!channel || !getProvider(channel, "video").apiKey) {
+      alert("请先在设置中配置 API Key");
+      return;
+    }
+    setPromptDialog({
+      kind: "video",
+      title: "生成视频",
+      label: "视频提示词",
+      initialValue: node.type === "text"
+        ? node.metadata.content || "cinematic short clip"
+        : node.metadata.prompt || "cinematic short clip",
+      submitLabel: "生成视频",
+    });
+  };
+
+  const openAudioGenerationDialog = () => {
+    if (!channel || !getProvider(channel, "audio").apiKey) {
+      alert("请先在设置中配置 API Key");
+      return;
+    }
+    setPromptDialog({
+      kind: "audio",
+      title: "生成语音",
+      label: "语音文本",
+      initialValue: node.metadata.prompt || node.metadata.content || "你好，OpenBoard",
+      submitLabel: "生成语音",
+    });
+  };
+
+  const submitPromptDialog = (value: string) => {
+    const kind = promptDialog?.kind;
+    setPromptDialog(null);
+    if (kind === "rewrite") void rewriteText(value);
+    if (kind === "image") void continueFromImage(value);
+    if (kind === "video") void generateOnVideo(value);
+    if (kind === "audio") void generateOnAudio(value);
+  };
+
   const imageToolbarPreferences = normalizeImageToolbarPreferences(config.imageToolbar);
   const imageToolbarActions = orderedVisibleImageActions(imageToolbarPreferences);
   const imageToolLabel = (label: string) => imageToolbarPreferences.showLabels ? label : undefined;
   const renderImageToolbarAction = (action: ImageToolbarAction) => {
     switch (action) {
       case "generate":
-        return <IconBtn key={action} label={imageToolLabel(node.metadata.content ? "续作" : "生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : node.metadata.content ? "基于此图继续创作" : "生成图片"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : continueFromImage())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(node.metadata.content ? "续作" : "生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : node.metadata.content ? "基于此图继续创作" : "生成图片"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openImageGenerationDialog())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
       case "video":
-        return <IconBtn key={action} label={imageToolLabel("视频")} title="生成视频" onClick={() => void generateOnVideo()}><span className="text-[10px] font-semibold">视频</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel("视频")} title="生成视频" onClick={openVideoGenerationDialog}><span className="text-[10px] font-semibold">视频</span></IconBtn>;
       case "reverse":
         return <IconBtn key={action} label={imageToolLabel("反推")} title="反推提示词" onClick={() => void reversePrompt()}><Type size={14} /></IconBtn>;
       case "crop":
@@ -1095,13 +1157,13 @@ return (
             <IconBtn title="编辑文字" onClick={() => onEditText?.()}>
               <Type size={14} />
             </IconBtn>
-            <IconBtn title="AI 改写" onClick={() => void rewriteText()}>
+            <IconBtn title="AI 改写" onClick={openRewriteDialog}>
               <Wand2 size={14} />
             </IconBtn>
             <IconBtn title="生图" onClick={() => void textToImage()}>
               <ImagePlus size={14} />
             </IconBtn>
-            <IconBtn title="生成视频" onClick={() => void generateOnVideo()}>
+            <IconBtn title="生成视频" onClick={openVideoGenerationDialog}>
               <Sparkles size={14} />
             </IconBtn>
             <IconBtn
@@ -1144,7 +1206,7 @@ return (
           <>
 			<IconBtn
 				title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "生成视频"}
-				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnVideo())}
+				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openVideoGenerationDialog())}
 			>
 			  {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
 			</IconBtn>
@@ -1157,7 +1219,7 @@ return (
           <>
 			<IconBtn
 				title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "语音生成"}
-				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnAudio())}
+				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openAudioGenerationDialog())}
 			>
 			  {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
 			</IconBtn>
@@ -1216,6 +1278,19 @@ return (
       ) : null}
 
       <NodeInfoDialog open={infoOpen} node={node} onClose={() => setInfoOpen(false)} />
+      {promptDialog ? (
+        <TextEntryDialog
+          open
+          title={promptDialog.title}
+          label={promptDialog.label}
+          initialValue={promptDialog.initialValue}
+          placeholder={promptDialog.placeholder}
+          submitLabel={promptDialog.submitLabel}
+          multiline={promptDialog.multiline}
+          onClose={() => setPromptDialog(null)}
+          onSubmit={submitPromptDialog}
+        />
+      ) : null}
 
       {node.type === "image" ? (
         <CropDialog
@@ -1282,6 +1357,12 @@ return (
                 }, context);
             if (!result) throw new Error("所选处理方式不支持此操作");
             const uploaded = await uploadMedia(result.blob, "image");
+            const display = fitMediaDisplaySize(
+              uploaded.width || node.width,
+              uploaded.height || node.height,
+              120,
+              360,
+            );
             placeRight([
               createNode(
                 "image",
@@ -1304,12 +1385,13 @@ return (
                       ...(isCloud ? { prompt } : { mode: keep ? "keep" : "remove" }),
                     }),
                   },
-                  width: Math.min(360, uploaded.width || node.width),
-                  height: Math.min(360, uploaded.height || node.height),
+                  width: display.width,
+                  height: display.height,
                 },
               ),
             ]);
             setImageTool(null);
+            await persistNow();
           }}
           onUpscale={async (scale, providerId, operation, context) => {
             const provider = transformRegistry.get(providerId);
@@ -1322,6 +1404,10 @@ return (
               height: source.height,
             }, context);
             const uploaded = await uploadMedia(result.blob, "image");
+            const display = fitMediaDisplaySize(
+              uploaded.width || node.width,
+              uploaded.height || node.height,
+            );
             placeRight([
               createNode(
                 "image",
@@ -1338,17 +1424,19 @@ return (
                     status: "success",
                     ...createTransformLineage(node.id, operation, result, { scale }),
                   },
-                  width: Math.min(420, uploaded.width || node.width),
-                  height: Math.min(420, uploaded.height || node.height),
+                  width: display.width,
+                  height: display.height,
                 },
               ),
             ]);
             setImageTool(null);
+            await persistNow();
           }}
           onSplit={async (vertical, horizontal) => {
             const created = await splitImageByGuides(node, vertical, horizontal);
             placeRight(created);
             setImageTool(null);
+            await persistNow();
           }}
         />
       ) : null}

@@ -175,6 +175,7 @@ type BoardState = {
   flushConfig: () => Promise<void>;
   setAssets: (assets: AssetItem[]) => void;
   flushAssets: () => Promise<void>;
+  commitAssetUpdate: (update: (assets: AssetItem[]) => AssetItem[]) => Promise<void>;
   setPrompts: (prompts: PromptItem[]) => void;
   flushPrompts: () => Promise<void>;
   addAssetFromNode: (nodeId: string) => Promise<void>;
@@ -1016,6 +1017,18 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   flushAssets: () => assetWrites.flush(),
+
+  commitAssetUpdate: async (update) => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const baseline = get().assets;
+      const next = structuredClone(update(structuredClone(baseline)));
+      await assetWrites.writeExact(next);
+      if (get().assets !== baseline) continue;
+      set({ assets: next });
+      return;
+    }
+    throw new Error("素材列表持续发生变化，请重试");
+  },
 
   setPrompts: (prompts) => {
     const next = structuredClone(prompts);

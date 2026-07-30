@@ -22,7 +22,7 @@ type workflowVariable struct {
 	ID       string          `json:"id"`
 	Kind     string          `json:"kind"`
 	Label    string          `json:"label"`
-	Required bool            `json:"required,omitempty"`
+	Required bool            `json:"required"`
 	Options  []string        `json:"options,omitempty"`
 	Default  json.RawMessage `json:"default,omitempty"`
 	Min      *float64        `json:"min,omitempty"`
