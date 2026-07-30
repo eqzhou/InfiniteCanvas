@@ -45,7 +45,8 @@ describe("OpenAI-compatible image transform provider", () => {
     const form = calls[0]?.init?.body as FormData;
     expect(form.get("model")).toBe("image-model");
     expect(form.get("prompt")).toBe("Keep the edit natural.\n\nreplace the selected area");
-    expect(form.get("image")).toBeInstanceOf(Blob);
+    expect(form.get("image[]")).toBeInstanceOf(Blob);
+    expect(form.get("image")).toBeNull();
     expect(form.get("mask")).toBeInstanceOf(Blob);
     expect(progress).toEqual([...progress].sort((a, b) => a - b));
     expect(progress.at(-1)).toBe(1);

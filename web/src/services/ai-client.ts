@@ -31,6 +31,21 @@ function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
+function imageFileExtension(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    case "image/avif":
+      return "avif";
+    case "image/gif":
+      return "gif";
+    default:
+      return "png";
+  }
+}
+
 async function authFetch(
   channel: AiChannel,
   path: string,
@@ -344,6 +359,9 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
   if (provider.protocol !== "openai") {
     throw new Error(`${provider.protocol} does not support image generation`);
   }
+  if ((model === "gpt-image-2" || model.startsWith("gpt-image-2-")) && transparentBackground) {
+    throw new Error("gpt-image-2 does not support transparent backgrounds");
+  }
 
   if (referenceDataUrls.length > 0 || referenceBlobs.length > 0) {
     const form = new FormData();
@@ -352,16 +370,17 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     form.set("n", String(n));
     form.set("size", size);
     if (quality) form.set("quality", quality);
+    if (transparentBackground) form.set("background", "transparent");
     for (const [i, dataUrl] of referenceDataUrls.entries()) {
       const decoded = decodeBoundedDataUrl(dataUrl, {
         maxBytes: MAX_IMAGE_PROVIDER_RESPONSE_BYTES,
         mimeTypes: ["image/"],
       });
       const blob = new Blob([decoded.bytes], { type: decoded.mimeType });
-      form.append("image", blob, `ref-${i}.png`);
+      form.append("image[]", blob, `ref-${i}.${imageFileExtension(decoded.mimeType)}`);
     }
     for (const [i, blob] of referenceBlobs.entries()) {
-      form.append("image", blob, `ref-${referenceDataUrls.length + i}.png`);
+      form.append("image[]", blob, `ref-${referenceDataUrls.length + i}.${imageFileExtension(blob.type)}`);
     }
     const res = await authFetch(channel, "/images/edits", { method: "POST", body: form, signal }, "image");
     return readImageProviderResults(res, n);

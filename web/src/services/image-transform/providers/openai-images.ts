@@ -132,7 +132,7 @@ function editForm(channel: AiChannel, image: Blob, prompt: string, mask?: Blob):
   const form = new FormData();
   form.set("model", getProvider(channel, "image").model);
   form.set("prompt", prompt);
-  form.set("image", image, imageFileName(image, "image"));
+  form.set("image[]", image, imageFileName(image, "image"));
   if (mask) form.set("mask", mask, "mask.png");
   return form;
 }

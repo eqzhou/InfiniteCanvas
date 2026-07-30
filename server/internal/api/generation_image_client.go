@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/textproto"
 	"net/url"
 	"path"
 	"strconv"
@@ -144,6 +146,9 @@ func (e *openAIImageExecutor) generateTemplate(ctx context.Context, request imag
 }
 
 func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
+	if isGPTImage2(request.Model) && request.TransparentBackground {
+		return nil, errors.New("gpt-image-2 does not support transparent backgrounds")
+	}
 	endpoint, err := imageProviderEndpoint(request.BaseURL, len(request.References) > 0)
 	if err != nil {
 		return nil, err
@@ -163,9 +168,24 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 				}
 			}
 		}
+		if request.TransparentBackground {
+			if err := writer.WriteField("background", "transparent"); err != nil {
+				return nil, err
+			}
+		}
 		for index, reference := range request.References {
-			extension := imageExtension(reference.MIMEType)
-			part, err := writer.CreateFormFile("image", fmt.Sprintf("ref-%d%s", index, extension))
+			mimeType := sniffGeneratedImageMIME(reference.Data)
+			if mimeType == "" {
+				return nil, errors.New("reference image has an unsupported content type")
+			}
+			extension := imageExtension(mimeType)
+			filename := fmt.Sprintf("ref-%d%s", index, extension)
+			header := make(textproto.MIMEHeader)
+			header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
+				"name": "image[]", "filename": filename,
+			}))
+			header.Set("Content-Type", mimeType)
+			part, err := writer.CreatePart(header)
 			if err != nil {
 				return nil, err
 			}
@@ -494,6 +514,11 @@ func readBounded(reader io.Reader, maximum int64) ([]byte, error) {
 		return nil, errors.New("image provider response exceeds size limit")
 	}
 	return value, nil
+}
+
+func isGPTImage2(model string) bool {
+	model = strings.TrimSpace(model)
+	return model == "gpt-image-2" || strings.HasPrefix(model, "gpt-image-2-")
 }
 
 func imageExtension(mimeType string) string {

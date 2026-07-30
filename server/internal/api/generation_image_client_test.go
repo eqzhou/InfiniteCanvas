@@ -104,7 +104,8 @@ func TestOpenAIImageExecutorEditsUseMultipartReferences(t *testing.T) {
 		}
 		reader := multipart.NewReader(r.Body, params["boundary"])
 		fields := map[string]string{}
-		imageParts := 0
+		imageArrayParts := 0
+		legacyImageParts := 0
 		for {
 			part, nextErr := reader.NextPart()
 			if nextErr == io.EOF {
@@ -114,29 +115,60 @@ func TestOpenAIImageExecutorEditsUseMultipartReferences(t *testing.T) {
 				t.Fatal(nextErr)
 			}
 			value, _ := io.ReadAll(part)
-			if part.FormName() == "image" {
-				imageParts++
+			switch part.FormName() {
+			case "image[]":
+				imageArrayParts++
+				if part.Header.Get("Content-Type") != "image/png" {
+					t.Errorf("image content type = %q", part.Header.Get("Content-Type"))
+				}
 				if !strings.HasSuffix(part.FileName(), ".png") || string(value) != string(png) {
 					t.Errorf("image part = %q %d", part.FileName(), len(value))
 				}
-			} else {
+			case "image":
+				legacyImageParts++
+			default:
 				fields[part.FormName()] = string(value)
 			}
 		}
-		if fields["prompt"] != "edit it" || fields["model"] != "gpt-image-1" || imageParts != 1 {
-			t.Errorf("fields = %#v, image parts = %d", fields, imageParts)
+		if fields["prompt"] != "edit it" || fields["model"] != "gpt-image-1.5" ||
+			fields["background"] != "transparent" || imageArrayParts != 2 || legacyImageParts != 0 {
+			t.Errorf("fields = %#v, image[] parts = %d, legacy image parts = %d", fields, imageArrayParts, legacyImageParts)
 		}
 		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+onePixelPNGBase64()+`"}]}`)
 	}))
 	defer upstream.Close()
 
 	images, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
-		BaseURL: upstream.URL + "/v1", APIKey: "sk-test", Model: "gpt-image-1",
+		BaseURL: upstream.URL + "/v1", APIKey: "sk-test", Model: "gpt-image-1.5",
 		Prompt: "edit it", Size: "1024x1024", Quality: "auto", Count: 1,
-		References: []generatedImage{{Data: png, MIMEType: "image/png"}},
+		TransparentBackground: true,
+		References: []generatedImage{
+			{Data: png, MIMEType: "image/png"},
+			{Data: png},
+		},
 	})
 	if err != nil || len(images) != 1 {
 		t.Fatalf("images = %#v, %v", images, err)
+	}
+}
+
+func TestOpenAIImageExecutorRejectsTransparentGPTImage2BeforeRequest(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	defer upstream.Close()
+
+	_, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
+		BaseURL: upstream.URL + "/v1", Model: "gpt-image-2",
+		Prompt: "draw a logo", Size: "1024x1024", Quality: "auto", Count: 1,
+		TransparentBackground: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support transparent") {
+		t.Fatalf("error = %v, want transparent background validation", err)
+	}
+	if requests != 0 {
+		t.Fatalf("provider requests = %d, want 0", requests)
 	}
 }
 

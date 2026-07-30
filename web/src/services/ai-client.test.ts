@@ -259,6 +259,99 @@ describe("generateVideo provider contracts", () => {
     expect(body.background).toBe("transparent");
   });
 
+  test("uses the OpenAI generations endpoint for text-to-image requests", async () => {
+    const requests: Array<{ url: string; method?: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method,
+        body: JSON.parse(String(init?.body)),
+      });
+      return json({ data: [{ url: "https://cdn.example/generated.png" }] });
+    }) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "draw a lighthouse",
+      size: "1536x1024",
+      quality: "high",
+      n: 2,
+    })).resolves.toEqual(["https://cdn.example/generated.png"]);
+
+    expect(requests).toEqual([{
+      url: "https://api.example/v1/images/generations",
+      method: "POST",
+      body: {
+        model: "gpt-image-1",
+        prompt: "draw a lighthouse",
+        n: 2,
+        size: "1536x1024",
+        quality: "high",
+      },
+    }]);
+  });
+
+  test("uses the OpenAI edits endpoint and image[] multipart fields for image-to-image requests", async () => {
+    const requests: Array<{ url: string; method?: string; body: FormData }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method,
+        body: init?.body as FormData,
+      });
+      return json({ data: [{ url: "https://cdn.example/edited.png" }] });
+    }) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "add a rainbow",
+      size: "1024x1024",
+      quality: "medium",
+      referenceDataUrls: ["data:image/jpeg;base64,cGl4ZWw="],
+      referenceBlobs: [new Blob(["second reference"], { type: "image/webp" })],
+      transparentBackground: true,
+    })).resolves.toEqual(["https://cdn.example/edited.png"]);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe("https://api.example/v1/images/edits");
+    expect(requests[0]?.method).toBe("POST");
+
+    const body = requests[0]?.body;
+    expect(body).toBeInstanceOf(FormData);
+    expect(body?.get("model")).toBe("gpt-image-1");
+    expect(body?.get("prompt")).toBe("add a rainbow");
+    expect(body?.get("n")).toBe("1");
+    expect(body?.get("size")).toBe("1024x1024");
+    expect(body?.get("quality")).toBe("medium");
+    expect(body?.get("background")).toBe("transparent");
+    const references = body?.getAll("image[]") as File[];
+    expect(references).toHaveLength(2);
+    expect(body?.getAll("image")).toHaveLength(0);
+    expect(references.every((entry) => entry instanceof Blob)).toBe(true);
+    expect(references.map((entry) => ({ name: entry.name, type: entry.type }))).toEqual([
+      { name: "ref-0.jpg", type: "image/jpeg" },
+      { name: "ref-1.webp", type: "image/webp" },
+    ]);
+  });
+
+  test("rejects transparent background for gpt-image-2 before contacting OpenAI", async () => {
+    let requests = 0;
+    globalThis.fetch = mock(async () => {
+      requests += 1;
+      return json({ data: [] });
+    }) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-2",
+      prompt: "draw a transparent logo",
+      transparentBackground: true,
+    })).rejects.toThrow("does not support transparent");
+    expect(requests).toBe(0);
+  });
+
   test("executes a synchronous declarative video relay", async () => {
     globalThis.fetch = mock(async (_input, init) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({ prompt: "motion", duration: 6 });
