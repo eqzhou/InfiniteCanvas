@@ -60,6 +60,34 @@ async function waitForFormalChannel(
   }).toBe(true);
 }
 
+async function saveFormalConfig(
+  request: APIRequestContext,
+  config: unknown,
+  apiKeys: Record<string, Record<string, string>>,
+) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await request.get("/api/config");
+    const headers: Record<string, string> = {};
+    if (current.status() === 404) {
+      headers["If-None-Match"] = "*";
+    } else {
+      await expect(current).toBeOK();
+      const etag = current.headers().etag;
+      expect(etag).toBeTruthy();
+      headers["If-Match"] = etag;
+    }
+    const saved = await request.put("/api/config", {
+      headers,
+      data: { config, secrets: { apiKeys, webdavPass: "" } },
+    });
+    if (saved.status() === 204) return;
+    if (saved.status() !== 412 || attempt === 2) {
+      expect(saved.status()).toBe(204);
+    }
+  }
+  throw new Error("Config save exhausted its bounded conflict retries");
+}
+
 async function openHydratedSurface(page: Page, path: string, channelId: string) {
   await page.goto(path);
   await expect(page.getByTitle("设置")).toBeVisible();
@@ -200,10 +228,9 @@ test("formal restricted Template image jobs survive reload", async ({ page, requ
   // Let the initial server hydrate and any default-workspace writes settle
   // before seeding credentials through the formal API client.
   await page.waitForTimeout(500);
-  expect((await request.put("/api/state/config", { data: config })).status()).toBe(204);
-  expect((await request.put("/api/secrets/config", {
-    data: { apiKeys: { "formal-template": { image: "template-formal-secret" } }, webdavPass: "" },
-  })).status()).toBe(204);
+  await saveFormalConfig(request, config, {
+    "formal-template": { image: "template-formal-secret" },
+  });
   await openHydratedSurface(page, "/workbench/image", "formal-template");
   await expect.poll(async () => {
     const response = await request.get("/api/secrets/config");
@@ -284,10 +311,9 @@ test("formal restricted Template video jobs survive reload", async ({ page, requ
     imageSize: "1024x1024", imageQuality: "auto", imageCount: 1, theme: "light",
   };
   await settleInitialSurface(page, "/workbench/video");
-  expect((await request.put("/api/state/config", { data: config })).status()).toBe(204);
-  expect((await request.put("/api/secrets/config", {
-    data: { apiKeys: { "formal-template-video": { video: "template-video-secret" } }, webdavPass: "" },
-  })).status()).toBe(204);
+  await saveFormalConfig(request, config, {
+    "formal-template-video": { video: "template-video-secret" },
+  });
   await waitForFormalChannel(request, "formal-template-video", "template-video-secret");
   templateVideoProviderRequest = undefined;
   blockTemplateVideo = true;
@@ -353,10 +379,9 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
     activeChannelId: "formal-gemini", systemPrompt: "formal system image rule",
     imageSize: "1024x1024", imageQuality: "auto", imageCount: 2, theme: "light",
   };
-  expect((await request.put("/api/state/config", { data: config })).status()).toBe(204);
-  expect((await request.put("/api/secrets/config", {
-    data: { apiKeys: { "formal-gemini": { image: "gemini-formal-secret" } }, webdavPass: "" },
-  })).status()).toBe(204);
+  await saveFormalConfig(request, config, {
+    "formal-gemini": { image: "gemini-formal-secret" },
+  });
   geminiProviderRequests = [];
   blockGemini = true;
   let startedResolve: (() => void) | undefined;
@@ -370,8 +395,10 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
   const rootId = await root.getAttribute("data-node-id");
   expect(rootId).toBeTruthy();
   await root.locator("[data-node-header]").click();
-  page.once("dialog", (dialog) => dialog.accept("durable Gemini canvas batch"));
-  await root.getByTitle("生成/重试").click();
+  await root.getByTitle("生成图片").click();
+  const generationDialog = page.getByRole("dialog", { name: "生成图片" });
+  await generationDialog.getByLabel("生图提示词").fill("durable Gemini canvas batch");
+  await generationDialog.getByRole("button", { name: "生成图片", exact: true }).click();
   try {
     await Promise.race([
       started,
@@ -389,24 +416,63 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
       generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
     },
   });
-  await expect(page.locator('[data-node-type="image"]')).toHaveCount(3);
+  let jobId = "";
+  await expect.poll(async () => {
+    const response = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
+    const jobs = await response.json() as {
+      items: Array<{ id: string; prompt: string; parameters?: { count?: number } }>;
+    };
+    const job = jobs.items.find((item) =>
+      item.prompt === "formal system image rule\n\ndurable Gemini canvas batch" ||
+      item.prompt === "durable Gemini canvas batch");
+    jobId = job?.id ?? "";
+    return job?.parameters?.count;
+  }).toBe(2);
+  const persistedPlaceholderIndexes = async () => {
+    const response = await request.get(`/api/projects/${encodeURIComponent(projectId)}`);
+    const project = await response.json() as {
+      nodes?: Array<{ metadata?: { generationJobId?: string; generationResultIndex?: number } }>;
+    };
+    return [...new Set(project.nodes
+      ?.filter((item) =>
+        item.metadata?.generationJobId === jobId &&
+        Number.isInteger(item.metadata.generationResultIndex))
+      .map((item) => item.metadata!.generationResultIndex!) ?? [])]
+      .sort((left, right) => left - right)
+      .join(",");
+  };
+  await expect.poll(persistedPlaceholderIndexes).toBe("0,1");
   await page.reload();
-  await expect(page.locator('[data-node-type="image"]')).toHaveCount(3);
+  await expect.poll(persistedPlaceholderIndexes).toBe("0,1");
   blockGemini = false;
   releaseGemini?.();
   releaseGemini = undefined;
-  const resultImages = page.locator(`[data-node-type="image"]:not([data-node-id="${rootId}"]) img`);
-  await expect(resultImages).toHaveCount(2, { timeout: 20_000 });
-  expect(geminiProviderRequests).toHaveLength(2);
 
+  await expect.poll(async () => {
+    const jobs = await (await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20")).json() as {
+      items: Array<{ id: string; status: string }>;
+    };
+    return jobs.items.find((item) => item.id === jobId)?.status;
+  }, { timeout: 20_000 }).toBe("succeeded");
   const jobsResponse = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
   const jobs = await jobsResponse.json() as { items: Array<{ id: string; prompt: string; status: string; result: { items?: Array<{ storageKey: string }> } }> };
-  const job = jobs.items.find((item) => item.prompt === "formal system image rule\n\ndurable Gemini canvas batch" || item.prompt === "durable Gemini canvas batch");
-  expect(job).toMatchObject({ status: "succeeded" });
+  const job = jobs.items.find((item) => item.id === jobId);
+  expect(job).toMatchObject({ id: jobId, status: "succeeded" });
   expect(job?.result.items).toHaveLength(2);
-  expect(new Set(job?.result.items?.map(({ storageKey }) => storageKey)).size).toBe(2);
+  const resultStorageKeys = [...new Set(job?.result.items?.map(({ storageKey }) => storageKey) ?? [])].sort();
+  expect(resultStorageKeys).toHaveLength(2);
+  expect(geminiProviderRequests).toHaveLength(2);
   await page.reload();
-  await expect(page.locator(`[data-node-type="image"]:not([data-node-id="${rootId}"]) img`)).toHaveCount(2);
+  await expect.poll(async () => {
+    const response = await request.get(`/api/projects/${encodeURIComponent(projectId)}`);
+    const project = await response.json() as {
+      nodes?: Array<{ metadata?: { generationJobId?: string; storageKey?: string } }>;
+    };
+    return [...new Set(project.nodes
+      ?.filter((item) =>
+        item.metadata?.generationJobId === jobId && Boolean(item.metadata.storageKey))
+      .map((item) => item.metadata!.storageKey!) ?? [])].sort();
+  }).toEqual(resultStorageKeys);
 
   expect((await request.put(`/api/projects/${encodeURIComponent(projectId)}`, { data: baseline })).status()).toBe(204);
   for (const item of job?.result.items ?? []) expect((await request.delete(`/api/blobs/${encodeURIComponent(item.storageKey)}`)).status()).toBe(204);
@@ -514,10 +580,9 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 		activeChannelId: "formal-media", systemPrompt: "", imageSize: "1024x1024",
 		imageQuality: "auto", imageCount: 1, theme: "light",
 	};
-	expect((await request.put("/api/state/config", { data: config })).status()).toBe(204);
-	expect((await request.put("/api/secrets/config", {
-		data: { apiKeys: { "formal-media": { video: "sk-video-formal", audio: "sk-audio-formal" } }, webdavPass: "" },
-	})).status()).toBe(204);
+	await saveFormalConfig(request, config, {
+		"formal-media": { video: "sk-video-formal", audio: "sk-audio-formal" },
+	});
 
 	let videoStartedResolve: (() => void) | undefined;
 	const videoStarted = new Promise<void>((resolve) => { videoStartedResolve = resolve; });
@@ -603,12 +668,9 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
     imageQuality: "auto", imageCount: 1, theme: "light",
   };
   await settleInitialSurface(page, "/workbench/image");
-  const savedConfig = await request.put("/api/state/config", { data: config });
-  expect(savedConfig.status()).toBe(204);
-  const savedSecrets = await request.put("/api/secrets/config", {
-    data: { apiKeys: { "formal-image": { image: "sk-formal-private" } }, webdavPass: "" },
+  await saveFormalConfig(request, config, {
+    "formal-image": { image: "sk-formal-private" },
   });
-  expect(savedSecrets.status()).toBe(204);
   await waitForFormalChannel(request, "formal-image", "sk-formal-private");
 
   let imageStartedResolve: (() => void) | undefined;
@@ -651,7 +713,7 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await expect(page.getByRole("button", { name: "拉取视频模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取音频模型" })).toBeVisible();
   const encryptionNotice = page.getByText(
-    "API Key 与对象存储密钥经本地服务加密后存入 PostgreSQL，数据库中不保存明文。",
+    "API Key 与对象存储密钥经服务端加密后存入 PostgreSQL，数据库中不保存明文。",
     { exact: false },
   );
   await encryptionNotice.scrollIntoViewIfNeeded();
@@ -812,10 +874,9 @@ test("formal workflow survives reload, checkpoints steps, and exposes image chil
     activeChannelId: "formal-image", systemPrompt: "", imageSize: "1024x1024",
     imageQuality: "auto", imageCount: 1, theme: "light",
   };
-  expect((await request.put("/api/state/config", { data: config })).status()).toBe(204);
-  expect((await request.put("/api/secrets/config", {
-    data: { apiKeys: { "formal-image": { image: "sk-formal-private" } }, webdavPass: "" },
-  })).status()).toBe(204);
+  await saveFormalConfig(request, config, {
+    "formal-image": { image: "sk-formal-private" },
+  });
 
   const timestamp = "2026-07-24T00:00:00.000Z";
   const template = {
