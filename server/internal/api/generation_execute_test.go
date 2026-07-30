@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -339,6 +341,9 @@ func TestImageGenerationFailureMessage(t *testing.T) {
 		{name: "rate limited", err: &imageProviderHTTPError{StatusCode: http.StatusTooManyRequests}, want: "模型服务请求过于频繁（HTTP 429），请稍后重试"},
 		{name: "gateway timeout", err: &imageProviderHTTPError{StatusCode: http.StatusGatewayTimeout}, want: "图片生成请求超时（HTTP 504），请稍后重试或增大渠道超时时间"},
 		{name: "context deadline", err: context.DeadlineExceeded, want: "图片生成请求超时，请稍后重试或增大渠道超时时间"},
+		{name: "wrapped context deadline", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: context.DeadlineExceeded}, want: "图片生成请求超时，请稍后重试或增大渠道超时时间"},
+		{name: "network timeout", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: &net.DNSError{Err: "timeout", Name: "provider.example", IsTimeout: true}}, want: "连接模型服务超时，请检查网络或增大渠道超时时间"},
+		{name: "network failure", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: errors.New("connection reset")}, want: "连接模型服务失败，请检查服务 URL 和网络"},
 		{name: "unknown status", err: &imageProviderHTTPError{StatusCode: http.StatusTeapot}, want: "图片生成失败（模型服务 HTTP 418）"},
 		{name: "unknown error stays private", err: errors.New("provider failed with sk-private"), want: "图片生成失败，请检查模型服务配置后重试"},
 	}
@@ -348,6 +353,29 @@ func TestImageGenerationFailureMessage(t *testing.T) {
 				t.Fatalf("imageGenerationFailureMessage() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestImageGenerationFailureLogDetailIdentifiesNetworkCauseWithoutURL(t *testing.T) {
+	err := &url.Error{
+		Op:  "Post",
+		URL: "https://provider.example/v1/images/edits?api_key=sk-private",
+		Err: &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: &net.DNSError{
+				Err:       "timeout",
+				Name:      "provider.example",
+				IsTimeout: true,
+			},
+		},
+	}
+	detail := imageGenerationFailureLogDetail(err)
+	if !strings.Contains(detail, "network timeout") || !strings.Contains(detail, "*net.DNSError") {
+		t.Fatalf("network detail = %q", detail)
+	}
+	if strings.Contains(detail, "provider.example") || strings.Contains(detail, "sk-private") {
+		t.Fatalf("network detail leaked provider URL: %q", detail)
 	}
 }
 

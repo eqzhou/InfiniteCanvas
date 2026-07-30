@@ -55,7 +55,7 @@ func newProviderHTTPClientWithResponseHeaderTimeout(
 		MaxIdleConns:          16,
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
+		TLSHandshakeTimeout:   0,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 		ExpectContinueTimeout: time.Second,
 	}

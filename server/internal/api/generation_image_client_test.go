@@ -12,6 +12,7 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,8 +29,57 @@ func TestImageProviderTransportUsesRequestContextDeadline(t *testing.T) {
 	if transport.ResponseHeaderTimeout != 0 {
 		t.Fatalf("response header timeout = %s, want request context deadline", transport.ResponseHeaderTimeout)
 	}
+	if transport.TLSHandshakeTimeout != 0 {
+		t.Fatalf("TLS handshake timeout = %s, want request context deadline", transport.TLSHandshakeTimeout)
+	}
 	if executor.client.Timeout != 10*time.Minute {
 		t.Fatalf("client timeout = %s, want defensive 10 minute cap", executor.client.Timeout)
+	}
+	if dialer := newGenerationProviderDialer(); dialer.Timeout != 0 {
+		t.Fatalf("dial timeout = %s, want request context deadline", dialer.Timeout)
+	}
+}
+
+func TestImageProviderTransportCancelsAStalledTLSHandshakeWithRequestContext(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- connection
+		}
+	}()
+
+	requestCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		requestCtx,
+		http.MethodGet,
+		"https://"+listener.Addr().String()+"/v1/models",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startedAt := time.Now()
+	_, requestErr := newProviderHTTPClient(10 * time.Minute).Do(request)
+	if !errors.Is(requestErr, context.DeadlineExceeded) {
+		t.Fatalf("request error = %v, want context deadline exceeded", requestErr)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("stalled TLS handshake ignored request deadline: %s", elapsed)
+	}
+
+	select {
+	case connection := <-accepted:
+		_ = connection.Close()
+	default:
 	}
 }
 

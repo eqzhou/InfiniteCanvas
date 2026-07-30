@@ -487,8 +487,12 @@ func safeGenerationDialContext(ctx context.Context, network, address string) (ne
 	if !selected.IsValid() {
 		return nil, errors.New("image provider resolved to a blocked network address")
 	}
-	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+	dialer := newGenerationProviderDialer()
 	return dialer.DialContext(ctx, network, net.JoinHostPort(selected.String(), port))
+}
+
+func newGenerationProviderDialer() *net.Dialer {
+	return &net.Dialer{KeepAlive: 30 * time.Second}
 }
 
 func isUnsafeGenerationAddress(address netip.Addr) bool {

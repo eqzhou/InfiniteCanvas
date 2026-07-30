@@ -13,6 +13,7 @@ import (
 	_ "image/png"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -54,6 +55,13 @@ func imageGenerationFailureMessage(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "图片生成请求超时，请稍后重试或增大渠道超时时间"
 	}
+	var networkErr *url.Error
+	if errors.As(err, &networkErr) {
+		if networkErr.Timeout() {
+			return "连接模型服务超时，请检查网络或增大渠道超时时间"
+		}
+		return "连接模型服务失败，请检查服务 URL 和网络"
+	}
 	statusCode, ok := imageProviderStatusCode(err)
 	if !ok {
 		return "图片生成失败，请检查模型服务配置后重试"
@@ -80,10 +88,25 @@ func imageGenerationFailureLogDetail(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "deadline exceeded"
 	}
+	var networkErr *url.Error
+	if errors.As(err, &networkErr) {
+		category := "network error"
+		if networkErr.Timeout() {
+			category = "network timeout"
+		}
+		return fmt.Sprintf("%s (%T)", category, innermostError(networkErr.Err))
+	}
 	if statusCode, ok := imageProviderStatusCode(err); ok {
 		return fmt.Sprintf("HTTP %d", statusCode)
 	}
 	return fmt.Sprintf("error type %T", err)
+}
+
+func innermostError(err error) error {
+	if next := errors.Unwrap(err); next != nil {
+		return innermostError(next)
+	}
+	return err
 }
 
 type imageGenerationRequest struct {
