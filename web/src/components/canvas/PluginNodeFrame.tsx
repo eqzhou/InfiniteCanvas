@@ -1,4 +1,13 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { buildPluginDocument, isPluginReadyMessage, parsePluginPatchMessage } from "@/lib/plugin-runtime";
 import { executePluginHostRequest, type PluginHostContext } from "@/lib/plugin-host-executor";
 import { parsePluginHostRequest } from "@/lib/plugin-host";
@@ -45,8 +54,19 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
   const quotaRef = useRef(createPluginQuota(performance.now()));
   const pendingPatchRef = useRef<{ title?: string; state?: Record<string, unknown> } | null>(null);
   const patchFrameRef = useRef<number | null>(null);
+  const sendInitialState = useCallback((frameWindow: Window) => {
+    const current = nodeRef.current;
+    frameWindow.postMessage({
+      type: "openboard:init",
+      nonce,
+      pluginId: manifest.id,
+      state: manifest.permissions.includes("node:read")
+        ? { title: current.title, state: current.metadata.pluginState ?? {} }
+        : {},
+    }, "*");
+  }, [manifest.id, manifest.permissions, nonce]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     nodeRef.current = node;
   }, [node]);
 
@@ -232,15 +252,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
       const frameWindow = frameRef.current?.contentWindow;
       if (!frameWindow || event.source !== frameWindow) return;
       if (isPluginReadyMessage(event.data, nonce, manifest.id)) {
-        const current = nodeRef.current;
-        frameWindow.postMessage({
-          type: "openboard:init",
-          nonce,
-          pluginId: manifest.id,
-          state: manifest.permissions.includes("node:read")
-            ? { title: current.title, state: current.metadata.pluginState ?? {} }
-            : {},
-        }, "*");
+        sendInitialState(frameWindow);
         return;
       }
       if (!consumeMessage(event.data)) return;
@@ -301,7 +313,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
       window.removeEventListener("message", receive);
       if (patchFrameRef.current !== null) cancelAnimationFrame(patchFrameRef.current);
     };
-  }, [manifest, nonce, updateNode, persistNow]);
+  }, [manifest, nonce, updateNode, persistNow, sendInitialState]);
 
   if (quarantined) {
     return (
@@ -313,11 +325,16 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
 
   return (
     <iframe
+      key={`${manifest.id}:${manifest.version}`}
       ref={frameRef}
       title={`${manifest.name} 插件`}
       sandbox="allow-scripts"
       srcDoc={sourceDocument}
       className="h-full w-full border-0 bg-transparent"
+      onLoad={() => {
+        const frameWindow = frameRef.current?.contentWindow;
+        if (frameWindow) sendInitialState(frameWindow);
+      }}
       onPointerDown={(event) => event.stopPropagation()}
     />
   );

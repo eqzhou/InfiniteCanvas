@@ -51,6 +51,8 @@ describe("plugin runtime boundary", () => {
     expect(document).toContain("default-src 'none'");
     expect(document).toContain("connect-src 'none'");
     expect(document).toContain("nonce-123");
+    expect(document).toContain("setInterval(announceReady,50)");
+    expect(document).toContain("ready:function(){if(initialized)return;announceReady()");
     expect(document).not.toContain("allow-same-origin");
   });
 

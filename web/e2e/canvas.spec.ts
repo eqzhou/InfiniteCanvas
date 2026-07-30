@@ -269,6 +269,21 @@ async function expectPluginEnabledStateStored(page: Page, pluginId: string, enab
   }).toBe(true);
 }
 
+async function expectPluginStateStored(
+  page: Page,
+  pluginId: string,
+  expectedState: Record<string, unknown>,
+) {
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    return projects.some((project) => project?.nodes?.some(
+      (node: { metadata?: { pluginId?: string; pluginState?: Record<string, unknown> } }) =>
+        node.metadata?.pluginId === pluginId &&
+        JSON.stringify(node.metadata.pluginState ?? {}) === JSON.stringify(expectedState),
+    ));
+  }, { timeout: 15_000 }).toBe(true);
+}
+
 async function setPluginEnabledAndWaitForSave(toggle: Locator, enabled: boolean) {
   await toggle.evaluate((element, expectedEnabled) => new Promise<void>((resolve, reject) => {
     const button = element as HTMLButtonElement;
@@ -2780,15 +2795,16 @@ test("a sandboxed plugin node persists its state across reloads", async ({ page 
   const note = page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容");
   await expect(note).toBeVisible();
   await note.fill("plugin state from Playwright");
-  // Sticky note patches via openboard.patch; wait for host-roundtrip + persist.
-  await expect
-    .poll(async () => page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容").inputValue(), {
-      timeout: 15_000,
-    })
-    .toBe("plugin state from Playwright");
-  await page.waitForTimeout(400);
+  // The iframe value changes before the host receives openboard.patch. Confirm
+  // the durable project write before exercising reload behavior.
+  await expectPluginStateStored(page, "openboard.sticky-note", {
+    text: "plugin state from Playwright",
+  });
 
-  await page.reload();
+  // Leave the document so WebKit cannot satisfy the assertion by restoring
+  // the previous iframe form control; the returning iframe must receive init.
+  await page.goto("/plugins");
+  await page.goto("/");
   await expect(
     page.frameLocator('iframe[title="便签 插件"]').getByLabel("便签内容"),
   ).toHaveValue("plugin state from Playwright", { timeout: 15_000 });
