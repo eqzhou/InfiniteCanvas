@@ -2,6 +2,14 @@ import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { Layers, Star } from "lucide-react";
 
+export function batchResultCount(
+  metadata: Pick<BoardNode["metadata"], "content" | "generationRunId" | "batchChildIds">,
+  childCount: number,
+): number {
+  const rootIsPreview = Boolean(metadata.generationRunId && metadata.batchChildIds?.length);
+  return childCount + (!rootIsPreview && metadata.content ? 1 : 0);
+}
+
 /** Controls for multi-result image batches (stack / expand / primary). */
 export function BatchGroupControls({ node }: { node: BoardNode }) {
   const project = useBoardStore((s) => s.getActive());
@@ -20,6 +28,7 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
   const expanded = root.metadata.imageBatchExpanded !== false;
   const primaryId = root.metadata.primaryImageId ?? childIds[0];
   const panoramaBatch = root.type === "panorama";
+  const rootIsPreview = Boolean(root.metadata.generationRunId && childIds.length);
 
   const toggleExpand = () => {
     updateActive((p) => {
@@ -73,7 +82,7 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
       onPointerDown={(e) => e.stopPropagation()}
     >
       <span className="px-1 text-[var(--ob-muted)]">
-        {panoramaBatch ? "全景组" : "组"} {children.length + (root.metadata.content ? 1 : 0)}
+        {panoramaBatch ? "全景组" : "组"} {batchResultCount(root.metadata, children.length)}
       </span>
       <button
         type="button"
@@ -84,7 +93,7 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
         <Layers size={12} />
         {expanded ? "收起" : "展开"}
       </button>
-      {isChild || (isRoot && node.metadata.content) ? (
+      {isChild || (isRoot && node.metadata.content && !rootIsPreview) ? (
         <button
           type="button"
           className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--ob-accent-soft)] ${

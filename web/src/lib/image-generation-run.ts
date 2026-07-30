@@ -23,12 +23,14 @@ export function placeImageGenerationRun(
   const source = project.nodes.find((node) => node.id === sourceId);
   if (!source || results.length < 1) throw new Error("Image generation run is missing its source or results");
 
-  const [firstResult, ...restResults] = results;
+  const [firstResult] = results;
   const runId = firstResult.metadata.generationRunId ?? uid("run");
   const isReusableEmptyImage = reuseEmptyImageTarget && source.type === "image" &&
     !source.metadata.content && !source.metadata.storageKey;
-  const batchRootId = isReusableEmptyImage ? source.id : firstResult.id;
-  const childIds = restResults.map((node) => node.id);
+  const isBatch = results.length > 1;
+  const batchRootId = isReusableEmptyImage ? source.id : isBatch ? uid("image") : firstResult.id;
+  const childResults = isBatch ? [...results] : [];
+  const childIds = childResults.map((node) => node.id);
   const sourceConfig = source.type === "config" ? source.id : undefined;
   const runMetadata = (metadata: NodeMetadata, isRoot = false): NodeMetadata => ({
     ...metadata,
@@ -37,11 +39,11 @@ export function placeImageGenerationRun(
     ...(isRoot && childIds.length > 0 ? {
       isBatchRoot: true,
       batchChildIds: childIds,
-      primaryImageId: batchRootId,
+      primaryImageId: childIds[0],
       imageBatchExpanded: true,
     } : {}),
   });
-  const normalizedChildren = restResults.map((result) => ({
+  const normalizedChildren = childResults.map((result) => ({
     ...result,
     metadata: {
       ...runMetadata(result.metadata),
@@ -61,10 +63,17 @@ export function placeImageGenerationRun(
           ...sourceMetadata,
         },
       }
-    : {
-        ...firstResult,
-        metadata: runMetadata(firstResult.metadata, true),
-      };
+    : isBatch
+      ? {
+          ...firstResult,
+          id: batchRootId,
+          title: "生成结果组",
+          metadata: runMetadata(firstResult.metadata, true),
+        }
+      : {
+          ...firstResult,
+          metadata: runMetadata(firstResult.metadata),
+        };
 
   return {
     ...project,

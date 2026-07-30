@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertResolvedImageReferences,
+  canRetryImageResult,
   createImageGenerationMetadata,
 } from "./image-generation";
 
@@ -15,6 +16,7 @@ describe("image generation lineage", () => {
       count: 3,
       transparentBackground: true,
       referenceStorageKeys,
+      generationChannelId: "channel-one",
     });
 
     expect(metadata).toEqual({
@@ -26,6 +28,7 @@ describe("image generation lineage", () => {
       transparentBackground: true,
       generationType: "image-to-image",
       referenceStorageKeys: ["image:one", "image:two"],
+      generationChannelId: "channel-one",
     });
     expect(metadata.referenceStorageKeys).not.toBe(referenceStorageKeys);
   });
@@ -56,5 +59,16 @@ describe("image generation lineage", () => {
     });
     expect(metadata.cameraPrompt).toEqual(cameraPrompt);
     expect(metadata.cameraPrompt).not.toBe(cameraPrompt);
+  });
+
+  test("only failed leaf results expose an in-place retry", () => {
+    expect(canRetryImageResult({ status: "error", prompt: "retry me" })).toBe(true);
+    expect(canRetryImageResult({ status: "success", prompt: "already done" })).toBe(false);
+    expect(canRetryImageResult({
+      status: "error",
+      prompt: "failed batch preview",
+      isBatchRoot: true,
+      batchChildIds: ["result-1"],
+    })).toBe(false);
   });
 });

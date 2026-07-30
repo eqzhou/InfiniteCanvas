@@ -206,9 +206,10 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           count: config.imageCount,
           transparentBackground: Boolean(node.metadata.transparentBackground),
           referenceStorageKeys,
+          generationChannelId: channel.id,
           cameraPrompt: node.metadata.cameraPrompt,
         });
-        generation.requestPrompt = applyCameraPrompt(generation.prompt, generation.cameraPrompt);
+        const requestPrompt = applyCameraPrompt(generation.prompt, generation.cameraPrompt);
         const provider = getProvider(channel, "image");
         if (usesServerGenerationJobs() && (provider.protocol === "openai" || provider.protocol === "gemini" ||
             (provider.protocol === "template" && Boolean(provider.template))) &&
@@ -228,7 +229,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
             await createServerImageGenerationJob({
               id: jobId,
               projectId: project?.id,
-              prompt: generation.requestPrompt,
+              prompt: requestPrompt,
               providerId: channel.id,
               model: generation.model,
               parameters: {
@@ -262,7 +263,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         const urls = await generateImages({
           channel,
           model: generation.model,
-          prompt: generation.requestPrompt,
+          prompt: requestPrompt,
           size: generation.size,
           quality: generation.quality,
           n: generation.count,
@@ -477,7 +478,6 @@ ${body}` : body;
           className="min-w-0 flex-1 truncate rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
           value={node.metadata.model ?? ""}
           title={defaultModelLabel}
-          disabled={hasImageContent}
           onChange={(event) => {
             const model = event.target.value.trim();
             updateNode(node.id, { metadata: { model: model || undefined } });
@@ -507,13 +507,6 @@ ${body}` : body;
           ))}
         </select>
       </div>
-      {hasImageContent ? (
-        <div className="rounded border border-[var(--ob-line)] bg-[var(--ob-canvas)] px-2 py-1.5 text-[10px] leading-relaxed text-[var(--ob-muted)]">
-          <div className="font-medium text-[var(--ob-text)]">最终实际发送的提示词（只读）</div>
-          <p className="mt-0.5 whitespace-pre-wrap">{node.metadata.requestPrompt || node.metadata.prompt || "未保存历史提示词"}</p>
-          <p className="mt-1">{node.metadata.model || "默认模型"} · {node.metadata.size || "默认尺寸"} · {node.metadata.quality || "默认质量"}</p>
-        </div>
-      ) : null}
       {node.type === "image" && !hasImageContent && upstream.texts.length > 0 && !text.trim() ? (
         <p className="text-[10px] text-[var(--ob-muted)]">将使用直接上游文本作为本次图片提示词。</p>
       ) : null}

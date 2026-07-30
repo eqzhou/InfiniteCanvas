@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { GenerationJob } from "@/types/board";
-import { canvasGenerationPatch } from "@/components/canvas/useCanvasGenerationRecovery";
+import {
+  batchPreviewPatch,
+  canvasGenerationPatch,
+  generationRunPatch,
+  missingGenerationPatch,
+} from "@/components/canvas/useCanvasGenerationRecovery";
 
 function job(status: GenerationJob["status"]): GenerationJob {
   return {
@@ -48,6 +53,46 @@ describe("canvas durable generation recovery", () => {
       naturalHeight: 50,
       generationJobId: "job-image",
       status: "success",
+    });
+  });
+
+  test("uses the first successful child as a partially successful batch preview", () => {
+    expect(batchPreviewPatch([
+      { status: "error", errorDetails: "first failed" },
+      { status: "success", content: "blob:second", storageKey: "image:second", naturalWidth: 1024 },
+    ])).toMatchObject({
+      status: "success",
+      content: "blob:second",
+      storageKey: "image:second",
+      naturalWidth: 1024,
+      errorDetails: undefined,
+    });
+  });
+
+  test("waits for every child and fails a batch only when none succeed", () => {
+    expect(batchPreviewPatch([
+      { status: "success", content: "blob:first" },
+      { status: "loading" },
+    ])).toBeUndefined();
+    expect(batchPreviewPatch([
+      { status: "error", errorDetails: "first failed" },
+      { status: "error" },
+    ])).toEqual({ status: "error", errorDetails: "first failed" });
+  });
+
+  test("propagates a single result terminal state to its config run", () => {
+    expect(generationRunPatch({ status: "loading" }, [])).toBeUndefined();
+    expect(generationRunPatch({ status: "success", content: "blob:only" }, []))
+      .toEqual({ status: "success", errorDetails: undefined });
+    expect(generationRunPatch({ status: "error", errorDetails: "only failed" }, []))
+      .toEqual({ status: "error", errorDetails: "only failed" });
+  });
+
+  test("turns a persist-before-submit crash into a retryable error after a grace period", () => {
+    expect(missingGenerationPatch(1_000, 30_999)).toBeUndefined();
+    expect(missingGenerationPatch(1_000, 31_000)).toEqual({
+      status: "error",
+      errorDetails: "生成任务未成功提交，请重试",
     });
   });
 });

@@ -39,10 +39,10 @@ describe("canvas server image placeholders", () => {
     const children = next.nodes.filter((node) => node.metadata.batchRootId === runRoot.id);
 
     expect(runRoot.type).toBe("image");
-    expect(runRoot.metadata.generationResultIndex).toBe(0);
+    expect(runRoot.metadata.generationResultIndex).toBeUndefined();
     expect(runRoot.metadata.generationRunId).toBeDefined();
-    expect(children).toHaveLength(2);
-    expect(children.map((node) => node.metadata.generationResultIndex)).toEqual([1, 2]);
+    expect(children).toHaveLength(3);
+    expect(children.map((node) => node.metadata.generationResultIndex)).toEqual([0, 1, 2]);
     expect(children.every((node) => node.type === "image" && node.metadata.generationJobId === "job-batch")).toBe(true);
     expect(children.every((node) => node.metadata.batchRootId === runRoot.id)).toBe(true);
     expect(updatedRoot.metadata).toMatchObject({
@@ -52,7 +52,7 @@ describe("canvas server image placeholders", () => {
     });
     expect(updatedRoot.metadata.isBatchRoot).toBeUndefined();
     expect(next.edges.filter((edge) => edge.from === root.id).map((edge) => edge.to)).toEqual([runRoot.id]);
-    expect(next.edges.filter((edge) => edge.from === runRoot.id)).toHaveLength(2);
+    expect(next.edges.filter((edge) => edge.from === runRoot.id)).toHaveLength(3);
     expect(project).not.toEqual(next);
     expect(root.metadata.batchChildIds).toBeUndefined();
     expect(parseBoardProject(next)).toMatchObject({ id: project.id });

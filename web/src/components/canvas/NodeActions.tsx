@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { BoardNode } from "@/types/board";
+import type { AiChannel, AiProviderKind, BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
   generateImages,
@@ -42,6 +42,7 @@ import { filenameForMimeType } from "@/lib/download-filename";
 import { copyImageSourceToClipboard } from "@/lib/image-clipboard";
 import {
   assertResolvedImageReferences,
+  canRetryImageResult,
   createImageGenerationMetadata,
 } from "@/lib/image-generation";
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
@@ -108,12 +109,17 @@ export function NodeActions({
 		(config.activeSharedChannelId ? channelChoices.find((c) => c.id === config.activeSharedChannelId) : undefined) ??
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
+  const channelReady = (selectedChannel: AiChannel | undefined, kind: AiProviderKind): selectedChannel is AiChannel =>
+    Boolean(selectedChannel && (
+      isServerManagedChannel(selectedChannel, kind) ||
+      getProvider(selectedChannel, kind).apiKey
+    ));
   const cameraAvailable = node.type === "image" || node.type === "video" ||
     (node.type === "config" && (node.metadata.generationMode ?? "image") !== "text");
   const promptForGeneration = (prompt: string) => applyCameraPrompt(prompt, node.metadata.cameraPrompt);
-	const serverProviderSupported = (kind: "image" | "video" | "audio") => {
-		if (!channel || !usesServerGenerationJobs()) return false;
-		const provider = getProvider(channel, kind);
+  const serverProviderSupported = (kind: "image" | "video" | "audio", selectedChannel = channel) => {
+		if (!selectedChannel || !usesServerGenerationJobs()) return false;
+		const provider = getProvider(selectedChannel, kind);
 		if (kind === "image") return provider.protocol === "openai" || provider.protocol === "gemini" ||
 			(provider.protocol === "template" && Boolean(provider.template)) || provider.protocol === "apimart" || provider.protocol === "kie";
 		if (kind === "audio") return provider.protocol === "openai";
@@ -128,9 +134,10 @@ export function NodeActions({
 		prompt: string,
 		referenceStorageKeys: string[],
 		options: { replaceExisting?: boolean } = {},
+		selectedChannel = channel,
 	) => {
-		if (!channel) throw new Error("图片生成渠道不可用");
-		const provider = getProvider(channel, "image");
+		if (!selectedChannel) throw new Error("图片生成渠道不可用");
+		const provider = getProvider(selectedChannel, "image");
 		if (provider.protocol === "gemini" && generation.transparentBackground) {
 			throw new Error("Gemini 图片生成不支持透明背景");
 		}
@@ -147,7 +154,7 @@ export function NodeActions({
 				id: jobId,
 				projectId: project?.id,
 				prompt,
-				providerId: channel.id,
+				providerId: selectedChannel.id,
 				model: generation.model,
 				parameters: {
 					size: generation.size,
@@ -285,13 +292,17 @@ export function NodeActions({
   const runConfigGenerate = async () => {
     if (configGenerating || node.metadata.status === "loading") return;
     const mode = node.metadata.generationMode ?? "image";
-    if (!channel || !getProvider(channel, mode === "text" ? "text" : mode === "video" ? "video" : "image").apiKey) {
+    const providerKind = mode === "text" ? "text" : mode === "video" ? "video" : "image";
+    if (!channelReady(channel, providerKind)) {
       alert("请先在设置中配置对应模型服务的 API Key");
       return;
     }
-    const { texts, imageKeys, images } = upstream();
+    const inputs = upstream();
+    const usesUpstreamInputs = !(node.metadata.prompt ?? node.metadata.content ?? "").trim();
+    const texts = usesUpstreamInputs ? inputs.texts : [];
+    const imageKeys = usesUpstreamInputs ? inputs.imageKeys : [];
+    const images = usesUpstreamInputs ? inputs.images : [];
     const prompt = resolveConfigPrompt({
-      promptSource: node.metadata.promptSource,
       prompt: node.metadata.prompt ?? node.metadata.content,
       upstreamTexts: texts,
     });
@@ -330,12 +341,13 @@ export function NodeActions({
           count: node.metadata.count || config.imageCount,
           transparentBackground: Boolean(node.metadata.transparentBackground),
           referenceStorageKeys: imageKeys,
+          generationChannelId: channel.id,
           cameraPrompt: node.metadata.cameraPrompt,
         });
-        generation.requestPrompt = promptForGeneration(generation.prompt);
+        const requestPrompt = promptForGeneration(generation.prompt);
         const materializedImages = images.filter((image) => image.storageKey || image.content);
         if (serverProviderSupported("image") && imageKeys.length === materializedImages.length) {
-          await startServerImageGeneration(node.id, generation, generation.requestPrompt, imageKeys);
+          await startServerImageGeneration(node.id, generation, requestPrompt, imageKeys);
           return;
         }
         const refs = await resolveNodeImageDataUrls(imageKeys);
@@ -343,7 +355,7 @@ export function NodeActions({
       const urls = await generateImages({
           channel,
           model: generation.model,
-          prompt: generation.requestPrompt,
+          prompt: requestPrompt,
           size: generation.size,
           quality: generation.quality,
           n: generation.count,
@@ -381,7 +393,16 @@ export function NodeActions({
         }
         placeImageBatch(node.id, created, generation);
       } else {
-		const { images, videos, audios, imageKeys, videoKeys, audioKeys } = upstream();
+		const videoInputs = usesUpstreamInputs ? inputs : {
+			...inputs,
+			images: [],
+			videos: [],
+			audios: [],
+			imageKeys: [],
+			videoKeys: [],
+			audioKeys: [],
+		};
+		const { images, videos, audios, imageKeys, videoKeys, audioKeys } = videoInputs;
 		const referenceCount = images.filter((value) => value.storageKey || value.content).length +
 			videos.filter((value) => value.storageKey || value.content).length +
 			audios.filter((value) => value.storageKey || value.content).length;
@@ -490,7 +511,7 @@ export function NodeActions({
         metadata: {
           generationMode: "image",
           prompt: "",
-          promptSource: "upstream",
+          model: channel ? getProvider(channel, "image").model : undefined,
           status: "idle",
           size: config.imageSize,
           count: config.imageCount,
@@ -542,7 +563,7 @@ export function NodeActions({
   };
 
   const continueFromImage = async () => {
-    if (!channel || !getProvider(channel, "image").apiKey) {
+    if (!channelReady(channel, "image")) {
       alert("请先在设置中配置 API Key");
       return;
     }
@@ -561,11 +582,12 @@ export function NodeActions({
         count: config.imageCount,
         transparentBackground: Boolean(node.metadata.transparentBackground),
         referenceStorageKeys,
+        generationChannelId: channel.id,
         cameraPrompt: node.metadata.cameraPrompt,
       });
-      generation.requestPrompt = promptForGeneration(generation.prompt);
+      const requestPrompt = promptForGeneration(generation.prompt);
       if (serverProviderSupported("image") && (!node.metadata.content || referenceStorageKeys.length === 1)) {
-        await startServerImageGeneration(node.id, generation, generation.requestPrompt, referenceStorageKeys);
+        await startServerImageGeneration(node.id, generation, requestPrompt, referenceStorageKeys);
         return;
       }
       const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
@@ -573,7 +595,7 @@ export function NodeActions({
         const urls = await generateImages({
         channel,
         model: generation.model,
-        prompt: generation.requestPrompt,
+        prompt: requestPrompt,
         size: generation.size,
         quality: generation.quality,
         n: generation.count,
@@ -618,7 +640,15 @@ export function NodeActions({
   };
 
   const retryImageResult = async () => {
-    if (!channel || !getProvider(channel, "image").apiKey) {
+    const savedChannelId = node.metadata.generationChannelId;
+    const retryChannel = savedChannelId
+      ? channelChoices.find((choice) => choice.id === savedChannelId)
+      : channel;
+    if (savedChannelId && !retryChannel) {
+      alert("原生成渠道已不可用，无法按原参数重试");
+      return;
+    }
+    if (!channelReady(retryChannel, "image")) {
       alert("请先在设置中配置 API Key");
       return;
     }
@@ -630,27 +660,28 @@ export function NodeActions({
     const referenceStorageKeys = [...(node.metadata.referenceStorageKeys ?? [])];
     const generation = createImageGenerationMetadata({
       prompt,
-      model: node.metadata.model || getProvider(channel, "image").model,
+      model: node.metadata.model || getProvider(retryChannel, "image").model,
       size: node.metadata.size || config.imageSize,
       quality: node.metadata.quality || config.imageQuality,
       count: 1,
       transparentBackground: Boolean(node.metadata.transparentBackground),
       referenceStorageKeys,
+      generationChannelId: retryChannel.id,
       cameraPrompt: node.metadata.cameraPrompt,
     });
-    generation.requestPrompt = node.metadata.requestPrompt || promptForGeneration(prompt);
+    const requestPrompt = promptForGeneration(prompt);
     try {
       updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
-      if (serverProviderSupported("image")) {
-        await startServerImageGeneration(node.id, generation, generation.requestPrompt, referenceStorageKeys, { replaceExisting: true });
+      if (serverProviderSupported("image", retryChannel)) {
+        await startServerImageGeneration(node.id, generation, requestPrompt, referenceStorageKeys, { replaceExisting: true }, retryChannel);
         return;
       }
       const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
       assertResolvedImageReferences(referenceStorageKeys, refs);
       const [url] = await generateImages({
-        channel,
+        channel: retryChannel,
         model: generation.model,
-        prompt: generation.requestPrompt,
+        prompt: requestPrompt,
         size: generation.size,
         quality: generation.quality,
         n: 1,
@@ -1098,10 +1129,10 @@ return (
         {node.type === "image" ? (
           <>
             {imageToolbarActions.map(renderImageToolbarAction)}
-            {node.metadata.content && node.metadata.prompt ? (
+            {canRetryImageResult(node.metadata) ? (
               <IconBtn
                 label={imageToolLabel("重试")}
-                title="重试此结果（使用原始生成快照）"
+                title="按原生成参数重试"
                 onClick={() => void retryImageResult()}
               >
                 <RotateCw size={14} />

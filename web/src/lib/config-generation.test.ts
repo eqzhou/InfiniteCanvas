@@ -2,23 +2,21 @@ import { describe, expect, test } from "bun:test";
 import { resolveConfigPrompt } from "./config-generation";
 
 describe("resolveConfigPrompt", () => {
-  test("uses ordered upstream text only when the config follows upstream", () => {
+  test("uses ordered upstream text when the config prompt is blank", () => {
     expect(resolveConfigPrompt({
-      promptSource: "upstream",
-      prompt: "local draft must not leak in",
+      prompt: "",
       upstreamTexts: ["first", "second"],
     })).toBe("first\n\nsecond");
   });
 
-  test("keeps an independent config prompt independent from connected text", () => {
+  test("keeps an authored config prompt independent from upstream text", () => {
     expect(resolveConfigPrompt({
-      promptSource: "independent",
       prompt: "local draft",
       upstreamTexts: ["upstream text"],
     })).toBe("local draft");
   });
 
-  test("uses a legacy config's local prompt when it has no upstream text", () => {
+  test("uses the config prompt when there is no upstream text", () => {
     expect(resolveConfigPrompt({
       prompt: "legacy prompt",
       upstreamTexts: [],

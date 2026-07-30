@@ -20,7 +20,6 @@ import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { defaultModelForMode } from "@/lib/generation-model";
 import { normalizeNodeTitle } from "@/lib/node-format";
-import { resolveConfigPrompt } from "@/lib/config-generation";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
 import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
 
@@ -97,24 +96,6 @@ export function BoardNodeView({
       ? undefined
       : findPluginManifest(node.metadata.pluginId, installedPlugins)
     : undefined;
-  const configUpstreamTexts = useMemo(() => {
-    if (!project || node.type !== "config") return [] as string[];
-    const incoming = project.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from);
-    const configured = node.metadata.inputOrder?.filter((id) => incoming.includes(id)) ?? [];
-    const order = [...configured, ...incoming.filter((id) => !configured.includes(id))];
-    return order
-      .map((id) => project.nodes.find((item) => item.id === id))
-      .filter((item): item is BoardNode => Boolean(item && item.type === "text"))
-      .map((item) => item.metadata.content ?? "")
-      .filter(Boolean);
-  }, [node.id, node.metadata.inputOrder, node.type, project]);
-  const configPromptSource = node.metadata.promptSource ??
-    (configUpstreamTexts.length > 0 ? "upstream" : "independent");
-  const configResolvedPrompt = resolveConfigPrompt({
-    promptSource: configPromptSource,
-    prompt: node.metadata.prompt ?? node.metadata.content,
-    upstreamTexts: configUpstreamTexts,
-  });
   const Icon =
     node.type === "text"
       ? Type
@@ -422,45 +403,19 @@ export function BoardNodeView({
                 }
               />
             </label>
-            <label className="flex flex-col gap-1">
-              提示词来源
-              <select
-                aria-label="配置节点提示词来源"
-                className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
-                value={configPromptSource}
+            <label className="flex min-h-0 flex-1 flex-col gap-1">
+              提示词
+              <textarea
+                aria-label="配置节点提示词"
+                className="min-h-20 flex-1 resize-none rounded border border-[var(--ob-line)] bg-transparent px-2 py-1 leading-relaxed"
+                maxLength={100_000}
+                placeholder="留空时使用上游输入；填写后独立生成"
+                value={node.metadata.prompt ?? ""}
                 onChange={(event) => updateNode(node.id, {
-                  metadata: { promptSource: event.target.value === "upstream" ? "upstream" : "independent" },
+                  metadata: { prompt: event.target.value },
                 })}
-              >
-                <option value="upstream" disabled={configUpstreamTexts.length === 0}>跟随上游文本</option>
-                <option value="independent">独立编辑</option>
-              </select>
+              />
             </label>
-            {configPromptSource === "upstream" ? (
-              <label className="flex min-h-0 flex-1 flex-col gap-1">
-                最终实际发送的提示词
-                <textarea
-                  aria-label="配置节点最终提示词"
-                  className="min-h-20 flex-1 resize-none rounded border border-[var(--ob-line)] bg-[var(--ob-canvas)] px-2 py-1 leading-relaxed text-[var(--ob-muted)]"
-                  value={configResolvedPrompt}
-                  readOnly
-                />
-              </label>
-            ) : (
-              <label className="flex min-h-0 flex-1 flex-col gap-1">
-                提示词
-                <textarea
-                  aria-label="配置节点提示词"
-                  className="min-h-20 flex-1 resize-none rounded border border-[var(--ob-line)] bg-transparent px-2 py-1 leading-relaxed"
-                  maxLength={100_000}
-                  placeholder="输入或粘贴多行提示词；空行会被保留"
-                  value={node.metadata.prompt ?? ""}
-                  onChange={(event) => updateNode(node.id, {
-                    metadata: { prompt: event.target.value },
-                  })}
-                />
-              </label>
-            )}
             <label className="flex flex-col gap-1">
               尺寸 / 比例
               <input

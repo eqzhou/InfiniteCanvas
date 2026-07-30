@@ -97,10 +97,7 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   }
   optionalString(input.content, `${path}.content`, 20_000_000);
   optionalString(input.prompt, `${path}.prompt`, 100_000);
-  optionalString(input.requestPrompt, `${path}.requestPrompt`, 100_000);
-  if (input.promptSource !== undefined && input.promptSource !== "upstream" && input.promptSource !== "independent") {
-    throw new Error(`${path}.promptSource is invalid`);
-  }
+  optionalString(input.generationChannelId, `${path}.generationChannelId`, 128);
   optionalString(input.model, `${path}.model`, 500);
   optionalString(input.size, `${path}.size`, 100);
   optionalString(input.quality, `${path}.quality`, 100);

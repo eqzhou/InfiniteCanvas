@@ -20,7 +20,7 @@ describe("placeImageGenerationRun", () => {
     expect(roots).toHaveLength(2);
     expect(new Set(roots.map((node) => node.metadata.generationRunId)).size).toBe(2);
     expect(second.nodes.find((node) => node.id === config.id)?.metadata.batchChildIds).toBeUndefined();
-    expect(roots.every((root) => root.metadata.batchChildIds?.length === 1)).toBe(true);
+    expect(roots.every((root) => root.metadata.batchChildIds?.length === 2)).toBe(true);
   });
 
   test("uses a fresh empty image as its first result without creating a second root", () => {
@@ -33,7 +33,7 @@ describe("placeImageGenerationRun", () => {
     });
 
     expect(next.nodes.find((node) => node.id === target.id)?.metadata.content).toContain("first");
-    expect(next.nodes.find((node) => node.id === target.id)?.metadata.batchChildIds).toHaveLength(1);
-    expect(next.edges.filter((edge) => edge.from === target.id)).toHaveLength(1);
+    expect(next.nodes.find((node) => node.id === target.id)?.metadata.batchChildIds).toHaveLength(2);
+    expect(next.edges.filter((edge) => edge.from === target.id)).toHaveLength(2);
   });
 });

@@ -131,10 +131,6 @@ export type PluginRegistry = {
 export type NodeMetadata = {
   content?: string;
   prompt?: string;
-  /** Whether a configuration node reads its prompt from upstream text or its own draft. */
-  promptSource?: "upstream" | "independent";
-  /** Immutable prompt snapshot sent with an image generation request. */
-  requestPrompt?: string;
   status?: NodeStatus;
   errorDetails?: string;
   fontSize?: number;
@@ -192,6 +188,8 @@ export type NodeMetadata = {
   workflowTemplateId?: string;
   generationJobId?: string;
   generationResultIndex?: number;
+  /** Channel used for the original image request, so retries do not silently reroute. */
+  generationChannelId?: string;
   /** Configuration node that started this image run, when applicable. */
   generationConfigId?: string;
   /** Stable identity for an image run; a retry gets a new job but not a new run. */

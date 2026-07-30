@@ -8,12 +8,12 @@ export type ImageGenerationRequest = {
   count: number;
   transparentBackground: boolean;
   referenceStorageKeys: readonly string[];
+  generationChannelId?: string;
   cameraPrompt?: CameraPromptConfig;
 };
 
 export type ImageGenerationMetadata = {
   prompt: string;
-  requestPrompt?: string;
   model: string;
   size: string;
   quality: string;
@@ -21,6 +21,7 @@ export type ImageGenerationMetadata = {
   transparentBackground: boolean;
   generationType: NonNullable<NodeMetadata["generationType"]>;
   referenceStorageKeys: string[];
+  generationChannelId?: string;
   cameraPrompt?: CameraPromptConfig;
 };
 
@@ -37,6 +38,7 @@ export function createImageGenerationMetadata(
     transparentBackground: request.transparentBackground,
     generationType: referenceStorageKeys.length ? "image-to-image" : "text-to-image",
     referenceStorageKeys,
+    generationChannelId: request.generationChannelId,
     cameraPrompt: request.cameraPrompt ? { ...request.cameraPrompt } : undefined,
   };
 }
@@ -48,4 +50,13 @@ export function assertResolvedImageReferences(
   if (resolvedReferences.length !== referenceStorageKeys.length) {
     throw new Error("参考图已丢失或无法恢复，请重新连接有效图片后再生成");
   }
+}
+
+export function canRetryImageResult(
+  metadata: Pick<NodeMetadata, "status" | "prompt" | "isBatchRoot" | "batchChildIds">,
+): boolean {
+  return metadata.status === "error" &&
+    Boolean(metadata.prompt) &&
+    !metadata.isBatchRoot &&
+    !metadata.batchChildIds?.length;
 }

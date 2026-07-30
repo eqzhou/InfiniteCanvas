@@ -12,6 +12,8 @@ type GenerationResultItem = {
   height?: number;
 };
 
+const MISSING_JOB_GRACE_MS = 30_000;
+
 function resultItem(job: GenerationJob, index = 0): GenerationResultItem | undefined {
   const items = Array.isArray(job.result.items) ? job.result.items : [];
   if (items.length > 8) return undefined;
@@ -65,6 +67,56 @@ export function canvasGenerationPatch(job: GenerationJob, content?: string, resu
   };
 }
 
+export function batchPreviewPatch(
+  children: ReadonlyArray<Pick<NodeMetadata,
+    "status" | "errorDetails" | "content" | "storageKey" | "mimeType" | "bytes" |
+    "naturalWidth" | "naturalHeight">>,
+): Partial<NodeMetadata> | undefined {
+  if (children.length === 0 || children.some((child) => child.status === "loading")) return undefined;
+  const successful = children.find((child) =>
+    child.status === "success" && Boolean(child.content || child.storageKey));
+  if (!successful) {
+    return {
+      status: "error",
+      errorDetails: children.find((child) => child.errorDetails)?.errorDetails || "全部图片生成失败",
+    };
+  }
+  return {
+    content: successful.content,
+    storageKey: successful.storageKey,
+    mimeType: successful.mimeType,
+    bytes: successful.bytes,
+    naturalWidth: successful.naturalWidth,
+    naturalHeight: successful.naturalHeight,
+    status: "success",
+    errorDetails: undefined,
+  };
+}
+
+export function generationRunPatch(
+  root: Pick<NodeMetadata, "status" | "errorDetails">,
+  children: ReadonlyArray<Pick<NodeMetadata,
+    "status" | "errorDetails" | "content" | "storageKey" | "mimeType" | "bytes" |
+    "naturalWidth" | "naturalHeight">>,
+): Partial<NodeMetadata> | undefined {
+  if (children.length > 0) return batchPreviewPatch(children);
+  if (root.status === "loading") return undefined;
+  if (root.status === "success") return { status: "success", errorDetails: undefined };
+  if (root.status === "error") return { status: "error", errorDetails: root.errorDetails };
+  return undefined;
+}
+
+export function missingGenerationPatch(
+  firstMissingAt: number,
+  now: number,
+): Partial<NodeMetadata> | undefined {
+  if (now - firstMissingAt < MISSING_JOB_GRACE_MS) return undefined;
+  return {
+    status: "error",
+    errorDetails: "生成任务未成功提交，请重试",
+  };
+}
+
 export function useCanvasGenerationRecovery(): void {
   const project = useBoardStore((state) => state.getActive());
   const updateNode = useBoardStore((state) => state.updateNode);
@@ -82,6 +134,7 @@ export function useCanvasGenerationRecovery(): void {
     if (!usesServerGenerationJobs() || pending.length === 0) return;
     let disposed = false;
     const inFlight = new Set<string>();
+    const missingSince = new Map<string, number>();
     const groups = new Map<string, typeof pending>();
     for (const target of pending) groups.set(target.jobId, [...(groups.get(target.jobId) ?? []), target]);
     const reconcile = async () => {
@@ -90,7 +143,18 @@ export function useCanvasGenerationRecovery(): void {
         inFlight.add(jobId);
         try {
           const job = await getGenerationJob(jobId);
-          if (disposed || !job || job.status === "queued" || job.status === "running") return;
+          if (disposed) return;
+          if (!job) {
+            const firstMissingAt = missingSince.get(jobId) ?? Date.now();
+            missingSince.set(jobId, firstMissingAt);
+            const patch = missingGenerationPatch(firstMissingAt, Date.now());
+            if (patch) {
+              targets.forEach(({ nodeId }) => updateNode(nodeId, { metadata: patch }));
+            }
+            return;
+          }
+          missingSince.delete(jobId);
+          if (job.status === "queued" || job.status === "running") return;
           await Promise.all(targets.map(async ({ nodeId, resultIndex }) => {
             if (job.status !== "succeeded") {
               updateNode(nodeId, { metadata: canvasGenerationPatch(job, undefined, resultIndex) });
@@ -123,22 +187,23 @@ export function useCanvasGenerationRecovery(): void {
   useEffect(() => {
     const nodes = project?.nodes ?? [];
     for (const root of nodes) {
-      if (root.type !== "image" || root.metadata.batchRootId || !root.metadata.generationConfigId) continue;
+      if (root.type !== "image" || root.metadata.batchRootId ||
+          (!root.metadata.batchChildIds?.length && !root.metadata.generationConfigId)) continue;
       const children = (root.metadata.batchChildIds ?? [])
         .map((id) => nodes.find((node) => node.id === id))
         .filter((node): node is NonNullable<typeof node> => Boolean(node));
       if (children.length !== (root.metadata.batchChildIds?.length ?? 0)) continue;
-      const targets = [root, ...children];
-      if (targets.some((target) => target.metadata.status === "loading")) continue;
-      const failed = targets.find((target) => target.metadata.status === "error");
-      const status = failed ? "error" : "success";
-      if (root.metadata.status !== status || root.metadata.errorDetails !== failed?.metadata.errorDetails) {
-        updateNode(root.id, { metadata: { status, errorDetails: failed?.metadata.errorDetails } });
+      const patch = generationRunPatch(root.metadata, children.map((child) => child.metadata));
+      if (!patch) continue;
+      if (children.length > 0 && (root.metadata.status !== patch.status ||
+          root.metadata.errorDetails !== patch.errorDetails ||
+          root.metadata.storageKey !== patch.storageKey || root.metadata.content !== patch.content)) {
+        updateNode(root.id, { metadata: patch });
       }
       const config = nodes.find((node) => node.id === root.metadata.generationConfigId);
       if (config?.type === "config" && config.metadata.generationOutputRootId === root.id &&
-          (config.metadata.status !== status || config.metadata.errorDetails !== failed?.metadata.errorDetails)) {
-        updateNode(config.id, { metadata: { status, errorDetails: failed?.metadata.errorDetails } });
+          (config.metadata.status !== patch.status || config.metadata.errorDetails !== patch.errorDetails)) {
+        updateNode(config.id, { metadata: { status: patch.status, errorDetails: patch.errorDetails } });
       }
     }
   }, [project?.nodes, updateNode]);

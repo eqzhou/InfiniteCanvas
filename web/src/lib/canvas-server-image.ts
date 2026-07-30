@@ -25,7 +25,6 @@ export function applyServerImagePlaceholders(
         metadata: {
           ...node.metadata,
           ...generation,
-          requestPrompt: generation.requestPrompt ?? generation.prompt,
           status: "loading",
           errorDetails: undefined,
           generationJobId: jobId,
@@ -36,6 +35,7 @@ export function applyServerImagePlaceholders(
   }
 
   const runId = uid("run");
+  const isBatch = generation.count > 1;
   const runRoot = createNode(
     "image",
     {
@@ -46,29 +46,29 @@ export function applyServerImagePlaceholders(
       title: generation.count > 1 ? "生成结果组" : "结果 1",
       metadata: {
         ...generation,
-        requestPrompt: generation.requestPrompt ?? generation.prompt,
         status: "loading",
-        generationJobId: jobId,
-        generationResultIndex: 0,
+        ...(!isBatch ? {
+          generationJobId: jobId,
+          generationResultIndex: 0,
+        } : {}),
         generationRunId: runId,
         ...(root.type === "config" ? { generationConfigId: root.id } : {}),
       },
     },
   );
-  const children = Array.from({ length: generation.count - 1 }, (_, offset) => createNode(
+  const children = Array.from({ length: isBatch ? generation.count : 0 }, (_, index) => createNode(
     "image",
     {
-      x: runRoot.position.x + runRoot.width + 48 + (offset % 3) * 28,
-      y: runRoot.position.y + Math.floor(offset / 3) * 28,
+      x: runRoot.position.x + runRoot.width + 48 + (index % 3) * 28,
+      y: runRoot.position.y + Math.floor(index / 3) * 28,
     },
     {
-      title: `结果 ${offset + 2}`,
+      title: `结果 ${index + 1}`,
       metadata: {
         ...generation,
-        requestPrompt: generation.requestPrompt ?? generation.prompt,
         status: "loading",
         generationJobId: jobId,
-        generationResultIndex: offset + 1,
+        generationResultIndex: index,
         generationRunId: runId,
         batchRootId: runRoot.id,
         ...(root.type === "config" ? { generationConfigId: root.id } : {}),
@@ -76,7 +76,6 @@ export function applyServerImagePlaceholders(
     },
   ));
   const childIds = children.map(({ id }) => id);
-  const isBatch = children.length > 0;
   return {
     ...project,
     nodes: [
@@ -100,7 +99,7 @@ export function applyServerImagePlaceholders(
             ...(isBatch ? {
               isBatchRoot: true,
               batchChildIds: childIds,
-              primaryImageId: runRoot.id,
+              primaryImageId: childIds[0],
               imageBatchExpanded: true,
             } : {}),
           },
