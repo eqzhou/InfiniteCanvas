@@ -127,7 +127,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(secretErr, store.ErrNotFound) {
 			secrets = nil
 		}
-		setMigrationETag(w, configStateVersion(value, secrets))
+		setContentETag(w, configStateVersion(value, secrets))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(value)
@@ -141,7 +141,7 @@ func (s *Server) compareAndSwapConfigState(
 	tenantWide bool,
 	value []byte,
 ) bool {
-	expectedVersion, createOnly, ok := migrationExpectedVersion(w, r)
+	expectedVersion, createOnly, ok := parseExpectedVersion(w, r)
 	if !ok {
 		return false
 	}
@@ -191,7 +191,7 @@ func (s *Server) compareAndSwapConfigState(
 		http.Error(w, "failed to read stored config state", http.StatusInternalServerError)
 		return false
 	}
-	setMigrationETag(w, configStateVersion(stored, nil))
+	setContentETag(w, configStateVersion(stored, nil))
 	return true
 }
 
@@ -217,7 +217,7 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 	tenantID := tenantIDFrom(r)
 	if key == "config" && tenantWide {
 		if err := s.preventTenantObjectStorageRebind(r.Context(), tenantID, value); errors.Is(err, errTenantObjectStorageRebind) {
-			http.Error(w, "object storage destination requires an explicit migration", http.StatusConflict)
+			http.Error(w, "object storage destination cannot be changed while data exists", http.StatusConflict)
 			return
 		} else if err != nil {
 			http.Error(w, "invalid object storage configuration", http.StatusBadRequest)
@@ -354,7 +354,7 @@ func (s *Server) storeTenantBlobConditional(ctx context.Context, tenantID, userI
 		if currentType == "" {
 			currentType = "application/octet-stream"
 		}
-		if migrationBlobVersion(currentType, currentData) != expectedContentVersion {
+		if blobContentVersion(currentType, currentData) != expectedContentVersion {
 			return errBlobObjectConflict
 		}
 	}

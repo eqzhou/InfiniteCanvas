@@ -1,16 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { createMigrationPreflight, createWorkspaceManifest } from "@/services/local-workspace-migration";
 import {
   createScopeReadyCoordinator,
   isGuestIdentity,
-  prepareAuthenticatedWorkspace,
-  releaseAuthenticatedWorkspace,
   requiresLoginWall,
   shouldOfferLogin,
   transitionWorkspaceIdentity,
 } from "./AuthGate";
 
-describe("AuthGate login migration interactions", () => {
+describe("AuthGate workspace identity transitions", () => {
   test("flushes the current workspace before credentials change and hydrates the new scope afterwards", async () => {
     const events: string[] = [];
     await transitionWorkspaceIdentity(
@@ -44,47 +41,6 @@ describe("AuthGate login migration interactions", () => {
     expect(scopes).toEqual(["open", "tenant-a", "open"]);
   });
 
-  test("waits for an explicit user decision when preflight finds local data", async () => {
-    let hydrated = 0;
-    const preflight = createMigrationPreflight(
-      createWorkspaceManifest([{ kind: "project", id: "project:a", fingerprint: "a", bytes: 10 }]),
-      createWorkspaceManifest([]),
-    );
-    const result = await prepareAuthenticatedWorkspace(
-      async () => ({ ...preflight, journal: null }),
-      async () => { hydrated += 1; },
-    );
-    expect(result?.inventory.resourceCount).toBe(1);
-    expect(hydrated).toBe(0);
-  });
-
-  test("hydrates immediately only when preflight confirms there is no local workspace", async () => {
-    let hydrated = 0;
-    const result = await prepareAuthenticatedWorkspace(
-      async () => null,
-      async () => { hydrated += 1; },
-    );
-    expect(result).toBeNull();
-    expect(hydrated).toBe(1);
-  });
-
-  test("keep-local releases hydration without migration while completion enters after verified migration", async () => {
-    let hydrated = 0;
-    let kept = 0;
-    await releaseAuthenticatedWorkspace(
-      "keep-local",
-      async () => { hydrated += 1; },
-      () => { kept += 1; },
-    );
-    expect({ hydrated, kept }).toEqual({ hydrated: 1, kept: 1 });
-
-    await releaseAuthenticatedWorkspace(
-      "migration-complete",
-      async () => { hydrated += 1; },
-      () => { kept += 1; },
-    );
-    expect({ hydrated, kept }).toEqual({ hydrated: 2, kept: 1 });
-  });
 });
 
 const signedInAccount = {

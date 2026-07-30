@@ -64,24 +64,6 @@ func (s *Server) authorizeProcessToken(r *http.Request) bool {
 	return provided != "" && s.processToken != "" && subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
 }
 
-// authorizeMigration protects the bulk read/write surface even when the rest
-// of the local API is intentionally open. In authenticated deployments a
-// process token must not impersonate a tenant user.
-func (s *Server) authorizeMigration(w http.ResponseWriter, r *http.Request) bool {
-	if authMode() == "off" {
-		if !s.authorizeProcessToken(r) {
-			http.Error(w, "invalid access token", http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-	if _, ok := authUserFrom(r.Context()); !ok {
-		http.Error(w, "login required", http.StatusUnauthorized)
-		return false
-	}
-	return true
-}
-
 // authorizeSecrets gates the encrypted config-secret bag.
 // Any authenticated active user may read/write their own bag (members use a
 // per-user key; admins use the tenant bag). When auth is off, the process token

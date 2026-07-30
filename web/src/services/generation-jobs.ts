@@ -1,4 +1,3 @@
-import { clear, createStore, entries } from "idb-keyval";
 import type {
   GenerationJob,
   GenerationJobPage,
@@ -10,7 +9,6 @@ import { validateJsonObject } from "@/lib/bounded-json";
 import { authFetch } from "@/services/auth-session";
 import { collectWorkflowJobStorageKeys, validateWorkflowGenerationJob } from "@/lib/workflow-job";
 
-const jobStore = createStore("openboard-generation-jobs", "jobs");
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 export const LEGACY_GENERATION_GRACE_MS = 30 * 60_000;
 
@@ -402,20 +400,6 @@ export async function replaceGenerationJobs(jobs: GenerationJob[]): Promise<void
     ids.add(job.id);
   }
   await api<void>("generation-jobs", { method: "PUT", body: JSON.stringify(validated) });
-}
-
-/** Browser-local history access reserved for the explicit account migration flow. */
-export async function readLocalGenerationJobsForMigration(): Promise<GenerationJob[]> {
-  const values = (await entries<string, GenerationJob>(jobStore))
-    .map(([, job]) => validateGenerationJob(job))
-    .sort((left, right) => left.id.localeCompare(right.id));
-  if (values.length > 10_000) throw new Error("generation history exceeds 10000 items");
-  return values;
-}
-
-/** Called only after the server migration manifest verifies the complete history. */
-export async function clearLocalGenerationJobsAfterMigration(): Promise<void> {
-  await clear(jobStore);
 }
 
 export function collectGenerationStorageKeysFromJobs(

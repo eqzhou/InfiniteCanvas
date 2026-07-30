@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-26T11:25:36.532Z",
+  "generatedAt": "2026-07-30T04:11:22.774Z",
   "packages": [
     {
       "name": "@babel/code-frame",
@@ -704,14 +704,6 @@
       "noticeFile": "LICENSE",
       "repository": "https://github.com/rehypejs/rehype-minify/tree/main/packages/html-url-attributes",
       "homepage": "UNKNOWN"
-    },
-    {
-      "name": "idb-keyval",
-      "version": "6.3.0",
-      "license": "Apache-2.0",
-      "noticeFile": "LICENCE",
-      "repository": "git+https://github.com/jakearchibald/idb-keyval.git",
-      "homepage": "https://github.com/jakearchibald/idb-keyval#readme"
     },
     {
       "name": "inline-style-parser",

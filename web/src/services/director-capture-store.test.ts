@@ -17,7 +17,7 @@ function memoryAdapter(): DirectorCaptureAdapter {
 const png = (bytes = 32) => new Blob([new Uint8Array(bytes)], { type: "image/png" });
 const ownerScope = "user_tenant_a_user_a";
 
-describe("director capture browser store", () => {
+describe("director capture storage adapter", () => {
   test("isolates captures by project and director while sorting newest first", async () => {
     const store = createDirectorCaptureStore(memoryAdapter());
     const first = await store.add({

@@ -63,7 +63,7 @@ canvas.
 - Minimap
 - Schema v2 migration, title editing, blank-canvas chooser, drag-in/out groups
 - Node font/model/prompt overrides and immediate text-to-image flow
-- Server persistence in the formal local runtime; IndexedDB is a development/offline compatibility mode
+- Database-backed server persistence in every runtime
 
 ### Phase 2 — AI creation and workbenches
 - Independent text/image/video/audio endpoints and encrypted credentials
@@ -149,8 +149,8 @@ Open http://localhost:5173
 application metadata, generation history, workflow templates, and protected
 media through Go into PostgreSQL-backed server storage. Redis provides
 short-lived project caching, and media bytes live in the protected Go data
-directory. IndexedDB is not a runtime persistence option; it is read only by
-the explicit legacy migration flow and cleared after a verified migration.
+directory. The browser does not keep a second workspace database or run a
+login-time data migration.
 
 For the optional Go Agent, the panel supports an explicit Local URL and a
 session-only connect token. Browser project synchronization, live runtime
@@ -259,7 +259,7 @@ docker run --rm --read-only --cap-drop ALL \
 
 ## Tech stack
 
-- **Web:** Vite, React 19, TypeScript, Zustand, idb-keyval, Tailwind
+- **Web:** Vite, React 19, TypeScript, Zustand, Tailwind
 - **Server:** Go 1.26.5+, chi router, pgx/PostgreSQL, go-redis, protected filesystem or S3/R2 media storage
 
 ### Product boundary: local deployment with optional accounts

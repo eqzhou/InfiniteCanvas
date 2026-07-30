@@ -193,13 +193,6 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/admin/prompt-sources/run-due", s.runDueAdminPromptSources)
 		r.Post("/media/references", s.createMediaReferences)
 		r.Get("/media/references/{token}", s.getMediaReference)
-		r.Get("/migration/capabilities", s.migrationCapabilities)
-		r.Post("/migration/versions", s.migrationVersions)
-		r.Put("/migration/projects/{id}", s.migrationPutProject)
-		r.Put("/migration/state/{key}", s.migrationPutState)
-		r.Put("/migration/secrets/config", s.migrationPutSecrets)
-		r.Put("/migration/generation-history", s.migrationPutGenerationHistory)
-		r.Put("/migration/blobs/{key}", s.migrationPutBlob)
 	})
 }
 
@@ -440,13 +433,6 @@ func MountServer(r chi.Router, s *Server) {
 		r.Post("/admin/prompt-sources/run-due", s.runDueAdminPromptSources)
 		r.Post("/media/references", s.createMediaReferences)
 		r.Get("/media/references/{token}", s.getMediaReference)
-		r.Get("/migration/capabilities", s.migrationCapabilities)
-		r.Post("/migration/versions", s.migrationVersions)
-		r.Put("/migration/projects/{id}", s.migrationPutProject)
-		r.Put("/migration/state/{key}", s.migrationPutState)
-		r.Put("/migration/secrets/config", s.migrationPutSecrets)
-		r.Put("/migration/generation-history", s.migrationPutGenerationHistory)
-		r.Put("/migration/blobs/{key}", s.migrationPutBlob)
 	})
 }
 

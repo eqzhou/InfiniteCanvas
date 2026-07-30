@@ -1,11 +1,8 @@
-import { createStore, del, entries, get, promisifyRequest, set } from "idb-keyval";
-
 import { validateDirectorGlb } from "@/lib/director-glb";
 import { deleteBlob, getBlob, putBlob } from "@/services/storage";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 const SAFE_FILE_NAME = /^[^/\\\u0000-\u001f\u007f]{1,160}\.glb$/i;
-const modelStore = createStore("openboard-director-models", "models");
 const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 
 export { validateDirectorGlb } from "@/lib/director-glb";
@@ -62,12 +59,6 @@ const DEFAULT_LIMITS: DirectorModelLimits = {
   maxBlobBytes: 100 * 1024 * 1024,
 };
 
-const defaultAdapter: DirectorModelAdapter = {
-  entries: () => entries(modelStore) as Promise<Array<[string, unknown]>>,
-  set: (key, value) => set(key, value, modelStore),
-  delete: (key) => del(key, modelStore),
-};
-
 let fallbackWriteQueue = Promise.resolve();
 
 function boundedId(value: unknown, path: string): string {
@@ -90,11 +81,6 @@ function keyFor(identity: DirectorModelIdentity): string {
     identity.objectId,
     identity.assetId,
   ].map((segment) => encodeURIComponent(segment)).join(":")}`;
-}
-
-function directorPrefix(identity: Pick<DirectorModelIdentity, "ownerScope" | "projectId" | "directorNodeId">): string {
-  return `model:${[identity.ownerScope, identity.projectId, identity.directorNodeId]
-    .map((segment) => encodeURIComponent(segment)).join(":")}:`;
 }
 
 function sameIdentity(left: DirectorModelIdentity, right: DirectorModelIdentity): boolean {
@@ -177,7 +163,7 @@ function copyRecord(record: DirectorModelRecord): DirectorModelRecord {
 }
 
 export function createDirectorModelStore(
-  adapter: DirectorModelAdapter = defaultAdapter,
+  adapter: DirectorModelAdapter,
   overrides: Partial<DirectorModelLimits> = {},
 ) {
   const limits = { ...DEFAULT_LIMITS, ...overrides };
@@ -187,9 +173,6 @@ export function createDirectorModelStore(
       return record && key === keyFor(record) ? [{ key, record }] : [];
     });
   const withWriteLock = async <T>(task: () => Promise<T>): Promise<T> => {
-    if (adapter === defaultAdapter && typeof navigator !== "undefined" && navigator.locks) {
-      return navigator.locks.request("openboard-director-models", task);
-    }
     const prior = fallbackWriteQueue;
     let release: () => void = () => {};
     fallbackWriteQueue = new Promise<void>((resolve) => { release = resolve; });
@@ -248,21 +231,6 @@ export function createDirectorModelStore(
       const safeOwner = boundedId(ownerScope, "ownerScope");
       const safeProject = boundedId(projectId, "projectId");
       const safeDirector = boundedId(directorNodeId, "directorNodeId");
-      const prefix = directorPrefix({ ownerScope: safeOwner, projectId: safeProject, directorNodeId: safeDirector });
-      if (adapter === defaultAdapter) {
-        return modelStore("readonly", async (store) => {
-          const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
-          const [keys, values] = await Promise.all([
-            promisifyRequest(store.getAllKeys(range)),
-            promisifyRequest(store.getAll(range)),
-          ]);
-          return values.flatMap((value, index) => {
-            const record = normalizeRecord(value);
-            return record && record.ownerScope === safeOwner && record.projectId === safeProject &&
-              record.directorNodeId === safeDirector && keys[index] === keyFor(record) ? [copyRecord(record)] : [];
-          });
-        });
-      }
       return (await all())
         .filter(({ record }) => record.ownerScope === safeOwner && record.projectId === safeProject && record.directorNodeId === safeDirector)
         .map(({ record }) => copyRecord(record));
@@ -270,10 +238,6 @@ export function createDirectorModelStore(
 
     async get(value: DirectorModelIdentity): Promise<DirectorModelRecord | null> {
       const safeIdentity = identity(value);
-      if (adapter === defaultAdapter) {
-        const record = normalizeRecord(await get(keyFor(safeIdentity), modelStore));
-        return record && sameIdentity(record, safeIdentity) ? copyRecord(record) : null;
-      }
       const match = (await all()).find(({ key, record }) => key === keyFor(safeIdentity) && sameIdentity(record, safeIdentity));
       return match ? copyRecord(match.record) : null;
     },
@@ -285,38 +249,6 @@ export function createDirectorModelStore(
       }
       if (input.blob.size > limits.maxBlobBytes) throw new Error(`GLB exceeds ${limits.maxBlobBytes} bytes`);
       const { bytes: portableBytes } = await validateDirectorGlb(input.blob, { maxBlobBytes: limits.maxBlobBytes });
-      if (adapter === defaultAdapter) {
-        // Validation prepares bytes before opening the transaction. WebKit
-        // auto-commits an IndexedDB transaction across an asynchronous Blob read.
-        return withWriteLock(() => modelStore("readwrite", async (store) => {
-          const targetKey = keyFor(identity(input));
-          const usage = await new Promise<{ count: number; totalBytes: number }>((resolve, reject) => {
-            let count = 0;
-            let totalBytes = 0;
-            const request = store.openCursor();
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-              const cursor = request.result;
-              if (!cursor) {
-                resolve({ count, totalBytes });
-                return;
-              }
-              const key = typeof cursor.key === "string" ? cursor.key : "";
-              const metadata = normalizeRecordMetadata(cursor.value);
-              if (key.startsWith("model:") && (!metadata || key !== keyFor(metadata))) {
-                cursor.delete();
-              } else if (metadata && key !== targetKey) {
-                count += 1;
-                totalBytes += metadata.bytes;
-              }
-              cursor.continue();
-            };
-          });
-          return commit(input, usage, async (record) => {
-            await promisifyRequest(store.put(storedRecord(record, portableBytes), keyFor(record)));
-          });
-        }));
-      }
       return withWriteLock(async () => {
         const stored = await all(true);
         const targetKey = keyFor(identity(input));
@@ -366,62 +298,6 @@ export function createDirectorModelStore(
         return { deletes, updates };
       };
       await withWriteLock(async () => {
-        if (adapter === defaultAdapter) {
-          const legacyUpdates: DirectorModelRecord[] = [];
-          await modelStore("readwrite", async (store) => {
-            await new Promise<void>((resolve, reject) => {
-              const request = store.openCursor();
-              request.onerror = () => reject(request.error);
-              request.onsuccess = () => {
-                const cursor = request.result;
-                if (!cursor) {
-                  resolve();
-                  return;
-                }
-                const key = typeof cursor.key === "string" ? cursor.key : "";
-                const metadata = normalizeRecordMetadata(cursor.value);
-                if (key.startsWith("model:") && (!metadata || key !== keyFor(metadata))) {
-                  cursor.delete();
-                  cursor.continue();
-                  return;
-                }
-                if (!metadata || metadata.ownerScope !== ownerScope) {
-                  cursor.continue();
-                  return;
-                }
-                const directors = valid[metadata.projectId];
-                const objects = directors?.[metadata.directorNodeId];
-                const active = objects?.[metadata.objectId] === metadata.assetId;
-                if (!directors || (!active && metadata.orphanedAt &&
-                    Date.parse(metadata.orphanedAt) <= now - ORPHAN_GRACE_MS)) {
-                  cursor.delete();
-                } else if (active && metadata.orphanedAt) {
-                  const payload = (cursor.value as { blob?: unknown }).blob;
-                  if (payload instanceof Blob) {
-                    legacyUpdates.push({ ...metadata, blob: payload, orphanedAt: undefined });
-                  } else {
-                    cursor.update({ ...(cursor.value as object), orphanedAt: undefined });
-                  }
-                } else if (!active && !metadata.orphanedAt) {
-                  const orphanedAt = new Date(now).toISOString();
-                  const payload = (cursor.value as { blob?: unknown }).blob;
-                  if (payload instanceof Blob) {
-                    legacyUpdates.push({ ...metadata, blob: payload, orphanedAt });
-                  } else {
-                    cursor.update({ ...(cursor.value as object), orphanedAt });
-                  }
-                }
-                cursor.continue();
-              };
-            });
-          });
-          // Blob reads cannot occur inside the cursor transaction on WebKit.
-          // Migrate changed legacy records one at a time after it closes.
-          for (const record of legacyUpdates) {
-            await defaultAdapter.set(keyFor(record), await serializeRecord(record));
-          }
-          return;
-        }
         const { deletes, updates } = planPrune(await all(true));
         await Promise.all([
           ...deletes.map((key) => adapter.delete(key)),

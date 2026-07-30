@@ -1,12 +1,7 @@
 import { authFetch } from "@/services/auth-session";
 import { storageKeyToDataUrl } from "@/services/storage";
-import { DATABASE_STORAGE_ENABLED } from "@/services/storage-mode";
 
 const MAX_MEDIA_REFERENCE_KEYS = 20;
-
-function serverStorageEnabled(): boolean {
-  return DATABASE_STORAGE_ENABLED;
-}
 
 export type MediaReferenceItem = {
   token: string;
@@ -35,7 +30,7 @@ export function mediaReferencePublicUrl(token: string, origin = typeof window !=
 
 /** True when the browser origin is a plausible third-party-fetchable HTTPS URL. */
 export function canMintPublicMediaReferences(origin = typeof window !== "undefined" ? window.location.origin : ""): boolean {
-  if (!serverStorageEnabled() || !origin) return false;
+  if (!origin) return false;
   try {
     const parsed = new URL(origin);
     if (parsed.protocol !== "https:") return false;

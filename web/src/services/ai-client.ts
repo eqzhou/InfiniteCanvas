@@ -15,7 +15,6 @@ import { readBoundedProviderJson, readBoundedProviderText } from "@/services/bou
 import { decodeBoundedDataUrl } from "@/services/remote-content";
 import { authFetch as apiFetch } from "@/services/auth-session";
 import { isServerManagedChannel } from "@/services/shared-channels";
-import { DATABASE_STORAGE_ENABLED } from "@/services/storage-mode";
 import { providerFetch, providerFetchUrl, ProviderHttpError } from "@/services/provider-http";
 
 const MAX_IMAGE_PROVIDER_RESPONSE_BYTES = 64 * 1024 * 1024;
@@ -61,7 +60,6 @@ async function readImageProviderResults(response: Response, expectedMaximum: num
 
 export async function listModels(channel: AiChannel, kind: AiProviderKind = "text"): Promise<string[]> {
   const provider = getProvider(channel, kind);
-	const serverStorage = DATABASE_STORAGE_ENABLED;
   if (provider.protocol === "template") return [];
   if (isServerManagedChannel(channel, kind)) {
     return [...(provider.models ?? [])].sort();
@@ -76,15 +74,11 @@ export async function listModels(channel: AiChannel, kind: AiProviderKind = "tex
       body: JSON.stringify({ channelId: channel.id, kind }),
     });
   } catch {
-    if (serverStorage) throw new Error("模型列表服务不可用，请检查 OpenBoard 服务连接");
-    return listModelsDirect(provider);
+    throw new Error("模型列表服务不可用，请检查 OpenBoard 服务连接");
   }
   if (response.status === 404 || response.status === 503) {
-    if (serverStorage) {
-      const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
-      throw new Error(detail.trim() || "模型列表服务不可用，请检查 OpenBoard 服务连接");
-    }
-    return listModelsDirect(provider);
+    const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
+    throw new Error(detail.trim() || "模型列表服务不可用，请检查 OpenBoard 服务连接");
   }
   if (!response.ok) {
     const detail = await readBoundedProviderText(response, MAX_PROVIDER_ERROR_BYTES).catch(() => "");
@@ -143,8 +137,7 @@ type TextGenerationOptions = {
 export async function generateText(options: TextGenerationOptions): Promise<string> {
 	assertNotManagedBrowserProvider(options.channel, "text");
   const provider = getProvider(options.channel, "text");
-  const serverProxied = DATABASE_STORAGE_ENABLED &&
-    !isLoopbackProviderUrl(provider.baseUrl);
+  const serverProxied = !isLoopbackProviderUrl(provider.baseUrl);
   return runTrackedGeneration({
     kind: "text",
     prompt: options.prompt,
@@ -157,8 +150,7 @@ export async function generateText(options: TextGenerationOptions): Promise<stri
 async function generateTextRequest(options: TextGenerationOptions): Promise<string> {
   const { channel, model, prompt, images = [], systemPrompt = "" } = options;
   const provider = getProvider(channel, "text");
-  if (DATABASE_STORAGE_ENABLED &&
-      !isLoopbackProviderUrl(provider.baseUrl)) {
+  if (!isLoopbackProviderUrl(provider.baseUrl)) {
     return generateTextThroughServer(
       channel.id,
       model,

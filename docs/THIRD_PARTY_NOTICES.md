@@ -15,7 +15,6 @@ from the lockfile and package registries before distribution.
 | nanoid | 5.1.16 | npm package metadata; MIT |
 | clsx | 2.1.x | npm package metadata; MIT |
 | html-to-image | 1.11.13 | npm package metadata; MIT |
-| idb-keyval | 6.3.0 | npm package metadata; Apache-2.0 |
 | react-markdown | 10.1.0 | npm package metadata; MIT |
 | remark-gfm | 4.0.1 | npm package metadata; MIT |
 | Three.js / types | 0.185.1 | npm package metadata; MIT |

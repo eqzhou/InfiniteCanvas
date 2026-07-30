@@ -1,10 +1,7 @@
-import { createStore, del, entries, promisifyRequest, set } from "idb-keyval";
-
 import { uid } from "@/lib/id";
 import { authFetch } from "@/services/auth-session";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
-const captureStore = createStore("openboard-director-captures", "captures");
 
 export type DirectorCaptureRecord = {
   id: string;
@@ -49,16 +46,8 @@ const DEFAULT_LIMITS: DirectorCaptureLimits = {
   maxTotalPixels: 40_000_000,
 };
 
-const OWNER_KEY = "openboard:director-capture-owner";
 const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
-let volatileOwnerScope = uid("browser");
 let fallbackWriteQueue = Promise.resolve();
-
-const defaultAdapter: DirectorCaptureAdapter = {
-  entries: () => entries(captureStore) as Promise<Array<[string, unknown]>>,
-  set: (key, value) => set(key, value, captureStore),
-  delete: (key) => del(key, captureStore),
-};
 
 function boundedId(value: unknown, path: string): string {
   if (typeof value !== "string" || !ID_PATTERN.test(value)) throw new Error(`${path} is invalid`);
@@ -117,7 +106,7 @@ function copyRecord(record: DirectorCapture): DirectorCapture {
 }
 
 export function createDirectorCaptureStore(
-  adapter: DirectorCaptureAdapter = defaultAdapter,
+  adapter: DirectorCaptureAdapter,
   limitOverrides: Partial<DirectorCaptureLimits> = {},
 ) {
   const limits = { ...DEFAULT_LIMITS, ...limitOverrides };
@@ -127,9 +116,6 @@ export function createDirectorCaptureStore(
       return record && key === keyFor(record) ? [{ key, record }] : [];
     });
   const withWriteLock = async <T>(task: () => Promise<T>): Promise<T> => {
-    if (adapter === defaultAdapter && typeof navigator !== "undefined" && navigator.locks) {
-      return navigator.locks.request("openboard-director-captures", task);
-    }
     const prior = fallbackWriteQueue;
     let release: () => void = () => {};
     fallbackWriteQueue = new Promise<void>((resolve) => { release = resolve; });
@@ -214,26 +200,6 @@ export function createDirectorCaptureStore(
         await write(record);
         return copyRecord(record);
       };
-      if (adapter === defaultAdapter) {
-        return captureStore("readwrite", async (store) => {
-          const [keys, values] = await Promise.all([
-            promisifyRequest(store.getAllKeys()),
-            promisifyRequest(store.getAll()),
-          ]);
-          const raw = keys.flatMap((key, index) =>
-            typeof key === "string" ? [[key, values[index]] as [string, unknown]] : []
-          );
-          const stored = normalizeEntries(raw);
-          const validKeys = new Set(stored.map(({ key }) => key));
-          await Promise.all(raw
-            .map(([key]) => key)
-            .filter((key) => key.startsWith("capture:") && !validKeys.has(key))
-            .map((key) => promisifyRequest(store.delete(key))));
-          return commit(stored, async (record) => {
-            await promisifyRequest(store.put(record, keyFor(record)));
-          });
-        });
-      }
       return withWriteLock(async () => {
         return commit(await all(), async (record) => adapter.set(keyFor(record), record));
       });
@@ -439,14 +405,5 @@ export const directorCaptureStore = serverDirectorCaptureStore;
 
 export function getDirectorCaptureOwnerScope(user?: { id: string; tenantId: string } | null): string {
   if (user) return boundedId(`user:${user.tenantId}:${user.id}`, "ownerScope");
-  if (typeof localStorage === "undefined") return volatileOwnerScope;
-  try {
-    const stored = localStorage.getItem(OWNER_KEY);
-    if (stored && ID_PATTERN.test(stored)) return stored;
-    volatileOwnerScope = uid("browser");
-    localStorage.setItem(OWNER_KEY, volatileOwnerScope);
-  } catch {
-    // Private browsing may deny storage; the process-local scope still isolates this session.
-  }
-  return volatileOwnerScope;
+  return "local";
 }

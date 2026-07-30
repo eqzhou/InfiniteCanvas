@@ -265,17 +265,9 @@
   变更路径都用 `time.Now()` 校验租约，导致刚认领的租约立即被判过期，任务被静默丢弃。租约到期时间改为始终
   使用真实时钟（它本就是「实例崩溃后可被其他实例接管」的墙钟语义），注入时钟仅用于判定到期与排下一次。
   仓库中已有的 `TestDuePromptSourceRunnerIsDeterministicAndPersistsNextRun` 此前一直是红的，被 Go 测试缓存掩盖。
-- 迁移清理不是原子的（既有边界，本轮扩展）：清理跨 4 个 IndexedDB 库执行，任一失败会把整次迁移报成 failed，
-  诱导用户从已被部分删除的本地数据重试。清理发生在服务端 manifest 校验通过之后，本地已非唯一副本，
-  因此现在改为逐库独立清理并汇总失败，迁移仍标记 complete 但携带清理错误说明。
-- `allowSecrets` 由客户端角色推导（本轮引入）：新增服务端 `GET /api/migration/capabilities`，前端只采用服务端
-  声明值（客户端提示只能收窄不能放宽），写入端点继续独立强制授权。
 
 第三轮复审（approve-with-nits）又修复两项：
 
-- 迁移能力接口把「不可达」误当「拒绝」：网络抖动或 5xx 会让前端以为服务端禁止迁移密钥，于是不带密钥迁移并在
-  之后清空存放密钥的本地库，造成唯一副本被销毁。现在只有 401/403 视为拒绝，其余一律抛
-  `MigrationCapabilitiesUnavailableError` 并在任何清理动作前中止迁移。
 - `validateAPIMartPublicURL` 的非规范写法绕过：`localhost` 与八进制/十进制/十六进制 IP 字面量此前仍能通过。
   现已一并拒绝，并修正注释——这些 URL 由 APIMart 在其自身网络抓取，因此该校验保护的是伙伴方而非本部署边界。
 

@@ -37,7 +37,6 @@ import {
   ungroupNodes,
 } from "@/lib/grouping";
 import {
-  cleanupUnusedMedia,
   collectBoardContentStorageKeys,
   collectStorageKeys,
   loadAssets,
@@ -1254,17 +1253,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   persistNow: async () => {
     projectWrites.enqueue(structuredClone(get().projects));
     await projectWrites.flush();
-    const { projects, assets } = get();
-    const keys = collectStorageKeys(projects, assets);
-    for (const history of histories.values()) {
-      for (const snapshot of history.snapshots()) {
-        for (const key of collectBoardContentStorageKeys(snapshot.nodes, snapshot.chatSessions)) {
-          keys.add(key);
-        }
-      }
-    }
-    for (const key of await collectGenerationStorageKeys()) keys.add(key);
-    await cleanupUnusedMedia(keys);
   },
 
   replaceWorkspace: async (snapshot) => {

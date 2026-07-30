@@ -20,11 +20,11 @@ func TestTenantAdminAuthOffRequiresProcessToken(t *testing.T) {
 	body := []byte(`{"modelCosts":[],"defaultCredits":0}`)
 
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
-	anonymous := migrationRequest(t, router, http.MethodPut, "/api/admin/models", body, nil)
+	anonymous := requestWithHeaders(t, router, http.MethodPut, "/api/admin/models", body, nil)
 	if anonymous.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous admin write = %d %s", anonymous.Code, anonymous.Body.String())
 	}
-	authorized := migrationRequest(t, router, http.MethodPut, "/api/admin/models", body, map[string]string{
+	authorized := requestWithHeaders(t, router, http.MethodPut, "/api/admin/models", body, map[string]string{
 		"Authorization": "Bearer test-token",
 	})
 	if authorized.Code != http.StatusOK {

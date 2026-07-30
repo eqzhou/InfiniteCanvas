@@ -5,7 +5,7 @@
   "name": "OpenBoard web dependency inventory",
   "documentNamespace": "https://openboard.local/spdx/openboard-web-0.1.0",
   "creationInfo": {
-    "created": "2026-07-26T11:25:36.530Z",
+    "created": "2026-07-30T04:11:22.770Z",
     "creators": [
       "Tool: OpenBoard audit-licenses.mjs"
     ]
@@ -625,13 +625,6 @@
       "name": "html-url-attributes",
       "versionInfo": "3.0.1",
       "licenseConcluded": "MIT",
-      "downloadLocation": "NOASSERTION"
-    },
-    {
-      "SPDXID": "SPDXRef-idb-keyval-6.3.0",
-      "name": "idb-keyval",
-      "versionInfo": "6.3.0",
-      "licenseConcluded": "Apache-2.0",
       "downloadLocation": "NOASSERTION"
     },
     {

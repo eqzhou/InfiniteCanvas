@@ -1,5 +1,5 @@
 import { authFetch } from "@/services/auth-session";
-import type { AppConfig, AssetItem, BoardProject, GenerationJob, PromptItem } from "@/types/board";
+import type { AppConfig, AssetItem, BoardProject, PromptItem } from "@/types/board";
 import { parseBoardProject } from "@/lib/board-document";
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
@@ -66,23 +66,6 @@ function stripTransientProjectMedia(value: unknown): unknown {
   return { ...project, nodes, chatSessions };
 }
 
-export type MigrationResourceRef = {
-  kind: "project" | "state" | "secret" | "blob" | "generation-history";
-  id: string;
-};
-
-export type MigrationResourceVersion = MigrationResourceRef & {
-  exists: boolean;
-  version?: string;
-};
-
-export class MigrationPreconditionError extends Error {
-  constructor() {
-    super("Remote data changed after migration preflight");
-    this.name = "MigrationPreconditionError";
-  }
-}
-
 export class TenantConfigAdminRequiredError extends Error {
   constructor() {
     super("Tenant configuration can only be changed by an owner or admin");
@@ -132,115 +115,6 @@ export class SecretAuthRequiredError extends Error {
     super(message);
     this.name = "SecretAuthRequiredError";
   }
-}
-
-export async function loadMigrationResourceVersions(
-  resources: readonly MigrationResourceRef[],
-): Promise<MigrationResourceVersion[]> {
-  const result: MigrationResourceVersion[] = [];
-  for (let offset = 0; offset < resources.length; offset += 100) {
-    const response = await request("migration/versions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resources: resources.slice(offset, offset + 100) }),
-    });
-    const page = await readJSON<{ resources?: unknown }>(response);
-    if (!Array.isArray(page.resources) || page.resources.length !== Math.min(100, resources.length - offset)) {
-      throw new Error("Migration version response is invalid");
-    }
-    page.resources.forEach((raw, index) => {
-      const expected = resources[offset + index]!;
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Migration version response is invalid");
-      const item = raw as Partial<MigrationResourceVersion>;
-      const validVersion = typeof item.version === "string" && /^m1-[0-9a-f]{64}$/.test(item.version);
-      if (item.kind !== expected.kind || item.id !== expected.id || typeof item.exists !== "boolean" ||
-          (item.exists ? !validVersion : item.version !== undefined)) {
-        throw new Error("Migration version response is invalid");
-      }
-      result.push({ kind: item.kind, id: item.id, exists: item.exists, ...(validVersion ? { version: item.version } : {}) } as MigrationResourceVersion);
-    });
-  }
-  return result;
-}
-
-function migrationHeaders(contentType: string, expectedVersion: string | null): Record<string, string> {
-  return expectedVersion === null
-    ? { "Content-Type": contentType, "If-None-Match": "*" }
-    : { "Content-Type": contentType, "If-Match": `"${expectedVersion}"` };
-}
-
-export class MigrationCapabilitiesUnavailableError extends Error {
-  constructor() {
-    super("无法确认服务端迁移权限，已保留本地数据。请稍后重试。");
-    this.name = "MigrationCapabilitiesUnavailableError";
-  }
-}
-
-/**
- * Server-declared migration capabilities. Secret migration rights must come
- * from the server, never from a client-side role copy; write endpoints enforce
- * the same rule independently.
- *
- * A denial ("server says no") and an unreachable server ("could not ask") must
- * stay distinguishable. Treating a transient network failure as a denial would
- * migrate without secrets and then clear the local stores that hold them,
- * destroying the only copy.
- */
-export async function loadMigrationCapabilities(): Promise<{ allowSecrets: boolean }> {
-  let response: Response;
-  try {
-    response = await request("migration/capabilities");
-  } catch {
-    throw new MigrationCapabilitiesUnavailableError();
-  }
-  // 401/403 are authoritative denials; anything else means we could not ask.
-  if (response.status === 401 || response.status === 403) return { allowSecrets: false };
-  if (!response.ok) throw new MigrationCapabilitiesUnavailableError();
-  try {
-    const payload = (await response.json()) as { allowSecrets?: unknown };
-    return { allowSecrets: payload?.allowSecrets === true };
-  } catch {
-    throw new MigrationCapabilitiesUnavailableError();
-  }
-}
-
-async function migrationWrite(path: string, body: BodyInit, contentType: string, expectedVersion: string | null): Promise<void> {
-  const response = await request(`migration/${path}`, {
-    method: "PUT",
-    headers: migrationHeaders(contentType, expectedVersion),
-    body,
-  });
-  if (response.status === 409 || response.status === 412) throw new MigrationPreconditionError();
-  if (!response.ok) throw new Error(`Migration write failed: HTTP ${response.status}`);
-}
-
-export function saveMigrationProject(project: BoardProject, expectedVersion: string | null): Promise<void> {
-  return migrationWrite(
-    `projects/${encodeURIComponent(project.id)}`,
-    JSON.stringify(stripTransientProjectMedia(project)),
-    "application/json",
-    expectedVersion,
-  );
-}
-
-export function saveMigrationState(
-  key: "config" | "assets" | "prompts",
-  value: AppConfig | AssetItem[] | PromptItem[],
-  expectedVersion: string | null,
-): Promise<void> {
-  return migrationWrite(`state/${key}`, JSON.stringify(value), "application/json", expectedVersion);
-}
-
-export function saveMigrationSecrets<T>(value: T, expectedVersion: string | null): Promise<void> {
-  return migrationWrite("secrets/config", JSON.stringify(value), "application/json", expectedVersion);
-}
-
-export function saveMigrationBlob(key: string, blob: Blob, expectedVersion: string | null): Promise<void> {
-  return migrationWrite(`blobs/${encodeURIComponent(key)}`, blob, blob.type || "application/octet-stream", expectedVersion);
-}
-
-export function saveMigrationGenerationHistory(jobs: GenerationJob[], expectedVersion: string | null): Promise<void> {
-  return migrationWrite("generation-history", JSON.stringify(jobs), "application/json", expectedVersion);
 }
 
 export async function loadServerProjects(): Promise<BoardProject[]> {

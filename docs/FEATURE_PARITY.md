@@ -31,7 +31,7 @@ are not implementation inputs.
 | S3/R2 media backend | [verified] optional dependency-free SigV4 S3-compatible backend supports AWS S3, Cloudflare R2 and explicit loopback MinIO; routing is user/tenant preference → tenant-admin weighted pool → process fallback/filesystem. Stable provider IDs, immutable placements, deletion tombstones, safe pre-write failover, encrypted write-only credentials, DNS-rebinding/private-network blocking, tenant-hashed keys, authenticated proxy reads, conditional overwrite and quota compensation are verified |
 | KIE/APIMart and exact model contracts | [verified] dedicated KIE/APIMart adapters cover bounded upload/create/poll/result flows, transient KIE polling retries and exact official-host upload trust. Exact capabilities include Kling 2.6/v3, Kling 3.0 Turbo, Seedance 2.0 standard/fast/mini, Seedream 5.0 Pro, Gemini 3.1 Flash Lite Image / Nano Banana 2 Lite, and HappyHorse 1.1; unverified names such as Agnes fail closed |
 | Tenant operations console | [verified] owner/admin UI and APIs cover users, roles/status, credit adjustments/logs, model costs, shared weighted AI channels, write-only destination-bound secrets, centralized prompt catalog/scheduling, and tenant storage-pool CRUD |
-| Login workspace migration | [verified] previewed conditional migration covers projects, present local state, optional credential opt-in, generation history and media with bounded version preflight, CAS writes, cancellation/resume, capacity/conflict checks and preservation of the local copy on failure; generation-history restore preserves existing tombstones and returns 410 on stale ID collisions |
+| Single authoritative workspace store | [verified] projects, settings, generation history and protected media load from and save to the database-backed server; there is no browser workspace database or login-time migration branch |
 | Video first/last-frame option | [verified] video workbench, video nodes and video config mode expose 首尾帧; ordered image refs map to Ark/Seedance `first_frame`/`last_frame` on browser and durable server paths; mode persists in node metadata and job parameters through retry/reload |
 | Prompt paste newlines and local wheel | [verified] node prompt chip editor preserves multi-line paste including blank lines, serializes Enter/block structure without collapsing newlines, and stops wheel events so scrolling the prompt does not zoom the canvas |
 | Left-panel asset drag onto canvas | [verified] canvas assets tab items are draggable with a bounded OpenBoard asset mime payload; dropping on the canvas surface inserts the asset at the drop world point with open-position collision avoidance, while click insert remains available |
@@ -101,9 +101,9 @@ implementation evidence.
 
 ## Intentional differences
 
-- OpenBoard formal local mode uses PostgreSQL, Redis and protected media files;
-  the reference v0.8.2 documentation describes browser-local data. IndexedDB
-  remains only the development/offline compatibility implementation.
+- OpenBoard uses PostgreSQL, Redis and protected media files in every runtime;
+  unlike the reference v0.8.2 browser-local design, it has one authoritative
+  database-backed workspace store.
 - Provider keys are encrypted by the local Go service. Remote deployments use
   `#connect?...` credentials so secrets do not enter HTTP logs; legacy query
   links are accepted only on loopback for v0.8.2 New API compatibility.
@@ -168,7 +168,7 @@ Markdown and layout fixes. No implementation source or assets were read:
 
 - [verified] Schema v2 documents; v1/no-version read compatibility plus save-time upgrade and reload E2E
 - [verified] Project create, rename, delete, batch delete, JSON and media-bundle import/export
-- [verified] PostgreSQL authoritative persistence, Redis disposable cache, protected filesystem media, and empty-server IndexedDB migration
+- [verified] PostgreSQL authoritative persistence, Redis disposable cache, and protected filesystem media with no browser persistence fallback
 - [verified] Pan, wheel/pinch zoom, slider, reset, fit, minimap, backgrounds, themes, culling, and 1k/10k indexes
 - [verified] Marquee/multi-select, copy/paste/duplicate, align/distribute, drag/click connections, edge deletion, undo/redo, and shortcuts
 - [verified] Text/image/config/video/audio/panorama/director/plugin nodes; ports, drag, resize, preview, metadata inspection, and prompt bars; director character and crowd inspectors expose visual eight-look/twenty-pose catalogs with arrow-key navigation
@@ -195,7 +195,7 @@ Markdown and layout fixes. No implementation source or assets were read:
 - [verified] Draggable image split guides with normalized coordinates and lineage
 - [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
 - [verified] Image and video workbenches with provider/model/refs/parameters, independent concurrent runs, aggregate cancellation, persisted side/bottom layout, bounded image categories/filtering, local/history reference thumbnails, result byte sizes, managed “My Assets” reuse, a draggable persisted workflow entrance, download/delete/regenerate, and canvas insertion; audio generation is available through canvas nodes and durable jobs but does not have a standalone workbench route; jobs use server-side OpenAI/Gemini/APIMart/KIE/restricted-Template image, OpenAI/Ark/APIMart/KIE/restricted-Template video, and OpenAI audio execution with renewable attempt-scoped leases, tenant blob persistence/quota release, polling and cancellation across browser reloads; canvas image/config/prompt actions create indexed durable image placeholders, and every supported canvas video/audio entry reconciles from the same durable jobs; Template image/video execution is limited to bounded JSON, exact known placeholders, safe relative paths and fixed auth modes with no script execution, and expansion is size-accounted before marshaling; image results require fully decoded PNG/JPEG and media results pass bounded container/signature checks; retry rejects missing references and history deletion preserves shared board/job media while reclaiming orphans
-- [verified] PostgreSQL generation-job migration, paginated CRUD and timestamp-preserving atomic bulk restore; IndexedDB compatibility in development mode
+- [verified] PostgreSQL generation-job persistence, paginated CRUD and timestamp-preserving atomic bulk restore
 - [verified] Project deletion and selected media-node deletion cascade-clean generation job history without affecting other projects
 - [verified] Ordinary project autosave never deletes remote projects; explicit delete and workspace replacement remain the only removal paths
 - [verified] Workbench history multi-select bulk delete uses a bounded server bulk API or local batch delete; soft-deleted tombstones stay hidden from default history lists

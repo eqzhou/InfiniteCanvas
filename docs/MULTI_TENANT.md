@@ -17,7 +17,7 @@ Goal: isolate projects, assets, prompts, generation jobs, secrets, and blobs per
 Service token (`OPENBOARD_TOKEN` / Vite proxy `Authorization`) remains for
 process-level access and zero-user bootstrap. In account modes it never grants
 a tenant identity and cannot bypass the login wall once accounts exist.
-Projects, state, blobs, files, generation history, shared channels, migration
+Projects, state, blobs, files, generation history, and shared channels
 and paid generation require a session after the first user (or always in
 `required`). Encrypted provider-secret reads and writes use the same rule;
 `off` mode revalidates the process token.

@@ -159,7 +159,7 @@ describe("director local GLB validation", () => {
   });
 });
 
-describe("director browser-local model store", () => {
+describe("director model storage adapter", () => {
   test("isolates a model by owner, project, director, object, and asset id", async () => {
     const { adapter } = memoryAdapter();
     const store = createDirectorModelStore(adapter);

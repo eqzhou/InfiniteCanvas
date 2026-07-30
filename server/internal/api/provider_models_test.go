@@ -84,7 +84,7 @@ func TestProviderModelsProxyReturnsAUsefulUpstreamError(t *testing.T) {
 func TestProviderModelsEndpointRejectsServerLoopback(t *testing.T) {
 	_, _, handler := sharedChannelHandler(t)
 	config := []byte(`{"channels":[{"id":"local","baseUrl":"http://127.0.0.1:9999","providers":{"text":{"baseUrl":"http://127.0.0.1:9999","model":"x","protocol":"openai"}}}]}`)
-	if got := migrationRequest(t, handler, http.MethodPut, "/api/state/config", config, map[string]string{
+	if got := requestWithHeaders(t, handler, http.MethodPut, "/api/state/config", config, map[string]string{
 		"If-None-Match": "*", "Authorization": "Bearer test-token",
 	}); got.Code != http.StatusNoContent {
 		t.Fatalf("config status=%d body=%s", got.Code, got.Body.String())

@@ -26,7 +26,7 @@ func (s *Server) storeTenantObjectBlob(ctx context.Context, tenantID, userID, ke
 			return errBlobObjectConflict
 		}
 		if expectedContentVersion != "" && expectedContentVersion != blobVersionAbsent {
-			if err != nil || migrationBlobVersion(current.Metadata.ContentType, current.Data) != expectedContentVersion {
+			if err != nil || blobContentVersion(current.Metadata.ContentType, current.Data) != expectedContentVersion {
 				return errBlobObjectConflict
 			}
 		}

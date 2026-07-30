@@ -223,7 +223,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           <div>
             <p className="ob-page-kicker">Workspace</p>
             <h2 id="settings-title" className="text-lg font-semibold tracking-tight">设置</h2>
-            <p className="text-xs text-[var(--ob-muted)]">本地工作区配置 · 模型、生成偏好、对象存储与备份</p>
+            <p className="text-xs text-[var(--ob-muted)]">工作区配置 · 模型、生成偏好、对象存储与备份</p>
           </div>
           <button
             type="button"

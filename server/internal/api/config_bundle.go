@@ -35,7 +35,7 @@ func configStateVersion(config, encryptedSecrets []byte) string {
 	value = append(value, config...)
 	value = append(value, 0)
 	value = append(value, encryptedSecrets...)
-	return migrationVersion(value)
+	return contentVersion(value)
 }
 
 func (s *Server) currentConfigBundle(
@@ -95,7 +95,7 @@ func (s *Server) getConfigBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	setMigrationETag(w, configStateVersion(config, encryptedSecrets))
+	setContentETag(w, configStateVersion(config, encryptedSecrets))
 	_, _ = w.Write(payload)
 }
 
@@ -103,7 +103,7 @@ func (s *Server) putConfigBundle(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeSecrets(w, r) || s.store == nil || s.secrets == nil {
 		return
 	}
-	expectedVersion, createOnly, ok := migrationExpectedVersion(w, r)
+	expectedVersion, createOnly, ok := parseExpectedVersion(w, r)
 	if !ok {
 		return
 	}
@@ -163,6 +163,6 @@ func (s *Server) putConfigBundle(w http.ResponseWriter, r *http.Request) {
 	if tenantWide {
 		s.InvalidateTenantBlobStore(tenantID)
 	}
-	setMigrationETag(w, configStateVersion(body.Config, envelope))
+	setContentETag(w, configStateVersion(body.Config, envelope))
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -72,7 +72,7 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	expectedVersion, createOnly, ok := migrationExpectedVersion(w, r)
+	expectedVersion, createOnly, ok := parseExpectedVersion(w, r)
 	if !ok {
 		return
 	}
@@ -118,7 +118,7 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 	if tenantWide {
 		s.InvalidateTenantBlobStore(tenantID)
 	}
-	setMigrationETag(w, configStateVersion(config, envelope))
+	setContentETag(w, configStateVersion(config, envelope))
 	w.WriteHeader(http.StatusNoContent)
 }
 
