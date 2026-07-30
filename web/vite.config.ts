@@ -1,9 +1,10 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 import fs from "node:fs";
 import { parseChangelog } from "./src/lib/release";
+import { resolveWebStorageMode } from "./build-storage-mode";
 
 const root = path.resolve(__dirname, "..");
 const appVersion = (() => {
@@ -30,28 +31,49 @@ const apiProxy = {
     : undefined,
 };
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  define: {
-    __APP_VERSION__: JSON.stringify(appVersion),
-    __APP_RELEASES__: JSON.stringify(appReleases),
-  },
-  build: {
-    outDir: process.env.OPENBOARD_WEB_OUT_DIR || "dist",
-  },
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "src"),
+export default defineConfig(({ command, mode }) => {
+  const loadedEnv = loadEnv(mode, __dirname, "");
+  const storageMode = resolveWebStorageMode(
+    command,
+    process.env.VITE_OPENBOARD_STORAGE ?? loadedEnv.VITE_OPENBOARD_STORAGE,
+  );
+
+  return {
+    plugins: [
+      react(),
+      tailwindcss(),
+      {
+        name: "openboard-storage-mode-marker",
+        transformIndexHtml(html) {
+          return html.replace(
+            "<head>",
+            `<head>\n    <meta name="openboard-storage-mode" content="${storageMode}" />`,
+          );
+        },
+      },
+    ],
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion),
+      __APP_RELEASES__: JSON.stringify(appReleases),
+      "import.meta.env.VITE_OPENBOARD_STORAGE": JSON.stringify(storageMode),
     },
-  },
-  server: {
-    port: 5173,
-    proxy: {
-      "/api": apiProxy,
+    build: {
+      outDir: process.env.OPENBOARD_WEB_OUT_DIR || "dist",
     },
-  },
-  preview: {
-    port: 5173,
-    proxy: { "/api": apiProxy },
-  },
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "src"),
+      },
+    },
+    server: {
+      port: 5173,
+      proxy: {
+        "/api": apiProxy,
+      },
+    },
+    preview: {
+      port: 5173,
+      proxy: { "/api": apiProxy },
+    },
+  };
 });

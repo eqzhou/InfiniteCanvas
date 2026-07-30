@@ -145,13 +145,14 @@ bun run dev
 
 Open http://localhost:5173
 
-`5173` is the Vite development server. The formal local runtime is built with
+`5173` is the Vite development server. Production builds default to
 `VITE_OPENBOARD_STORAGE=server`: projects and application metadata are persisted
 through Go into PostgreSQL, Redis provides short-lived project caching, and
-media bytes live in the protected Go data directory. IndexedDB remains only for
-development/offline compatibility. On the first formal launch, legacy browser
-data is migrated only when the server database is completely empty; the browser
-stores are cleared after a successful migration.
+media bytes live in the protected Go data directory. An offline production
+build must explicitly set `VITE_OPENBOARD_STORAGE=local`; IndexedDB otherwise
+remains a development-only compatibility path. On the first formal launch,
+legacy browser data is migrated only when the server database is completely
+empty; the browser stores are cleared after a successful migration.
 
 For the optional Go Agent, the panel supports an explicit Local URL and a
 session-only connect token. Browser project synchronization, live runtime
