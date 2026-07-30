@@ -2234,6 +2234,8 @@ test("a configuration node generates the requested text batch", async ({ page })
   await expect.poll(() => requests).toBe(3);
   expect(textBodies).toHaveLength(3);
   expect(textBodies.every((body) => body.instructions === "Return one concise alternative.")).toBe(true);
+  await expect(config).toContainText("状态：success");
+  await clickCanvasTool(page, "适应");
   await expect(page.locator('[data-node-type="text"]')).toHaveCount(4);
   for (const index of [1, 2, 3]) {
     await expect(page.getByText(`batch result ${index}`, { exact: true })).toBeVisible();
