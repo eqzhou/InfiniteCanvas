@@ -1,4 +1,4 @@
-import { clear, createStore, del, entries, get, set, setMany } from "idb-keyval";
+import { clear, createStore, entries } from "idb-keyval";
 import type {
   GenerationJob,
   GenerationJobPage,
@@ -10,7 +10,6 @@ import { validateJsonObject } from "@/lib/bounded-json";
 import { authFetch } from "@/services/auth-session";
 import { collectWorkflowJobStorageKeys, validateWorkflowGenerationJob } from "@/lib/workflow-job";
 
-const SERVER_STORAGE = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
 const jobStore = createStore("openboard-generation-jobs", "jobs");
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 export const LEGACY_GENERATION_GRACE_MS = 30 * 60_000;
@@ -84,7 +83,7 @@ export type GenerationJobPollingOptions = {
 };
 
 export function usesServerGenerationJobs(): boolean {
-	return SERVER_STORAGE;
+	return true;
 }
 
 export function isServerOwnedGenerationJob(job: GenerationJob): boolean {
@@ -184,43 +183,28 @@ export async function listGenerationJobs(query: GenerationJobQuery = {}): Promis
   const page = query.page ?? 1;
   const pageSize = query.pageSize ?? 20;
   validatePagination(page, pageSize);
-  if (SERVER_STORAGE) {
-    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-    if (query.projectId) params.set("projectId", query.projectId);
-    if (query.kind) params.set("kind", query.kind);
-    if (query.includeDeleted) params.set("includeDeleted", "1");
-    const result = await api<GenerationJobPage>(`generation-jobs?${params}`);
-    return { ...result, items: result.items.map(validateGenerationJob) };
-  }
-  const values = (await entries<string, GenerationJob>(jobStore))
-    .map(([, value]) => validateGenerationJob(value))
-    .filter((job) => query.includeDeleted || job.status !== "deleted");
-  return paginateGenerationJobs(values, query);
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (query.projectId) params.set("projectId", query.projectId);
+  if (query.kind) params.set("kind", query.kind);
+  if (query.includeDeleted) params.set("includeDeleted", "1");
+  const result = await api<GenerationJobPage>(`generation-jobs?${params}`);
+  return { ...result, items: result.items.map(validateGenerationJob) };
 }
 
 export async function getGenerationJob(id: string): Promise<GenerationJob | undefined> {
   if (!ID.test(id)) throw new Error("invalid generation job id");
-  if (SERVER_STORAGE) {
-    try {
-      return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`));
-    } catch (error) {
-      if (error instanceof Error && (error as Error & { status?: number }).status === 404) return undefined;
-      throw error;
-    }
+  try {
+    return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`));
+  } catch (error) {
+    if (error instanceof Error && (error as Error & { status?: number }).status === 404) return undefined;
+    throw error;
   }
-  const value = await get<GenerationJob>(id, jobStore);
-  return value ? validateGenerationJob(value) : undefined;
 }
 
 export async function createGenerationJob(input: NewGenerationJob): Promise<GenerationJob> {
   const timestamp = nowIso();
   const job = validateGenerationJob({ ...input, id: input.id ?? uid("job"), createdAt: timestamp, updatedAt: timestamp });
-  if (SERVER_STORAGE) {
-    return validateGenerationJob(await api<GenerationJob>("generation-jobs", { method: "POST", body: JSON.stringify(job) }));
-  }
-  if (await get(job.id, jobStore)) throw new Error("generation job already exists");
-  await set(job.id, job, jobStore);
-  return job;
+  return validateGenerationJob(await api<GenerationJob>("generation-jobs", { method: "POST", body: JSON.stringify(job) }));
 }
 
 export async function createServerImageGenerationJob(input: ServerImageGenerationInput): Promise<GenerationJob> {
@@ -239,7 +223,6 @@ async function createServerGenerationJob(
 	kind: "image" | "video" | "audio",
 	input: ServerImageGenerationInput | ServerVideoGenerationInput | ServerAudioGenerationInput,
 ): Promise<GenerationJob> {
-	if (!SERVER_STORAGE) throw new Error(`server ${kind} generation requires server storage`);
 	const id = input.id ?? uid("job");
 	if (!ID.test(id) || (input.projectId && !ID.test(input.projectId)) || !ID.test(input.providerId)) {
 		throw new Error("invalid server image generation input");
@@ -251,7 +234,6 @@ async function createServerGenerationJob(
 }
 
 export async function cancelServerGenerationJob(id: string): Promise<GenerationJob> {
-	if (!SERVER_STORAGE) throw new Error("server generation requires server storage");
 	if (!ID.test(id)) throw new Error("invalid generation job id");
 	return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}/cancel`, {
 		method: "POST",
@@ -308,28 +290,12 @@ export async function updateGenerationJob(id: string, patch: Partial<GenerationJ
   const current = await getGenerationJob(id);
   if (!current) throw new Error("generation job not found");
   const job = validateGenerationJob({ ...current, ...patch, id, createdAt: current.createdAt, updatedAt: nowIso() });
-  if (SERVER_STORAGE) {
-    return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(job) }));
-  }
-  await set(id, job, jobStore);
-  return job;
+  return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(job) }));
 }
 
 export async function deleteGenerationJob(id: string): Promise<void> {
   if (!ID.test(id)) throw new Error("invalid generation job id");
-  if (SERVER_STORAGE) {
-    await api<void>(`generation-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
-    return;
-  }
-  const current = await get<GenerationJob>(id, jobStore);
-  if (!current) return;
-  const job = validateGenerationJob({
-    ...current,
-    status: "deleted",
-    error: current.error || "已删除",
-    updatedAt: nowIso(),
-  });
-  await set(id, job, jobStore);
+  await api<void>(`generation-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function uniqueGenerationJobIds(ids: readonly string[]): string[] {
@@ -348,26 +314,11 @@ export async function deleteGenerationJobs(ids: readonly string[]): Promise<numb
   const unique = uniqueGenerationJobIds(ids);
   if (!unique.length) return 0;
   if (unique.length > 100) throw new Error("too many generation job ids");
-  if (SERVER_STORAGE) {
-    const result = await api<{ deleted?: number }>("generation-jobs/bulk-delete", {
-      method: "POST",
-      body: JSON.stringify({ ids: unique }),
-    });
-    return Number(result?.deleted ?? 0);
-  }
-  let deleted = 0;
-  for (const id of unique) {
-    const current = await get<GenerationJob>(id, jobStore);
-    if (!current || current.status === "deleted") continue;
-    await set(id, validateGenerationJob({
-      ...current,
-      status: "deleted",
-      error: current.error || "已删除",
-      updatedAt: nowIso(),
-    }), jobStore);
-    deleted += 1;
-  }
-  return deleted;
+  const result = await api<{ deleted?: number }>("generation-jobs/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ ids: unique }),
+  });
+  return Number(result?.deleted ?? 0);
 }
 
 export function selectGenerationJobsForProject(
@@ -393,19 +344,11 @@ export function selectGenerationJobsForNodeCleanup(
 
 export async function deleteGenerationJobsForProject(projectId: string): Promise<number> {
   if (!ID.test(projectId)) throw new Error("invalid project id");
-  if (SERVER_STORAGE) {
-    const result = await api<{ deleted?: number }>(
-      `generation-jobs/project/${encodeURIComponent(projectId)}`,
-      { method: "DELETE" },
-    );
-    return Number(result?.deleted ?? 0);
-  }
-  const values = await entries<string, GenerationJob>(jobStore);
-  const targets = selectGenerationJobsForProject(values.map(([, job]) => job), projectId);
-  for (const job of targets) {
-    await del(job.id, jobStore);
-  }
-  return targets.length;
+  const result = await api<{ deleted?: number }>(
+    `generation-jobs/project/${encodeURIComponent(projectId)}`,
+    { method: "DELETE" },
+  );
+  return Number(result?.deleted ?? 0);
 }
 
 /** Remove jobs owned by deleted canvas nodes. Active server jobs are cancelled first. */
@@ -458,12 +401,7 @@ export async function replaceGenerationJobs(jobs: GenerationJob[]): Promise<void
     if (ids.has(job.id)) throw new Error("duplicate generation job id");
     ids.add(job.id);
   }
-  if (SERVER_STORAGE) {
-    await api<void>("generation-jobs", { method: "PUT", body: JSON.stringify(validated) });
-    return;
-  }
-  await clear(jobStore);
-  await setMany(validated.map((job) => [job.id, job] as [IDBValidKey, GenerationJob]), jobStore);
+  await api<void>("generation-jobs", { method: "PUT", body: JSON.stringify(validated) });
 }
 
 /** Browser-local history access reserved for the explicit account migration flow. */

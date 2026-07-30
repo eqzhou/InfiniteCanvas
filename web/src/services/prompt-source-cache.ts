@@ -1,4 +1,3 @@
-import { createStore, del, get, set } from "idb-keyval";
 import type { PromptItem, PromptSourceConfig } from "@/types/board";
 
 export type PromptSourceCacheRecord = {
@@ -11,12 +10,7 @@ export type PromptSourceCacheRecord = {
   signature: string;
 };
 
-const cacheStore = createStore("openboard-prompt-cache", "source_cache");
 const memory = new Map<string, PromptSourceCacheRecord>();
-
-function cacheKey(sourceId: string): string {
-  return `prompt-source:${sourceId}`;
-}
 
 export function promptSourceSignature(source: PromptSourceConfig): string {
   const value = [
@@ -39,15 +33,7 @@ export async function readPromptSourceCache(
   sourceId: string,
 ): Promise<PromptSourceCacheRecord | null> {
   const hit = memory.get(sourceId);
-  if (hit) return structuredClone(hit);
-  try {
-    const record = await get<PromptSourceCacheRecord>(cacheKey(sourceId), cacheStore);
-    if (!record || typeof record !== "object") return null;
-    memory.set(sourceId, record);
-    return structuredClone(record);
-  } catch {
-    return null;
-  }
+  return hit ? structuredClone(hit) : null;
 }
 
 export async function writePromptSourceCache(
@@ -67,20 +53,10 @@ export async function writePromptSourceCache(
     signature: record.signature,
   };
   memory.set(record.sourceId, next);
-  try {
-    await set(cacheKey(record.sourceId), next, cacheStore);
-  } catch {
-    // Cache is best-effort; in-memory still helps the current session.
-  }
 }
 
 export async function clearPromptSourceCache(sourceId: string): Promise<void> {
   memory.delete(sourceId);
-  try {
-    await del(cacheKey(sourceId), cacheStore);
-  } catch {
-    // ignore
-  }
 }
 
 export function withSourceMeta(

@@ -88,7 +88,7 @@ canvas.
 - Client-scoped `generation_get_status` for canvas and workbench tasks
 - Continuous shared Codex threads, cross-tab running state, safe Markdown, structured logs, stop, attachments, and approvals
 - Per-node camera prompt controls for image/video/config generation, with structured camera/lens/focal-length/aperture persistence and retry-safe prompt assembly
-- Native director scene v4 with visual catalogs for eight procedural character looks and twenty poses, actor/extra staging, six primitive geometries, bounded instanced crowd arrays, named multi-camera shots, independent director/camera views, composition guides, bounded browser-local GLB import/relink, interactive move/rotate/scale controls, and a screenshot tray that uses protected cross-device storage in formal mode while retaining offline IndexedDB compatibility
+- Native director scene v4 with visual catalogs for eight procedural character looks and twenty poses, actor/extra staging, six primitive geometries, bounded instanced crowd arrays, named multi-camera shots, independent director/camera views, composition guides, protected server-backed GLB import/relink, interactive move/rotate/scale controls, and a protected cross-device screenshot tray
 - Native panorama nodes with strict 2:1 upload/reuse, ordinary managed image references, fixed 2048x1024 AI generation, controlled quality and 1–8 result batches, 360° viewing, durable atomic commit, and director environment handoff
 - Codex user bubbles, open assistant replies, auto-scroll, jump-to-bottom, and attachment-to-canvas image/config flow
 - Independent OpenBoard Codex plugin installer and standard Claude MCP instructions
@@ -145,14 +145,12 @@ bun run dev
 
 Open http://localhost:5173
 
-`5173` is the Vite development server. Production builds default to
-`VITE_OPENBOARD_STORAGE=server`: projects and application metadata are persisted
-through Go into PostgreSQL, Redis provides short-lived project caching, and
-media bytes live in the protected Go data directory. An offline production
-build must explicitly set `VITE_OPENBOARD_STORAGE=local`; IndexedDB otherwise
-remains a development-only compatibility path. On the first formal launch,
-legacy browser data is migrated only when the server database is completely
-empty; the browser stores are cleared after a successful migration.
+`5173` is the Vite development server. Every runtime persists projects,
+application metadata, generation history, workflow templates, and protected
+media through Go into PostgreSQL-backed server storage. Redis provides
+short-lived project caching, and media bytes live in the protected Go data
+directory. IndexedDB is not a runtime persistence option; it is read only by
+the explicit legacy migration flow and cleared after a verified migration.
 
 For the optional Go Agent, the panel supports an explicit Local URL and a
 session-only connect token. Browser project synchronization, live runtime

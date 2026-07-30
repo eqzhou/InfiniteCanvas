@@ -1,6 +1,7 @@
 import { nowIso, uid } from "@/lib/id";
 import { getRuntimeClientId } from "@/services/runtime-identity";
 import { getSessionToken } from "@/services/auth-session";
+import { DATABASE_STORAGE_ENABLED } from "@/services/storage-mode";
 import { getAICallLogClientReport, reportAICallLog } from "@/services/ai-call-logs";
 
 export type GenerationActivityKind = "text" | "image" | "video" | "audio";
@@ -85,7 +86,7 @@ let clientReportEnabledCache: { enabled: boolean; expiresAt: number } | null = n
 function canAttemptClientAICallReport(): boolean {
   // Browser direct-connect audit upload only makes sense against a server-backed
   // API. Local/IndexedDB deployments and pure unit tests must not poke /api.
-  if (import.meta.env.VITE_OPENBOARD_STORAGE !== "server") return false;
+  if (!DATABASE_STORAGE_ENABLED) return false;
   // Without a session (or process-token bootstrap handled server-side), the
   // report endpoint will 401; skip the network round-trip entirely.
   if (typeof window === "undefined") return false;

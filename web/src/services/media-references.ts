@@ -1,10 +1,11 @@
 import { authFetch } from "@/services/auth-session";
 import { storageKeyToDataUrl } from "@/services/storage";
+import { DATABASE_STORAGE_ENABLED } from "@/services/storage-mode";
 
 const MAX_MEDIA_REFERENCE_KEYS = 20;
 
 function serverStorageEnabled(): boolean {
-  return import.meta.env.VITE_OPENBOARD_STORAGE === "server";
+  return DATABASE_STORAGE_ENABLED;
 }
 
 export type MediaReferenceItem = {

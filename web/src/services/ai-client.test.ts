@@ -12,12 +12,10 @@ import type { AiChannel } from "@/types/board";
 import { sharedChannelAsAI } from "@/services/shared-channels";
 
 const originalFetch = globalThis.fetch;
-const originalStorageMode = import.meta.env.VITE_OPENBOARD_STORAGE;
 const fixtureCredential = ["test", "credential"].join("-");
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  import.meta.env.VITE_OPENBOARD_STORAGE = originalStorageMode;
 });
 
 test("uses an inline image when persistent blob storage is unavailable", async () => {
@@ -95,7 +93,6 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 
 describe("generateVideo provider contracts", () => {
   test("routes remote text generation through the same-origin provider gateway", async () => {
-    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
     const requests: Array<{ url: string; headers: Headers; body: unknown }> = [];
     globalThis.fetch = mock(async (input, init) => {
       const url = String(input);
@@ -128,7 +125,6 @@ describe("generateVideo provider contracts", () => {
   });
 
   test("does not fall back to a remote browser request when the text gateway fails", async () => {
-    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
     const requests: string[] = [];
     globalThis.fetch = mock(async (input) => {
       requests.push(String(input));
@@ -144,7 +140,6 @@ describe("generateVideo provider contracts", () => {
   });
 
   test("keeps loopback text providers browser-direct in server storage mode", async () => {
-    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
     const requests: Array<{ url: string; authorization: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {
       requests.push({
@@ -167,10 +162,10 @@ describe("generateVideo provider contracts", () => {
 
   test("applies a global system prompt to OpenAI text and image requests", async () => {
     const bodies: unknown[] = [];
-    globalThis.fetch = mock(async (_input, init) => {
+    globalThis.fetch = mock(async (input, init) => {
       bodies.push(JSON.parse(String(init?.body ?? "{}")));
-      return bodies.length === 1
-        ? json({ output_text: "ok" })
+      return String(input) === "/api/provider-text"
+        ? json({ text: "ok" })
         : json({ data: [{ url: "https://cdn.example/system.png" }] });
     }) as typeof fetch;
 
@@ -187,7 +182,7 @@ describe("generateVideo provider contracts", () => {
       systemPrompt: "Use a transparent editorial style.",
     });
 
-    expect(bodies[0]).toMatchObject({ instructions: "Keep the result concise." });
+    expect(bodies[0]).toMatchObject({ systemPromptProfile: "global" });
     expect(bodies[1]).toMatchObject({
       prompt: "Use a transparent editorial style.\n\ndraw a lighthouse",
     });
@@ -201,8 +196,8 @@ describe("generateVideo provider contracts", () => {
         apiKey: new Headers(init?.headers).get("x-goog-api-key"),
         body: JSON.parse(String(init?.body ?? "{}")),
       });
-      return requests.length === 1
-        ? json({ candidates: [{ content: { parts: [{ text: "gemini text" }] } }] })
+      return String(input) === "/api/provider-text"
+        ? json({ text: "gemini text" })
         : json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: "YWJj" } }] } }] });
     }) as typeof fetch;
     const c = channel("https://legacy.example/v1");
@@ -217,9 +212,9 @@ describe("generateVideo provider contracts", () => {
       "data:image/png;base64,YWJj",
       "data:image/png;base64,YWJj",
     ]);
-    expect(requests.map((item) => item.apiKey)).toEqual([fixtureCredential, fixtureCredential, fixtureCredential]);
-    expect(requests[0]?.url).toContain("/models/gemini-2.5-flash:generateContent");
-    expect(requests[0]?.body).toMatchObject({ systemInstruction: { parts: [{ text: "Be concise" }] } });
+    expect(requests.map((item) => item.apiKey)).toEqual([null, fixtureCredential, fixtureCredential]);
+    expect(requests[0]?.url).toBe("/api/provider-text");
+    expect(requests[0]?.body).toMatchObject({ channelId: c.id, systemPromptProfile: "global" });
     expect(requests[1]?.body).toMatchObject({ contents: [{ parts: [{ text: "Use clean lines\n\ndraw" }] }] });
     expect(requests[2]?.body).toMatchObject({ contents: [{ parts: [{ text: "Use clean lines\n\ndraw" }] }] });
   });
@@ -327,7 +322,6 @@ describe("generateVideo provider contracts", () => {
   });
 
   test("does not fall back to a cross-origin model request when the server gateway is unavailable", async () => {
-    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
     const requests: string[] = [];
     globalThis.fetch = mock(async (input) => {
       requests.push(String(input));
@@ -356,7 +350,7 @@ describe("generateVideo provider contracts", () => {
     const requests: Array<{ url: string; auth: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {
       requests.push({ url: String(input), auth: new Headers(init?.headers).get("Authorization") });
-      if (String(input).includes("text.example")) return json({ output_text: "ok" });
+      if (String(input) === "/api/provider-text") return json({ text: "ok" });
       if (String(input).includes("image.example")) return json({ data: [{ url: "https://cdn.example/image.png" }] });
       return new Response(new Blob(["audio"], { type: "audio/mpeg" }));
     }) as typeof fetch;
@@ -372,11 +366,11 @@ describe("generateVideo provider contracts", () => {
     await generateSpeech({ channel: c, model: "audio", input: "hello" });
 
     expect(requests.map((r) => r.url)).toEqual([
-      "https://text.example/v1/responses",
+      "/api/provider-text",
       "https://image.example/v1/images/generations",
       "https://audio.example/v1/audio/speech",
     ]);
-    expect(requests.map((r) => r.auth)).toEqual(["Bearer text-key", "Bearer image-key", "Bearer audio-key"]);
+    expect(requests.map((r) => r.auth)).toEqual([null, "Bearer image-key", "Bearer audio-key"]);
   });
 
   test("does not retry text generation after an authentication failure", async () => {
@@ -390,27 +384,23 @@ describe("generateVideo provider contracts", () => {
       channel: channel("https://api.example/v1"),
       model: "text",
       prompt: "hello",
-    })).rejects.toThrow("401");
+    })).rejects.toThrow("invalid key");
     expect(calls).toBe(1);
   });
 
-  test("falls back to chat completions only when the responses endpoint is unsupported", async () => {
+  test("does not bypass the server gateway when the provider contract is unsupported", async () => {
     const urls: string[] = [];
     globalThis.fetch = mock(async (input) => {
       urls.push(String(input));
-      if (urls.length === 1) return new Response("not found", { status: 404 });
-      return json({ choices: [{ message: { content: "fallback" } }] });
+      return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
     await expect(generateText({
       channel: channel("https://api.example/v1"),
       model: "text",
       prompt: "hello",
-    })).resolves.toBe("fallback");
-    expect(urls).toEqual([
-      "https://api.example/v1/responses",
-      "https://api.example/v1/chat/completions",
-    ]);
+    })).rejects.toThrow("not found");
+    expect(urls).toEqual(["/api/provider-text"]);
   });
 
   test("forwards audio speed and instructions and rejects out-of-range speed", async () => {

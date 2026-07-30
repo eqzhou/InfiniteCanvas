@@ -40,26 +40,12 @@ function parseCatalog(value: unknown): PublicPromptCatalog {
 
 function readCache(scope: string): CatalogCache | null {
   const key = cacheKey(scope);
-  try {
-    if (typeof sessionStorage === "undefined") return volatileCache.get(key) ?? null;
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<CatalogCache>;
-    if (typeof parsed.etag !== "string") return null;
-    return { etag: parsed.etag, catalog: parseCatalog(parsed.catalog) };
-  } catch {
-    return null;
-  }
+  return volatileCache.get(key) ?? null;
 }
 
 function writeCache(scope: string, value: CatalogCache): void {
   const key = cacheKey(scope);
   volatileCache.set(key, value);
-  try {
-    if (typeof sessionStorage !== "undefined") sessionStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // A valid network result remains usable when browser storage is unavailable.
-  }
 }
 
 export async function loadPublicPromptCatalog(

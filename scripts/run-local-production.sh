@@ -27,7 +27,7 @@ export OPENBOARD_API_TARGET=http://127.0.0.1:8790
 export OPENBOARD_WEB_OUT_DIR=dist-local
 
 echo "Building the local production UI with PostgreSQL-backed server storage..."
-VITE_OPENBOARD_STORAGE=server bun run --cwd web build
+bun run --cwd web build
 echo "Building the local production server..."
 (cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go build -trimpath -o ./bin/openboard-server ./cmd/server)
 

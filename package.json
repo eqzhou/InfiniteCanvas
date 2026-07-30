@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "bun run --cwd web dev",
     "build": "bun run --cwd web build && bun run --cwd packages/plugin-sdk build",
-    "build:local": "VITE_OPENBOARD_STORAGE=server OPENBOARD_WEB_OUT_DIR=dist-local bun run --cwd web build",
+    "build:local": "OPENBOARD_WEB_OUT_DIR=dist-local bun run --cwd web build",
     "start:local": "./scripts/run-local-production.sh",
     "typecheck": "bun run --cwd web typecheck && bun run --cwd packages/plugin-sdk typecheck",
     "test": "bun run --cwd web test && cd server && GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go test ./...",

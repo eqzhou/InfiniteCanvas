@@ -44,7 +44,7 @@ export function createWebServerCommand({
     return `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`;
   }
   if (mode === "formal") {
-    return `VITE_OPENBOARD_STORAGE=server bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`;
+    return `bun run build && OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run preview --host 127.0.0.1 --port ${webPort}`;
   }
   return `OPENBOARD_API_TARGET=http://127.0.0.1:${agentPort} OPENBOARD_TOKEN=e2e-token bun run dev --host 127.0.0.1 --port ${webPort} --strictPort`;
 }

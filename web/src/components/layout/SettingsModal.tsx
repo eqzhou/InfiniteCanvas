@@ -709,9 +709,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           <div className="mt-5 flex items-start gap-2 border-t border-[var(--ob-line)] pt-4 text-xs text-[var(--ob-muted)]">
             <ShieldCheck className="mt-0.5 shrink-0" size={15} />
             <p>
-            {import.meta.env.VITE_OPENBOARD_STORAGE === "server"
-              ? "API Key 与对象存储密钥经本地服务加密后存入 PostgreSQL，数据库中不保存明文。"
-              : "API Key 仅保存在当前浏览器的本地存储中。"}
+            API Key 与对象存储密钥经服务端加密后存入 PostgreSQL，数据库中不保存明文。
             Ark / Seedance 请为对应服务选择 Ark 协议，并填写兼容的
             `/api/v3` Base URL 与模型名。
             </p>

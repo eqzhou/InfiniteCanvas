@@ -1,4 +1,4 @@
-import { clear, createStore, del, entries, get, set } from "idb-keyval";
+import { clear, createStore, entries, get, set } from "idb-keyval";
 import type { AppConfig, AssetItem, AssistantSession, BoardNode, BoardProject, GenerationJob, PromptItem } from "@/types/board";
 import { decodeBoundedDataUrl, readBoundedResponse } from "@/services/remote-content";
 import { normalizeExternalHttpsUrl } from "@/lib/remote-url";
@@ -56,9 +56,6 @@ import {
   summarizeMigrationCredentials,
   type MigrationCredentialSummary,
 } from "@/services/local-migration-resources";
-
-const SERVER_STORAGE = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
-
 // idb-keyval createStore only ensures the *requested* object store exists.
 // Using one DB name with three stores leaves later stores missing after first open.
 // Separate DBs avoid upgrade races and the "object store was not found" crash.
@@ -320,7 +317,6 @@ async function runLocalWorkspaceMigration(
 export async function preflightLocalWorkspaceMigration(
   options: { includeSecrets?: boolean; allowSecrets?: boolean } = {},
 ): Promise<StorageMigrationPreflight | null> {
-  if (!SERVER_STORAGE) return null;
   serverMigrationSuppressed = true;
   // The server is authoritative for secret migration rights; the caller's
   // role-derived hint can only narrow it, never widen it.
@@ -345,7 +341,6 @@ export async function preflightLocalWorkspaceMigration(
 export async function migrateLocalWorkspace(
   options: { includeSecrets?: boolean; allowSecrets?: boolean; onProgress?: (progress: StorageMigrationProgress) => void; signal?: AbortSignal } = {},
 ): Promise<ExecuteWorkspaceMigrationResult | null> {
-  if (!SERVER_STORAGE) return null;
   serverMigrationSuppressed = true;
   const capabilities = await loadMigrationCapabilities();
   const allowSecrets = capabilities.allowSecrets && options.allowSecrets !== false;
@@ -363,7 +358,7 @@ export function keepLocalWorkspaceForSession(): void {
 }
 
 function ensureServerMigration(): Promise<void> {
-  if (!SERVER_STORAGE || serverMigrationSuppressed) return Promise.resolve();
+  if (serverMigrationSuppressed) return Promise.resolve();
   if (serverMigration) return serverMigration;
   serverMigration = (async () => {
     const local = await readLocalMigrationWorkspace();
@@ -409,12 +404,8 @@ const REMOTE_MEDIA_MIME_TYPES = [
 ] as const;
 
 export async function loadProjects(): Promise<BoardProject[]> {
-  if (SERVER_STORAGE) {
-    await ensureServerMigration();
-    return loadServerProjects();
-  }
-  const projects = (await get<unknown[]>(PROJECTS_KEY, appStore)) ?? [];
-  return projects.map(parseBoardProject);
+  await ensureServerMigration();
+  return loadServerProjects();
 }
 
 /**
@@ -423,28 +414,19 @@ export async function loadProjects(): Promise<BoardProject[]> {
  * instead of retrying a write the server will always refuse.
  */
 export async function saveProjects(projects: BoardProject[]): Promise<string[]> {
-  if (SERVER_STORAGE) return saveServerProjects(projects);
-  await set(PROJECTS_KEY, projects, appStore);
-  return [];
+  return saveServerProjects(projects);
 }
 
 /** Explicit deletes for user-driven project removal. Ordinary save never deletes remote projects. */
 export async function deleteProjectsById(ids: readonly string[]): Promise<void> {
   const unique = [...new Set(ids.filter(Boolean))];
   if (!unique.length) return;
-  if (SERVER_STORAGE) {
-    await Promise.all(unique.map((id) => deleteServerProject(id)));
-    return;
-  }
-  const current = ((await get<BoardProject[]>(PROJECTS_KEY, appStore)) ?? [])
-    .filter((project) => !unique.includes(project.id));
-  await set(PROJECTS_KEY, current, appStore);
+  await Promise.all(unique.map((id) => deleteServerProject(id)));
 }
 
 /** Full project-catalog replacement for workspace restore only. */
 export async function replaceProjects(projects: BoardProject[]): Promise<void> {
-  if (SERVER_STORAGE) return replaceServerProjects(projects);
-  await set(PROJECTS_KEY, projects, appStore);
+  return replaceServerProjects(projects);
 }
 
 export type ConfigSecrets = {
@@ -550,53 +532,40 @@ function readSessionConfigSecrets(): ConfigSecrets {
   }
 }
 
-function writeSessionConfigSecrets(secrets: ConfigSecrets): void {
-  if (typeof sessionStorage === "undefined") return;
-  try {
-    sessionStorage.setItem(CONFIG_SECRETS_KEY, JSON.stringify(secrets));
-  } catch {
-    // The live config remains usable when private browsing denies session storage.
-  }
-}
-
 export async function loadConfig(): Promise<AppConfig | null> {
   await ensureServerMigration();
   let serverBundle: { config: AppConfig; secrets: ConfigSecrets } | null = null;
-  if (SERVER_STORAGE) {
-    try {
-      serverBundle = await loadServerConfigBundle<ConfigSecrets>();
-    } catch (error) {
-      if (!(error instanceof SecretAuthRequiredError) && !(error instanceof TenantConfigAdminRequiredError)) throw error;
-      const config = await loadServerState<AppConfig>("config");
-      if (config) {
-        serverBundle = {
-          config,
-          secrets: { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" },
-        };
-      }
+  try {
+    serverBundle = await loadServerConfigBundle<ConfigSecrets>();
+  } catch (error) {
+    if (!(error instanceof SecretAuthRequiredError) && !(error instanceof TenantConfigAdminRequiredError)) throw error;
+    const config = await loadServerState<AppConfig>("config");
+    if (config) {
+      serverBundle = {
+        config,
+        secrets: { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" },
+      };
     }
   }
-  const stored = SERVER_STORAGE
-    ? serverBundle?.config ?? null
-    : (await get<AppConfig>(CONFIG_KEY, appStore)) ?? null;
+  const stored = serverBundle?.config ?? null;
   if (!stored) return null;
-  const sessionSecrets = SERVER_STORAGE
-    ? serverBundle?.secrets ?? { apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "", objectStorageSecretAccessKey: "", objectStorageSessionToken: "" }
-    : readSessionConfigSecrets();
+  const sessionSecrets = serverBundle?.secrets ?? {
+    apiKeys: {},
+    webdavPass: "",
+    objectStorageAccessKeyId: "",
+    objectStorageSecretAccessKey: "",
+    objectStorageSessionToken: "",
+  };
   const persistedSecrets = extractConfigSecrets(stored);
-	const secrets = mergeConfigSecrets(sessionSecrets, persistedSecrets);
-  if (!SERVER_STORAGE) writeSessionConfigSecrets(secrets);
+  const secrets = mergeConfigSecrets(sessionSecrets, persistedSecrets);
 
   const sanitized = sanitizeConfigForPersistence(stored);
   if (hasConfigSecrets(persistedSecrets)) {
-    if (SERVER_STORAGE) {
-      try {
-        await saveServerState("config", sanitized);
-      } catch (error) {
-        if (!(error instanceof TenantConfigAdminRequiredError)) throw error;
-      }
+    try {
+      await saveServerState("config", sanitized);
+    } catch (error) {
+      if (!(error instanceof TenantConfigAdminRequiredError)) throw error;
     }
-    else await set(CONFIG_KEY, sanitized, appStore);
   }
   const objectStorage = normalizeObjectStorage(sanitized.objectStorage);
   return {
@@ -621,85 +590,57 @@ export async function saveConfig(config: AppConfig): Promise<void> {
   const secrets = extractConfigSecrets(config);
   const hasSecrets = summarizeMigrationCredentials(secrets).present;
   const sanitized = sanitizeConfigForPersistence(config);
-	if (SERVER_STORAGE) {
-    // One conditional server transaction keeps destinations and credentials
-    // paired and prevents a stale tab from overwriting either half.
-    try {
-      await saveServerConfigBundle(sanitized, secrets);
-    } catch (error) {
-      if ((error instanceof SecretAuthRequiredError || error instanceof TenantConfigAdminRequiredError) && !hasSecrets) {
-        await saveServerState("config", sanitized);
-      } else {
-        throw error;
-      }
+  // One conditional server transaction keeps destinations and credentials
+  // paired and prevents a stale tab from overwriting either half.
+  try {
+    await saveServerConfigBundle(sanitized, secrets);
+  } catch (error) {
+    if ((error instanceof SecretAuthRequiredError || error instanceof TenantConfigAdminRequiredError) && !hasSecrets) {
+      await saveServerState("config", sanitized);
+    } else {
+      throw error;
     }
-	}
-  else writeSessionConfigSecrets(secrets);
-  if (!SERVER_STORAGE) await set(CONFIG_KEY, sanitized, appStore);
+  }
 }
 
 export async function loadAssets(): Promise<AssetItem[]> {
-  if (SERVER_STORAGE) {
-    await ensureServerMigration();
-    return (await loadServerState<AssetItem[]>("assets")) ?? [];
-  }
-  return (await get<AssetItem[]>(ASSETS_KEY, appStore)) ?? [];
+  await ensureServerMigration();
+  return (await loadServerState<AssetItem[]>("assets")) ?? [];
 }
 
 export async function saveAssets(assets: AssetItem[]): Promise<void> {
-  if (SERVER_STORAGE) return saveServerState("assets", assets);
-  await set(ASSETS_KEY, assets, appStore);
+  return saveServerState("assets", assets);
 }
 
 export async function loadPrompts(): Promise<PromptItem[]> {
-  if (SERVER_STORAGE) {
-    await ensureServerMigration();
-    return (await loadServerState<PromptItem[]>("prompts")) ?? [];
-  }
-  return (await get<PromptItem[]>(PROMPTS_KEY, appStore)) ?? [];
+  await ensureServerMigration();
+  return (await loadServerState<PromptItem[]>("prompts")) ?? [];
 }
 
 export async function savePrompts(prompts: PromptItem[]): Promise<void> {
-  if (SERVER_STORAGE) return saveServerState("prompts", prompts);
-  await set(PROMPTS_KEY, prompts, appStore);
+  return saveServerState("prompts", prompts);
 }
 
 export async function putBlob(
-  kind: "image" | "media",
+  _kind: "image" | "media",
   key: string,
   blob: Blob,
 ): Promise<void> {
-  if (SERVER_STORAGE) return putServerBlob(key, blob);
-  const record: StoredBlobRecord = {
-    version: 1,
-    mimeType: blob.type || "application/octet-stream",
-    bytes: await blob.arrayBuffer(),
-  };
-  await set(key, record, kind === "image" ? imageStore : mediaStore);
+  return putServerBlob(key, blob);
 }
 
 export async function getBlob(
-  kind: "image" | "media",
+  _kind: "image" | "media",
   key: string,
 ): Promise<Blob | undefined> {
-  if (SERVER_STORAGE) return getServerBlob(key);
-  return storedValueToBlob(await get<unknown>(key, kind === "image" ? imageStore : mediaStore));
+  return getServerBlob(key);
 }
 
-export async function deleteBlob(kind: "image" | "media", key: string): Promise<void> {
-  if (SERVER_STORAGE) {
-    await deleteServerBlob(key);
-    const serverURL = objectUrls.get(key);
-    if (serverURL) URL.revokeObjectURL(serverURL);
-    objectUrls.delete(key);
-    return;
-  }
-  await del(key, kind === "image" ? imageStore : mediaStore);
-  const url = objectUrls.get(key);
-  if (url) {
-    URL.revokeObjectURL(url);
-    objectUrls.delete(key);
-  }
+export async function deleteBlob(_kind: "image" | "media", key: string): Promise<void> {
+  await deleteServerBlob(key);
+  const serverURL = objectUrls.get(key);
+  if (serverURL) URL.revokeObjectURL(serverURL);
+  objectUrls.delete(key);
 }
 
 export async function storeImportedMedia(
@@ -1023,9 +964,8 @@ export async function rehydrateProjects(
   const migratedStorageKeys: string[] = [];
   const projectStorageKeys = projects.flatMap((project) =>
     [...collectBoardContentStorageKeys(project.nodes, project.chatSessions)]);
-  const displayUrls = SERVER_STORAGE
-    ? await createServerBlobDisplayUrls(projectStorageKeys).catch(() => new Map<string, string>())
-    : new Map<string, string>();
+  const displayUrls = await createServerBlobDisplayUrls(projectStorageKeys)
+    .catch(() => new Map<string, string>());
   for (const project of projects) {
     const nodes: BoardNode[] = [];
     try {
@@ -1152,11 +1092,9 @@ export async function rehydrateProjects(
 
 export async function rehydrateAssets(assets: AssetItem[]): Promise<AssetItem[]> {
   const out: AssetItem[] = [];
-  const displayUrls = SERVER_STORAGE
-    ? await createServerBlobDisplayUrls(
-        assets.map((asset) => asset.storageKey).filter((key): key is string => Boolean(key)),
-      ).catch(() => new Map<string, string>())
-    : new Map<string, string>();
+  const displayUrls = await createServerBlobDisplayUrls(
+    assets.map((asset) => asset.storageKey).filter((key): key is string => Boolean(key)),
+  ).catch(() => new Map<string, string>());
   for (const asset of assets) {
     if (asset.storageKey) {
       const kind = mediaKindFromKey(asset.storageKey);
@@ -1247,21 +1185,10 @@ function loadHtmlImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-export async function cleanupUnusedMedia(liveKeys: Set<string>): Promise<void> {
-  for (const store of [imageStore, mediaStore]) {
-    const all = await entries(store);
-    for (const [key] of all) {
-      const k = String(key);
-      if (!liveKeys.has(k)) {
-        await del(k, store);
-        const url = objectUrls.get(k);
-        if (url) {
-          URL.revokeObjectURL(url);
-          objectUrls.delete(k);
-        }
-      }
-    }
-  }
+export async function cleanupUnusedMedia(_liveKeys: Set<string>): Promise<void> {
+  // Server-owned blobs are reclaimed by the authenticated lifecycle APIs.
+  // Legacy IndexedDB is intentionally read only until the explicit migration
+  // flow verifies and clears the complete browser workspace.
 }
 
 export function collectStorageKeys(

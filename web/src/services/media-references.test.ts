@@ -8,11 +8,9 @@ import {
 } from "./media-references";
 
 const originalFetch = globalThis.fetch;
-const originalStorage = import.meta.env.VITE_OPENBOARD_STORAGE;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  import.meta.env.VITE_OPENBOARD_STORAGE = originalStorage;
 });
 
 describe("media reference helpers", () => {
@@ -22,13 +20,10 @@ describe("media reference helpers", () => {
     );
   });
 
-  test("only mints when server storage is on a public HTTPS origin", () => {
-    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
+  test("only mints on a public HTTPS origin", () => {
     expect(canMintPublicMediaReferences("https://canvas.example.com")).toBe(true);
     expect(canMintPublicMediaReferences("http://canvas.example.com")).toBe(false);
     expect(canMintPublicMediaReferences("https://localhost:5173")).toBe(false);
-    import.meta.env.VITE_OPENBOARD_STORAGE = "local";
-    expect(canMintPublicMediaReferences("https://canvas.example.com")).toBe(false);
   });
 
   test("createMediaReferences posts storage keys and parses items", async () => {
@@ -49,7 +44,6 @@ describe("media reference helpers", () => {
   });
 
   test("resolveMediaRefs prefers public URLs over data URLs when minting works", async () => {
-    import.meta.env.VITE_OPENBOARD_STORAGE = "server";
     // Force canMint via stubbing location origin through create path: we mock
     // createMediaReferences network and override canMint by monkeypatching window.
     const originalWindow = globalThis.window;
@@ -76,7 +70,6 @@ describe("media reference helpers", () => {
   });
 
   test("resolvePublicMediaReferenceUrls returns empty map when minting is unavailable", async () => {
-    import.meta.env.VITE_OPENBOARD_STORAGE = "local";
     const map = await resolvePublicMediaReferenceUrls(["image:1"]);
     expect(map.size).toBe(0);
   });

@@ -33,7 +33,7 @@ export function DirectorCaptureTray({
   onSendSelected: () => void;
   onPreview: (id: string | null) => void;
 }) {
-  const synchronized = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
+  const synchronized = true;
   const preview = captures.find((capture) => capture.record.id === previewId);
   const previewCloseRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { createStore, del, entries, get, promisifyRequest, set } from "idb-keyval";
 
 import { validateDirectorGlb } from "@/lib/director-glb";
+import { deleteBlob, getBlob, putBlob } from "@/services/storage";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 const SAFE_FILE_NAME = /^[^/\\\u0000-\u001f\u007f]{1,160}\.glb$/i;
@@ -431,4 +432,88 @@ export function createDirectorModelStore(
   };
 }
 
-export const directorModelStore = createDirectorModelStore();
+type ServerDirectorModelDescriptor = DirectorModelIdentity & Pick<DirectorModelRecord, "fileName" | "bytes">;
+
+function serverModelStorageKey(assetId: string): string {
+  return `director-model:${boundedId(assetId, "assetId")}`;
+}
+
+/**
+ * Runtime director models use the same authenticated protected-blob service as
+ * canvas media. Their descriptors live in the PostgreSQL project document, so
+ * a second browser metadata database is neither necessary nor authoritative.
+ */
+export const directorModelStore = {
+  async list(
+    ownerScope: string,
+    projectId: string,
+    directorNodeId: string,
+    descriptors: readonly ServerDirectorModelDescriptor[] = [],
+  ): Promise<DirectorModelRecord[]> {
+    const scope = boundedId(ownerScope, "ownerScope");
+    const project = boundedId(projectId, "projectId");
+    const director = boundedId(directorNodeId, "directorNodeId");
+    const records = await Promise.all(descriptors.map(async (descriptor) => {
+      const safe = {
+        ownerScope: boundedId(descriptor.ownerScope, "ownerScope"),
+        projectId: boundedId(descriptor.projectId, "projectId"),
+        directorNodeId: boundedId(descriptor.directorNodeId, "directorNodeId"),
+        objectId: boundedId(descriptor.objectId, "objectId"),
+        assetId: boundedId(descriptor.assetId, "assetId"),
+      };
+      if (safe.ownerScope !== scope || safe.projectId !== project || safe.directorNodeId !== director) return null;
+      const fileName = boundedFileName(descriptor.fileName);
+      if (!Number.isInteger(descriptor.bytes) || descriptor.bytes < 20 || descriptor.bytes > DEFAULT_LIMITS.maxBlobBytes) return null;
+      const blob = await getBlob("media", serverModelStorageKey(safe.assetId));
+      if (!blob || blob.size !== descriptor.bytes) return null;
+      return {
+        ...safe,
+        fileName,
+        bytes: blob.size,
+        mimeType: "model/gltf-binary" as const,
+        createdAt: new Date(0).toISOString(),
+        blob: blob.slice(0, blob.size, "model/gltf-binary"),
+      };
+    }));
+    return records.filter((record): record is DirectorModelRecord => record !== null);
+  },
+
+  async get(_value: DirectorModelIdentity): Promise<DirectorModelRecord | null> {
+    return null;
+  },
+
+  async put(input: DirectorModelInput): Promise<DirectorModelRecord> {
+    const safeIdentity: DirectorModelIdentity = {
+      ownerScope: boundedId(input.ownerScope, "ownerScope"),
+      projectId: boundedId(input.projectId, "projectId"),
+      directorNodeId: boundedId(input.directorNodeId, "directorNodeId"),
+      objectId: boundedId(input.objectId, "objectId"),
+      assetId: boundedId(input.assetId, "assetId"),
+    };
+    const fileName = boundedFileName(input.fileName);
+    const { bytes } = await validateDirectorGlb(input.blob, { maxBlobBytes: DEFAULT_LIMITS.maxBlobBytes });
+    const stored = new Blob([bytes], { type: "application/octet-stream" });
+    await putBlob("media", serverModelStorageKey(safeIdentity.assetId), stored);
+    return {
+      ...safeIdentity,
+      fileName,
+      bytes: stored.size,
+      mimeType: "model/gltf-binary",
+      createdAt: new Date().toISOString(),
+      blob: stored.slice(0, stored.size, "model/gltf-binary"),
+    };
+  },
+
+  async delete(value: DirectorModelIdentity): Promise<void> {
+    await deleteBlob("media", serverModelStorageKey(value.assetId));
+  },
+
+  async prune(
+    _ownerScope: string,
+    _valid: Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, string>>>>>>,
+    _now = Date.now(),
+  ): Promise<void> {
+    // Project descriptors are authoritative. Explicit model removal and failed
+    // imports delete their blob immediately; tenant quota remains server-side.
+  },
+};

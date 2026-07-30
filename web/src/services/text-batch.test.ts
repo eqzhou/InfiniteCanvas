@@ -9,7 +9,7 @@ describe("configuration-node text batches", () => {
     let calls = 0;
     globalThis.fetch = (async () => {
       calls += 1;
-      return new Response(JSON.stringify({ output_text: `result-${calls}` }), {
+      return new Response(JSON.stringify({ text: `result-${calls}` }), {
         headers: { "Content-Type": "application/json" },
       });
     }) as typeof fetch;
@@ -68,7 +68,7 @@ describe("configuration-node text batches", () => {
       maximumActive = Math.max(maximumActive, active);
       await new Promise((resolve) => setTimeout(resolve, 5));
       active -= 1;
-      return new Response(JSON.stringify({ output_text: `result-${call}` }), {
+      return new Response(JSON.stringify({ text: `result-${call}` }), {
         headers: { "Content-Type": "application/json" },
       });
     }) as typeof fetch;

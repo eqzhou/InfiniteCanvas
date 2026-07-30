@@ -306,8 +306,6 @@ export function createDirectorCaptureStore(
   };
 }
 
-const localDirectorCaptureStore = createDirectorCaptureStore();
-
 type ServerDirectorCapture = Omit<DirectorCaptureRecord, "ownerScope" | "blob" | "orphanedAt"> & { url: string };
 
 function parseServerCapture(value: unknown, ownerScope: string): DirectorCaptureRecord {
@@ -437,9 +435,7 @@ const serverDirectorCaptureStore = {
   },
 };
 
-export const directorCaptureStore = import.meta.env.VITE_OPENBOARD_STORAGE === "server"
-  ? serverDirectorCaptureStore
-  : localDirectorCaptureStore;
+export const directorCaptureStore = serverDirectorCaptureStore;
 
 export function getDirectorCaptureOwnerScope(user?: { id: string; tenantId: string } | null): string {
   if (user) return boundedId(`user:${user.tenantId}:${user.id}`, "ownerScope");

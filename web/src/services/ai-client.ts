@@ -15,6 +15,7 @@ import { readBoundedProviderJson, readBoundedProviderText } from "@/services/bou
 import { decodeBoundedDataUrl } from "@/services/remote-content";
 import { authFetch as apiFetch } from "@/services/auth-session";
 import { isServerManagedChannel } from "@/services/shared-channels";
+import { DATABASE_STORAGE_ENABLED } from "@/services/storage-mode";
 import { providerFetch, providerFetchUrl, ProviderHttpError } from "@/services/provider-http";
 
 const MAX_IMAGE_PROVIDER_RESPONSE_BYTES = 64 * 1024 * 1024;
@@ -60,7 +61,7 @@ async function readImageProviderResults(response: Response, expectedMaximum: num
 
 export async function listModels(channel: AiChannel, kind: AiProviderKind = "text"): Promise<string[]> {
   const provider = getProvider(channel, kind);
-	const serverStorage = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
+	const serverStorage = DATABASE_STORAGE_ENABLED;
   if (provider.protocol === "template") return [];
   if (isServerManagedChannel(channel, kind)) {
     return [...(provider.models ?? [])].sort();
@@ -142,7 +143,7 @@ type TextGenerationOptions = {
 export async function generateText(options: TextGenerationOptions): Promise<string> {
 	assertNotManagedBrowserProvider(options.channel, "text");
   const provider = getProvider(options.channel, "text");
-  const serverProxied = import.meta.env.VITE_OPENBOARD_STORAGE === "server" &&
+  const serverProxied = DATABASE_STORAGE_ENABLED &&
     !isLoopbackProviderUrl(provider.baseUrl);
   return runTrackedGeneration({
     kind: "text",
@@ -156,7 +157,7 @@ export async function generateText(options: TextGenerationOptions): Promise<stri
 async function generateTextRequest(options: TextGenerationOptions): Promise<string> {
   const { channel, model, prompt, images = [], systemPrompt = "" } = options;
   const provider = getProvider(channel, "text");
-  if (import.meta.env.VITE_OPENBOARD_STORAGE === "server" &&
+  if (DATABASE_STORAGE_ENABLED &&
       !isLoopbackProviderUrl(provider.baseUrl)) {
     return generateTextThroughServer(
       channel.id,

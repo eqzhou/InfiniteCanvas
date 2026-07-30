@@ -178,7 +178,20 @@ export function DirectorDialog({
   const refreshModels = useCallback(async (targetScene: DirectorScene) => {
     const token = ++modelRefreshTokenRef.current;
     const models = targetScene.objects.filter((object) => object.kind === "model" && object.modelAsset);
-    const stored = await directorModelStore.list(ownerScope, projectId, directorNodeId);
+    const stored = await directorModelStore.list(
+      ownerScope,
+      projectId,
+      directorNodeId,
+      models.map((object) => ({
+        ownerScope,
+        projectId,
+        directorNodeId,
+        objectId: object.id,
+        assetId: object.modelAsset!.assetId,
+        fileName: object.modelAsset!.fileName,
+        bytes: object.modelAsset!.bytes,
+      })),
+    );
     const loaded = models.map((object) => [
       object.id,
       stored.find((record) => record.objectId === object.id && record.assetId === object.modelAsset!.assetId) ?? null,

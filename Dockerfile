@@ -2,8 +2,6 @@
 
 FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS web-build
 WORKDIR /src/web
-ARG VITE_OPENBOARD_STORAGE=server
-ENV VITE_OPENBOARD_STORAGE=$VITE_OPENBOARD_STORAGE
 COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY web/ ./

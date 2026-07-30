@@ -1,18 +1,11 @@
-import { createStore, get, set } from "idb-keyval";
-
 import { parseWorkflowTemplate } from "@/lib/workflow-document";
 import {
-  deletePersonalWorkflowTemplate,
   duplicatePersonalWorkflowTemplate,
-  upsertPersonalWorkflowTemplate,
 } from "@/lib/workflow-template";
 import { nowIso, uid } from "@/lib/id";
 import { authFetch } from "@/services/auth-session";
 import type { WorkflowTemplate } from "@/types/workflow";
 
-const SERVER_STORAGE = import.meta.env.VITE_OPENBOARD_STORAGE === "server";
-const workflowStore = createStore("openboard-workflows", "templates");
-const DOCUMENT_KEY = "openboard:workflow-templates";
 const MAX_PERSONAL_TEMPLATES = 1_000;
 const DOCUMENT_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -126,16 +119,8 @@ async function serverJSON<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function loadPersonalWorkflowTemplates(): Promise<WorkflowTemplate[]> {
-  if (SERVER_STORAGE) {
-    const templates = await serverJSON<unknown[]>("workflow-templates");
-    return parsePersonalWorkflowTemplateDocument({ version: 1, templates });
-  }
-  return parsePersonalWorkflowTemplateDocument((await get(DOCUMENT_KEY, workflowStore)) ?? { version: 1, templates: [] });
-}
-
-async function persistLocalTemplates(templates: WorkflowTemplate[]): Promise<void> {
-  const parsed = parsePersonalWorkflowTemplateDocument({ version: 1, templates });
-  await set(DOCUMENT_KEY, { version: 1, templates: parsed }, workflowStore);
+  const templates = await serverJSON<unknown[]>("workflow-templates");
+  return parsePersonalWorkflowTemplateDocument({ version: 1, templates });
 }
 
 export async function listWorkflowTemplates(): Promise<WorkflowTemplate[]> {
@@ -145,14 +130,10 @@ export async function listWorkflowTemplates(): Promise<WorkflowTemplate[]> {
 export async function savePersonalWorkflowTemplate(template: WorkflowTemplate): Promise<WorkflowTemplate> {
   const parsed = parseWorkflowTemplate(template);
   if (parsed.scope !== "personal") throw new Error("public workflow templates are read-only");
-  if (SERVER_STORAGE) return parseWorkflowTemplate(await serverJSON<unknown>(
+  return parseWorkflowTemplate(await serverJSON<unknown>(
     `workflow-templates/${encodeURIComponent(parsed.id)}`,
     { method: "PUT", body: JSON.stringify(parsed) },
   ));
-  const current = await loadPersonalWorkflowTemplates();
-  const next = upsertPersonalWorkflowTemplate(current, parsed);
-  await persistLocalTemplates(next);
-  return next.find((candidate) => candidate.id === parsed.id)!;
 }
 
 export async function duplicateWorkflowTemplate(sourceId: string): Promise<WorkflowTemplate> {
@@ -160,26 +141,14 @@ export async function duplicateWorkflowTemplate(sourceId: string): Promise<Workf
   const id = uid("workflow");
   const next = duplicatePersonalWorkflowTemplate(catalog, sourceId, nowIso(), id);
   const copy = next.find((template) => template.id === id)!;
-  if (SERVER_STORAGE) return savePersonalWorkflowTemplate(copy);
-  const personal = next.filter((template) => template.scope === "personal");
-  await persistLocalTemplates(personal);
-  return copy;
+  return savePersonalWorkflowTemplate(copy);
 }
 
 export async function removePersonalWorkflowTemplate(id: string): Promise<void> {
-  if (SERVER_STORAGE) {
-    await serverJSON<void>(`workflow-templates/${encodeURIComponent(id)}`, { method: "DELETE" });
-    return;
-  }
-  const current = await loadPersonalWorkflowTemplates();
-  await persistLocalTemplates(deletePersonalWorkflowTemplate(current, id));
+  await serverJSON<void>(`workflow-templates/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function replacePersonalWorkflowTemplates(templates: WorkflowTemplate[]): Promise<void> {
   const parsed = parsePersonalWorkflowTemplateDocument({ version: 1, templates });
-  if (SERVER_STORAGE) {
-    await serverJSON<void>("workflow-templates", { method: "PUT", body: JSON.stringify(parsed) });
-    return;
-  }
-  await persistLocalTemplates(parsed);
+  await serverJSON<void>("workflow-templates", { method: "PUT", body: JSON.stringify(parsed) });
 }
