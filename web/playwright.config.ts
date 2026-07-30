@@ -21,12 +21,12 @@ export function createAgentServerCommand({
   dataDir,
 }: AgentServerCommandOptions): string {
   if (mode === "production") {
-    return `data_dir=${dataDir}; trap 'rm -rf "$data_dir"' EXIT; cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_AUTH_MODE=off OPENBOARD_DATA="$data_dir" go run ./cmd/server`;
+    return `data_dir=${dataDir}; trap 'rm -rf "$data_dir"' EXIT; cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_AUTH_MODE=off OPENBOARD_E2E_TENANT_TOKEN=e2e-tenant-token OPENBOARD_DATA="$data_dir" go run ./cmd/server`;
   }
   if (mode === "formal") {
     return `../scripts/run-formal-e2e-server.sh ${agentPort} ${origin}`;
   }
-  return `cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_AUTH_MODE=off OPENBOARD_DATA=../web/node_modules/.cache/openboard-agent-e2e go run ./cmd/server`;
+  return `cd ../server && GOSUMDB=sum.golang.org OPENBOARD_ADDR=127.0.0.1:${agentPort} OPENBOARD_ORIGINS=${origin} OPENBOARD_TOKEN=e2e-token OPENBOARD_AUTH_MODE=off OPENBOARD_E2E_TENANT_TOKEN=e2e-tenant-token OPENBOARD_DATA=../web/node_modules/.cache/openboard-agent-e2e go run ./cmd/server`;
 }
 
 type WebServerCommandOptions = Readonly<{

@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,9 +26,13 @@ import (
 type contextKey string
 
 const (
-	authUserKey   contextKey = "openboardAuthUser"
-	sessionHeader            = "X-OpenBoard-Session"
+	authUserKey          contextKey = "openboardAuthUser"
+	sessionHeader                   = "X-OpenBoard-Session"
+	e2eTenantHeader                 = "X-OpenBoard-E2E-Tenant"
+	e2eTenantTokenHeader            = "X-OpenBoard-E2E-Token"
 )
+
+var e2eTenantIDPattern = regexp.MustCompile(`^e2e-[a-f0-9]{24}$`)
 
 func authMode() string {
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("OPENBOARD_AUTH_MODE")))
@@ -62,6 +68,96 @@ func (s *Server) authorizeProcessToken(r *http.Request) bool {
 	providedHash := sha256.Sum256([]byte(provided))
 	expectedHash := sha256.Sum256([]byte(s.processToken))
 	return provided != "" && s.processToken != "" && subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
+}
+
+// withE2ETenant gives every browser test an isolated database tenant. The
+// override is deliberately unavailable unless the server was started with an
+// explicit test token, auth is disabled, and the caller is on loopback.
+func (s *Server) withE2ETenant(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID := strings.TrimSpace(r.Header.Get(e2eTenantHeader))
+		if tenantID == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		expectedToken := strings.TrimSpace(os.Getenv("OPENBOARD_E2E_TENANT_TOKEN"))
+		if expectedToken == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		providedToken := strings.TrimSpace(r.Header.Get(e2eTenantTokenHeader))
+		expectedHash := sha256.Sum256([]byte(expectedToken))
+		providedHash := sha256.Sum256([]byte(providedToken))
+		authorized := expectedToken != "" &&
+			providedToken != "" &&
+			authMode() == "off" &&
+			isLoopbackRemote(r.RemoteAddr) &&
+			e2eTenantIDPattern.MatchString(tenantID) &&
+			subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) == 1
+		if !authorized {
+			http.Error(w, "test tenant override denied", http.StatusForbidden)
+			return
+		}
+		user := store.AuthUser{
+			ID:       tenantID + "-user",
+			TenantID: tenantID,
+			Role:     "owner",
+			Status:   "active",
+		}
+		ctx := context.WithValue(r.Context(), authUserKey, user)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+type e2eTenantEnsurer interface {
+	EnsureE2ETenant(context.Context, string) error
+}
+
+func (s *Server) ensureE2ETenant(w http.ResponseWriter, r *http.Request) {
+	expectedToken := strings.TrimSpace(os.Getenv("OPENBOARD_E2E_TENANT_TOKEN"))
+	if expectedToken == "" {
+		http.NotFound(w, r)
+		return
+	}
+	providedToken := strings.TrimSpace(r.Header.Get(e2eTenantTokenHeader))
+	expectedHash := sha256.Sum256([]byte(expectedToken))
+	providedHash := sha256.Sum256([]byte(providedToken))
+	if authMode() != "off" ||
+		providedToken == "" ||
+		!isLoopbackRemote(r.RemoteAddr) ||
+		subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) != 1 {
+		http.Error(w, "test tenant creation denied", http.StatusForbidden)
+		return
+	}
+	var input struct {
+		TenantID string `json:"tenantId"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&input); err != nil ||
+		!e2eTenantIDPattern.MatchString(strings.TrimSpace(input.TenantID)) {
+		http.Error(w, "invalid test tenant", http.StatusBadRequest)
+		return
+	}
+	ensurer, ok := s.store.(e2eTenantEnsurer)
+	if !ok {
+		http.Error(w, "test tenant storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := ensurer.EnsureE2ETenant(r.Context(), strings.TrimSpace(input.TenantID)); err != nil {
+		http.Error(w, "failed to create test tenant", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	remoteIP := net.ParseIP(strings.TrimSpace(remoteAddr))
+	if remoteIP == nil {
+		host, _, splitErr := net.SplitHostPort(remoteAddr)
+		if splitErr == nil {
+			remoteIP = net.ParseIP(host)
+		}
+	}
+	return remoteIP != nil && remoteIP.IsLoopback()
 }
 
 // authorizeSecrets gates the encrypted config-secret bag.

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolveE2EEnvironment } from "./environment";
 
@@ -6,6 +7,23 @@ const { agentPort } = resolveE2EEnvironment();
 const agentUrl = `http://127.0.0.1:${agentPort}`;
 const pngPixelBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWP8z8AARAjAhGBCWIQFAIPRAgYQO+IXAAAAAElFTkSuQmCC";
 const pngReplacementBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADFbP4CAAAAFUlEQVQIHWNk+A+ESIAJiQ1mEhYAAILSAgahbK2jAAAAAElFTkSuQmCC";
+
+test.beforeEach(async ({ context, request }, testInfo) => {
+  const tenantSuffix = createHash("sha256")
+    .update(`${testInfo.project.name}:${testInfo.testId}:${testInfo.retry}`)
+    .digest("hex")
+    .slice(0, 24);
+  const tenantId = `e2e-${tenantSuffix}`;
+  const response = await request.post("/api/e2e/tenant", {
+    headers: { "X-OpenBoard-E2E-Token": "e2e-tenant-token" },
+    data: { tenantId },
+  });
+  expect(response).toBeOK();
+  await context.setExtraHTTPHeaders({
+    "X-OpenBoard-E2E-Tenant": tenantId,
+    "X-OpenBoard-E2E-Token": "e2e-tenant-token",
+  });
+});
 
 function triangleGlb(): Buffer {
   const manifest = {
@@ -68,6 +86,19 @@ async function openFreshBoard(
   if ((page.viewportSize()?.width ?? 1440) < 768) {
     await page.locator("aside").getByRole("button", { name: "关闭项目侧栏" }).click();
   }
+}
+
+async function readServerProjects(page: Page): Promise<any[]> {
+  return page.evaluate(async () => {
+    const summariesResponse = await fetch("/api/projects");
+    if (!summariesResponse.ok) throw new Error(`project list failed: ${summariesResponse.status}`);
+    const summaries = await summariesResponse.json() as Array<{ id: string }>;
+    return Promise.all(summaries.map(async ({ id }) => {
+      const response = await fetch(`/api/projects/${encodeURIComponent(id)}`);
+      if (!response.ok) throw new Error(`project read failed: ${response.status}`);
+      return response.json();
+    }));
+  });
 }
 
 async function installOwnerAuthRoutes(page: Page) {
@@ -470,7 +501,7 @@ test("3D director edits persist and rendered captures return to the canvas", asy
   const imagesBefore = await imageNodes.count();
   const edgesBefore = await edgeGroups.count();
   const captureButton = dialog.getByRole("button", { name: "拍摄当前机位" });
-  const captures = dialog.getByRole("list", { name: "本机截图列表" }).getByRole("listitem");
+  const captures = dialog.getByRole("list", { name: "同步截图列表" }).getByRole("listitem");
   await captureButton.click();
   await expect(captures).toHaveCount(1);
   await expect(captureButton).toBeEnabled();
@@ -483,7 +514,7 @@ test("3D director edits persist and rendered captures return to the canvas", asy
   await dialog.getByRole("button", { name: "关闭导演台" }).click();
   await page.reload();
   await directorNode.getByRole("button", { name: "打开导演台" }).click();
-  await expect(dialog.getByRole("list", { name: "本机截图列表" }).getByRole("listitem")).toHaveCount(2);
+  await expect(dialog.getByRole("list", { name: "同步截图列表" }).getByRole("listitem")).toHaveCount(2);
   await dialog.getByRole("button", { name: "查看截图 主摄像机" }).first().click();
   await expect(page.getByRole("dialog", { name: "截图预览" })).toBeVisible();
   await page.getByRole("button", { name: "关闭截图预览" }).click();
@@ -520,8 +551,8 @@ test("3D director edits persist and rendered captures return to the canvas", asy
 
   await directorNode.getByRole("button", { name: "打开导演台" }).click();
   await dialog.getByRole("button", { name: "清空全部" }).click();
-  await expect(dialog.getByRole("list", { name: "本机截图列表" })).toHaveCount(0);
-  await expect(dialog.getByText("拍摄后会保存在当前浏览器")).toBeVisible();
+  await expect(dialog.getByRole("list", { name: "同步截图列表" })).toHaveCount(0);
+  await expect(dialog.getByText("拍摄后会保存到受保护存储")).toBeVisible();
   await expect(imageNodes).toHaveCount(imagesBefore + 2);
   await dialog.getByRole("button", { name: "关闭导演台" }).click();
 });
@@ -761,7 +792,7 @@ test("director stages eight characters, twenty poses, geometry, and instanced cr
 
   if (browserName !== "webkit") {
     await dialog.getByRole("button", { name: "拍摄当前机位" }).click();
-    await expect(dialog.getByRole("list", { name: "本机截图列表" }).getByRole("listitem")).toHaveCount(1);
+    await expect(dialog.getByRole("list", { name: "同步截图列表" }).getByRole("listitem")).toHaveCount(1);
   }
   await dialog.getByRole("button", { name: "关闭导演台" }).click();
   const downloadPromise = page.waitForEvent("download");
@@ -839,7 +870,7 @@ test("native panorama uploads, previews, persists, and lights the director envir
   const imageNodes = page.locator('[data-node-type="image"]');
   const imagesBefore = await imageNodes.count();
   await directorDialog.getByRole("button", { name: "拍摄当前机位" }).click();
-  await expect(directorDialog.getByRole("list", { name: "本机截图列表" }).getByRole("listitem")).toHaveCount(1);
+  await expect(directorDialog.getByRole("list", { name: "同步截图列表" }).getByRole("listitem")).toHaveCount(1);
   await expect(directorDialog.getByLabel("选择截图 主摄像机")).toBeChecked();
   await directorDialog.getByRole("button", { name: "发送到画布" }).click();
   await directorDialog.getByRole("button", { name: "关闭导演台" }).click();
@@ -1413,34 +1444,9 @@ test("a text node and its content survive a reload", async ({ page }) => {
     await expect(page.getByText("1 节点", { exact: false })).toBeVisible();
   }
 
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          new Promise<boolean>((resolve, reject) => {
-            const open = indexedDB.open("openboard-app");
-            open.onerror = () => reject(open.error);
-            open.onsuccess = () => {
-              const database = open.result;
-              const transaction = database.transaction("app_state", "readonly");
-              const request = transaction.objectStore("app_state").get("openboard:projects");
-              request.onerror = () => reject(request.error);
-              request.onsuccess = () => {
-                const projects = Array.isArray(request.result) ? request.result : [];
-                const persisted = projects.some((project) =>
-                  project?.nodes?.some(
-                    (node: { metadata?: { content?: string } }) =>
-                      node.metadata?.content === "persisted from Playwright",
-                  ),
-                );
-                database.close();
-                resolve(persisted);
-              };
-            };
-          }),
-      ),
-    )
-    .toBe(true);
+  await expect.poll(async () => (await readServerProjects(page)).some((project) =>
+    project?.nodes?.some((node: { metadata?: { content?: string } }) =>
+      node.metadata?.content === "persisted from Playwright"))).toBe(true);
   await page.reload();
 
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue(
@@ -1504,22 +1510,8 @@ test("node ports support click-to-connect without requiring a drag", async ({ pa
     .getByTitle("输出端口 / 拖出连线").click();
   await video.getByTitle("输入端口").click();
 
-  await expect.poll(() => page.evaluate(() => new Promise<number>((resolve, reject) => {
-    const open = indexedDB.open("openboard-app");
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const database = open.result;
-      const request = database.transaction("app_state", "readonly")
-        .objectStore("app_state")
-        .get("openboard:projects");
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const projects = Array.isArray(request.result) ? request.result : [];
-        database.close();
-        resolve(projects.reduce((count, project) => count + (project?.edges?.length ?? 0), 0));
-      };
-    };
-  }))).toBe(1);
+  await expect.poll(async () => (await readServerProjects(page))
+    .reduce((count, project) => count + (project?.edges?.length ?? 0), 0)).toBe(1);
 });
 
 test("Escape closes settings, shortcuts, and the local Agent panel", async ({ page }) => {
@@ -1638,46 +1630,29 @@ test("a same-frame drag commits group membership before pointerup reconciliation
   const canvas = await surface.boundingBox();
   expect(source).not.toBeNull();
   expect(canvas).not.toBeNull();
-  const persistedGroup = () => page.evaluate(() => new Promise<{
-    childIds: string[];
-    position: { x: number; y: number } | null;
-    width: number | null;
-    height: number | null;
-    padding: { left: number; top: number; right: number; bottom: number } | null;
-  }>((resolve, reject) => {
-    const request = indexedDB.open("openboard-app");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const database = request.result;
-      const read = database.transaction("app_state", "readonly")
-        .objectStore("app_state").get("openboard:projects");
-      read.onerror = () => reject(read.error);
-      read.onsuccess = () => {
-        const projects = Array.isArray(read.result) ? read.result : [];
-        const imported = projects.find((item) => item?.title === "Group race atomic (导入)");
-        const group = imported?.nodes?.find((node: { id?: string }) => node.id === "group_1");
-        const childIds: string[] = group?.metadata?.childIds ?? [];
-        const children = imported?.nodes?.filter((node: { id?: string }) => childIds.includes(node.id ?? "")) ?? [];
-        const minX = children.length ? Math.min(...children.map((node: { position: { x: number } }) => node.position.x)) : 0;
-        const minY = children.length ? Math.min(...children.map((node: { position: { y: number } }) => node.position.y)) : 0;
-        const maxX = children.length ? Math.max(...children.map((node: { position: { x: number }; width: number }) => node.position.x + node.width)) : 0;
-        const maxY = children.length ? Math.max(...children.map((node: { position: { y: number }; height: number }) => node.position.y + node.height)) : 0;
-        database.close();
-        resolve({
-          childIds,
-          position: group?.position ?? null,
-          width: group?.width ?? null,
-          height: group?.height ?? null,
-          padding: group && children.length ? {
-            left: minX - group.position.x,
-            top: minY - group.position.y,
-            right: group.position.x + group.width - maxX,
-            bottom: group.position.y + group.height - maxY,
-          } : null,
-        });
-      };
+  const persistedGroup = async () => {
+    const projects = await readServerProjects(page);
+    const imported = projects.find((item) => item?.title === "Group race atomic (导入)");
+    const group = imported?.nodes?.find((node: { id?: string }) => node.id === "group_1");
+    const childIds: string[] = group?.metadata?.childIds ?? [];
+    const children = imported?.nodes?.filter((node: { id?: string }) => childIds.includes(node.id ?? "")) ?? [];
+    const minX = children.length ? Math.min(...children.map((node: { position: { x: number } }) => node.position.x)) : 0;
+    const minY = children.length ? Math.min(...children.map((node: { position: { y: number } }) => node.position.y)) : 0;
+    const maxX = children.length ? Math.max(...children.map((node: { position: { x: number }; width: number }) => node.position.x + node.width)) : 0;
+    const maxY = children.length ? Math.max(...children.map((node: { position: { y: number }; height: number }) => node.position.y + node.height)) : 0;
+    return {
+      childIds,
+      position: group?.position ?? null,
+      width: group?.width ?? null,
+      height: group?.height ?? null,
+      padding: group && children.length ? {
+        left: minX - group.position.x,
+        top: minY - group.position.y,
+        right: group.position.x + group.width - maxX,
+        bottom: group.position.y + group.height - maxY,
+      } : null,
     };
-  }));
+  };
   await page.evaluate(({ source }) => {
     const header = document.querySelector<HTMLElement>('[data-node-id="text_c"] [data-node-header]');
     if (!header) throw new Error("group drag fixture missing");
@@ -1817,26 +1792,15 @@ test("group shortcut, whole-group drag/resize, copy/delete, undo, and reload sta
   await page.keyboard.press(`${modifier}+Shift+z`);
   await expect(groups).toHaveCount(1);
   await expect(texts).toHaveCount(2);
-  await expect.poll(() => page.evaluate(() => new Promise<{ groups: number; texts: number }>((resolve, reject) => {
-    const request = indexedDB.open("openboard-app");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const database = request.result;
-      const read = database.transaction("app_state", "readonly")
-        .objectStore("app_state").get("openboard:projects");
-      read.onerror = () => reject(read.error);
-      read.onsuccess = () => {
-        const projects = Array.isArray(read.result) ? read.result : [];
-        const project = projects.find((item) => item?.title === "我的第一个画布") ?? projects[0];
-        const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
-        database.close();
-        resolve({
-          groups: nodes.filter((node: { type?: string }) => node.type === "group").length,
-          texts: nodes.filter((node: { type?: string }) => node.type === "text").length,
-        });
-      };
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    const project = projects.find((item) => item?.title === "我的第一个画布") ?? projects[0];
+    const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
+    return {
+      groups: nodes.filter((node: { type?: string }) => node.type === "group").length,
+      texts: nodes.filter((node: { type?: string }) => node.type === "text").length,
     };
-  }))).toEqual({ groups: 1, texts: 2 });
+  }).toEqual({ groups: 1, texts: 2 });
   await page.reload();
   await expect(groups).toHaveCount(1);
   await expect(texts).toHaveCount(2);
@@ -1901,22 +1865,8 @@ test("a legacy v1 project upgrades to schema v2 and survives reload", async ({ p
   });
 
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("persisted legacy content");
-  await expect.poll(() => page.evaluate(() => new Promise<number | null>((resolve, reject) => {
-    const request = indexedDB.open("openboard-app");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const database = request.result;
-      const read = database.transaction("app_state", "readonly")
-        .objectStore("app_state").get("openboard:projects");
-      read.onerror = () => reject(read.error);
-      read.onsuccess = () => {
-        const projects = Array.isArray(read.result) ? read.result : [];
-        const imported = projects.find((item) => item?.title === "Legacy schema fixture (导入)");
-        database.close();
-        resolve(imported?.schemaVersion ?? null);
-      };
-    };
-  }))).toBe(2);
+  await expect.poll(async () => (await readServerProjects(page))
+    .find((item) => item?.title === "Legacy schema fixture (导入)")?.schemaVersion ?? null).toBe(2);
 
   await page.reload();
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue("persisted legacy content");
@@ -2007,27 +1957,9 @@ test("node title, font size, and model overrides are editable and persistent", a
   await expect.poll(() => editor.evaluate((element) => getComputedStyle(element).fontSize))
     .not.toBe(initialSize);
 
-  await expect.poll(() => page.evaluate(
-    () => new Promise<boolean>((resolve, reject) => {
-      const open = indexedDB.open("openboard-app");
-      open.onerror = () => reject(open.error);
-      open.onsuccess = () => {
-        const database = open.result;
-        const request = database.transaction("app_state", "readonly")
-          .objectStore("app_state")
-          .get("openboard:projects");
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          const projects = Array.isArray(request.result) ? request.result : [];
-          resolve(projects.some((project) => project?.nodes?.some(
-            (item: { title?: string; metadata?: { model?: string } }) =>
-              item.title === "本地创作节点" && item.metadata?.model === "local-text-model",
-          )));
-          database.close();
-        };
-      };
-    }),
-  )).toBe(true);
+  await expect.poll(async () => (await readServerProjects(page)).some((project) =>
+    project?.nodes?.some((item: { title?: string; metadata?: { model?: string } }) =>
+      item.title === "本地创作节点" && item.metadata?.model === "local-text-model"))).toBe(true);
 
   await page.reload();
   await expect(page.locator('[data-node-type="text"]').locator("[data-node-title]")).toHaveText("本地创作节点");

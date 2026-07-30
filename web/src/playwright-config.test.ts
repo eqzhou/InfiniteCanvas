@@ -46,6 +46,7 @@ describe("Playwright agent server command", () => {
     });
 
     expect(command).toContain("OPENBOARD_AUTH_MODE=off");
+    expect(command).toContain("OPENBOARD_E2E_TENANT_TOKEN=e2e-tenant-token");
   });
 });
 

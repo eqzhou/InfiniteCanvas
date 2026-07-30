@@ -749,6 +749,17 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 	return nil
 }
 
+// EnsureE2ETenant creates an isolated tenant used only by the explicitly gated
+// browser-test harness. Product code never calls this method directly.
+func (s *PostgresStore) EnsureE2ETenant(ctx context.Context, tenantID string) error {
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO openboard_tenants (id, name, plan, storage_quota_bytes, generation_quota_monthly)
+VALUES ($1, 'Browser E2E', 'free', $2, $3)
+ON CONFLICT (id) DO NOTHING`,
+		tenantID, defaultStorageQuotaBytes, defaultGenerationQuotaMonthly)
+	return err
+}
+
 func projectCacheKey(tenantID, id string) string {
 	return "openboard:project:" + tenantID + ":" + id
 }

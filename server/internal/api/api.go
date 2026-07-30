@@ -84,6 +84,7 @@ func Mount(r chi.Router, dataDir string) {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.health)
 		r.Get("/version", s.version)
+		r.Post("/e2e/tenant", s.ensureE2ETenant)
 		r.Get("/agent/status", s.agentStatus)
 		r.Post("/agent/execute", s.executeAgentTool)
 		r.Post("/runtime/ticket", s.runtimeTicket)
@@ -315,10 +316,12 @@ func MountServer(r chi.Router, s *Server) {
 	s.startPromptCatalogScheduler()
 	s.startAICallLogRetentionScheduler()
 	r.Route("/api", func(r chi.Router) {
+		r.Use(s.withE2ETenant)
 		r.Use(s.withSession)
 		r.Use(s.requireUserWhenNeeded)
 		r.Get("/health", s.health)
 		r.Get("/version", s.version)
+		r.Post("/e2e/tenant", s.ensureE2ETenant)
 		r.Post("/auth/register", s.register)
 		r.Post("/auth/login", s.login)
 		r.Post("/auth/logout", s.logout)
