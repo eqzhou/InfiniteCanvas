@@ -47,6 +47,8 @@ import {
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
 import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
+import { resolveConfigPrompt } from "@/lib/config-generation";
+import { placeImageGenerationRun } from "@/lib/image-generation-run";
 import { audioJobParameters, audioSpeechOptions } from "@/lib/audio-generation";
 import { NodeInfoDialog } from "@/components/canvas/NodeInfoDialog";
 import { isServerManagedChannel, mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
@@ -69,7 +71,7 @@ import {
   Plus,
   RotateCw,
   Sparkles,
-	Square,
+  Square,
   Type,
   Wand2,
 } from "lucide-react";
@@ -78,10 +80,12 @@ export function NodeActions({
   node,
   onEditText,
   avoidTopToolbarOverlap = false,
+  inlineConfigOnly = false,
 }: {
   node: BoardNode;
   onEditText?: () => void;
   avoidTopToolbarOverlap?: boolean;
+  inlineConfigOnly?: boolean;
 }) {
   const project = useBoardStore((s) => s.getActive());
   const config = useBoardStore((s) => s.config);
@@ -96,6 +100,7 @@ export function NodeActions({
   const [infoOpen, setInfoOpen] = useState(false);
   const [assetSaveState, setAssetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [imageCopyState, setImageCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const [configGenerating, setConfigGenerating] = useState(false);
   const cameraAnchorRef = useRef<HTMLSpanElement>(null);
 	const sharedChannels = useSharedChannels();
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
@@ -122,6 +127,7 @@ export function NodeActions({
 		generation: ReturnType<typeof createImageGenerationMetadata>,
 		prompt: string,
 		referenceStorageKeys: string[],
+		options: { replaceExisting?: boolean } = {},
 	) => {
 		if (!channel) throw new Error("图片生成渠道不可用");
 		const provider = getProvider(channel, "image");
@@ -131,27 +137,44 @@ export function NodeActions({
 		if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
 			throw new Error("当前图片模板不支持透明背景");
 		}
-		const job = await createServerImageGenerationJob({
-			projectId: project?.id,
-			prompt,
-			providerId: channel.id,
-			model: generation.model,
-			parameters: {
-				size: generation.size,
-				quality: generation.quality,
-				count: generation.count,
-				transparentBackground: generation.transparentBackground,
-				referenceStorageKeys,
-			},
-		});
+		const jobId = uid("job");
+		let placeholdersApplied = false;
 		try {
-			updateActive((current) => applyServerImagePlaceholders(current, rootId, job.id, generation));
+			updateActive((current) => applyServerImagePlaceholders(current, rootId, jobId, generation, options));
+			placeholdersApplied = true;
 			await persistNow();
+			return await createServerImageGenerationJob({
+				id: jobId,
+				projectId: project?.id,
+				prompt,
+				providerId: channel.id,
+				model: generation.model,
+				parameters: {
+					size: generation.size,
+					quality: generation.quality,
+					count: generation.count,
+					transparentBackground: generation.transparentBackground,
+					referenceStorageKeys,
+				},
+			});
 		} catch (error) {
-			await cancelServerGenerationJob(job.id).catch(() => undefined);
+			if (placeholdersApplied) {
+				updateActive((current) => ({
+					...current,
+					nodes: current.nodes.map((item) => item.metadata.generationJobId === jobId ? {
+						...item,
+						metadata: {
+							...item.metadata,
+							status: "error" as const,
+							errorDetails: error instanceof Error ? error.message : String(error),
+						},
+					} : item),
+				}));
+				await persistNow().catch(() => undefined);
+			}
+			await cancelServerGenerationJob(jobId).catch(() => undefined);
 			throw error;
 		}
-		return job;
 	};
 	const cancelNodeGeneration = async () => {
 		const jobId = node.metadata.generationJobId;
@@ -250,75 +273,33 @@ export function NodeActions({
     created: BoardNode[],
     generation: ReturnType<typeof createImageGenerationMetadata>,
   ) => {
-    if (created.length <= 1) {
-      updateActive((project) => ({
-        ...project,
-        nodes: [
-          ...project.nodes.map((item) => item.id === rootId
-            ? {
-                ...item,
-                metadata: {
-                  ...item.metadata,
-                  ...generation,
-                  status: "success" as const,
-                  errorDetails: undefined,
-                },
-              }
-            : item),
-          ...created,
-        ],
-        edges: [
-          ...project.edges,
-          ...created.map((item) => ({ id: uid("edge"), from: rootId, to: item.id })),
-        ],
-      }));
-      return;
-    }
-    updateActive((project) => {
-      const childIds = created.map((item) => item.id);
-      return {
-        ...project,
-        nodes: [
-          ...project.nodes.map((item) => item.id === rootId
-            ? {
-                ...item,
-                metadata: {
-                  ...item.metadata,
-                  ...generation,
-                  status: "success" as const,
-                  isBatchRoot: true,
-                  batchChildIds: [...(item.metadata.batchChildIds ?? []), ...childIds],
-                  primaryImageId: item.metadata.primaryImageId ?? childIds[0],
-                  imageBatchExpanded: true,
-                },
-              }
-            : item),
-          ...created.map((item) => ({
-            ...item,
-            metadata: { ...item.metadata, batchRootId: rootId },
-          })),
-        ],
-        edges: [
-          ...project.edges,
-          ...created.map((item) => ({ id: uid("edge"), from: rootId, to: item.id })),
-        ],
-      };
-    });
+    updateActive((project) => placeImageGenerationRun(project, {
+      sourceId: rootId,
+      results: created.map((item) => ({
+        ...item,
+        metadata: { ...item.metadata, ...generation },
+      })),
+    }));
   };
 
   const runConfigGenerate = async () => {
+    if (configGenerating || node.metadata.status === "loading") return;
     const mode = node.metadata.generationMode ?? "image";
     if (!channel || !getProvider(channel, mode === "text" ? "text" : mode === "video" ? "video" : "image").apiKey) {
       alert("请先在设置中配置对应模型服务的 API Key");
       return;
     }
     const { texts, imageKeys, images } = upstream();
-    const prompt =
-      texts.join("\n\n") || node.metadata.prompt || node.metadata.content || "";
-    if (!prompt && mode !== "image") {
+    const prompt = resolveConfigPrompt({
+      promptSource: node.metadata.promptSource,
+      prompt: node.metadata.prompt ?? node.metadata.content,
+      upstreamTexts: texts,
+    });
+    if (!prompt) {
       alert("需要上游文本或节点内提示词");
       return;
     }
+    setConfigGenerating(true);
     updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
     try {
       if (mode === "text") {
@@ -342,7 +323,7 @@ export function NodeActions({
         placeRight(created);
       } else if (mode === "image") {
         const generation = createImageGenerationMetadata({
-          prompt: prompt || "a clean product photo",
+          prompt,
           model: node.metadata.model || getProvider(channel, "image").model,
           size: node.metadata.size || config.imageSize,
           quality: node.metadata.quality || config.imageQuality,
@@ -351,9 +332,10 @@ export function NodeActions({
           referenceStorageKeys: imageKeys,
           cameraPrompt: node.metadata.cameraPrompt,
         });
+        generation.requestPrompt = promptForGeneration(generation.prompt);
         const materializedImages = images.filter((image) => image.storageKey || image.content);
         if (serverProviderSupported("image") && imageKeys.length === materializedImages.length) {
-          await startServerImageGeneration(node.id, generation, promptForGeneration(generation.prompt), imageKeys);
+          await startServerImageGeneration(node.id, generation, generation.requestPrompt, imageKeys);
           return;
         }
         const refs = await resolveNodeImageDataUrls(imageKeys);
@@ -361,7 +343,7 @@ export function NodeActions({
       const urls = await generateImages({
           channel,
           model: generation.model,
-          prompt: promptForGeneration(generation.prompt),
+          prompt: generation.requestPrompt,
           size: generation.size,
           quality: generation.quality,
           n: generation.count,
@@ -495,18 +477,21 @@ export function NodeActions({
           errorDetails: err instanceof Error ? err.message : String(err),
         },
       });
+    } finally {
+      setConfigGenerating(false);
     }
   };
 
-  const textToImage = async () => {
+  const textToImage = () => {
     const cfg = createNode(
       "config",
       { x: node.position.x + node.width + 60, y: node.position.y },
       {
         metadata: {
           generationMode: "image",
-          prompt: node.metadata.content,
-          status: "loading",
+          prompt: "",
+          promptSource: "upstream",
+          status: "idle",
           size: config.imageSize,
           count: config.imageCount,
         },
@@ -518,66 +503,6 @@ export function NodeActions({
       edges: [...p.edges, { id: uid("edge"), from: node.id, to: cfg.id }],
       updatedAt: nowIso(),
     }));
-    try {
-      if (!channel || !getProvider(channel, "image").apiKey) {
-        throw new Error("请先在设置中配置图片模型服务的 API Key");
-      }
-      const prompt = node.metadata.content?.trim() || "a clean product photo";
-      const generation = createImageGenerationMetadata({
-        prompt,
-        model: getProvider(channel, "image").model,
-        size: cfg.metadata.size || config.imageSize,
-        quality: config.imageQuality,
-        count: cfg.metadata.count || config.imageCount,
-        transparentBackground: Boolean(cfg.metadata.transparentBackground),
-        referenceStorageKeys: [],
-        cameraPrompt: node.metadata.cameraPrompt,
-      });
-      if (serverProviderSupported("image")) {
-        await startServerImageGeneration(cfg.id, generation, promptForGeneration(generation.prompt), []);
-        return;
-      }
-      const urls = await generateImages({
-        channel,
-        model: generation.model,
-        prompt: promptForGeneration(generation.prompt),
-        size: generation.size,
-        quality: generation.quality,
-        n: generation.count,
-        transparentBackground: generation.transparentBackground,
-        systemPrompt: config.systemPrompt,
-      });
-      const created: BoardNode[] = [];
-      for (const [index, url] of urls.entries()) {
-        const uploaded = await uploadMedia(url, "image");
-        created.push(createNode(
-          "image",
-          { x: cfg.position.x + cfg.width + 60, y: cfg.position.y + index * 40 },
-          {
-            metadata: {
-              content: uploaded.url,
-              storageKey: uploaded.storageKey,
-              naturalWidth: uploaded.width,
-              naturalHeight: uploaded.height,
-              bytes: uploaded.bytes,
-              mimeType: uploaded.mimeType,
-              status: "success",
-              ...generation,
-            },
-            width: Math.min(360, uploaded.width || 320),
-            height: Math.min(360, uploaded.height || 320),
-          },
-        ));
-      }
-      placeImageBatch(cfg.id, created, generation);
-    } catch (error) {
-      updateNode(cfg.id, {
-        metadata: {
-          status: "error",
-          errorDetails: error instanceof Error ? error.message : String(error),
-        },
-      });
-    }
   };
 
   const rewriteText = async () => {
@@ -616,15 +541,16 @@ export function NodeActions({
     }
   };
 
-  const generateOnImage = async () => {
+  const continueFromImage = async () => {
     if (!channel || !getProvider(channel, "image").apiKey) {
       alert("请先在设置中配置 API Key");
       return;
     }
-    const prompt =
-      window.prompt("生图提示词", node.metadata.prompt || "cinematic still") || "";
+    const prompt = window.prompt(
+      node.metadata.content ? "描述如何基于当前图片继续创作" : "生图提示词",
+      node.metadata.content ? "" : node.metadata.prompt || "cinematic still",
+    ) || "";
     if (!prompt) return;
-    updateNode(node.id, { metadata: { status: "loading", prompt } });
     try {
       const referenceStorageKeys = node.metadata.storageKey ? [node.metadata.storageKey] : [];
       const generation = createImageGenerationMetadata({
@@ -637,8 +563,9 @@ export function NodeActions({
         referenceStorageKeys,
         cameraPrompt: node.metadata.cameraPrompt,
       });
+      generation.requestPrompt = promptForGeneration(generation.prompt);
       if (serverProviderSupported("image") && (!node.metadata.content || referenceStorageKeys.length === 1)) {
-        await startServerImageGeneration(node.id, generation, promptForGeneration(generation.prompt), referenceStorageKeys);
+        await startServerImageGeneration(node.id, generation, generation.requestPrompt, referenceStorageKeys);
         return;
       }
       const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
@@ -646,7 +573,7 @@ export function NodeActions({
         const urls = await generateImages({
         channel,
         model: generation.model,
-        prompt: promptForGeneration(generation.prompt),
+        prompt: generation.requestPrompt,
         size: generation.size,
         quality: generation.quality,
         n: generation.count,
@@ -654,9 +581,14 @@ export function NodeActions({
         transparentBackground: generation.transparentBackground,
         systemPrompt: config.systemPrompt,
       });
-      if (urls.length === 1 && !node.metadata.content) {
-        const uploaded = await uploadMedia(urls[0], "image");
-        updateNode(node.id, {
+      const created: BoardNode[] = [];
+      for (const [index, url] of urls.entries()) {
+        const uploaded = await uploadMedia(url, "image");
+        created.push(createNode("image", {
+          x: node.position.x + node.width + 60,
+          y: node.position.y + index * 36,
+        }, {
+          title: `结果 ${index + 1}`,
           metadata: {
             content: uploaded.url,
             storageKey: uploaded.storageKey,
@@ -665,82 +597,82 @@ export function NodeActions({
             bytes: uploaded.bytes,
             mimeType: uploaded.mimeType,
             status: "success",
-            cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
             ...generation,
           },
-        });
-      } else {
-        const created: BoardNode[] = [];
-        for (const [i, url] of urls.entries()) {
-          const uploaded = await uploadMedia(url, "image");
-          created.push(
-            createNode(
-              "image",
-              {
-                x: node.position.x + node.width + 60,
-                y: node.position.y + i * 36,
-              },
-              {
-                metadata: {
-                  content: uploaded.url,
-                  storageKey: uploaded.storageKey,
-                  status: "success",
-                  cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
-                  ...generation,
-                },
-              },
-            ),
-          );
-        }
-        if (created.length > 1) {
-          updateActive((p) => {
-            const childIds = created.map((c) => c.id);
-            return {
-              ...p,
-              nodes: [
-                ...p.nodes.map((n) =>
-                  n.id === node.id
-                    ? {
-                        ...n,
-                        metadata: {
-                          ...n.metadata,
-                          isBatchRoot: true,
-                          batchChildIds: childIds,
-                          primaryImageId: childIds[0],
-                          imageBatchExpanded: true,
-                          status: "success" as const,
-                          ...generation,
-                        },
-                      }
-                    : n,
-                ),
-                ...created.map((c) => ({
-                  ...c,
-                  metadata: { ...c.metadata, batchRootId: node.id },
-                })),
-              ],
-              edges: [
-                ...p.edges,
-                ...created.map((c) => ({
-                  id: uid("edge"),
-                  from: node.id,
-                  to: c.id,
-                })),
-              ],
-            };
-          });
-        } else {
-          placeRight(created);
-          updateNode(node.id, { metadata: { status: "success", ...generation } });
-        }
+          width: Math.min(360, uploaded.width || 320),
+          height: Math.min(360, uploaded.height || 320),
+        }));
       }
+      updateActive((current) => placeImageGenerationRun(current, {
+        sourceId: node.id,
+        results: created,
+        reuseEmptyImageTarget: !node.metadata.content && !node.metadata.storageKey,
+      }));
     } catch (err) {
-      updateNode(node.id, {
-        metadata: {
-          status: "error",
-          errorDetails: err instanceof Error ? err.message : String(err),
-        },
+      if (!node.metadata.content && !node.metadata.storageKey) {
+        updateNode(node.id, { metadata: { status: "error", errorDetails: err instanceof Error ? err.message : String(err) } });
+      } else {
+        alert(err instanceof Error ? err.message : String(err));
+      }
+    }
+  };
+
+  const retryImageResult = async () => {
+    if (!channel || !getProvider(channel, "image").apiKey) {
+      alert("请先在设置中配置 API Key");
+      return;
+    }
+    const prompt = node.metadata.prompt?.trim();
+    if (!prompt) {
+      alert("此图片没有可重试的生成快照，请使用“继续创作”生成新结果");
+      return;
+    }
+    const referenceStorageKeys = [...(node.metadata.referenceStorageKeys ?? [])];
+    const generation = createImageGenerationMetadata({
+      prompt,
+      model: node.metadata.model || getProvider(channel, "image").model,
+      size: node.metadata.size || config.imageSize,
+      quality: node.metadata.quality || config.imageQuality,
+      count: 1,
+      transparentBackground: Boolean(node.metadata.transparentBackground),
+      referenceStorageKeys,
+      cameraPrompt: node.metadata.cameraPrompt,
+    });
+    generation.requestPrompt = node.metadata.requestPrompt || promptForGeneration(prompt);
+    try {
+      updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
+      if (serverProviderSupported("image")) {
+        await startServerImageGeneration(node.id, generation, generation.requestPrompt, referenceStorageKeys, { replaceExisting: true });
+        return;
+      }
+      const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
+      assertResolvedImageReferences(referenceStorageKeys, refs);
+      const [url] = await generateImages({
+        channel,
+        model: generation.model,
+        prompt: generation.requestPrompt,
+        size: generation.size,
+        quality: generation.quality,
+        n: 1,
+        referenceDataUrls: refs,
+        transparentBackground: generation.transparentBackground,
+        systemPrompt: config.systemPrompt,
       });
+      if (!url) throw new Error("图片服务没有返回结果");
+      const uploaded = await uploadMedia(url, "image");
+      updateNode(node.id, { metadata: {
+        content: uploaded.url,
+        storageKey: uploaded.storageKey,
+        naturalWidth: uploaded.width,
+        naturalHeight: uploaded.height,
+        bytes: uploaded.bytes,
+        mimeType: uploaded.mimeType,
+        status: "success",
+        errorDetails: undefined,
+        ...generation,
+      } });
+    } catch (error) {
+      updateNode(node.id, { metadata: { status: "error", errorDetails: error instanceof Error ? error.message : String(error) } });
     }
   };
 
@@ -1065,7 +997,7 @@ export function NodeActions({
   const renderImageToolbarAction = (action: ImageToolbarAction) => {
     switch (action) {
       case "generate":
-        return <IconBtn key={action} label={imageToolLabel("生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "生成/重试"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : generateOnImage())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(node.metadata.content ? "续作" : "生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : node.metadata.content ? "基于此图继续创作" : "生成图片"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : continueFromImage())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
       case "video":
         return <IconBtn key={action} label={imageToolLabel("视频")} title="生成视频" onClick={() => void generateOnVideo()}><span className="text-[10px] font-semibold">视频</span></IconBtn>;
       case "reverse":
@@ -1097,6 +1029,27 @@ export function NodeActions({
         return <IconBtn key={action} label={imageToolLabel(node.metadata.freeResize ? "自由" : "等比")} title={node.metadata.freeResize ? "锁定比例" : "自由缩放"} onClick={() => updateNode(node.id, { metadata: { freeResize: !node.metadata.freeResize } })}><span className="text-[10px] font-semibold">{node.metadata.freeResize ? "自由" : "等比"}</span></IconBtn>;
     }
   };
+
+  if (inlineConfigOnly) {
+    if (node.type !== "config") return null;
+    const loading = configGenerating || node.metadata.status === "loading";
+    const cancellable = loading && Boolean(node.metadata.generationJobId);
+    return (
+      <button
+        type="button"
+        className="ob-btn-primary mt-1 inline-flex w-full items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs"
+        aria-label={cancellable ? "停止配置节点生成" : "配置节点生成"}
+        aria-busy={loading}
+        disabled={loading && !cancellable}
+        title={cancellable ? "停止当前生成" : loading ? "生成中" : node.metadata.generationOutputRootId ? "再次生成一批独立结果" : "生成一批独立结果"}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={() => void (cancellable ? cancelNodeGeneration() : runConfigGenerate())}
+      >
+        {cancellable ? <Square size={13} /> : <Sparkles size={13} />}
+        {cancellable ? "停止生成" : loading ? "生成中…" : node.metadata.generationOutputRootId ? "再次生成一批" : "生成"}
+      </button>
+    );
+  }
 
 return (
     <>
@@ -1142,7 +1095,20 @@ return (
             </IconBtn>
           </>
         ) : null}
-        {node.type === "image" ? imageToolbarActions.map(renderImageToolbarAction) : null}
+        {node.type === "image" ? (
+          <>
+            {imageToolbarActions.map(renderImageToolbarAction)}
+            {node.metadata.content && node.metadata.prompt ? (
+              <IconBtn
+                label={imageToolLabel("重试")}
+                title="重试此结果（使用原始生成快照）"
+                onClick={() => void retryImageResult()}
+              >
+                <RotateCw size={14} />
+              </IconBtn>
+            ) : null}
+          </>
+        ) : null}
         {node.type === "video" ? (
           <>
 			<IconBtn
@@ -1168,14 +1134,6 @@ return (
               <Download size={14} />
             </IconBtn>
           </>
-        ) : null}
-        {node.type === "config" ? (
-          <IconBtn
-            title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "运行生成"}
-            onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : runConfigGenerate())}
-          >
-            {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
-          </IconBtn>
         ) : null}
         {cameraAvailable ? (
           <span ref={cameraAnchorRef} className="inline-flex">

@@ -13,6 +13,7 @@ export type ImageGenerationRequest = {
 
 export type ImageGenerationMetadata = {
   prompt: string;
+  requestPrompt?: string;
   model: string;
   size: string;
   quality: string;

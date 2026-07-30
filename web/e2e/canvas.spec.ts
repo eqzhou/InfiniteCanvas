@@ -1976,7 +1976,7 @@ test("config input reorder changes Ark reference order", async ({ page }) => {
 
   await page.locator('[data-node-id="config"] [data-node-header]').click();
   await page.getByRole("button", { name: "下移输入 1" }).click();
-  await page.getByTitle("运行生成").click();
+  await page.locator('[data-node-id="config"]').getByRole("button", { name: "配置节点生成" }).click();
   await expect.poll(() => requestBody).not.toBeNull();
   const references = requestBody?.content
     ?.filter((item) => item.type === "image_url")
@@ -2101,7 +2101,7 @@ test("config node preserves blank-line prompts across reload and uses them for g
   await page.reload();
   await node.locator("[data-node-header]").click();
   await expect(node.getByLabel("配置节点提示词")).toHaveValue("first line\n\nthird line");
-  await node.getByTitle("运行生成").click();
+  await node.getByRole("button", { name: "配置节点生成" }).click();
   await expect.poll(() => requestPrompt).toBe("first line\n\nthird line");
 });
 
@@ -2157,7 +2157,7 @@ test("settings keeps provider configuration structured without responsive overfl
   }
 });
 
-test("text-to-image creates a connected config and executes immediately", async ({ page }) => {
+test("text-to-image creates a connected config and runs through its explicit batch entry", async ({ page }) => {
   let requestBody: Record<string, unknown> | null = null;
   await page.route("https://mock.example/v1/images/generations", async (route) => {
     requestBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
@@ -2185,9 +2185,12 @@ test("text-to-image creates a connected config and executes immediately", async 
   await page.getByPlaceholder("写下提示词或说明…").fill("a red square");
   await page.getByTitle("生图").click();
 
-  await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
-  await expect(page.locator('[data-node-type="config"]').getByLabel("配置节点提示词"))
-    .toHaveValue("a red square");
+  const config = page.locator('[data-node-type="config"]');
+  await expect(config).toHaveCount(1);
+  await expect(config.getByLabel("配置节点提示词来源")).toHaveValue("upstream");
+  await expect(config.getByLabel("配置节点最终提示词")).toHaveValue("a red square");
+  await expect(config.getByLabel("配置节点提示词")).toHaveCount(0);
+  await config.getByRole("button", { name: "配置节点生成" }).click();
   await expect.poll(() => requestBody).toMatchObject({
     model: "mock-image-model",
     prompt: "Use a crisp editorial style.\n\na red square",
@@ -2205,9 +2208,13 @@ test("text-to-image creates a connected config and executes immediately", async 
         request.onsuccess = () => {
           const projects = Array.isArray(request.result) ? request.result : [];
           resolve(projects.some((project) => {
-            const config = project?.nodes?.find((item: { type?: string }) => item.type === "config");
+            const config = project?.nodes?.find((item: { id?: string; type?: string }) => item.type === "config");
             const images = project?.nodes?.filter((item: { type?: string }) => item.type === "image") ?? [];
-            return config?.metadata?.batchChildIds?.length === 2 && images.length === 2 &&
+            const run = images.find((item: { metadata?: Record<string, unknown> }) =>
+              item.metadata?.generationConfigId === config?.id && item.metadata?.isBatchRoot,
+            );
+            return !config?.metadata?.batchChildIds && config?.metadata?.generationOutputRootId === run?.id &&
+              run?.metadata?.batchChildIds?.length === 1 && images.length === 2 &&
               images.every((item: { metadata?: Record<string, unknown> }) =>
                 item.metadata?.status === "success" &&
                 item.metadata?.generationType === "text-to-image" &&
@@ -2256,10 +2263,10 @@ test("failed text-to-image keeps its config and can retry successfully", async (
 
   const config = page.locator('[data-node-type="config"]');
   await expect(config).toHaveCount(1);
+  await config.getByRole("button", { name: "配置节点生成" }).click();
   await expect(config).toContainText("AI 503");
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(0);
-  await config.locator("[data-node-header]").click();
-  await config.getByTitle("运行生成").click();
+  await config.getByRole("button", { name: "配置节点生成" }).click();
   await expect.poll(() => requests).toBe(2);
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
@@ -2305,15 +2312,11 @@ test("a configuration node generates the requested text batch", async ({ page })
   const source = page.locator('[data-node-type="text"]');
   await source.getByPlaceholder("写下提示词或说明…").fill("three alternatives");
   await source.getByTitle("生图").click();
-  await page.getByTitle("适应").click();
-  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
   const config = page.locator('[data-node-type="config"]');
   await expect(config).toHaveCount(1);
-  await config.locator("[data-node-header]").click();
-  await expect(config.getByTitle("运行生成")).toBeVisible();
   await config.getByLabel("模式").selectOption("text");
   await config.getByLabel("数量").fill("3");
-  await config.getByTitle("运行生成").click();
+  await config.getByRole("button", { name: "配置节点生成" }).click();
 
   await expect.poll(() => requests).toBe(3);
   expect(textBodies).toHaveLength(3);
@@ -3900,21 +3903,22 @@ test("node camera settings persist, stay screen-sized, and expand generation pro
   await cameraPanel.getByLabel("焦距").fill("24");
   await cameraPanel.getByLabel("光圈").fill("4");
   await cameraPanel.getByTitle("关闭摄像机设置").click();
-  await configNode.getByTitle("运行生成").click();
+  await configNode.getByRole("button", { name: "配置节点生成" }).click();
   await expect.poll(() => prompts.length).toBe(3);
   expect(prompts[2]).toContain("config camera scene");
   expect(prompts[2]!.match(/Camera: mirrorless camera/g)).toHaveLength(1);
   const configImageResult = page.locator('[data-node-type="image"]').last();
   await configImageResult.locator("[data-node-header]").click();
   await expect(configImageResult.getByTitle("摄像机设置（已启用）")).toBeVisible();
-  await expect(configImageResult.getByRole("textbox", { name: "节点生成提示词" })).toContainText("config camera scene");
+  await expect(configImageResult.getByText("最终实际发送的提示词（只读）")).toBeVisible();
+  await expect(configImageResult.locator(".node-prompt")).toContainText("config camera scene");
 
   await configNode.locator("[data-node-header]").click();
   await configNode.getByLabel("模式").selectOption("text");
   await expect(configNode.getByTitle("摄像机设置")).toHaveCount(0);
   await configNode.getByLabel("模式").selectOption("video");
   await expect(configNode.getByTitle("摄像机设置（已启用）")).toBeVisible();
-  await configNode.getByTitle("运行生成").click();
+  await configNode.getByRole("button", { name: "配置节点生成" }).click();
   await expect.poll(() => videoPrompts.length).toBe(1);
   expect(videoPrompts[0]).toContain("config camera scene");
   expect(videoPrompts[0]!.match(/Camera: mirrorless camera/g)).toHaveLength(1);

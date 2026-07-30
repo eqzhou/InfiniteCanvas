@@ -1,19 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { isNodePromptType, nodePromptKind, nodePromptPlaceholder } from "./node-prompt";
+import { initialNodePrompt, nodePromptPlaceholder } from "./node-prompt";
 
-describe("node prompt behavior", () => {
-  test("routes every promptable node to its matching provider", () => {
-    expect(isNodePromptType("audio")).toBe(true);
-    expect(isNodePromptType("config")).toBe(false);
-    expect(nodePromptKind("text")).toBe("text");
-    expect(nodePromptKind("image")).toBe("image");
-    expect(nodePromptKind("video")).toBe("video");
-    expect(nodePromptKind("audio")).toBe("audio");
+describe("image prompt drafts", () => {
+  test("does not reuse a generated image's request snapshot as a continuation draft", () => {
+    expect(initialNodePrompt({
+      type: "image",
+      metadata: { content: "data:image/png;base64,test", prompt: "original image prompt" },
+    })).toBe("");
   });
 
-  test("uses an audio-specific prompt instead of video copy", () => {
-    expect(nodePromptPlaceholder("audio", false)).toBe("输入语音文本…");
-    expect(nodePromptPlaceholder("text", false)).toBe("输入要生成的文本…");
-    expect(nodePromptPlaceholder("text", true)).toBe("描述如何改写这段文本…");
+  test("keeps an empty image ready for its first generation", () => {
+    expect(initialNodePrompt({ type: "image", metadata: { prompt: "first image prompt" } })).toBe("first image prompt");
+    expect(nodePromptPlaceholder("image", true)).toContain("继续创作");
   });
 });

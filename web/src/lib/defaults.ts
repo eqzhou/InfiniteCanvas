@@ -129,6 +129,7 @@ export function createNode(
     type === "config"
       ? {
           generationMode: "image" as const,
+          promptSource: "independent" as const,
           size: "1024x1024",
           count: 1,
           status: "idle" as const,

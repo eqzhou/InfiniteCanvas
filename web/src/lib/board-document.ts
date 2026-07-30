@@ -97,6 +97,10 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   }
   optionalString(input.content, `${path}.content`, 20_000_000);
   optionalString(input.prompt, `${path}.prompt`, 100_000);
+  optionalString(input.requestPrompt, `${path}.requestPrompt`, 100_000);
+  if (input.promptSource !== undefined && input.promptSource !== "upstream" && input.promptSource !== "independent") {
+    throw new Error(`${path}.promptSource is invalid`);
+  }
   optionalString(input.model, `${path}.model`, 500);
   optionalString(input.size, `${path}.size`, 100);
   optionalString(input.quality, `${path}.quality`, 100);
@@ -211,7 +215,15 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   if (input.panoramaProjection !== undefined && input.panoramaProjection !== "equirectangular") {
     throw new Error(`${path}.panoramaProjection is invalid`);
   }
-  for (const key of ["workflowRunId", "workflowStepId", "workflowTemplateId", "generationJobId"] as const) {
+  for (const key of [
+    "workflowRunId",
+    "workflowStepId",
+    "workflowTemplateId",
+    "generationJobId",
+    "generationConfigId",
+    "generationRunId",
+    "generationOutputRootId",
+  ] as const) {
     if (input[key] !== undefined) id(input[key], `${path}.${key}`);
   }
   if (input.generationResultIndex !== undefined &&
@@ -461,6 +473,34 @@ export function parseBoardProject(value: unknown): BoardProject {
     }
     if (child.metadata.isBatchRoot || child.metadata.batchChildIds?.length) {
       throw new Error(`nested batch child ${child.id} is unsupported`);
+    }
+  }
+
+  for (const node of nodes) {
+    const configId = node.metadata.generationConfigId;
+    if (configId) {
+      const config = nodeByID.get(configId);
+      if (!config || config.type !== "config") {
+        throw new Error(`generation result ${node.id} references an invalid config`);
+      }
+      if (!node.metadata.generationRunId) {
+        throw new Error(`generation result ${node.id} is missing its run id`);
+      }
+    }
+    const outputRootId = node.metadata.generationOutputRootId;
+    if (outputRootId) {
+      if (node.type !== "config") throw new Error(`non-config node ${node.id} has a generation output root`);
+      const output = nodeByID.get(outputRootId);
+      if (!output || output.type !== "image" || output.metadata.generationConfigId !== node.id) {
+        throw new Error(`config ${node.id} references an invalid generation output root`);
+      }
+    }
+    if (node.metadata.batchRootId) {
+      const root = nodeByID.get(node.metadata.batchRootId);
+      if (root?.metadata.generationRunId && node.metadata.generationRunId &&
+          root.metadata.generationRunId !== node.metadata.generationRunId) {
+        throw new Error(`batch child ${node.id} belongs to a different generation run`);
+      }
     }
   }
 

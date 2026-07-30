@@ -14,7 +14,13 @@ import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import { Send } from "lucide-react";
 import { getProvider } from "@/lib/ai-config";
-import { isNodePromptType, nodePromptKind, nodePromptPlaceholder, type NodePromptType } from "@/lib/node-prompt";
+import {
+  initialNodePrompt,
+  isNodePromptType,
+  nodePromptKind,
+  nodePromptPlaceholder,
+  type NodePromptType,
+} from "@/lib/node-prompt";
 import {
   activePromptReferences,
   buildPromptReferences,
@@ -44,6 +50,7 @@ import {
   mergeSharedChannelChoices,
   useSharedChannels,
 } from "@/services/shared-channels";
+import { placeImageGenerationRun } from "@/lib/image-generation-run";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
   const config = useBoardStore((s) => s.config);
@@ -52,7 +59,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   const updateNode = useBoardStore((s) => s.updateNode);
   const updateActive = useBoardStore((s) => s.updateActive);
   const persistNow = useBoardStore((s) => s.persistNow);
-  const [text, setText] = useState(node.metadata.prompt ?? "");
+  const [text, setText] = useState(() => initialNodePrompt(node));
   const [busy, setBusy] = useState(false);
   const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const sharedChannels = useSharedChannels();
@@ -67,6 +74,25 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
   const references = buildPromptReferences(project, node.id);
+  const hasImageContent = node.type === "image" && Boolean(node.metadata.content || node.metadata.storageKey);
+  const upstream = useMemo(() => {
+    if (!project) return { texts: [] as string[], images: [] as PromptReference[] };
+    const incoming = project.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from);
+    const ordered = node.metadata.inputOrder?.filter((id) => incoming.includes(id)) ?? [];
+    const ids = [...ordered, ...incoming.filter((id) => !ordered.includes(id))];
+    const nodes = ids.map((id) => project.nodes.find((item) => item.id === id)).filter(Boolean) as BoardNode[];
+    return {
+      texts: nodes.filter((item) => item.type === "text").map((item) => item.metadata.content ?? "").filter(Boolean),
+      images: nodes.filter((item) => item.type === "image" && (item.metadata.content || item.metadata.storageKey)).map((item) => ({
+        nodeId: item.id,
+        kind: "image" as const,
+        label: "上游图片",
+        title: item.title,
+        ...(item.metadata.storageKey ? { storageKey: item.metadata.storageKey } : {}),
+        ...(item.metadata.content ? { content: item.metadata.content } : {}),
+      })),
+    };
+  }, [node.id, node.metadata.inputOrder, project]);
 
   const promptable = isNodePromptType(node.type);
   const promptType: NodePromptType = isNodePromptType(node.type) ? node.type : "text";
@@ -90,11 +116,16 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    setText(initialNodePrompt(node));
+  }, [node.id, node.type, node.metadata.content, node.metadata.storageKey]);
+
   if (!promptable) return null;
 
   const generationBusy =
     busy ||
     (node.metadata.status === "loading" && Boolean(node.metadata.generationJobId));
+  const effectivePrompt = text.trim() || (!hasImageContent && node.type === "image" ? upstream.texts.join("\n\n") : "");
 
   const placeRight = (created: BoardNode[]) => {
     updateActive((p) => ({
@@ -108,7 +139,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   };
 
   const send = async () => {
-    if (!text.trim() || generationBusy) return;
+    if (!effectivePrompt || generationBusy) return;
     const kind = nodePromptKind(promptType);
     if (
       !channel ||
@@ -118,14 +149,16 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       return;
     }
     setBusy(true);
-    const rawPrompt = text.trim();
-    updateNode(node.id, { metadata: { prompt: rawPrompt, status: "loading", errorDetails: undefined } });
+    const rawPrompt = effectivePrompt;
+    if (node.type !== "image" || !hasImageContent) {
+      updateNode(node.id, { metadata: { prompt: rawPrompt, status: "loading", errorDetails: undefined } });
+    }
     try {
       const activeReferences = activePromptReferences(text, references);
       if (node.type === "text") {
         const prompt = node.metadata.content
           ? `原文本：\n${node.metadata.content}\n\n修改要求：${text.trim()}`
-          : text.trim();
+          : rawPrompt;
         const out = await generateText({
           channel,
           model: node.metadata.model || getProvider(channel, "text").model,
@@ -147,7 +180,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         }
       } else if (node.type === "image") {
         const imageReferences: PromptReference[] = [
-          ...(node.metadata.storageKey || node.metadata.content
+          ...(hasImageContent
             ? [{
                 nodeId: node.id,
                 kind: "image" as const,
@@ -157,14 +190,16 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
                 ...(node.metadata.content ? { content: node.metadata.content } : {}),
               }]
             : []),
+          ...(hasImageContent ? [] : upstream.images),
           ...activeReferences.filter((reference) => reference.kind === "image"),
         ];
-        const referenceStorageKeys = imageReferences
+        const uniqueImageReferences = [...new Map(imageReferences.map((reference) => [reference.nodeId, reference])).values()];
+        const referenceStorageKeys = uniqueImageReferences
           .map((reference) => reference.storageKey)
           .filter((key): key is string => Boolean(key));
-        const refs = await resolvePromptReferences(imageReferences, "image", 9);
+        const refs = await resolvePromptReferences(uniqueImageReferences, "image", 9);
         const generation = createImageGenerationMetadata({
-          prompt: text.trim(),
+          prompt: rawPrompt,
           model: node.metadata.model || getProvider(channel, "image").model,
           size: config.imageSize,
           quality: config.imageQuality,
@@ -173,34 +208,53 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           referenceStorageKeys,
           cameraPrompt: node.metadata.cameraPrompt,
         });
+        generation.requestPrompt = applyCameraPrompt(generation.prompt, generation.cameraPrompt);
         const provider = getProvider(channel, "image");
         if (usesServerGenerationJobs() && (provider.protocol === "openai" || provider.protocol === "gemini" ||
             (provider.protocol === "template" && Boolean(provider.template))) &&
-            imageReferences.every((reference) => Boolean(reference.storageKey))) {
+            uniqueImageReferences.every((reference) => Boolean(reference.storageKey))) {
           if (provider.protocol === "gemini" && generation.transparentBackground) {
             throw new Error("Gemini 图片生成不支持透明背景");
           }
           if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
             throw new Error("当前图片模板不支持透明背景");
           }
-          const job = await createServerImageGenerationJob({
-            projectId: project?.id,
-            prompt: applyCameraPrompt(generation.prompt, generation.cameraPrompt),
-            providerId: channel.id,
-            model: generation.model,
-            parameters: {
-              size: generation.size,
-              quality: generation.quality,
-              count: generation.count,
-              transparentBackground: generation.transparentBackground,
-              referenceStorageKeys,
-            },
-          });
+          const jobId = uid("job");
+          let placeholdersApplied = false;
           try {
-            updateActive((current) => applyServerImagePlaceholders(current, node.id, job.id, generation));
+            updateActive((current) => applyServerImagePlaceholders(current, node.id, jobId, generation));
+            placeholdersApplied = true;
             await persistNow();
+            await createServerImageGenerationJob({
+              id: jobId,
+              projectId: project?.id,
+              prompt: generation.requestPrompt,
+              providerId: channel.id,
+              model: generation.model,
+              parameters: {
+                size: generation.size,
+                quality: generation.quality,
+                count: generation.count,
+                transparentBackground: generation.transparentBackground,
+                referenceStorageKeys,
+              },
+            });
           } catch (error) {
-            await cancelServerGenerationJob(job.id).catch(() => undefined);
+            if (placeholdersApplied) {
+              updateActive((current) => ({
+                ...current,
+                nodes: current.nodes.map((item) => item.metadata.generationJobId === jobId ? {
+                  ...item,
+                  metadata: {
+                    ...item.metadata,
+                    status: "error" as const,
+                    errorDetails: error instanceof Error ? error.message : String(error),
+                  },
+                } : item),
+              }));
+              await persistNow().catch(() => undefined);
+            }
+            await cancelServerGenerationJob(jobId).catch(() => undefined);
             throw error;
           }
           return;
@@ -208,7 +262,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         const urls = await generateImages({
           channel,
           model: generation.model,
-          prompt: applyCameraPrompt(generation.prompt, generation.cameraPrompt),
+          prompt: generation.requestPrompt,
           size: generation.size,
           quality: generation.quality,
           n: generation.count,
@@ -216,7 +270,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           transparentBackground: generation.transparentBackground,
           systemPrompt: config.systemPrompt,
         });
-        await placeImageResults(node, urls, generation, placeRight, updateNode, updateActive);
+        await placeImageResults(node, urls, generation, updateActive);
       } else if (node.type === "video") {
         const ownVideo: PromptReference[] = node.metadata.storageKey || node.metadata.content
           ? [{
@@ -378,18 +432,22 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       }
       // Keep the last prompt so users can refine and resubmit.
     } catch (err) {
-      updateNode(node.id, {
-        metadata: {
-          status: "error",
-          errorDetails: err instanceof Error ? err.message : String(err),
-        },
-      });
+      if (node.type === "image" && hasImageContent) {
+        alert(err instanceof Error ? err.message : String(err));
+      } else {
+        updateNode(node.id, {
+          metadata: {
+            status: "error",
+            errorDetails: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  const placeholder = nodePromptPlaceholder(promptType, Boolean(node.metadata.content));
+  const placeholder = nodePromptPlaceholder(promptType, Boolean(node.metadata.content || node.metadata.storageKey));
   const defaultModelLabel = selectedModel || "继承渠道默认模型";
 
   const appendPromptLibrary = (promptId: string) => {
@@ -401,7 +459,9 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
 ${body}` : body;
     setText(next);
-    updateNode(node.id, { metadata: { prompt: next } }, { history: false });
+    if (!(node.type === "image" && hasImageContent)) {
+      updateNode(node.id, { metadata: { prompt: next } }, { history: false });
+    }
   };
 
   return (
@@ -417,6 +477,7 @@ ${body}` : body;
           className="min-w-0 flex-1 truncate rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
           value={node.metadata.model ?? ""}
           title={defaultModelLabel}
+          disabled={hasImageContent}
           onChange={(event) => {
             const model = event.target.value.trim();
             updateNode(node.id, { metadata: { model: model || undefined } });
@@ -446,6 +507,16 @@ ${body}` : body;
           ))}
         </select>
       </div>
+      {hasImageContent ? (
+        <div className="rounded border border-[var(--ob-line)] bg-[var(--ob-canvas)] px-2 py-1.5 text-[10px] leading-relaxed text-[var(--ob-muted)]">
+          <div className="font-medium text-[var(--ob-text)]">最终实际发送的提示词（只读）</div>
+          <p className="mt-0.5 whitespace-pre-wrap">{node.metadata.requestPrompt || node.metadata.prompt || "未保存历史提示词"}</p>
+          <p className="mt-1">{node.metadata.model || "默认模型"} · {node.metadata.size || "默认尺寸"} · {node.metadata.quality || "默认质量"}</p>
+        </div>
+      ) : null}
+      {node.type === "image" && !hasImageContent && upstream.texts.length > 0 && !text.trim() ? (
+        <p className="text-[10px] text-[var(--ob-muted)]">将使用直接上游文本作为本次图片提示词。</p>
+      ) : null}
       <div className="flex min-w-0 items-end gap-2">
         <div className="min-w-0 flex-1">
           <PromptChipInput
@@ -454,7 +525,9 @@ ${body}` : body;
             references={references}
             onChange={(value) => {
               setText(value);
-              updateNode(node.id, { metadata: { prompt: value } }, { history: false });
+              if (!(node.type === "image" && hasImageContent)) {
+                updateNode(node.id, { metadata: { prompt: value } }, { history: false });
+              }
             }}
             onSubmit={() => void send()}
           />
@@ -464,7 +537,7 @@ ${body}` : body;
           className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
           aria-busy={busy}
           aria-label={busy ? "生成中" : "发送提示词"}
-          disabled={generationBusy || !text.trim()}
+          disabled={generationBusy || !effectivePrompt}
           onClick={() => void send()}
           title="发送 (Ctrl/Cmd+Enter)"
         >
@@ -496,27 +569,8 @@ async function placeImageResults(
   node: BoardNode,
   urls: string[],
   generation: ReturnType<typeof createImageGenerationMetadata>,
-  placeRight: (nodes: BoardNode[]) => void,
-  updateNode: ReturnType<typeof useBoardStore.getState>["updateNode"],
   updateActive: ReturnType<typeof useBoardStore.getState>["updateActive"],
 ) {
-  if (urls.length === 1 && !node.metadata.content) {
-    const uploaded = await uploadMedia(urls[0], "image");
-    updateNode(node.id, {
-      metadata: {
-        content: uploaded.url,
-        storageKey: uploaded.storageKey,
-        naturalWidth: uploaded.width,
-        naturalHeight: uploaded.height,
-        bytes: uploaded.bytes,
-        mimeType: uploaded.mimeType,
-        status: "success",
-        ...generation,
-      },
-    });
-    return;
-  }
-
   const created: BoardNode[] = [];
   for (const [i, url] of urls.entries()) {
     const uploaded = await uploadMedia(url, "image");
@@ -538,7 +592,6 @@ async function placeImageResults(
             mimeType: uploaded.mimeType,
             status: "success",
             ...generation,
-            batchRootId: node.id,
           },
           width: Math.min(280, uploaded.width || 240),
           height: Math.min(280, uploaded.height || 240),
@@ -547,40 +600,9 @@ async function placeImageResults(
     );
   }
 
-  if (urls.length > 1) {
-    // mark current as batch root if empty multi-gen, else just place children
-    updateActive((p) => {
-      const childIds = created.map((c) => c.id);
-      const nodes = p.nodes.map((n) =>
-        n.id === node.id
-          ? {
-              ...n,
-              metadata: {
-                ...n.metadata,
-                isBatchRoot: true,
-                batchChildIds: [
-                  ...(n.metadata.batchChildIds ?? []),
-                  ...childIds,
-                ],
-                primaryImageId: childIds[0],
-                imageBatchExpanded: true,
-                status: "success" as const,
-                ...generation,
-              },
-            }
-          : n,
-      );
-      return {
-        ...p,
-        nodes: [...nodes, ...created],
-        edges: [
-          ...p.edges,
-          ...created.map((c) => ({ id: uid("edge"), from: node.id, to: c.id })),
-        ],
-      };
-    });
-  } else {
-    placeRight(created);
-    updateNode(node.id, { metadata: { status: "success", ...generation } });
-  }
+  updateActive((project) => placeImageGenerationRun(project, {
+    sourceId: node.id,
+    results: created,
+    reuseEmptyImageTarget: !node.metadata.content && !node.metadata.storageKey,
+  }));
 }

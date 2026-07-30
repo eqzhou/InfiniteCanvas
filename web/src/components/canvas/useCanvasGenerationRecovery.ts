@@ -70,7 +70,7 @@ export function useCanvasGenerationRecovery(): void {
   const updateNode = useBoardStore((state) => state.updateNode);
   const pending = useMemo(() => (project?.nodes ?? [])
     .filter((node) => (node.type === "image" || node.type === "video" || node.type === "audio") &&
-      !node.metadata.isBatchRoot && node.metadata.status === "loading" && node.metadata.generationJobId)
+      node.metadata.status === "loading" && node.metadata.generationJobId)
     .slice(0, 32)
     .map((node) => ({
       nodeId: node.id,
@@ -121,19 +121,25 @@ export function useCanvasGenerationRecovery(): void {
   }, [pending, updateNode]);
 
   useEffect(() => {
-    for (const root of project?.nodes ?? []) {
-      if (root.metadata.status !== "loading" || !root.metadata.batchChildIds?.length) continue;
-      const children = root.metadata.batchChildIds
-        .map((id) => project?.nodes.find((node) => node.id === id))
+    const nodes = project?.nodes ?? [];
+    for (const root of nodes) {
+      if (root.type !== "image" || root.metadata.batchRootId || !root.metadata.generationConfigId) continue;
+      const children = (root.metadata.batchChildIds ?? [])
+        .map((id) => nodes.find((node) => node.id === id))
         .filter((node): node is NonNullable<typeof node> => Boolean(node));
-      if (children.length !== root.metadata.batchChildIds.length || children.some((child) => child.metadata.status === "loading")) {
-        continue;
+      if (children.length !== (root.metadata.batchChildIds?.length ?? 0)) continue;
+      const targets = [root, ...children];
+      if (targets.some((target) => target.metadata.status === "loading")) continue;
+      const failed = targets.find((target) => target.metadata.status === "error");
+      const status = failed ? "error" : "success";
+      if (root.metadata.status !== status || root.metadata.errorDetails !== failed?.metadata.errorDetails) {
+        updateNode(root.id, { metadata: { status, errorDetails: failed?.metadata.errorDetails } });
       }
-      const failed = children.find((child) => child.metadata.status === "error");
-      updateNode(root.id, { metadata: {
-        status: failed ? "error" : "success",
-        errorDetails: failed?.metadata.errorDetails,
-      } });
+      const config = nodes.find((node) => node.id === root.metadata.generationConfigId);
+      if (config?.type === "config" && config.metadata.generationOutputRootId === root.id &&
+          (config.metadata.status !== status || config.metadata.errorDetails !== failed?.metadata.errorDetails)) {
+        updateNode(config.id, { metadata: { status, errorDetails: failed?.metadata.errorDetails } });
+      }
     }
   }, [project?.nodes, updateNode]);
 }
