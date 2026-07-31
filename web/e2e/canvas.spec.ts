@@ -5172,16 +5172,17 @@ test("workbench history refills the form without generating", async ({ page }) =
 
   // Move the form away from the record so a successful refill is unambiguous.
   await prompt.fill("另一个草稿");
-  await page.getByLabel("尺寸").selectOption("1024x1024");
-  await page.getByLabel("质量").selectOption("auto");
-  await page.getByLabel("数量").fill("1");
+  await page.getByLabel("图片尺寸", { exact: true }).selectOption("1024x1024");
+  await page.getByLabel("图片质量", { exact: true }).selectOption("auto");
+  await page.getByLabel("数量", { exact: true }).fill("1");
 
   await refill.click();
   await expect(prompt).toHaveValue("回填探针提示词");
-  await expect(page.getByLabel("尺寸")).toHaveValue("1536x1024");
-  await expect(page.getByLabel("质量")).toHaveValue("high");
-  await expect(page.getByLabel("数量")).toHaveValue("3");
-  await expect(page.getByLabel("模型")).toHaveValue("probe-image-model");
+  await expect(page.getByLabel("图片尺寸", { exact: true })).toHaveValue("1536x1024");
+  await expect(page.getByLabel("自定义图片尺寸", { exact: true })).toHaveValue("1536x1024");
+  await expect(page.getByLabel("图片质量", { exact: true })).toHaveValue("high");
+  await expect(page.getByLabel("数量", { exact: true })).toHaveValue("3");
+  await expect(page.getByLabel("模型", { exact: true })).toHaveValue("probe-image-model");
 
   // Refilling must not start a generation: the record count stays put.
   await expect(refill).toHaveCount(1);
