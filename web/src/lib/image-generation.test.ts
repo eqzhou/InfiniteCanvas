@@ -3,6 +3,7 @@ import {
   assertResolvedImageReferences,
   canRetryImageResult,
   createImageGenerationMetadata,
+  normalizeImageGenerationForProvider,
 } from "./image-generation";
 
 describe("image generation lineage", () => {
@@ -43,6 +44,23 @@ describe("image generation lineage", () => {
       transparentBackground: false,
       referenceStorageKeys: [],
     }).generationType).toBe("text-to-image");
+  });
+
+  test("normalizes legacy image settings before a known provider request", () => {
+    const source = createImageGenerationMetadata({
+      prompt: "poster",
+      model: "doubao-seedream-5-0-pro",
+      size: "3:2",
+      quality: "high",
+      count: 8,
+      transparentBackground: false,
+      referenceStorageKeys: [],
+    });
+    const normalized = normalizeImageGenerationForProvider(source, "apimart");
+
+    expect(normalized).toMatchObject({ size: "1536x1024", quality: "auto", count: 1 });
+    expect(normalized).not.toBe(source);
+    expect(normalized.referenceStorageKeys).not.toBe(source.referenceStorageKeys);
   });
 
   test("rejects a retry when any recorded reference cannot be restored", () => {

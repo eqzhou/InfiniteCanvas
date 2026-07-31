@@ -17,6 +17,12 @@ const path = require("node:path");
 const PROCESS_OWNED = Object.freeze({
   OPENBOARD_WEB_OUT_DIR: "dist-local",
   FORCE_COLOR: "0",
+  HTTP_PROXY: "",
+  HTTPS_PROXY: "",
+  ALL_PROXY: "",
+  http_proxy: "",
+  https_proxy: "",
+  all_proxy: "",
 });
 
 /** Applied only when neither `.env` nor the shell defines the key. */

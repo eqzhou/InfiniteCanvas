@@ -69,7 +69,7 @@ export type ServerAudioGenerationInput = {
 	prompt: string;
 	providerId: string;
 	model?: string;
-	parameters: { voice: string; format: string };
+	parameters: { voice: string; format: string; speed?: number; instructions?: string };
 };
 
 export type GenerationJobPollingOptions = {

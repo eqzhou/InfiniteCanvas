@@ -36,6 +36,7 @@ type providerTextRequest struct {
 	SystemPromptProfile string   `json:"systemPromptProfile,omitempty"`
 	ReasoningEffort     string   `json:"reasoningEffort,omitempty"`
 	SystemPrompt        string   `json:"-"`
+	AuditEndpoint       string   `json:"-"`
 }
 
 type providerTextResult struct {
@@ -342,10 +343,14 @@ func parseGeminiText(body []byte) (string, error) {
 func fetchProviderTextWithClient(
 	ctx context.Context,
 	connection providerModelConnection,
-	input providerTextRequest,
+	input *providerTextRequest,
 	client *http.Client,
 	allowLoopback bool,
 ) (string, error) {
+	if input == nil {
+		return "", errors.New("text generation request is missing")
+	}
+	input.AuditEndpoint = ""
 	connection.Protocol = strings.ToLower(strings.TrimSpace(connection.Protocol))
 	if connection.Protocol == "" {
 		connection.Protocol = "openai"
@@ -356,7 +361,7 @@ func fetchProviderTextWithClient(
 	if strings.TrimSpace(connection.APIKey) == "" || len(connection.APIKey) > 64<<10 {
 		return "", errors.New("provider API key is not configured")
 	}
-	if err := validateProviderTextRequest(input); err != nil {
+	if err := validateProviderTextRequest(*input); err != nil {
 		return "", err
 	}
 	timeout := connection.Timeout
@@ -370,8 +375,9 @@ func fetchProviderTextWithClient(
 		if err != nil {
 			return "", err
 		}
+		input.AuditEndpoint = endpoint
 		status, body, err := requestProviderText(
-			requestCtx, client, endpoint, connection.APIKey, "gemini", providerGeminiBody(input),
+			requestCtx, client, endpoint, connection.APIKey, "gemini", providerGeminiBody(*input),
 		)
 		if err != nil {
 			return "", err
@@ -386,7 +392,8 @@ func fetchProviderTextWithClient(
 	if err != nil {
 		return "", err
 	}
-	responsesBody := map[string]any{"model": input.Model, "input": providerTextInput(input)}
+	input.AuditEndpoint = responsesEndpoint
+	responsesBody := map[string]any{"model": input.Model, "input": providerTextInput(*input)}
 	if input.ReasoningEffort != "" {
 		responsesBody["reasoning"] = map[string]any{"effort": input.ReasoningEffort}
 	}
@@ -410,8 +417,9 @@ func fetchProviderTextWithClient(
 	if err != nil {
 		return "", err
 	}
+	input.AuditEndpoint = chatEndpoint
 	chatBody := map[string]any{
-		"model": input.Model, "messages": providerChatMessages(input),
+		"model": input.Model, "messages": providerChatMessages(*input),
 	}
 	if input.ReasoningEffort != "" {
 		chatBody["reasoning_effort"] = input.ReasoningEffort
@@ -449,7 +457,7 @@ func providerTextSystemPrompt(connection providerModelConnection, profile string
 }
 
 func providerTextAuditPayload(input providerTextRequest, protocol string) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"source":              "server-proxy",
 		"protocol":            protocol,
 		"model":               input.Model,
@@ -457,6 +465,10 @@ func providerTextAuditPayload(input providerTextRequest, protocol string) map[st
 		"imageCount":          len(input.Images),
 		"systemPromptProfile": input.SystemPromptProfile,
 	}
+	if endpoint := strings.TrimSpace(input.AuditEndpoint); endpoint != "" {
+		payload["method"], payload["endpoint"] = "POST", endpoint
+	}
+	return payload
 }
 
 func (s *Server) generateProviderText(w http.ResponseWriter, r *http.Request) {
@@ -517,7 +529,7 @@ func (s *Server) generateProviderText(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseProvider()
 	startedAt := time.Now()
-	text, err := fetchProviderTextWithClient(r.Context(), connection, input, providerTextHTTPClient, false)
+	text, err := fetchProviderTextWithClient(r.Context(), connection, &input, providerTextHTTPClient, false)
 	status := "succeeded"
 	errorMessage := ""
 	if err != nil {

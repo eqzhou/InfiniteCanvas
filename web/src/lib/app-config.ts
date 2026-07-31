@@ -8,6 +8,7 @@ import {
 import { normalizeImageToolbarPreferences } from "@/lib/image-toolbar-preferences";
 import { normalizeGenerationDefaults } from "@/lib/generation-defaults";
 import { normalizePreferredModels } from "@/lib/workbench-preferences";
+import { normalizeAudioRoles } from "@/lib/audio-provider";
 
 export const SYSTEM_PROMPT_MAX_LENGTH = 20_000;
 
@@ -51,6 +52,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
   const rawPanelTab = (config as AppConfig & { canvasPanelTab?: unknown }).canvasPanelTab;
   const rawDisabled = (config as AppConfig & { disabledPluginIds?: unknown }).disabledPluginIds;
 	const rawSharedChannelID = (config as AppConfig & { activeSharedChannelId?: unknown }).activeSharedChannelId;
+  const rawLegacyAudioRoles = (config as AppConfig & { audioRoles?: unknown }).audioRoles;
   const disabledPluginIds = Array.isArray(rawDisabled)
     ? [...new Set(rawDisabled.filter((id): id is string => typeof id === "string" && id.length > 0))]
     : [];
@@ -78,6 +80,9 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
       (config as AppConfig & { imageToolbar?: unknown }).imageToolbar),
     generationDefaults: normalizeGenerationDefaults(
       (config as AppConfig & { generationDefaults?: unknown }).generationDefaults),
+    ...(rawLegacyAudioRoles === undefined
+      ? { audioRoles: undefined }
+      : { audioRoles: normalizeAudioRoles(rawLegacyAudioRoles) }),
     workflowAgentSystemPrompt: typeof (config as AppConfig & { workflowAgentSystemPrompt?: unknown }).workflowAgentSystemPrompt === "string"
       ? ((config as AppConfig & { workflowAgentSystemPrompt?: string }).workflowAgentSystemPrompt ?? "").slice(0, SYSTEM_PROMPT_MAX_LENGTH)
       : "",

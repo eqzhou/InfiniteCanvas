@@ -159,7 +159,12 @@ export type NodeMetadata = {
   transparentBackground?: boolean;
   generationType?: "text-to-image" | "image-to-image";
   referenceStorageKeys?: string[];
+  /** Explicit per-node voice override. Blank means follow the project role/default. */
   voice?: string;
+  /** Voice actually sent on the most recent generation, retained for audit only. */
+  resolvedVoice?: string;
+  /** Project-level role preset used to resolve the provider-specific voice. */
+  audioRoleId?: string;
   isBatchRoot?: boolean;
   batchRootId?: string;
   batchChildIds?: string[];
@@ -262,6 +267,8 @@ export type BoardProject = {
   activeChatId: string | null;
   backgroundMode: BackgroundMode;
   viewport: Viewport;
+  /** Reusable cast for this project; audio nodes may bind to one role. */
+  audioRoles?: AudioRolePreset[];
 };
 
 export type ProjectSummary = {
@@ -355,7 +362,13 @@ export type AiChannel = {
 
 export type AiProviderKind = "text" | "image" | "video" | "audio";
 export type PreferredModels = Record<string, Partial<Record<AiProviderKind, string>>>;
-export type AiProtocol = "openai" | "ark" | "gemini" | "template" | "apimart" | "kie";
+export type AiProtocol = "openai" | "ark" | "gemini" | "template" | "apimart" | "kie" | "azure" | "edge";
+export type AudioRolePreset = {
+  id: string;
+  name: string;
+  /** One logical role can map to a different voice on each provider. */
+  voices: Partial<Record<AiProtocol, string>>;
+};
 export type AiTemplateConfig = {
   method: "POST" | "PUT";
   path: string;
@@ -417,6 +430,8 @@ export type AppConfig = {
   canvasPanelTab?: "projects" | "elements" | "assets" | "prompts";
   imageToolbar?: import("@/lib/image-toolbar-preferences").ImageToolbarPreferences;
   generationDefaults?: import("@/lib/generation-defaults").GenerationDefaults;
+  /** @deprecated Legacy global roles are migrated into pre-existing projects. */
+  audioRoles?: AudioRolePreset[];
   /** Workflow agent instruction. Blank falls back to the built-in default. */
   workflowAgentSystemPrompt?: string;
 };

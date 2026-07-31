@@ -3,6 +3,7 @@ import type {
   AssistantMessage,
   AssistantRef,
   AssistantSession,
+  AudioRolePreset,
   BoardEdge,
   BoardNode,
   BoardProject,
@@ -30,6 +31,7 @@ const MAX_EDGES = 30_000;
 const MAX_DIRECTOR_OBJECTS_PER_PROJECT = 2_000;
 const MAX_DIRECTOR_CAMERAS_PER_PROJECT = 320;
 const MAX_DIRECTOR_POPULATION_PER_PROJECT = 20_000;
+const AUDIO_ROLE_PROTOCOLS = new Set(["openai", "azure", "edge"]);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -107,6 +109,9 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   optionalString(input.size, `${path}.size`, 100);
   optionalString(input.quality, `${path}.quality`, 100);
   optionalString(input.storageKey, `${path}.storageKey`, 512);
+  optionalString(input.voice, `${path}.voice`, 100);
+  optionalString(input.resolvedVoice, `${path}.resolvedVoice`, 100);
+  if (input.audioRoleId !== undefined) id(input.audioRoleId, `${path}.audioRoleId`);
   if (input.generationMode !== undefined &&
       (typeof input.generationMode !== "string" || !GENERATION_MODES.has(input.generationMode))) {
     throw new Error(`${path}.generationMode is invalid`);
@@ -358,6 +363,32 @@ function parseSession(value: unknown, index: number): AssistantSession {
   };
 }
 
+function parseAudioRoles(value: unknown): AudioRolePreset[] | undefined {
+  if (value === undefined) return undefined;
+  const roles = array(value, "audioRoles", 32);
+  const seen = new Set<string>();
+  return roles.map((item, index) => {
+    const path = `audioRoles[${index}]`;
+    const input = record(item, path);
+    const roleID = id(input.id, `${path}.id`);
+    if (seen.has(roleID)) throw new Error("audioRoles contains duplicate role ids");
+    seen.add(roleID);
+    const name = string(input.name, `${path}.name`, 80);
+    if (!name.trim()) throw new Error(`${path}.name is empty`);
+    const rawVoices = record(input.voices, `${path}.voices`);
+    const voices: AudioRolePreset["voices"] = {};
+    for (const [protocol, rawVoice] of Object.entries(rawVoices)) {
+      if (!AUDIO_ROLE_PROTOCOLS.has(protocol)) {
+        throw new Error(`${path}.voices.${protocol} is unsupported`);
+      }
+      const voice = string(rawVoice, `${path}.voices.${protocol}`, 100);
+      if (!voice.trim()) throw new Error(`${path}.voices.${protocol} is empty`);
+      voices[protocol as "openai" | "azure" | "edge"] = voice;
+    }
+    return { id: roleID, name, voices };
+  });
+}
+
 export function parseBoardProject(value: unknown): BoardProject {
   const input = record(value, "project");
   const schemaVersion = input.schemaVersion ?? 1;
@@ -528,6 +559,7 @@ export function parseBoardProject(value: unknown): BoardProject {
   if (activeChatId && !chatSessions.some((session) => session.id === activeChatId)) {
     throw new Error("activeChatId references an unknown session");
   }
+  const audioRoles = parseAudioRoles(input.audioRoles);
 
   return {
     schemaVersion: 2,
@@ -545,5 +577,6 @@ export function parseBoardProject(value: unknown): BoardProject {
       y: finite(viewport.y, "viewport.y"),
       k: zoom,
     },
+    ...(audioRoles === undefined ? {} : { audioRoles }),
   };
 }

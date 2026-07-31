@@ -58,13 +58,22 @@ import {
   type CreditEstimate,
 } from "@/services/auth-session";
 import {
-  IMAGE_ASPECT_PRESETS,
   imageAspectForSize,
   resolveImageSizeForAspect,
   resolvePreferredModel,
   withPreferredModel,
   type ImageAspectSelection,
 } from "@/lib/workbench-preferences";
+import {
+  imageAspectOptionsFor,
+  imageOutputLimitFor,
+  imageQualityOptionsFor,
+  normalizeImageAspectForProvider,
+  normalizeImageQualityForProvider,
+  normalizeImageSizeForProvider,
+  imageSizeOptionsFor,
+  optionsWithCurrentValue,
+} from "@/lib/image-generation-options";
 import {
   acceptsWorkbenchReference,
   MAX_REFERENCE_FILES,
@@ -127,6 +136,19 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const reusableAssets = useMemo(() => workbenchImageAssets(assets), [assets]);
   const categories = useMemo(() => workbenchCategories(jobs), [jobs]);
   const visibleJobs = useMemo(() => filterWorkbenchJobs(jobs, categoryFilter), [categoryFilter, jobs]);
+  const qualityOptions = useMemo(
+    () => imageQualityOptionsFor(provider?.protocol, model),
+    [model, provider?.protocol],
+  );
+  const sizeOptions = useMemo(
+    () => imageSizeOptionsFor(provider?.protocol, model),
+    [model, provider?.protocol],
+  );
+  const aspectOptions = useMemo(
+    () => imageAspectOptionsFor(provider?.protocol, model),
+    [model, provider?.protocol],
+  );
+  const imageOutputLimit = imageOutputLimitFor(provider?.protocol, model, 8);
   const allowsEmptyKlingPrompt = kind === "video" && provider?.protocol === "apimart" && model === "kling-v3" &&
     klingOptions.multiShot && klingOptions.shotType === "customize" && klingOptions.shots.length > 0;
 	const allowsEmptySeedancePrompt = kind === "video" && provider?.protocol === "apimart" &&
@@ -158,10 +180,31 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   }, [channelId, kind, setConfig]);
 
   useEffect(() => {
-    if (kind === "image" && imageAspect !== "custom") {
+    if (kind !== "image") return;
+    const normalized = normalizeImageAspectForProvider(imageAspect, provider?.protocol, model);
+    if (normalized !== imageAspect) {
+      setImageAspect(normalized);
+      if (normalized !== "custom") {
+        const resolved = resolveImageSizeForAspect(normalized, provider?.protocol, model);
+        setSize(resolved);
+        setCustomImageSize(resolved);
+      }
+      return;
+    }
+    if (imageAspect !== "custom") {
       setSize(resolveImageSizeForAspect(imageAspect, provider?.protocol, model));
     }
   }, [imageAspect, kind, model, provider?.protocol]);
+
+  useEffect(() => {
+    if (kind !== "image") return;
+    setQuality((current) => normalizeImageQualityForProvider(current, provider?.protocol, model));
+  }, [kind, model, provider?.protocol]);
+
+  useEffect(() => {
+    if (kind !== "image") return;
+    setCount((current) => Math.min(Math.max(1, current), imageOutputLimit));
+  }, [imageOutputLimit, kind]);
 
   // Refresh the pre-flight cost whenever the model or unit count changes so the
   // primary button can show "预计 N 算力" without an extra click.
@@ -438,7 +481,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       }
 		runOnServer = runOnServer && serverReferencesSupported;
 		const ownerClientId = runOnServer ? "" : getRuntimeOwnerId();
-		const parameters: Record<string, unknown> = {
+        const rawParameters: Record<string, unknown> = {
         ...(source?.parameters ?? (kind === "image"
         ? {
             size, quality, count, transparentBackground: transparent,
@@ -464,6 +507,24 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
           })),
         ...(ownerClientId ? { ownerClientId } : {}),
       };
+      const parameters: Record<string, unknown> = kind === "image"
+        ? (() => {
+            const requestedCount = Number(rawParameters.count ?? count);
+            return {
+              ...rawParameters,
+              size: normalizeImageSizeForProvider(String(rawParameters.size ?? size)),
+              quality: normalizeImageQualityForProvider(
+                String(rawParameters.quality ?? quality),
+                runProvider?.protocol,
+                runModel,
+              ),
+              count: Math.min(
+                Math.max(1, Number.isFinite(requestedCount) ? Math.floor(requestedCount) : 1),
+                imageOutputLimitFor(runProvider?.protocol, runModel),
+              ),
+            };
+          })()
+        : rawParameters;
 		if (runOnServer) {
 			if (kind === "video" && runProvider.protocol === "apimart" && (runModel === "kling-v2-6" || runModel === "kling-v3")) {
 				validateKlingVideoParameters({
@@ -809,11 +870,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                       if (next === "custom") {
                         setSize(customImageSize);
                       } else {
-                        setSize(resolveImageSizeForAspect(next, provider?.protocol, model));
+                        const resolved = resolveImageSizeForAspect(next, provider?.protocol, model);
+                        setSize(resolved);
+                        setCustomImageSize(resolved);
                       }
                     }}
                   >
-                    {IMAGE_ASPECT_PRESETS.map((preset) => (
+                    {aspectOptions.map((preset) => (
                       <option key={preset.aspect} value={preset.aspect}>{preset.label}</option>
                     ))}
                     <option value="custom">自定义</option>
@@ -821,30 +884,58 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 </label>
                 <label className="block">
                   <span className="ob-label">尺寸</span>
-                  <input
+                  <select
                     aria-label="图片尺寸"
-                    className="ob-field"
+                    className="ob-field cursor-pointer"
                     value={size}
                     onChange={(event) => {
-                      setSize(event.target.value);
-                      setCustomImageSize(event.target.value);
-                      setImageAspect("custom");
+                      const next = event.target.value;
+                      setSize(next);
+                      setCustomImageSize(next);
+                      setImageAspect(imageAspectForSize(next));
                     }}
-                  />
+                  >
+                    {optionsWithCurrentValue(sizeOptions, size).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
                 </label>
+                {imageAspect === "custom" ? (
+                  <label className="block">
+                    <span className="ob-label">自定义尺寸</span>
+                    <input
+                      aria-label="自定义图片尺寸"
+                      className="ob-field"
+                      value={customImageSize}
+                      onChange={(event) => {
+                        setCustomImageSize(event.target.value);
+                        setSize(event.target.value);
+                      }}
+                    />
+                  </label>
+                ) : null}
                 <label className="block">
                   <span className="ob-label">质量</span>
-                  <input className="ob-field" value={quality} onChange={(event) => setQuality(event.target.value)} />
+                  <select
+                    aria-label="图片质量"
+                    className="ob-field cursor-pointer"
+                    value={quality}
+                    onChange={(event) => setQuality(event.target.value)}
+                  >
+                    {optionsWithCurrentValue(qualityOptions, quality).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
                 </label>
                 <label className="block">
                   <span className="ob-label">数量</span>
                   <input
                     type="number"
                     min={1}
-                    max={8}
+                    max={imageOutputLimit}
                     className="ob-field"
                     value={count}
-                    onChange={(event) => setCount(Number(event.target.value) || 1)}
+                      onChange={(event) => setCount(Math.min(imageOutputLimit, Math.max(1, Number(event.target.value) || 1)))}
                   />
                 </label>
                 <div className="flex items-center gap-2 self-end pb-2.5 text-[var(--ob-muted)]">

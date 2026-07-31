@@ -67,7 +67,8 @@ func (s *Server) getSharedChannels(w http.ResponseWriter, r *http.Request) {
 	result := make([]sharedChannelPublic, 0, len(channels)+1)
 	for _, raw := range channels {
 		channel, message := normalizeAdminChannel(raw)
-		if message != "" || !channel.Enabled || !channel.AllowUserUse || !presence[channel.ID] {
+		if message != "" || !channel.Enabled || !channel.AllowUserUse ||
+			(adminChannelRequiresSecret(channel) && !presence[channel.ID]) {
 			continue
 		}
 		result = append(result, sharedChannelPublic{
@@ -109,7 +110,7 @@ func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string)
 		return adminChannelPublic{}, "invalid channel URL"
 	}
 	switch item.Protocol {
-	case "openai", "gemini", "apimart", "kie":
+	case "openai", "gemini", "apimart", "kie", "azure", "edge":
 	default:
 		return adminChannelPublic{}, "unsupported channel protocol"
 	}
@@ -218,10 +219,17 @@ func (s *Server) resolveSharedChannel(ctx context.Context, tenantID, id string) 
 		return adminChannelPublic{}, "", err
 	}
 	apiKey := secrets[id]
-	if strings.TrimSpace(apiKey) == "" || len(apiKey) > maxAdminChannelSecretBytes {
+	if adminChannelRequiresSecret(channel) && strings.TrimSpace(apiKey) == "" {
 		return adminChannelPublic{}, "", errors.New("shared channel secret is not configured")
 	}
+	if len(apiKey) > maxAdminChannelSecretBytes {
+		return adminChannelPublic{}, "", errors.New("shared channel secret is invalid")
+	}
 	return channel, apiKey, nil
+}
+
+func adminChannelRequiresSecret(channel adminChannelPublic) bool {
+	return channel.Protocol != "edge"
 }
 
 func sharedChannelSupports(channel adminChannelPublic, kind, requestedModel string) bool {
@@ -255,7 +263,7 @@ func sharedChannelSupports(channel adminChannelPublic, kind, requestedModel stri
 	case "video":
 		return channel.Protocol == "openai" || channel.Protocol == "apimart" || channel.Protocol == "kie"
 	case "audio":
-		return channel.Protocol == "openai"
+		return channel.Protocol == "openai" || channel.Protocol == "azure" || channel.Protocol == "edge"
 	default:
 		return false
 	}
@@ -274,7 +282,8 @@ func (s *Server) selectSharedChannel(ctx context.Context, tenantID, kind, routin
 	totalWeight := uint64(0)
 	for _, raw := range channels {
 		channel, message := normalizeAdminChannel(raw)
-		if message != "" || !sharedChannelSupports(channel, kind, requestedModel) || strings.TrimSpace(secrets[channel.ID]) == "" {
+		if message != "" || !sharedChannelSupports(channel, kind, requestedModel) ||
+			(adminChannelRequiresSecret(channel) && strings.TrimSpace(secrets[channel.ID]) == "") {
 			continue
 		}
 		eligible = append(eligible, channel)
@@ -732,7 +741,31 @@ func (s *Server) checkAdminChannelConnection(ctx context.Context, tenantID, id s
 		return len(models), fetchErr
 	}
 	secrets, err := s.decryptAdminChannelSecrets(ctx, tenantID)
-	if err != nil || strings.TrimSpace(secrets[id]) == "" {
+	if err != nil {
+		return 0, errors.New("channel secret is unavailable")
+	}
+	apiKey := strings.TrimSpace(secrets[id])
+	if channel.Protocol == "azure" || channel.Protocol == "edge" {
+		if channel.Protocol == "azure" && apiKey == "" {
+			return 0, errors.New("channel secret is not configured")
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, time.Duration(channel.TimeoutSeconds)*time.Second)
+		defer cancel()
+		_, generateErr := newHTTPAudioExecutor().Generate(requestCtx, audioGenerationRequest{
+			Protocol: channel.Protocol,
+			BaseURL:  channel.BaseURL,
+			APIKey:   apiKey,
+			Model:    channel.DefaultAudioModel,
+			Prompt:   "OpenBoard 连接测试",
+			Voice:    "zh-CN-XiaoxiaoNeural",
+			Format:   "mp3",
+		})
+		if generateErr != nil {
+			return 0, errors.New("channel connection failed")
+		}
+		return 0, nil
+	}
+	if apiKey == "" {
 		return 0, errors.New("channel secret is not configured")
 	}
 	parsed, err := validateGenerationURL(channel.BaseURL)
@@ -756,9 +789,9 @@ func (s *Server) checkAdminChannelConnection(ctx context.Context, tenantID, id s
 		return 0, errors.New("failed to create channel request")
 	}
 	if channel.Protocol == "gemini" {
-		request.Header.Set("x-goog-api-key", secrets[id])
+		request.Header.Set("x-goog-api-key", apiKey)
 	} else {
-		request.Header.Set("Authorization", "Bearer "+secrets[id])
+		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	response, err := newOpenAIImageExecutor().client.Do(request)
 	if err != nil {

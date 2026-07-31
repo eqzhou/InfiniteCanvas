@@ -329,6 +329,16 @@ func TestPromptCatalogRBACAndUnsafeSourceURL(t *testing.T) {
 	}
 }
 
+func TestDecodeAdminPromptCatalogDefaultsLegacyJSONSourceFormat(t *testing.T) {
+	catalog, err := decodeAdminPromptCatalog([]byte(`{"version":1,"revision":2,"categories":[],"prompts":[],"sources":[{"id":"legacy","name":"Legacy","url":"https://catalog.example/prompts.json","enabled":true}],"syncRuns":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Sources) != 1 || catalog.Sources[0].Format != "json" {
+		t.Fatalf("legacy source format = %#v", catalog.Sources)
+	}
+}
+
 func TestPromptSourceResponseEnforcesRedirectMIMEAndSizeBounds(t *testing.T) {
 	response := func(status int, contentType, body string) *http.Response {
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{contentType}}, Body: io.NopCloser(strings.NewReader(body))}
@@ -336,6 +346,10 @@ func TestPromptSourceResponseEnforcesRedirectMIMEAndSizeBounds(t *testing.T) {
 	valid, err := readAdminPromptCatalogResponse(response(http.StatusOK, "application/json", `[{"id":"one","title":"One","body":"Body","tags":[]}]`))
 	if err != nil || len(valid) != 1 {
 		t.Fatalf("valid = %#v, %v", valid, err)
+	}
+	githubRaw, err := readAdminPromptCatalogResponse(response(http.StatusOK, "text/plain; charset=utf-8", `[{"id":"raw","title":"Raw","body":"Body","tags":[]}]`))
+	if err != nil || len(githubRaw) != 1 || githubRaw[0].ID != "raw" {
+		t.Fatalf("GitHub Raw JSON = %#v, %v", githubRaw, err)
 	}
 	for name, candidate := range map[string]*http.Response{
 		"redirect":  response(http.StatusTemporaryRedirect, "application/json", `{}`),
@@ -345,5 +359,49 @@ func TestPromptSourceResponseEnforcesRedirectMIMEAndSizeBounds(t *testing.T) {
 		if _, err := readAdminPromptCatalogResponse(candidate); err == nil {
 			t.Fatalf("%s response accepted", name)
 		}
+	}
+}
+
+func TestPromptSourceMarkdownResponseParsesNestedPromptCatalog(t *testing.T) {
+	markdown := "# Catalog\n\n## Prompt collection\n\n### 一、电商与产品\n\n#### 1.1 商品主图\n\n```text\nproduct hero image\n```\n\n### 二、角色与一致性\n\n#### 2.1 角色三视图\n\n```text\ncharacter turnaround sheet\n```\n\n### Legacy labeled entry\n\n提示词：\n```text\nlegacy labeled prompt\n```\n\n### Empty trailing documentation heading\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/markdown; charset=utf-8"}},
+		Body:       io.NopCloser(strings.NewReader(markdown)),
+	}
+	items, err := readAdminPromptCatalogResponse(response, "markdown")
+	if err != nil {
+		t.Fatalf("markdown parse failed: %v", err)
+	}
+	if len(items) != 3 || items[0].Title != "1.1 商品主图" || items[1].Title != "2.1 角色三视图" || items[2].Body != "legacy labeled prompt" {
+		t.Fatalf("items = %#v", items)
+	}
+	if strings.Join(items[0].Tags, ",") != "Prompt collection,电商,产品" ||
+		strings.Join(items[1].Tags, ",") != "Prompt collection,角色,一致性" ||
+		strings.Join(items[2].Tags, ",") != "Prompt collection" {
+		t.Fatalf("tags = %#v", items)
+	}
+}
+
+func TestPromptSourceMarkdownResponseParsesSupplementalNumberedPromptsAndTildeFences(t *testing.T) {
+	markdown := "# Catalog\n\n## 补充案例\n\n#### 来源文章\n\n##### 原文提示词摘录\n\n- 说明：只保留明确给出的提示词\n1. 提示词：一张中文信息图，结构清晰\n2. 围绕上面的形象，设计一个 IP\n\n##### 可直接复用的指令/关键词摘录\n\n1. 生成一张胶片旅行抓拍\n2. 关键词：photorealistic\n\n### 真实提示词\n\n~~~text\nactual prompt\n~~~\n"
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/markdown"}},
+		Body:       io.NopCloser(strings.NewReader(markdown)),
+	}
+	items, err := readAdminPromptCatalogResponse(response, "markdown")
+	if err != nil {
+		t.Fatalf("markdown parse failed: %v", err)
+	}
+	if len(items) != 5 {
+		t.Fatalf("items = %#v", items)
+	}
+	if items[0].Body != "一张中文信息图，结构清晰" ||
+		items[1].Body != "围绕上面的形象，设计一个 IP" ||
+		items[2].Body != "生成一张胶片旅行抓拍" ||
+		items[3].Body != "关键词：photorealistic" ||
+		items[4].Body != "actual prompt" {
+		t.Fatalf("items = %#v", items)
 	}
 }

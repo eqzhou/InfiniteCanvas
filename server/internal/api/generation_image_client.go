@@ -41,7 +41,10 @@ type openAIImageExecutor struct {
 }
 
 func newOpenAIImageExecutor() *openAIImageExecutor {
-	return &openAIImageExecutor{client: newProviderHTTPClient(10 * time.Minute),
+	// Some OpenAI-compatible image gateways terminate long-running HTTP/2
+	// streams with an unexpected EOF around their own gateway deadline. Keep
+	// image calls on HTTP/1.1 while leaving text/model discovery on HTTP/2.
+	return &openAIImageExecutor{client: newProviderImageHTTPClient(10 * time.Minute),
 		apimartPollInterval: 3 * time.Second, apimartMaxDuration: 5 * time.Minute,
 		kiePollInterval: 3 * time.Second, kieMaxDuration: 15 * time.Minute}
 }
@@ -83,6 +86,7 @@ func (e *openAIImageExecutor) generateTemplate(ctx context.Context, request imag
 		return nil, err
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	setProviderRequestID(httpRequest, request.RequestID)
 	if request.APIKey != "" {
 		if request.Template.Auth == "x-api-key" {
 			httpRequest.Header.Set("x-api-key", request.APIKey)
@@ -227,6 +231,7 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 	}
 	httpRequest.Header.Set("Content-Type", contentType)
 	httpRequest.Header.Set("Accept", "application/json")
+	setProviderRequestID(httpRequest, request.RequestID)
 	if request.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+request.APIKey)
 	}
@@ -316,7 +321,7 @@ func (e *openAIImageExecutor) generateGemini(ctx context.Context, request imageG
 	images := make([]generatedImage, 0, request.Count)
 	totalBytes := 0
 	for len(images) < request.Count {
-		batch, err := e.generateGeminiBatch(ctx, endpoint, request.APIKey, body)
+		batch, err := e.generateGeminiBatch(ctx, endpoint, request.APIKey, body, request.RequestID)
 		if err != nil {
 			return nil, err
 		}
@@ -334,12 +339,13 @@ func (e *openAIImageExecutor) generateGemini(ctx context.Context, request imageG
 	return images, nil
 }
 
-func (e *openAIImageExecutor) generateGeminiBatch(ctx context.Context, endpoint, apiKey string, body []byte) ([]generatedImage, error) {
+func (e *openAIImageExecutor) generateGeminiBatch(ctx context.Context, endpoint, apiKey string, body []byte, requestID string) ([]generatedImage, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	setProviderRequestID(request, requestID)
 	if apiKey != "" {
 		request.Header.Set("x-goog-api-key", apiKey)
 	}
@@ -398,6 +404,15 @@ func (e *openAIImageExecutor) generateGeminiBatch(ctx context.Context, endpoint,
 		return nil, errors.New("Gemini image provider returned no image")
 	}
 	return images, nil
+}
+
+func setProviderRequestID(request *http.Request, requestID string) {
+	if request == nil {
+		return
+	}
+	if requestID = strings.TrimSpace(requestID); requestID != "" {
+		request.Header.Set("X-Client-Request-Id", requestID)
+	}
 }
 
 func geminiImageProviderEndpoint(baseURL, model string) (string, error) {

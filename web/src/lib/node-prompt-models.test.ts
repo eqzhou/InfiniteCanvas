@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createDefaultChannel, createNode } from "@/lib/defaults";
 import {
+  resolveNodePromptModelChoices,
   resolveNodePromptModels,
   resolveNodePromptSelectedModel,
 } from "@/lib/node-prompt-models";
@@ -37,5 +38,21 @@ describe("node prompt model options", () => {
     expect(resolveNodePromptSelectedModel(node, channel)).toBe("custom-image");
     const bare = createNode("text", { x: 0, y: 0 });
     expect(resolveNodePromptSelectedModel(bare, channel)).toBe(channel.providers!.text.model);
+  });
+
+  test("does not repeat a lone inherited audio model as an explicit choice", () => {
+    const channel = createDefaultChannel();
+    channel.providers!.audio = {
+      ...channel.providers!.audio,
+      protocol: "edge",
+      model: "edge-tts",
+      models: ["edge-tts", "edge-tts"],
+    };
+    const node = createNode("audio", { x: 0, y: 0 });
+
+    expect(resolveNodePromptModelChoices(node, channel)).toEqual({
+      inheritedLabel: "跟随渠道（edge-tts）",
+      options: [],
+    });
   });
 });

@@ -5,6 +5,7 @@ import {
   imagePromptInheritsFromUpstream,
   initialNodePrompt,
   nodePromptPlaceholder,
+  nodePromptUsesPromptLibrary,
 } from "./node-prompt";
 
 describe("image prompt drafts", () => {
@@ -110,5 +111,10 @@ describe("image prompt drafts", () => {
   test("keeps an empty image ready for its first generation", () => {
     expect(initialNodePrompt(image({ prompt: "first image prompt" }), false)).toBe("first image prompt");
     expect(nodePromptPlaceholder("image", true)).toContain("继续创作");
+  });
+
+  test("keeps visual prompt presets out of audio nodes", () => {
+    expect(nodePromptUsesPromptLibrary("audio")).toBe(false);
+    expect(nodePromptUsesPromptLibrary("image")).toBe(true);
   });
 });

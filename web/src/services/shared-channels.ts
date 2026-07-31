@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AiChannel, AiProtocol, AiProviderKind } from "@/types/board";
 import { getProvider } from "@/lib/ai-config";
+import { audioProtocolRequiresKey } from "@/lib/audio-provider";
 import { authFetch } from "@/services/auth-session";
 
 export type SharedChannel = {
@@ -54,6 +55,15 @@ export function sharedChannelAsAI(channel: SharedChannel): AiChannel {
 
 export function isServerManagedChannel(channel: AiChannel, kind: AiProviderKind): boolean {
   return getProvider(channel, kind).apiKey === managedCredential;
+}
+
+export function isGenerationChannelReady(channel: AiChannel | undefined, kind: AiProviderKind): channel is AiChannel {
+  if (!channel) return false;
+  if (isServerManagedChannel(channel, kind)) return true;
+  const provider = getProvider(channel, kind);
+  return kind === "audio" && !audioProtocolRequiresKey(provider.protocol)
+    ? true
+    : Boolean(provider.apiKey.trim());
 }
 
 export function invalidateSharedChannelCatalog(): void {

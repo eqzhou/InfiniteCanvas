@@ -1,4 +1,3 @@
-import { resolveProviderCapability } from "@/lib/provider-capabilities";
 import type { AiProviderKind, PreferredModels } from "@/types/board";
 
 const SAFE_CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -6,7 +5,8 @@ const MODEL_MAX_LENGTH = 128;
 const PREFERENCE_CHANNEL_LIMIT = 100;
 const PROVIDER_KINDS: readonly AiProviderKind[] = ["text", "image", "video", "audio"];
 
-export type ImageAspectPreset = "1:1" | "3:2" | "2:3";
+/** Common image compositions shared by the workbench and generation nodes. */
+export type ImageAspectPreset = "1:1" | "3:2" | "2:3" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9" | "5:4" | "4:5";
 export type ImageAspectSelection = ImageAspectPreset | "custom";
 
 export const IMAGE_ASPECT_PRESETS: readonly Readonly<{
@@ -17,6 +17,13 @@ export const IMAGE_ASPECT_PRESETS: readonly Readonly<{
   Object.freeze({ aspect: "1:1", label: "方形 1:1", pixelSize: "1024x1024" }),
   Object.freeze({ aspect: "3:2", label: "横向 3:2", pixelSize: "1536x1024" }),
   Object.freeze({ aspect: "2:3", label: "纵向 2:3", pixelSize: "1024x1536" }),
+  Object.freeze({ aspect: "4:3", label: "横向 4:3", pixelSize: "1024x768" }),
+  Object.freeze({ aspect: "3:4", label: "纵向 3:4", pixelSize: "768x1024" }),
+  Object.freeze({ aspect: "16:9", label: "横向 16:9", pixelSize: "1536x864" }),
+  Object.freeze({ aspect: "9:16", label: "纵向 9:16", pixelSize: "864x1536" }),
+  Object.freeze({ aspect: "21:9", label: "超宽屏 21:9", pixelSize: "1792x768" }),
+  Object.freeze({ aspect: "5:4", label: "横向 5:4", pixelSize: "1280x1024" }),
+  Object.freeze({ aspect: "4:5", label: "纵向 4:5", pixelSize: "1024x1280" }),
 ]);
 
 function cleanModel(value: unknown): string {
@@ -81,11 +88,9 @@ export function resolvePreferredModel(
 
 export function resolveImageSizeForAspect(
   aspect: ImageAspectPreset,
-  protocol: string | undefined,
-  model: string,
+  _protocol: string | undefined,
+  _model: string,
 ): string {
-  const capability = resolveProviderCapability(protocol ?? "", "image", model);
-  if (capability?.sizes?.includes(aspect)) return aspect;
   return IMAGE_ASPECT_PRESETS.find((preset) => preset.aspect === aspect)?.pixelSize ?? "1024x1024";
 }
 

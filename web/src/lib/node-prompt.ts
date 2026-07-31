@@ -17,6 +17,10 @@ export function nodePromptPlaceholder(type: NodePromptType, hasContent: boolean)
   return "输入语音文本…";
 }
 
+export function nodePromptUsesPromptLibrary(type: NodePromptType): boolean {
+  return type !== "audio";
+}
+
 /**
  * Text and config nodes own textual intent. An image connected only to other
  * images still owns its prompt because those inputs provide references, not

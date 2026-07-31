@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +113,58 @@ func TestAICallLogSanitizeRedactsSecrets(t *testing.T) {
 	}
 	if _, ok := decoded["data"].(map[string]any); !ok {
 		t.Fatalf("binary-ish data not omitted: %s", string(raw))
+	}
+}
+
+func TestAICallLogSanitizeRemovesEndpointCredentialsAndQuery(t *testing.T) {
+	raw, err := sanitizeAICallLogJSON(map[string]any{
+		"endpoint": "https://user:password@provider.example/v1/images/edits?api_key=secret&sig=private#fragment",
+		"baseUrl":  "https://provider.example/v1?token=secret",
+	})
+	if err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded["endpoint"] != "https://provider.example/v1/images/edits" || decoded["baseUrl"] != "https://provider.example/v1" {
+		t.Fatalf("endpoint credentials/query were not removed: %s", raw)
+	}
+}
+
+func TestImageRequestAuditPayloadIdentifiesEditEndpointAndReferences(t *testing.T) {
+	payload := imageRequestAuditPayload(imageGenerationRequest{
+		Protocol:  "openai",
+		BaseURL:   "https://provider.example/v1",
+		Model:     "gpt-image-1",
+		RequestID: "job-image-request-id",
+		Prompt:    "a cat",
+		Count:     1,
+		References: []generatedImage{{
+			Data: []byte("not persisted in audit"), MIMEType: "image/png",
+		}},
+		ReferenceStorageKeys: []string{"image:generated:source-1:abc"},
+	})
+	if got, want := payload["endpoint"], "https://provider.example/v1/images/edits"; got != want {
+		t.Fatalf("endpoint=%v want %v", got, want)
+	}
+	if payload["method"] != "POST" || payload["referenceCount"] != 1 {
+		t.Fatalf("missing request metadata: %#v", payload)
+	}
+	if payload["requestId"] != "job-image-request-id" {
+		t.Fatalf("request id missing: %#v", payload)
+	}
+	references, ok := payload["referenceImages"].([]map[string]any)
+	if !ok || len(references) != 1 || references[0]["index"] != 1 || references[0]["storageKey"] != "image:generated:source-1:abc" {
+		t.Fatalf("reference identity missing: %#v", payload["referenceImages"])
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if strings.Contains(string(encoded), "not persisted in audit") {
+		t.Fatal("image bytes leaked into audit payload")
 	}
 }
 
@@ -318,5 +371,22 @@ func TestClientAICallLogReportRejectsBadPayload(t *testing.T) {
 	bad := request(t, r, http.MethodPost, "/api/ai-call-logs/report", []byte(`{"kind":"nope","status":"succeeded","durationMs":1}`))
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("bad kind status=%d body=%s", bad.Code, bad.Body.String())
+	}
+}
+
+func TestAudioAuditPayloadReportsActualProviderEndpoint(t *testing.T) {
+	azure := mediaRequestAuditPayload(resolvedMediaRequest{Audio: audioGenerationRequest{
+		Protocol: "azure", BaseURL: "https://eastus.tts.speech.microsoft.com", Model: "azure-neural-tts",
+		Prompt: "hello", Voice: "zh-CN-XiaoxiaoNeural", Format: "mp3",
+	}}, "audio")
+	if azure["protocol"] != "azure" || azure["endpoint"] != "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1" {
+		t.Fatalf("Azure audit payload = %#v", azure)
+	}
+	edge := mediaRequestAuditPayload(resolvedMediaRequest{Audio: audioGenerationRequest{
+		Protocol: "edge", BaseURL: "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud",
+		Model: "edge-tts", Prompt: "hello", Voice: "zh-CN-XiaoxiaoNeural", Format: "mp3",
+	}}, "audio")
+	if edge["protocol"] != "edge" || edge["endpoint"] != "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1" {
+		t.Fatalf("Edge audit payload = %#v", edge)
 	}
 }

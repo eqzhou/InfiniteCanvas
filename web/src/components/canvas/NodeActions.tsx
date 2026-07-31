@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { AiChannel, AiProviderKind, BoardNode } from "@/types/board";
+import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
   generateImages,
@@ -45,6 +45,7 @@ import {
   assertResolvedImageReferences,
   canRetryImageResult,
   createImageGenerationMetadata,
+  normalizeImageGenerationForProvider,
 } from "@/lib/image-generation";
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
@@ -52,8 +53,20 @@ import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
 import { resolveConfigPrompt } from "@/lib/config-generation";
 import { placeImageGenerationRun } from "@/lib/image-generation-run";
 import { audioJobParameters, audioSpeechOptions } from "@/lib/audio-generation";
+import {
+  audioProtocolRequiresKey,
+  audioProtocolSupportsServerJobs,
+  resolveAudioVoice,
+} from "@/lib/audio-provider";
+import { DEFAULT_GENERATION_DEFAULTS } from "@/lib/generation-defaults";
+import { imageOutputLimitFor } from "@/lib/image-generation-options";
 import { NodeInfoDialog } from "@/components/canvas/NodeInfoDialog";
-import { isServerManagedChannel, mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
+import {
+  isGenerationChannelReady,
+  isServerManagedChannel,
+  mergeSharedChannelChoices,
+  useSharedChannels,
+} from "@/services/shared-channels";
 import {
   normalizeImageToolbarPreferences,
   orderedVisibleImageActions,
@@ -124,11 +137,6 @@ export function NodeActions({
 		(config.activeSharedChannelId ? channelChoices.find((c) => c.id === config.activeSharedChannelId) : undefined) ??
     config.channels.find((c) => c.id === config.activeChannelId) ??
     config.channels[0];
-  const channelReady = (selectedChannel: AiChannel | undefined, kind: AiProviderKind): selectedChannel is AiChannel =>
-    Boolean(selectedChannel && (
-      isServerManagedChannel(selectedChannel, kind) ||
-      getProvider(selectedChannel, kind).apiKey
-    ));
   const cameraAvailable = node.type === "image" || node.type === "video" ||
     (node.type === "config" && (node.metadata.generationMode ?? "image") !== "text");
   const promptForGeneration = (prompt: string) => applyCameraPrompt(prompt, node.metadata.cameraPrompt);
@@ -137,7 +145,7 @@ export function NodeActions({
 		const provider = getProvider(selectedChannel, kind);
 		if (kind === "image") return provider.protocol === "openai" || provider.protocol === "gemini" ||
 			(provider.protocol === "template" && Boolean(provider.template)) || provider.protocol === "apimart" || provider.protocol === "kie";
-		if (kind === "audio") return provider.protocol === "openai";
+		if (kind === "audio") return audioProtocolSupportsServerJobs(provider.protocol);
 		return provider.protocol === "openai" || provider.protocol === "ark" ||
 			(provider.protocol === "template" && Boolean(provider.template)) ||
 			provider.protocol === "apimart" || provider.protocol === "kie" ||
@@ -159,10 +167,11 @@ export function NodeActions({
 		if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
 			throw new Error("当前图片模板不支持透明背景");
 		}
+		const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
 		const jobId = uid("job");
 		let placeholdersApplied = false;
 		try {
-			updateActive((current) => applyServerImagePlaceholders(current, rootId, jobId, generation, options));
+			updateActive((current) => applyServerImagePlaceholders(current, rootId, jobId, normalizedGeneration, options));
 			placeholdersApplied = true;
 			await persistNow();
 			return await createServerImageGenerationJob({
@@ -170,12 +179,12 @@ export function NodeActions({
 				projectId: project?.id,
 				prompt,
 				providerId: selectedChannel.id,
-				model: generation.model,
+				model: normalizedGeneration.model,
 				parameters: {
-					size: generation.size,
-					quality: generation.quality,
-					count: generation.count,
-					transparentBackground: generation.transparentBackground,
+					size: normalizedGeneration.size,
+					quality: normalizedGeneration.quality,
+					count: normalizedGeneration.count,
+					transparentBackground: normalizedGeneration.transparentBackground,
 					referenceStorageKeys,
 				},
 			});
@@ -308,7 +317,7 @@ export function NodeActions({
     if (configGenerating || node.metadata.status === "loading") return;
     const mode = node.metadata.generationMode ?? "image";
     const providerKind = mode === "text" ? "text" : mode === "video" ? "video" : "image";
-    if (!channelReady(channel, providerKind)) {
+    if (!isGenerationChannelReady(channel, providerKind)) {
       alert("请先在设置中配置对应模型服务的 API Key");
       return;
     }
@@ -355,34 +364,40 @@ export function NodeActions({
         ));
         placeRight(created);
       } else if (mode === "image") {
+        const imageProvider = getProvider(channel, "image");
+        const imageModel = node.metadata.model || imageProvider.model;
         const generation = createImageGenerationMetadata({
           prompt,
-          model: node.metadata.model || getProvider(channel, "image").model,
+          model: imageModel,
           size: node.metadata.size || config.imageSize,
           quality: node.metadata.quality || config.imageQuality,
-          count: node.metadata.count || config.imageCount,
+          count: Math.min(
+            Math.max(1, node.metadata.count || config.imageCount || 1),
+            imageOutputLimitFor(imageProvider.protocol, imageModel),
+          ),
           transparentBackground: Boolean(node.metadata.transparentBackground),
           referenceStorageKeys: imageKeys,
           generationChannelId: channel.id,
           cameraPrompt: node.metadata.cameraPrompt,
         });
-        const requestPrompt = promptForGeneration(generation.prompt);
+        const normalizedGeneration = normalizeImageGenerationForProvider(generation, imageProvider.protocol);
+        const requestPrompt = promptForGeneration(normalizedGeneration.prompt);
         const materializedImages = images.filter((image) => image.storageKey || image.content);
         if (serverProviderSupported("image") && imageKeys.length === materializedImages.length) {
-          await startServerImageGeneration(node.id, generation, requestPrompt, imageKeys);
+          await startServerImageGeneration(node.id, normalizedGeneration, requestPrompt, imageKeys);
           return;
         }
         const refs = await resolveNodeImageDataUrls(imageKeys);
         assertResolvedImageReferences(imageKeys, refs);
       const urls = await generateImages({
           channel,
-          model: generation.model,
+          model: normalizedGeneration.model,
           prompt: requestPrompt,
-          size: generation.size,
-          quality: generation.quality,
-          n: generation.count,
+          size: normalizedGeneration.size,
+          quality: normalizedGeneration.quality,
+          n: normalizedGeneration.count,
           referenceDataUrls: refs,
-          transparentBackground: generation.transparentBackground,
+          transparentBackground: normalizedGeneration.transparentBackground,
           systemPrompt: config.systemPrompt,
         });
         const created: BoardNode[] = [];
@@ -406,7 +421,7 @@ export function NodeActions({
                   mimeType: uploaded.mimeType,
                   status: "success",
                   cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
-                  ...generation,
+                  ...normalizedGeneration,
                 },
                 width: display.width,
                 height: display.height,
@@ -414,7 +429,7 @@ export function NodeActions({
             ),
           );
         }
-        placeImageBatch(node.id, created, generation);
+        placeImageBatch(node.id, created, normalizedGeneration);
       } else {
 		const { images, videos, audios, imageKeys, videoKeys, audioKeys } = inputs;
 		const referenceCount = images.filter((value) => value.storageKey || value.content).length +
@@ -581,7 +596,7 @@ export function NodeActions({
   };
 
   const continueFromImage = async (prompt: string) => {
-    if (!channelReady(channel, "image")) {
+    if (!isGenerationChannelReady(channel, "image")) {
       alert("请先在设置中配置 API Key");
       return;
     }
@@ -598,22 +613,24 @@ export function NodeActions({
         generationChannelId: channel.id,
         cameraPrompt: node.metadata.cameraPrompt,
       });
-      const requestPrompt = promptForGeneration(generation.prompt);
+      const imageProvider = getProvider(channel, "image");
+      const normalizedGeneration = normalizeImageGenerationForProvider(generation, imageProvider.protocol);
+      const requestPrompt = promptForGeneration(normalizedGeneration.prompt);
       if (serverProviderSupported("image") && (!node.metadata.content || referenceStorageKeys.length === 1)) {
-        await startServerImageGeneration(node.id, generation, requestPrompt, referenceStorageKeys);
+        await startServerImageGeneration(node.id, normalizedGeneration, requestPrompt, referenceStorageKeys);
         return;
       }
       const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
       assertResolvedImageReferences(referenceStorageKeys, refs);
         const urls = await generateImages({
         channel,
-        model: generation.model,
+        model: normalizedGeneration.model,
         prompt: requestPrompt,
-        size: generation.size,
-        quality: generation.quality,
-        n: generation.count,
+        size: normalizedGeneration.size,
+        quality: normalizedGeneration.quality,
+        n: normalizedGeneration.count,
         referenceDataUrls: refs,
-        transparentBackground: generation.transparentBackground,
+        transparentBackground: normalizedGeneration.transparentBackground,
         systemPrompt: config.systemPrompt,
       });
       const created: BoardNode[] = [];
@@ -633,7 +650,7 @@ export function NodeActions({
             bytes: uploaded.bytes,
             mimeType: uploaded.mimeType,
             status: "success",
-            ...generation,
+            ...normalizedGeneration,
           },
           width: display.width,
           height: display.height,
@@ -664,7 +681,7 @@ export function NodeActions({
       alert("原生成渠道已不可用，无法按原参数重试");
       return;
     }
-    if (!channelReady(retryChannel, "image")) {
+    if (!isGenerationChannelReady(retryChannel, "image")) {
       alert("请先在设置中配置 API Key");
       return;
     }
@@ -685,24 +702,26 @@ export function NodeActions({
       generationChannelId: retryChannel.id,
       cameraPrompt: node.metadata.cameraPrompt,
     });
-    const requestPrompt = promptForGeneration(prompt);
+    const retryProvider = getProvider(retryChannel, "image");
+    const normalizedGeneration = normalizeImageGenerationForProvider(generation, retryProvider.protocol);
+    const requestPrompt = promptForGeneration(normalizedGeneration.prompt);
     try {
       updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
       if (serverProviderSupported("image", retryChannel)) {
-        await startServerImageGeneration(node.id, generation, requestPrompt, referenceStorageKeys, { replaceExisting: true }, retryChannel);
+        await startServerImageGeneration(node.id, normalizedGeneration, requestPrompt, referenceStorageKeys, { replaceExisting: true }, retryChannel);
         return;
       }
       const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
       assertResolvedImageReferences(referenceStorageKeys, refs);
       const [url] = await generateImages({
         channel: retryChannel,
-        model: generation.model,
+        model: normalizedGeneration.model,
         prompt: requestPrompt,
-        size: generation.size,
-        quality: generation.quality,
-        n: 1,
+        size: normalizedGeneration.size,
+        quality: normalizedGeneration.quality,
+        n: normalizedGeneration.count,
         referenceDataUrls: refs,
-        transparentBackground: generation.transparentBackground,
+        transparentBackground: normalizedGeneration.transparentBackground,
         systemPrompt: config.systemPrompt,
       });
       if (!url) throw new Error("图片服务没有返回结果");
@@ -716,7 +735,7 @@ export function NodeActions({
         mimeType: uploaded.mimeType,
         status: "success",
         errorDetails: undefined,
-        ...generation,
+        ...normalizedGeneration,
       } });
     } catch (error) {
       updateNode(node.id, { metadata: { status: "error", errorDetails: error instanceof Error ? error.message : String(error) } });
@@ -955,25 +974,40 @@ export function NodeActions({
   const inspect = () => setInfoOpen(true);
 
   const generateOnAudio = async (prompt: string) => {
-    if (!channel || !getProvider(channel, "audio").apiKey) {
+    const provider = channel ? getProvider(channel, "audio") : undefined;
+    if (!channel || !provider || (audioProtocolRequiresKey(provider.protocol) && !provider.apiKey)) {
       alert("请先在设置中配置 API Key");
       return;
     }
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
     try {
+		const actualVoice = resolveAudioVoice({
+			roles: project?.audioRoles,
+			roleId: node.metadata.audioRoleId,
+			protocol: provider.protocol,
+			fallback: config.generationDefaults?.audioVoice ?? DEFAULT_GENERATION_DEFAULTS.audioVoice,
+			explicit: node.metadata.voice,
+		});
 		if (serverProviderSupported("audio")) {
 			const job = await createServerAudioGenerationJob({
 				projectId: project?.id,
 				prompt,
 				providerId: channel.id,
 				model: node.metadata.model || getProvider(channel, "audio").model,
-				parameters: audioJobParameters(node.metadata.voice, config.generationDefaults),
+				parameters: audioJobParameters(actualVoice, config.generationDefaults),
 			});
 			if (!node.metadata.content) {
-				updateNode(node.id, { metadata: { status: "loading", prompt, generationJobId: job.id } });
+				updateNode(node.id, { metadata: { status: "loading", prompt, generationJobId: job.id, resolvedVoice: actualVoice } });
 			} else {
 				const placeholder = createNode("audio", { x: node.position.x + node.width + 60, y: node.position.y }, {
-					metadata: { status: "loading", prompt, generationJobId: job.id },
+					metadata: {
+						status: "loading",
+						prompt,
+						generationJobId: job.id,
+						voice: node.metadata.voice,
+						resolvedVoice: actualVoice,
+						audioRoleId: node.metadata.audioRoleId,
+					},
 				});
 				placeRight([placeholder]);
 				updateNode(node.id, { metadata: { status: "success" } });
@@ -985,7 +1019,7 @@ export function NodeActions({
         channel,
         model: node.metadata.model || getProvider(channel, "audio").model,
         input: prompt,
-        ...audioSpeechOptions(node.metadata.voice, config.generationDefaults),
+        ...audioSpeechOptions(actualVoice, config.generationDefaults),
       });
       const uploaded = await uploadMedia(speech.blob, "media");
       if (!node.metadata.content) {
@@ -997,6 +1031,9 @@ export function NodeActions({
             bytes: uploaded.bytes,
             status: "success",
             prompt,
+            voice: node.metadata.voice,
+            resolvedVoice: actualVoice,
+            audioRoleId: node.metadata.audioRoleId,
           },
         });
       } else {
@@ -1011,6 +1048,9 @@ export function NodeActions({
               bytes: uploaded.bytes,
               status: "success",
               prompt,
+              voice: node.metadata.voice,
+              resolvedVoice: actualVoice,
+              audioRoleId: node.metadata.audioRoleId,
             },
           },
         );
@@ -1042,7 +1082,7 @@ export function NodeActions({
   };
 
   const openImageGenerationDialog = () => {
-    if (!channelReady(channel, "image")) {
+    if (!isGenerationChannelReady(channel, "image")) {
       alert("请先在设置中配置 API Key");
       return;
     }
@@ -1074,7 +1114,7 @@ export function NodeActions({
   };
 
   const openAudioGenerationDialog = () => {
-    if (!channel || !getProvider(channel, "audio").apiKey) {
+    if (!isGenerationChannelReady(channel, "audio")) {
       alert("请先在设置中配置 API Key");
       return;
     }

@@ -48,16 +48,31 @@ describe("workbench preferences", () => {
   });
 
   test("maps common aspect presets to provider-supported size representations", () => {
-    expect(IMAGE_ASPECT_PRESETS.map((preset) => preset.aspect)).toEqual(["1:1", "3:2", "2:3"]);
+    expect(IMAGE_ASPECT_PRESETS.map((preset) => preset.aspect)).toEqual([
+      "1:1",
+      "3:2",
+      "2:3",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "21:9",
+      "5:4",
+      "4:5",
+    ]);
     expect(resolveImageSizeForAspect("1:1", "openai", "gpt-image-1")).toBe("1024x1024");
     expect(resolveImageSizeForAspect("3:2", "openai", "gpt-image-1")).toBe("1536x1024");
     expect(resolveImageSizeForAspect("2:3", "openai", "gpt-image-1")).toBe("1024x1536");
-    expect(resolveImageSizeForAspect("3:2", "apimart", "gpt-image-1-official")).toBe("3:2");
+    expect(resolveImageSizeForAspect("4:3", "openai", "gpt-image-1")).toBe("1024x768");
+    expect(resolveImageSizeForAspect("16:9", "openai", "gpt-image-1")).toBe("1536x864");
+    expect(resolveImageSizeForAspect("3:2", "apimart", "gpt-image-1-official")).toBe("1536x1024");
   });
 
   test("recognizes preset sizes but keeps arbitrary dimensions custom", () => {
     expect(imageAspectForSize("1536x1024")).toBe("3:2");
     expect(imageAspectForSize("2:3")).toBe("2:3");
+    expect(imageAspectForSize("1024x768")).toBe("4:3");
+    expect(imageAspectForSize("9:16")).toBe("9:16");
     expect(imageAspectForSize("1200x700")).toBe("custom");
     expect(imageAspectForSize(" 1200x700 ")).toBe("custom");
   });

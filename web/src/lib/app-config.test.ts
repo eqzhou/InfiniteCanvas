@@ -75,6 +75,23 @@ describe("application configuration", () => {
     expect(normalizeAppConfig(base).generationDefaults?.videoRatio).toBe("16:9");
   });
 
+  test("normalizes legacy global role mappings without creating them for new configs", () => {
+    const base = createDefaultConfig();
+    expect(normalizeAppConfig(base).audioRoles).toBeUndefined();
+    const input = [{
+      id: "hero",
+      name: " 男主 ",
+      voices: { azure: "zh-CN-YunxiNeural", edge: "zh-CN-YunjianNeural" },
+    }];
+    const normalized = normalizeAppConfig({ ...base, audioRoles: input });
+    expect(normalized.audioRoles).toEqual([{
+      id: "hero",
+      name: "男主",
+      voices: { azure: "zh-CN-YunxiNeural", edge: "zh-CN-YunjianNeural" },
+    }]);
+    expect(normalized.audioRoles).not.toBe(input);
+  });
+
   test("bounds persisted canvas panel preferences", () => {
     const base = createDefaultConfig();
     expect(normalizeAppConfig({

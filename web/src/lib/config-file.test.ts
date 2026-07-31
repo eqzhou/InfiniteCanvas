@@ -72,6 +72,43 @@ describe("configuration file", () => {
     expect(restored.objectStorage?.secretAccessKey).toBe(currentStorageCredential);
   });
 
+  test("imports Azure and Edge audio provider protocols", () => {
+    const current = createDefaultConfig();
+    const channel = current.channels[0]!;
+    for (const protocol of ["azure", "edge"] as const) {
+      const incoming = exportConfigFile({
+        ...current,
+        channels: [{
+          ...channel,
+          providers: {
+            ...channel.providers!,
+            audio: { ...channel.providers!.audio, protocol },
+          },
+        }],
+      });
+      expect(importConfigFile(JSON.stringify(incoming), current).channels[0]?.providers?.audio.protocol)
+        .toBe(protocol);
+    }
+  });
+
+  test("does not export the retired global audio role mapping", () => {
+    const current = createDefaultConfig();
+    const incoming = exportConfigFile({
+      ...current,
+      audioRoles: [{
+        id: "narrator",
+        name: "旁白",
+        voices: {
+          openai: "coral",
+          azure: "zh-CN-XiaoxiaoNeural",
+          edge: "zh-CN-YunxiNeural",
+        },
+      }],
+    });
+
+    expect(incoming.config.audioRoles).toBeUndefined();
+  });
+
   test("does not import executable extension surfaces", () => {
     const current = {
       ...createDefaultConfig(),

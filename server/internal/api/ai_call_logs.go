@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -268,6 +269,12 @@ func redactAICallLogValue(value any) any {
 				out[key] = "[redacted]"
 				continue
 			}
+			if lower == "endpoint" || lower == "baseurl" {
+				if endpoint, ok := item.(string); ok {
+					out[key] = sanitizeAICallLogURL(endpoint)
+					continue
+				}
+			}
 			if lower == "data" || lower == "b64_json" || lower == "bytes" {
 				switch v := item.(type) {
 				case string:
@@ -305,8 +312,70 @@ func redactAICallLogValue(value any) any {
 	}
 }
 
+// sanitizeAICallLogURL keeps the route useful to administrators while
+// removing query strings, credentials, and fragments that may carry secrets.
+func sanitizeAICallLogURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "[redacted]"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func auditReferenceImages(keys []string, references []generatedImage) []map[string]any {
+	count := len(keys)
+	if len(references) > count {
+		count = len(references)
+	}
+	if count == 0 {
+		return nil
+	}
+	items := make([]map[string]any, 0, count)
+	for index := 0; index < count; index++ {
+		item := map[string]any{"index": index + 1}
+		if index < len(keys) && strings.TrimSpace(keys[index]) != "" {
+			key := strings.TrimSpace(keys[index])
+			if len(key) > 512 {
+				key = key[:512] + "…"
+			}
+			item["storageKey"] = key
+		}
+		if index < len(references) {
+			if mimeType := strings.TrimSpace(references[index].MIMEType); mimeType != "" {
+				item["mimeType"] = mimeType
+			}
+			if len(references[index].Data) > 0 {
+				item["bytes"] = len(references[index].Data)
+			}
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func auditImageEndpoint(request imageGenerationRequest) string {
+	var endpoint string
+	switch strings.ToLower(strings.TrimSpace(request.Protocol)) {
+	case "", "openai":
+		endpoint, _ = imageProviderEndpoint(request.BaseURL, len(request.References) > 0)
+	case "gemini":
+		endpoint, _ = geminiImageProviderEndpoint(request.BaseURL, request.Model)
+	case "template":
+		endpoint, _ = imageTemplateEndpoint(request.BaseURL, request.Template)
+	case "apimart":
+		endpoint, _ = generationProviderEndpoint(request.BaseURL, "/images/generations")
+	case "kie":
+		endpoint, _ = kieAPIEndpoint(request.BaseURL, "/jobs/createTask")
+	}
+	return endpoint
+}
+
 func imageRequestAuditPayload(request imageGenerationRequest) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"protocol":              request.Protocol,
 		"baseUrl":               request.BaseURL,
 		"model":                 request.Model,
@@ -317,20 +386,51 @@ func imageRequestAuditPayload(request imageGenerationRequest) map[string]any {
 		"transparentBackground": request.TransparentBackground,
 		"referenceCount":        len(request.References),
 	}
+	if requestID := strings.TrimSpace(request.RequestID); requestID != "" {
+		payload["requestId"] = requestID
+	}
+	if endpoint := auditImageEndpoint(request); endpoint != "" {
+		method := "POST"
+		if strings.EqualFold(strings.TrimSpace(request.Protocol), "template") && request.Template != nil && request.Template.Method != "" {
+			method = request.Template.Method
+		}
+		payload["method"] = method
+		payload["endpoint"] = endpoint
+	}
+	if references := auditReferenceImages(request.ReferenceStorageKeys, request.References); len(references) > 0 {
+		payload["referenceImages"] = references
+	}
+	return payload
 }
 
 func mediaRequestAuditPayload(request resolvedMediaRequest, kind string) map[string]any {
 	if kind == "audio" {
-		return map[string]any{
-			"protocol": "audio",
+		payload := map[string]any{
+			"protocol": request.Audio.Protocol,
 			"baseUrl":  request.Audio.BaseURL,
 			"model":    request.Audio.Model,
 			"prompt":   request.Audio.Prompt,
 			"voice":    request.Audio.Voice,
 			"format":   request.Audio.Format,
 		}
+		var endpoint string
+		var err error
+		method := "POST"
+		switch strings.ToLower(strings.TrimSpace(request.Audio.Protocol)) {
+		case "azure":
+			endpoint, err = azureSpeechEndpoint(request.Audio.BaseURL)
+		case "edge":
+			endpoint, err = edgeSpeechEndpoint(request.Audio.BaseURL)
+			method = "WEBSOCKET"
+		default:
+			endpoint, err = generationProviderEndpoint(request.Audio.BaseURL, "/audio/speech")
+		}
+		if err == nil {
+			payload["method"], payload["endpoint"] = method, endpoint
+		}
+		return payload
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"protocol":       request.Video.Protocol,
 		"baseUrl":        request.Video.BaseURL,
 		"model":          request.Video.Model,
@@ -344,8 +444,39 @@ func mediaRequestAuditPayload(request resolvedMediaRequest, kind string) map[str
 		"frameMode":      request.Video.FrameMode,
 		"referenceCount": len(request.Video.References),
 	}
+	var endpoint string
+	switch strings.ToLower(strings.TrimSpace(request.Video.Protocol)) {
+	case "ark":
+		endpoint, _ = generationProviderEndpoint(request.Video.BaseURL, "/contents/generations/tasks")
+	case "apimart":
+		endpoint, _ = generationProviderEndpoint(request.Video.BaseURL, "/videos/generations")
+	case "kie":
+		endpoint, _ = kieAPIEndpoint(request.Video.BaseURL, "/jobs/createTask")
+	case "template":
+		endpoint, _ = imageTemplateEndpoint(request.Video.BaseURL, request.Video.Template)
+	default:
+		endpoint, _ = generationProviderEndpoint(request.Video.BaseURL, "/videos")
+	}
+	if endpoint != "" {
+		method := "POST"
+		if strings.EqualFold(strings.TrimSpace(request.Video.Protocol), "template") && request.Video.Template != nil && request.Video.Template.Method != "" {
+			method = request.Video.Template.Method
+		}
+		payload["method"], payload["endpoint"] = method, endpoint
+	}
+	if len(request.Video.ReferenceStorageKeys) > 0 {
+		references := make([]map[string]any, 0, len(request.Video.ReferenceStorageKeys))
+		for index, key := range request.Video.ReferenceStorageKeys {
+			key = strings.TrimSpace(key)
+			if len(key) > 512 {
+				key = key[:512] + "…"
+			}
+			references = append(references, map[string]any{"index": index + 1, "storageKey": key})
+		}
+		payload["referenceMedia"] = references
+	}
+	return payload
 }
-
 
 type clientAICallLogReport struct {
 	Kind        string          `json:"kind"`

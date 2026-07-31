@@ -73,6 +73,9 @@ services:
       OPENBOARD_S3_SECRET_ACCESS_KEY: "${OPENBOARD_S3_SECRET_ACCESS_KEY:-}"
       OPENBOARD_S3_SESSION_TOKEN: "${OPENBOARD_S3_SESSION_TOKEN:-}"
       OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK: "${OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK:-false}"
+      OPENBOARD_DEBUG: "${OPENBOARD_DEBUG:-false}"
+      # Direct provider traffic remains the default; opt in explicitly.
+      OPENBOARD_PROVIDER_PROXY_URL: "${OPENBOARD_PROVIDER_PROXY_URL:-}"
     volumes:
       - openboard-data:/data
     read_only: true

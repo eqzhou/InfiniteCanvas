@@ -465,19 +465,22 @@ describe("remote prompt source limits", () => {
 
 
 describe("community prompt source presets", () => {
-  test("exposes Image Prompts registry presets including Banana Prompt Quicker", () => {
-    expect(COMMUNITY_PROMPT_SOURCE_PRESETS.length).toBeGreaterThanOrEqual(6);
+  test("exposes registry presets and the Tiger Xianyu markdown source", () => {
+    expect(COMMUNITY_PROMPT_SOURCE_PRESETS.length).toBeGreaterThanOrEqual(7);
     const banana = COMMUNITY_PROMPT_SOURCE_PRESETS.find((item) => item.id === "banana-prompt-quicker");
     expect(banana).toBeDefined();
     expect(banana!.source.url).toContain("yukkcat/image-prompts");
     expect(banana!.source.format).toBe("json");
+    const xianyu = COMMUNITY_PROMPT_SOURCE_PRESETS.find((item) => item.id === "xianyu-awesome-gptimage2");
+    expect(xianyu).toBeDefined();
+    expect(xianyu!.source.url).toContain("xianyu110/awesome-gptimage2");
+    expect(xianyu!.source.format).toBe("markdown");
     for (const preset of COMMUNITY_PROMPT_SOURCE_PRESETS) {
       const source = clonePresetSource(preset);
       expect(source.id).toBe(preset.id);
       expect(source.url.startsWith("https://")).toBe(true);
-      expect(source.format).toBe("json");
       expect(source.builtIn).toBe(true);
-      expect(source.mapping?.bodyPath).toBe("prompt");
+      if (source.format === "json") expect(source.mapping?.bodyPath).toBe("prompt");
       // Preset clones must be independent of the catalog table.
       source.name = "mutated";
       expect(preset.source.name).not.toBe("mutated");
@@ -679,6 +682,234 @@ plain body two
       source: "Bilingual",
       sourceId: "bilingual-json",
     }]);
+  });
+
+  test("parses category headings and fenced prompts under level-four entries", async () => {
+    const markdown = `# Catalog
+
+## 提示词合集
+
+### 一、电商与产品
+
+#### 1.1 香水电商详情页
+
+\`\`\`text
+（有香水垫图）给这个香水产品生成电商中文详情页，9:16，4k
+\`\`\`
+
+![结果图](https://cdn.example/perfume.png)
+`;
+    globalThis.fetch = mock(async () => new Response(markdown, {
+      headers: { "content-type": "text/markdown; charset=utf-8" },
+    })) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "xianyu-awesome-gptimage2",
+      name: "Xianyu GPT Image 2",
+      url: "https://raw.githubusercontent.com/xianyu110/awesome-gptimage2/main/README.md",
+      format: "markdown",
+      enabled: true,
+      refreshMinutes: 0,
+      builtIn: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      title: "1.1 香水电商详情页",
+      body: "（有香水垫图）给这个香水产品生成电商中文详情页，9:16，4k",
+      tags: ["提示词合集", "电商", "产品"],
+      coverUrl: "https://cdn.example/perfume.png",
+    });
+  });
+
+  test("resets sibling category tags for nested entries", async () => {
+    const markdown = [
+      "# Catalog",
+      "",
+      "## 提示词合集",
+      "",
+      "### 一、电商与产品",
+      "",
+      "#### 1.1 商品主图",
+      "",
+      "```text",
+      "product hero image",
+      "```",
+      "",
+      "### 二、角色与一致性",
+      "",
+      "#### 2.1 角色三视图",
+      "",
+      "```text",
+      "character turnaround sheet",
+      "```",
+      "",
+    ].join("\n");
+    globalThis.fetch = mock(async () => new Response(markdown, {
+      headers: { "content-type": "text/markdown" },
+    })) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "category-reset",
+      name: "Category reset",
+      url: "https://prompts.example/category-reset.md",
+      format: "markdown",
+      enabled: true,
+      refreshMinutes: 0,
+    });
+
+    expect(items.map((item) => item.tags)).toEqual([
+      ["提示词合集", "电商", "产品"],
+      ["提示词合集", "角色", "一致性"],
+    ]);
+  });
+
+  test("does not treat fenced headings or documentation code as prompts", async () => {
+    const markdown = [
+      "# Catalog",
+      "",
+      "## Prompt collection",
+      "",
+      "### Examples",
+      "",
+      "#### API 示例",
+      "```bash",
+      "#### this is code, not a prompt",
+      "npm install example",
+      "```",
+      "",
+      "#### Actual prompt",
+      "```text",
+      "a real image prompt",
+      "```",
+      "",
+    ].join("\n");
+    globalThis.fetch = mock(async () => new Response(markdown, {
+      headers: { "content-type": "text/markdown" },
+    })) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "fence-aware",
+      name: "Fence aware",
+      url: "https://prompts.example/fence-aware.md",
+      format: "markdown",
+      enabled: true,
+      refreshMinutes: 0,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ title: "Actual prompt", body: "a real image prompt" });
+  });
+
+  test("keeps structured prompt IDs stable when a new entry is prepended", async () => {
+    const source = {
+      id: "stable-ids",
+      name: "Stable IDs",
+      url: "https://prompts.example/stable.md",
+      format: "markdown" as const,
+      enabled: true,
+      refreshMinutes: 0,
+    };
+    const markdown = (entries: string[]) => [
+      "# Catalog", "", "## Collection", "", "### Category", "",
+      ...entries.flatMap((entry) => [
+        `#### ${entry}`,
+        "```text",
+        `${entry} prompt`,
+        "```",
+        "",
+      ]),
+    ].join("\n");
+    globalThis.fetch = mock(async () => new Response(markdown(["A", "B"]), {
+      headers: { "content-type": "text/markdown" },
+    })) as typeof fetch;
+    const first = await fetchPromptSource(source);
+    globalThis.fetch = mock(async () => new Response(markdown(["New", "A", "B"]), {
+      headers: { "content-type": "text/markdown" },
+    })) as typeof fetch;
+    const second = await fetchPromptSource(source);
+
+    expect(second.find((item) => item.title === "A")?.id).toBe(first.find((item) => item.title === "A")?.id);
+    expect(second.find((item) => item.title === "B")?.id).toBe(first.find((item) => item.title === "B")?.id);
+  });
+
+  test("parses explicit numbered prompts under supplemental H5 sections", async () => {
+    const markdown = [
+      "# Catalog",
+      "",
+      "## 补充案例",
+      "",
+      "#### 来源文章",
+      "",
+      "##### 原文提示词摘录",
+      "",
+      "- 说明：只保留明确给出的提示词",
+      "1. 提示词：一张中文信息图，结构清晰",
+      "2. 围绕上面的形象，设计一个 IP",
+      "",
+      "##### 可直接复用的指令/关键词摘录",
+      "",
+      "1. 生成一张 35mm 胶片旅行抓拍",
+      "2. 关键词：photorealistic",
+      "",
+      "##### 图片链接",
+      "",
+      "1. https://cdn.example/image.png",
+    ].join("\n");
+    globalThis.fetch = mock(async () => new Response(markdown, {
+      headers: { "content-type": "text/markdown" },
+    })) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "supplemental",
+      name: "Supplemental",
+      url: "https://prompts.example/supplemental.md",
+      format: "markdown",
+      enabled: true,
+      refreshMinutes: 0,
+    });
+
+    expect(items).toHaveLength(4);
+    expect(items.map((item) => item.body)).toEqual([
+      "一张中文信息图，结构清晰",
+      "围绕上面的形象，设计一个 IP",
+      "生成一张 35mm 胶片旅行抓拍",
+      "关键词：photorealistic",
+    ]);
+  });
+
+  test("accepts tilde fenced prompts while ignoring tilde code headings", async () => {
+    const markdown = [
+      "# Catalog",
+      "",
+      "## 工具",
+      "",
+      "### 安装说明",
+      "~~~bash",
+      "#### this is code",
+      "npm install example",
+      "~~~",
+      "",
+      "### 真实提示词",
+      "~~~text",
+      "a real image prompt",
+      "~~~",
+    ].join("\n");
+    globalThis.fetch = mock(async () => new Response(markdown, {
+      headers: { "content-type": "text/markdown" },
+    })) as typeof fetch;
+
+    const items = await fetchPromptSource({
+      id: "tilde-aware",
+      name: "Tilde aware",
+      url: "https://prompts.example/tilde.md",
+      format: "markdown",
+      enabled: true,
+      refreshMinutes: 0,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.body).toBe("a real image prompt");
   });
 });
 

@@ -116,7 +116,7 @@ func TestProviderTextUsesResponsesAPI(t *testing.T) {
 
 	text, err := fetchProviderTextWithClient(context.Background(), providerModelConnection{
 		BaseURL: upstream.URL, APIKey: providerFixtureKey("provider"), Protocol: "openai",
-	}, providerTextRequest{
+	}, &providerTextRequest{
 		ChannelID: "personal", Model: "gpt-test", Prompt: "hello", SystemPrompt: "Be concise",
 		ReasoningEffort: "high",
 	}, upstream.Client(), true)
@@ -153,11 +153,15 @@ func TestProviderTextFallsBackOnlyWhenResponsesIsUnsupported(t *testing.T) {
 	}))
 	defer upstream.Close()
 
+	input := &providerTextRequest{ChannelID: "personal", Model: "gpt-test", Prompt: "hello"}
 	text, err := fetchProviderTextWithClient(context.Background(), providerModelConnection{
 		BaseURL: upstream.URL, APIKey: providerFixtureKey("provider"), Protocol: "openai",
-	}, providerTextRequest{ChannelID: "personal", Model: "gpt-test", Prompt: "hello"}, upstream.Client(), true)
+	}, input, upstream.Client(), true)
 	if err != nil || text != "chat response" || requestCount != 2 {
 		t.Fatalf("text=%q requests=%d err=%v", text, requestCount, err)
+	}
+	if input.AuditEndpoint != upstream.URL+"/v1/chat/completions" {
+		t.Fatalf("audit endpoint=%q", input.AuditEndpoint)
 	}
 
 	requestCount = 0
@@ -168,7 +172,7 @@ func TestProviderTextFallsBackOnlyWhenResponsesIsUnsupported(t *testing.T) {
 	defer rejected.Close()
 	_, err = fetchProviderTextWithClient(context.Background(), providerModelConnection{
 		BaseURL: rejected.URL, APIKey: providerFixtureKey("bad"), Protocol: "openai",
-	}, providerTextRequest{ChannelID: "personal", Model: "gpt-test", Prompt: "hello"}, rejected.Client(), true)
+	}, &providerTextRequest{ChannelID: "personal", Model: "gpt-test", Prompt: "hello"}, rejected.Client(), true)
 	if err == nil || requestCount != 1 {
 		t.Fatalf("expected one failed request, requests=%d err=%v", requestCount, err)
 	}
@@ -186,7 +190,7 @@ func TestProviderTextUsesGeminiContract(t *testing.T) {
 
 	text, err := fetchProviderTextWithClient(context.Background(), providerModelConnection{
 		BaseURL: upstream.URL + "/v1beta", APIKey: providerFixtureKey("gemini"), Protocol: "gemini",
-	}, providerTextRequest{ChannelID: "personal", Model: "gemini-test", Prompt: "hello"}, upstream.Client(), true)
+	}, &providerTextRequest{ChannelID: "personal", Model: "gemini-test", Prompt: "hello"}, upstream.Client(), true)
 	if err != nil || text != "gemini response" {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -331,6 +335,15 @@ func TestProviderTextAuditPayloadDoesNotPersistPromptContents(t *testing.T) {
 	}
 	if payload["promptRunes"] != utf8.RuneCountInString(prompt) {
 		t.Fatalf("prompt rune count=%v", payload["promptRunes"])
+	}
+}
+
+func TestProviderTextAuditPayloadIncludesEndpoint(t *testing.T) {
+	payload := providerTextAuditPayload(providerTextRequest{
+		Model: "gpt-test", AuditEndpoint: "https://provider.example/v1/responses",
+	}, "openai")
+	if payload["method"] != "POST" || payload["endpoint"] != "https://provider.example/v1/responses" {
+		t.Fatalf("endpoint metadata missing: %#v", payload)
 	}
 }
 

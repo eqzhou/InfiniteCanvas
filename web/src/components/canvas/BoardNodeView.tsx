@@ -1,10 +1,11 @@
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
-import type { BoardNode } from "@/types/board";
+import type { AiChannel, BoardNode } from "@/types/board";
 import { cn } from "@/lib/cn";
 import { ProjectCommitRollbackError, useBoardStore } from "@/stores/use-board-store";
 import { NodeActions } from "@/components/canvas/NodeActions";
 import { NodePromptBar } from "@/components/canvas/NodePromptBar";
 import { BatchGroupControls } from "@/components/canvas/BatchGroupControls";
+import { AudioNodePlayer } from "@/components/canvas/AudioNodePlayer";
 import { PluginNodeFrame } from "@/components/canvas/PluginNodeFrame";
 import { ImagePreviewDialog } from "@/components/canvas/ImagePreviewDialog";
 import { createDefaultDirectorScene, getDirectorPopulation } from "@/lib/director-scene";
@@ -20,6 +21,14 @@ import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { defaultModelForMode } from "@/lib/generation-model";
 import { normalizeNodeTitle } from "@/lib/node-format";
+import {
+  imageSizeOptionsFor,
+  imageOutputLimitFor,
+  imageQualityOptionsFor,
+  normalizeImageQualityForProvider,
+  optionsWithCurrentValue,
+} from "@/lib/image-generation-options";
+import { getProvider } from "@/lib/ai-config";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
 import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
 
@@ -57,6 +66,8 @@ type Props = {
   onStartConnect: (e?: { pointerId?: number }) => void;
   onCompleteConnect: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
+  /** All personal and currently published shared channels, supplied by the canvas once. */
+  generationChannels?: readonly AiChannel[];
 };
 
 export function BoardNodeView({
@@ -70,6 +81,7 @@ export function BoardNodeView({
   onStartConnect,
   onCompleteConnect,
   onContextMenu,
+  generationChannels = [],
 }: Props) {
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const directorEditStartedRef = useRef(false);
@@ -90,6 +102,23 @@ export function BoardNodeView({
   const installedPlugins = config.plugins ?? [];
   const activeChannel = config.channels.find(
     (channel) => channel.id === config.activeChannelId,
+  );
+  const configuredGenerationChannel = node.metadata.generationChannelId
+    ? generationChannels.find((channel) => channel.id === node.metadata.generationChannelId)
+    : undefined;
+  const activeGenerationChannel = config.activeSharedChannelId
+    ? generationChannels.find((channel) => channel.id === config.activeSharedChannelId)
+    : activeChannel;
+  const imageChannel = configuredGenerationChannel ?? activeGenerationChannel ?? activeChannel;
+  const imageProvider = imageChannel ? getProvider(imageChannel, "image") : undefined;
+  const imageModel = node.metadata.model || imageProvider?.model || "";
+  const imageQualityOptions = imageQualityOptionsFor(imageProvider?.protocol, imageModel);
+  const imageSizeOptions = imageSizeOptionsFor(imageProvider?.protocol, imageModel);
+  const imageOutputLimit = imageOutputLimitFor(imageProvider?.protocol, imageModel);
+  const imageQuality = normalizeImageQualityForProvider(
+    node.metadata.quality ?? config.imageQuality,
+    imageProvider?.protocol,
+    imageModel,
   );
   const pluginManifest = node.type === "plugin"
     ? config.disabledPluginIds?.includes(node.metadata.pluginId ?? "")
@@ -354,7 +383,7 @@ export function BoardNodeView({
         {node.type === "audio" ? (
           node.metadata.content ? (
             <div className="flex h-full flex-col justify-center gap-2" onPointerDown={(e) => e.stopPropagation()}>
-              <audio src={node.metadata.content} controls className="w-full" />
+              <AudioNodePlayer src={node.metadata.content} />
               <div className="truncate text-xs text-[var(--ob-muted)]">
                 {node.metadata.mimeType ?? "audio"} · {node.metadata.bytes ? `${Math.round(node.metadata.bytes/1024)}KB` : ""}
               </div>
@@ -460,33 +489,93 @@ export function BoardNodeView({
                 })}
               />
             </label>
-            <label className="flex flex-col gap-1">
-              尺寸 / 比例
-              <input
-                className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
-                value={node.metadata.size ?? "1024x1024"}
-                onChange={(e) =>
-                  updateNode(node.id, { metadata: { size: e.target.value } })
-                }
-              />
-            </label>
+            {(node.metadata.generationMode ?? "image") === "image" ? (
+              <>
+                <label className="flex flex-col gap-1">
+                  尺寸 / 比例
+                  <select
+                    aria-label="配置节点图片尺寸"
+                    className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                    value={node.metadata.size ?? "1024x1024"}
+                    onChange={(event) => updateNode(node.id, {
+                      metadata: { size: event.target.value },
+                    })}
+                  >
+                    {optionsWithCurrentValue(
+                      imageSizeOptions,
+                      node.metadata.size ?? "1024x1024",
+                    ).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                {!imageSizeOptions.some((option) => option.value === (node.metadata.size ?? "1024x1024")) ? (
+                  <label className="flex flex-col gap-1">
+                    自定义尺寸
+                    <input
+                      aria-label="配置节点自定义图片尺寸"
+                      className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                      value={node.metadata.size ?? "1024x1024"}
+                      onChange={(event) => updateNode(node.id, {
+                        metadata: { size: event.target.value },
+                      })}
+                    />
+                  </label>
+                ) : null}
+                <label className="flex flex-col gap-1">
+                  图片质量
+                  <select
+                    aria-label="配置节点图片质量"
+                    className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                    value={imageQuality}
+                    onChange={(event) => updateNode(node.id, {
+                      metadata: { quality: event.target.value },
+                    })}
+                  >
+                    {optionsWithCurrentValue(
+                      imageQualityOptions,
+                      imageQuality,
+                    ).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : null}
             <label className="flex flex-col gap-1">
               数量
               <input
                 type="number"
                 min={1}
-                max={8}
+                max={(node.metadata.generationMode ?? "image") === "image" ? imageOutputLimit : 8}
                 className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                 value={node.metadata.count ?? 1}
                 onChange={(e) =>
                   updateNode(node.id, {
-                    metadata: { count: Number(e.target.value) || 1 },
+                    metadata: {
+                      count: Math.min(
+                        (node.metadata.generationMode ?? "image") === "image" ? imageOutputLimit : 8,
+                        Math.max(1, Number(e.target.value) || 1),
+                      ),
+                    },
                   })
                 }
               />
             </label>
             {(node.metadata.generationMode ?? "image") === "video" ? (
               <>
+                <label className="flex flex-col gap-1">
+                  视频尺寸
+                  <input
+                    aria-label="配置节点视频尺寸"
+                    className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                    value={node.metadata.size ?? ""}
+                    placeholder="按服务支持填写，例如 1280x720"
+                    onChange={(event) => updateNode(node.id, {
+                      metadata: { size: event.target.value },
+                    })}
+                  />
+                </label>
                 <label className="flex flex-col gap-1">
                   视频比例
                   <select

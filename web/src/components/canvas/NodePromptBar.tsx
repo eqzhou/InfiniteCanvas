@@ -21,6 +21,7 @@ import {
   isNodePromptType,
   nodePromptKind,
   nodePromptPlaceholder,
+  nodePromptUsesPromptLibrary,
   type NodePromptType,
 } from "@/lib/node-prompt";
 import {
@@ -31,6 +32,7 @@ import {
 import { PromptChipInput } from "@/components/canvas/PromptChipInput";
 import {
   createImageGenerationMetadata,
+  normalizeImageGenerationForProvider,
 } from "@/lib/image-generation";
 import { applyCameraPrompt } from "@/lib/camera-prompt";
 import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
@@ -44,8 +46,7 @@ import {
 } from "@/services/generation-jobs";
 import { DEFAULT_SITE_POLICY, getSitePolicy, type SitePolicy } from "@/services/auth-session";
 import {
-  resolveNodePromptModels,
-  resolveNodePromptSelectedModel,
+  resolveNodePromptModelChoices,
 } from "@/lib/node-prompt-models";
 import {
   isServerManagedChannel,
@@ -53,6 +54,15 @@ import {
   useSharedChannels,
 } from "@/services/shared-channels";
 import { placeImageGenerationRun } from "@/lib/image-generation-run";
+import { DEFAULT_GENERATION_DEFAULTS } from "@/lib/generation-defaults";
+import {
+  audioRoleDefaultLabel,
+  audioVoiceLabel,
+  audioProtocolRequiresKey,
+  audioProtocolSupportsServerJobs,
+  audioVoiceOptions,
+  resolveAudioVoice,
+} from "@/lib/audio-provider";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
   const config = useBoardStore((s) => s.config);
@@ -99,11 +109,19 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
   const promptable = isNodePromptType(node.type);
   const promptType: NodePromptType = isNodePromptType(node.type) ? node.type : "text";
-  const modelOptions = useMemo(
-    () => (promptable ? resolveNodePromptModels(channel, promptType, sitePolicy) : []),
-    [channel, promptable, promptType, sitePolicy],
+  const modelChoices = useMemo(
+    () => resolveNodePromptModelChoices(node, channel, sitePolicy),
+    [channel, node, sitePolicy],
   );
-  const selectedModel = promptable ? resolveNodePromptSelectedModel(node, channel) : "";
+  const selectedAudioProvider = channel ? getProvider(channel, "audio") : undefined;
+  const selectedAudioProtocol = selectedAudioProvider?.protocol ?? "openai";
+  const selectedAudioVoice = resolveAudioVoice({
+    roles: project?.audioRoles,
+    roleId: node.metadata.audioRoleId,
+    protocol: selectedAudioProtocol,
+    fallback: config.generationDefaults?.audioVoice ?? DEFAULT_GENERATION_DEFAULTS.audioVoice,
+    explicit: node.metadata.voice,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -153,10 +171,9 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       return;
     }
     const requestChannel = savedChannel ?? channel;
-    if (
-      !requestChannel ||
-      (!isServerManagedChannel(requestChannel, kind) && !getProvider(requestChannel, kind).apiKey)
-    ) {
+    const requestProvider = requestChannel ? getProvider(requestChannel, kind) : undefined;
+    const requiresKey = kind !== "audio" || !requestProvider || audioProtocolRequiresKey(requestProvider.protocol);
+    if (!requestChannel || (!isServerManagedChannel(requestChannel, kind) && requiresKey && !requestProvider?.apiKey)) {
       alert("请先在设置中配置 API Key");
       return;
     }
@@ -231,9 +248,10 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           .map((reference) => reference.storageKey)
           .filter((key): key is string => Boolean(key));
         const refs = await resolvePromptReferences(uniqueImageReferences, "image", 9);
+        const provider = getProvider(requestChannel, "image");
         const generation = createImageGenerationMetadata({
           prompt: rawPrompt,
-          model: node.metadata.model || getProvider(requestChannel, "image").model,
+          model: node.metadata.model || provider.model,
           size: regenerateImageInPlace ? node.metadata.size || config.imageSize : config.imageSize,
           quality: regenerateImageInPlace ? node.metadata.quality || config.imageQuality : config.imageQuality,
           count: regenerateImageInPlace ? 1 : config.imageCount,
@@ -242,15 +260,15 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           generationChannelId: requestChannel.id,
           cameraPrompt: node.metadata.cameraPrompt,
         });
-        const requestPrompt = applyCameraPrompt(generation.prompt, generation.cameraPrompt);
-        const provider = getProvider(requestChannel, "image");
+        const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
+        const requestPrompt = applyCameraPrompt(normalizedGeneration.prompt, normalizedGeneration.cameraPrompt);
         if (usesServerGenerationJobs() && (provider.protocol === "openai" || provider.protocol === "gemini" ||
             (provider.protocol === "template" && Boolean(provider.template))) &&
             uniqueImageReferences.every((reference) => Boolean(reference.storageKey))) {
-          if (provider.protocol === "gemini" && generation.transparentBackground) {
+          if (provider.protocol === "gemini" && normalizedGeneration.transparentBackground) {
             throw new Error("Gemini 图片生成不支持透明背景");
           }
-          if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
+          if (provider.protocol === "template" && normalizedGeneration.transparentBackground && !provider.template?.supportsTransparentBackground) {
             throw new Error("当前图片模板不支持透明背景");
           }
           const jobId = uid("job");
@@ -260,7 +278,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
               current,
               node.id,
               jobId,
-              generation,
+              normalizedGeneration,
               { replaceExisting: regenerateImageInPlace },
             ));
             placeholdersApplied = true;
@@ -270,12 +288,12 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
               projectId: project?.id,
               prompt: requestPrompt,
               providerId: requestChannel.id,
-              model: generation.model,
+              model: normalizedGeneration.model,
               parameters: {
-                size: generation.size,
-                quality: generation.quality,
-                count: generation.count,
-                transparentBackground: generation.transparentBackground,
+                size: normalizedGeneration.size,
+                quality: normalizedGeneration.quality,
+                count: normalizedGeneration.count,
+                transparentBackground: normalizedGeneration.transparentBackground,
                 referenceStorageKeys,
               },
             });
@@ -301,16 +319,16 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         }
         const urls = await generateImages({
           channel: requestChannel,
-          model: generation.model,
+          model: normalizedGeneration.model,
           prompt: requestPrompt,
-          size: generation.size,
-          quality: generation.quality,
-          n: generation.count,
+          size: normalizedGeneration.size,
+          quality: normalizedGeneration.quality,
+          n: normalizedGeneration.count,
           referenceDataUrls: refs,
-          transparentBackground: generation.transparentBackground,
+          transparentBackground: normalizedGeneration.transparentBackground,
           systemPrompt: config.systemPrompt,
         });
-        await placeImageResults(node, urls, generation, updateActive, {
+        await placeImageResults(node, urls, normalizedGeneration, updateActive, {
           replaceExisting: regenerateImageInPlace,
         });
       } else if (node.type === "video") {
@@ -420,20 +438,34 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         }
       } else if (node.type === "audio") {
         const audioProvider = getProvider(requestChannel, "audio");
-        if (usesServerGenerationJobs() && audioProvider.protocol === "openai") {
+        const actualVoice = resolveAudioVoice({
+          roles: project?.audioRoles,
+          roleId: node.metadata.audioRoleId,
+          protocol: audioProvider.protocol,
+          fallback: config.generationDefaults?.audioVoice ?? DEFAULT_GENERATION_DEFAULTS.audioVoice,
+          explicit: node.metadata.voice,
+        });
+        if (usesServerGenerationJobs() && audioProtocolSupportsServerJobs(audioProvider.protocol)) {
           const job = await createServerAudioGenerationJob({
             projectId: project?.id,
             prompt: rawPrompt,
             providerId: requestChannel.id,
             model: node.metadata.model || audioProvider.model,
-            parameters: audioJobParameters(node.metadata.voice, config.generationDefaults),
+            parameters: audioJobParameters(actualVoice, config.generationDefaults),
           });
           try {
             if (!node.metadata.content) {
-              updateNode(node.id, { metadata: { status: "loading", prompt: rawPrompt, generationJobId: job.id } });
+              updateNode(node.id, { metadata: { status: "loading", prompt: rawPrompt, generationJobId: job.id, resolvedVoice: actualVoice } });
             } else {
               placeRight([createNode("audio", { x: node.position.x + node.width + 60, y: node.position.y }, {
-                metadata: { status: "loading", prompt: rawPrompt, generationJobId: job.id },
+                metadata: {
+                  status: "loading",
+                  prompt: rawPrompt,
+                  generationJobId: job.id,
+                  voice: node.metadata.voice,
+                  resolvedVoice: actualVoice,
+                  audioRoleId: node.metadata.audioRoleId,
+                },
               })]);
               updateNode(node.id, { metadata: { status: "success" } });
             }
@@ -448,7 +480,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           channel: requestChannel,
           model: node.metadata.model || getProvider(requestChannel, "audio").model,
           input: text.trim(),
-          ...audioSpeechOptions(node.metadata.voice, config.generationDefaults),
+          ...audioSpeechOptions(actualVoice, config.generationDefaults),
         });
         const uploaded = await uploadMedia(speech.blob, "media");
         const metadata = {
@@ -458,6 +490,9 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           bytes: uploaded.bytes,
           status: "success" as const,
           prompt: text.trim(),
+          voice: node.metadata.voice,
+          resolvedVoice: actualVoice,
+          audioRoleId: node.metadata.audioRoleId,
         };
         if (!node.metadata.content) {
           updateNode(node.id, { metadata });
@@ -490,7 +525,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   };
 
   const placeholder = nodePromptPlaceholder(promptType, Boolean(node.metadata.content || node.metadata.storageKey));
-  const defaultModelLabel = selectedModel || "继承渠道默认模型";
+  const defaultModelLabel = modelChoices.inheritedLabel;
 
   const appendPromptLibrary = (promptId: string) => {
     const prompt = prompts.find((item) => item.id === promptId);
@@ -525,31 +560,75 @@ ${body}` : body;
           }}
         >
           <option value="">{defaultModelLabel}</option>
-          {modelOptions.map((model) => (
+          {modelChoices.options.map((model) => (
             <option key={model} value={model}>{model}</option>
           ))}
-          {node.metadata.model && !modelOptions.includes(node.metadata.model) ? (
+          {node.metadata.model && !modelChoices.options.includes(node.metadata.model) ? (
             <option value={node.metadata.model}>{node.metadata.model}</option>
           ) : null}
         </select>
-        <select
-          aria-label="提示词库"
-          className="w-[42%] min-w-[6rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-1 text-[11px]"
-          value=""
-          onChange={(event) => {
-            const id = event.target.value;
-            event.currentTarget.value = "";
-            if (id) appendPromptLibrary(id);
-          }}
-        >
-          <option value="">提示词库</option>
-          {prompts.map((prompt) => (
-            <option key={prompt.id} value={prompt.id}>{prompt.title}</option>
-          ))}
-        </select>
+        {nodePromptUsesPromptLibrary(promptType) ? (
+          <select
+            aria-label="提示词库"
+            className="w-[42%] min-w-[6rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-1 text-[11px]"
+            value=""
+            onChange={(event) => {
+              const id = event.target.value;
+              event.currentTarget.value = "";
+              if (id) appendPromptLibrary(id);
+            }}
+          >
+            <option value="">提示词库</option>
+            {prompts.map((prompt) => (
+              <option key={prompt.id} value={prompt.id}>{prompt.title}</option>
+            ))}
+          </select>
+        ) : null}
       </div>
       {node.type === "image" && !hasImageContent && upstream.texts.length > 0 && !text.trim() ? (
         <p className="text-[10px] text-[var(--ob-muted)]">将使用直接上游文本作为本次图片提示词。</p>
+      ) : null}
+      {node.type === "image" && hasImageContent && inheritsUpstreamPrompt && node.metadata.prompt ? (
+        <div
+          className="rounded border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_45%,transparent)] px-2 py-1.5 text-[10px]"
+          aria-label="最终实际发送的提示词"
+        >
+          <div className="mb-1 font-medium text-[var(--ob-muted)]">最终实际发送的提示词（只读）</div>
+          <p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words leading-relaxed" onWheel={(event) => event.stopPropagation()}>
+            {node.metadata.prompt}
+          </p>
+        </div>
+      ) : null}
+      {node.type === "audio" ? (
+        <div className="grid min-w-0 grid-cols-2 gap-1.5">
+          <select
+            aria-label="音频角色"
+            title="角色来自：项目面板 → 当前画布配音角色"
+            className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
+            value={node.metadata.audioRoleId ?? ""}
+            onChange={(event) => updateNode(node.id, { metadata: {
+              audioRoleId: event.target.value || undefined,
+              voice: undefined,
+            } })}
+          >
+            <option value="">{audioRoleDefaultLabel(project?.audioRoles)}</option>
+            {(project?.audioRoles ?? []).map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+          </select>
+          <select
+            aria-label="音频声线"
+            className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
+            value={node.metadata.voice ?? ""}
+            onChange={(event) => updateNode(node.id, { metadata: { voice: event.target.value || undefined } })}
+          >
+            <option value="">跟随角色/默认：{audioVoiceLabel(selectedAudioVoice)}</option>
+            {audioVoiceOptions(selectedAudioProtocol).map((voice) => (
+              <option key={voice} value={voice}>{audioVoiceLabel(voice)}</option>
+            ))}
+            {node.metadata.voice && !audioVoiceOptions(selectedAudioProtocol).some((voice) => voice === node.metadata.voice) ? (
+              <option value={node.metadata.voice}>{audioVoiceLabel(node.metadata.voice)}</option>
+            ) : null}
+          </select>
+        </div>
       ) : null}
       <div className="flex min-w-0 items-end gap-2">
         <div className="min-w-0 flex-1">

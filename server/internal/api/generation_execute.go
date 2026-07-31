@@ -63,6 +63,9 @@ func imageGenerationFailureMessage(err error) string {
 		if imageProviderNetworkTimeout(networkErr) {
 			return "连接模型服务超时，请检查网络或增大渠道超时时间"
 		}
+		if imageProviderConnectionInterrupted(networkErr) {
+			return "模型服务在生成过程中中断了连接，请稍后重试或检查上游网关"
+		}
 		return "连接模型服务失败，请检查服务 URL 和网络"
 	}
 	statusCode, ok := imageProviderStatusCode(err)
@@ -85,6 +88,16 @@ func imageGenerationFailureMessage(err error) string {
 	default:
 		return fmt.Sprintf("图片生成失败（模型服务 HTTP %d）", statusCode)
 	}
+}
+
+func imageProviderConnectionInterrupted(err *url.Error) bool {
+	if err == nil || err.Err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Err.Error())
+	return strings.Contains(message, "unexpected eof") ||
+		strings.Contains(message, "connection reset by peer") ||
+		strings.Contains(message, "connection closed")
 }
 
 func imageGenerationFailureLogDetail(err error) string {
@@ -156,14 +169,25 @@ type imageGenerationRequest struct {
 	BaseURL               string
 	APIKey                string
 	Model                 string
+	RequestID             string
 	Prompt                string
 	Size                  string
 	Quality               string
 	Count                 int
 	TransparentBackground bool
 	References            []generatedImage
-	Template              *imageProviderTemplate
-	ProviderTimeout       time.Duration
+	// ReferenceStorageKeys is kept separately from References so audit logs can
+	// identify the source images without ever persisting their binary contents.
+	ReferenceStorageKeys []string
+	Template             *imageProviderTemplate
+	ProviderTimeout      time.Duration
+}
+
+func providerRequestID(jobID string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(jobID)))
+	digest[6] = (digest[6] & 0x0f) | 0x40
+	digest[8] = (digest[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", digest[0:4], digest[4:6], digest[6:8], digest[8:10], digest[10:16])
 }
 
 type generatedImage struct {
@@ -485,6 +509,7 @@ func (s *Server) executeClaimedImageJob(claimed store.TenantGenerationJob) {
 	}()
 
 	var auditRequest any
+	auditError := ""
 	finish := func(status string, result json.RawMessage, message string) bool {
 		if s.generationRoot.Err() != nil {
 			return false
@@ -497,7 +522,15 @@ func (s *Server) executeClaimedImageJob(claimed store.TenantGenerationJob) {
 		_, err := s.store.CompleteServerGenerationJob(finishCtx, tenantID, job.ID,
 			job.LeaseOwner, status, result, message, time.Now().UTC())
 		durationMs := time.Since(startedAt).Milliseconds()
-		s.recordAICallLog(finishCtx, tenantID, job, status, durationMs, message, auditRequest, result)
+		auditMessage := strings.TrimSpace(message)
+		if detail := strings.TrimSpace(auditError); detail != "" {
+			if auditMessage == "" {
+				auditMessage = detail
+			} else {
+				auditMessage += " [" + detail + "]"
+			}
+		}
+		s.recordAICallLog(finishCtx, tenantID, job, status, durationMs, auditMessage, auditRequest, result)
 		return err == nil
 	}
 
@@ -539,7 +572,8 @@ func (s *Server) executeClaimedImageJob(claimed store.TenantGenerationJob) {
 			finish("cancelled", nil, "已取消")
 			return
 		}
-		log.Printf("server image job %s/%s provider failed: %s", tenantID, job.ID, imageGenerationFailureLogDetail(err))
+		auditError = imageGenerationFailureLogDetail(err)
+		log.Printf("server image job %s/%s provider failed: %s", tenantID, job.ID, auditError)
 		finish("failed", nil, imageGenerationFailureMessage(err))
 		return
 	}
@@ -793,8 +827,10 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	}
 	return imageGenerationRequest{
 		Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: apiKey, Model: model, Prompt: prompt,
-		Size: parameters.Size, Quality: parameters.Quality, Count: parameters.Count,
-		TransparentBackground: parameters.TransparentBackground, References: references, Template: provider.Template,
+		RequestID: providerRequestID(job.ID),
+		Size:      parameters.Size, Quality: parameters.Quality, Count: parameters.Count,
+		TransparentBackground: parameters.TransparentBackground, References: references,
+		ReferenceStorageKeys: append([]string(nil), parameters.ReferenceStorageKeys...), Template: provider.Template,
 		ProviderTimeout: providerTimeout,
 	}, nil
 }

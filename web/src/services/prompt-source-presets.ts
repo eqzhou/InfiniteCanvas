@@ -3,8 +3,9 @@ import { parsePromptSourceConfig } from "@/services/prompt-sources";
 
 /**
  * Community catalog presets for one-click add.
- * Built-in catalogs read the public Image Prompts unified JSON registry
- * (https://github.com/yukkcat/image-prompts) instead of per-canvas parsers.
+ * Most built-in catalogs read the public Image Prompts unified JSON registry
+ * (https://github.com/yukkcat/image-prompts); sources whose upstream catalog
+ * is structured Markdown opt into the bounded Markdown parser instead.
  */
 export type PromptSourcePreset = {
   id: string;
@@ -111,6 +112,22 @@ export const COMMUNITY_PROMPT_SOURCE_PRESETS: PromptSourcePreset[] = [
       "DavidWu GPT Image 2",
       "https://github.com/davidwuw0811-boop/awesome-gpt-image2-prompts",
     ),
+  },
+  {
+    id: "xianyu-awesome-gptimage2",
+    name: "Xianyu GPT Image 2",
+    description: "xianyu110/awesome-gptimage2 分类提示词 Markdown",
+    repositoryUrl: "https://github.com/xianyu110/awesome-gptimage2",
+    source: {
+      id: "xianyu-awesome-gptimage2",
+      name: "Xianyu GPT Image 2",
+      url: "https://raw.githubusercontent.com/xianyu110/awesome-gptimage2/main/README.md",
+      format: "markdown",
+      enabled: true,
+      refreshMinutes: 0,
+      homepage: "https://github.com/xianyu110/awesome-gptimage2",
+      builtIn: true,
+    },
   },
 ];
 

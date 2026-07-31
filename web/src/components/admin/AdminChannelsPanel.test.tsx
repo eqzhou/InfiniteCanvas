@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AdminChannelModelDiffReview } from "./AdminChannelsPanel";
+import { AdminChannelModelDiffReview, adminChannelCanTest } from "./AdminChannelsPanel";
 
 describe("AdminChannelModelDiffReview", () => {
+  test("allows keyless Edge channels to run the connection test", () => {
+    expect(adminChannelCanTest({ protocol: "edge", secretConfigured: false })).toBe(true);
+    expect(adminChannelCanTest({ protocol: "azure", secretConfigured: false })).toBe(false);
+    expect(adminChannelCanTest({ protocol: "openai", secretConfigured: true })).toBe(true);
+  });
+
   test("shows new, existing, and removed models as an explicit confirmation step", () => {
     const html = renderToStaticMarkup(
       <AdminChannelModelDiffReview

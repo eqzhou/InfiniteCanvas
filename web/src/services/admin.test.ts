@@ -124,6 +124,23 @@ describe("admin client", () => {
     expect(cleanAdminChannelModels(undefined)).toEqual([]);
   });
 
+  test("accepts Azure and Edge shared audio channel protocols", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(String(init?.body));
+      return new Response(String(init?.body));
+    }) as typeof fetch;
+    const base = {
+      id: "speech", name: "Speech", baseUrl: "https://speech.example.com",
+      enabled: true, allowUserUse: true, weight: 1, timeoutSeconds: 60, models: [],
+      defaultTextModel: "", defaultImageModel: "", defaultVideoModel: "",
+      defaultAudioModel: "cloud-tts", secretConfigured: false,
+    };
+    await putAdminChannels([{ ...base, protocol: "azure" }, { ...base, id: "edge", protocol: "edge" }]);
+    expect(JSON.parse(requests[0] ?? "[]").map((item: { protocol: string }) => item.protocol))
+      .toEqual(["azure", "edge"]);
+  });
+
   test("loads bounded read-only storage pool status", async () => {
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toContain("admin/storage-pool");

@@ -3,17 +3,25 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"math"
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 const maxMediaProviderJSONBytes = 2 << 20
@@ -26,7 +34,9 @@ type httpVideoExecutor struct {
 }
 
 type httpAudioExecutor struct {
-	client *http.Client
+	client           *http.Client
+	edgeWebSocketURL string
+	now              func() time.Time
 }
 
 func newHTTPVideoExecutor() *httpVideoExecutor {
@@ -34,7 +44,7 @@ func newHTTPVideoExecutor() *httpVideoExecutor {
 }
 
 func newHTTPAudioExecutor() *httpAudioExecutor {
-	return &httpAudioExecutor{client: newOpenAIImageExecutor().client}
+	return &httpAudioExecutor{client: newOpenAIImageExecutor().client, now: time.Now}
 }
 
 func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGenerationRequest, existing *videoProviderCheckpoint, save func(videoProviderCheckpoint) error) (generatedMedia, error) {
@@ -413,6 +423,19 @@ func (e *httpVideoExecutor) download(ctx context.Context, rawURL, providerBaseUR
 }
 
 func (e *httpAudioExecutor) Generate(ctx context.Context, request audioGenerationRequest) (generatedMedia, error) {
+	protocol := strings.ToLower(strings.TrimSpace(request.Protocol))
+	if protocol == "" {
+		protocol = "openai"
+	}
+	switch protocol {
+	case "azure":
+		return e.generateAzureSpeech(ctx, request)
+	case "edge":
+		return e.generateEdgeSpeech(ctx, request)
+	case "openai":
+	default:
+		return generatedMedia{}, errors.New("unsupported audio provider")
+	}
 	endpoint, err := generationProviderEndpoint(request.BaseURL, "/audio/speech")
 	if err != nil {
 		return generatedMedia{}, err
@@ -452,6 +475,277 @@ func (e *httpAudioExecutor) Generate(ctx context.Context, request audioGeneratio
 		mimeType = audioFormatMIME(request.Format)
 	}
 	return generatedMedia{Data: data, MIMEType: mimeType}, err
+}
+
+var audioVoicePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$`)
+
+func validateAudioSpeechRequest(request audioGenerationRequest) error {
+	if !audioVoicePattern.MatchString(strings.TrimSpace(request.Voice)) {
+		return errors.New("invalid audio voice")
+	}
+	if request.Speed != 0 && (math.IsNaN(request.Speed) || request.Speed < 0.25 || request.Speed > 4) {
+		return errors.New("audio speed must be between 0.25 and 4.0")
+	}
+	if strings.TrimSpace(request.Prompt) == "" || len(request.Prompt) > 100_000 {
+		return errors.New("invalid audio prompt")
+	}
+	return nil
+}
+
+func (e *httpAudioExecutor) generateAzureSpeech(ctx context.Context, request audioGenerationRequest) (generatedMedia, error) {
+	if err := validateAudioSpeechRequest(request); err != nil {
+		return generatedMedia{}, err
+	}
+	endpoint, err := azureSpeechEndpoint(request.BaseURL)
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	outputFormat, mimeType, err := azureSpeechOutputFormat(request.Format)
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	rate := "default"
+	if request.Speed > 0 {
+		rate = strconv.FormatFloat(request.Speed, 'f', -1, 64)
+	}
+	ssml := `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN"><voice name="` +
+		html.EscapeString(strings.TrimSpace(request.Voice)) + `"><prosody rate="` + rate + `">` +
+		html.EscapeString(request.Prompt) + `</prosody></voice></speak>`
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(ssml))
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/ssml+xml")
+	httpRequest.Header.Set("Ocp-Apim-Subscription-Key", request.APIKey)
+	httpRequest.Header.Set("X-Microsoft-OutputFormat", outputFormat)
+	httpRequest.Header.Set("User-Agent", "OpenBoard")
+	response, err := e.client.Do(httpRequest)
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 2048))
+		return generatedMedia{}, fmt.Errorf("Azure speech provider returned HTTP %d", response.StatusCode)
+	}
+	data, err := readBounded(response.Body, maxGeneratedAudioBytes)
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	if declared := normalizeMediaMIME(response.Header.Get("Content-Type")); declared != "" && declared != "application/octet-stream" {
+		mimeType = declared
+	}
+	return generatedMedia{Data: data, MIMEType: mimeType}, nil
+}
+
+func azureSpeechEndpoint(baseURL string) (string, error) {
+	parsed, err := validateGenerationURL(baseURL)
+	if err != nil {
+		return "", err
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if !strings.HasSuffix(basePath, "/cognitiveservices/v1") {
+		basePath += "/cognitiveservices/v1"
+	}
+	parsed.Path = path.Clean(basePath)
+	return parsed.String(), nil
+}
+
+func azureSpeechOutputFormat(format string) (string, string, error) {
+	switch format {
+	case "", "mp3":
+		return "audio-24khz-48kbitrate-mono-mp3", "audio/mpeg", nil
+	case "wav":
+		return "riff-24khz-16bit-mono-pcm", "audio/wav", nil
+	case "pcm":
+		return "raw-24khz-16bit-mono-pcm", "audio/pcm", nil
+	case "opus":
+		return "ogg-24khz-16bit-mono-opus", "audio/ogg", nil
+	default:
+		return "", "", errors.New("Azure speech format is unsupported; use mp3, wav, pcm, or opus")
+	}
+}
+
+const (
+	edgeTrustedClientToken = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+	edgeGECVersion         = "1-143.0.3650.75"
+)
+
+func edgeSecMSGECToken(now time.Time) string {
+	seconds := now.UTC().Unix() + 11644473600
+	seconds -= seconds % 300
+	ticks := seconds * 10_000_000
+	sum := sha256.Sum256([]byte(strconv.FormatInt(ticks, 10) + edgeTrustedClientToken))
+	return strings.ToUpper(hex.EncodeToString(sum[:]))
+}
+
+func edgeConnectionID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value), nil
+}
+
+func edgeTimestamp(now time.Time) string {
+	return now.UTC().Format("Mon Jan 02 2006 15:04:05 GMT+0000 (Coordinated Universal Time)")
+}
+
+func (e *httpAudioExecutor) edgeEndpoint(request audioGenerationRequest, now time.Time) (string, error) {
+	if e.edgeWebSocketURL != "" {
+		return e.edgeWebSocketURL, nil
+	}
+	base, err := edgeSpeechEndpoint(request.BaseURL)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", errors.New("invalid Edge speech endpoint")
+	}
+	connectionID, err := edgeConnectionID()
+	if err != nil {
+		return "", err
+	}
+	query := parsed.Query()
+	query.Set("TrustedClientToken", edgeTrustedClientToken)
+	query.Set("ConnectionId", connectionID)
+	query.Set("Sec-MS-GEC", edgeSecMSGECToken(now))
+	query.Set("Sec-MS-GEC-Version", edgeGECVersion)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func edgeSpeechEndpoint(baseURL string) (string, error) {
+	parsed, err := validateGenerationURL(baseURL)
+	if err != nil {
+		return "", err
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if !strings.HasSuffix(basePath, "/edge/v1") {
+		basePath += "/edge/v1"
+	}
+	parsed.Path = path.Clean(basePath)
+	return parsed.String(), nil
+}
+
+func (e *httpAudioExecutor) generateEdgeSpeech(ctx context.Context, request audioGenerationRequest) (generatedMedia, error) {
+	if err := validateAudioSpeechRequest(request); err != nil {
+		return generatedMedia{}, err
+	}
+	if request.Format != "" && request.Format != "mp3" {
+		return generatedMedia{}, errors.New("Edge speech supports mp3 output only")
+	}
+	now := time.Now
+	if e.now != nil {
+		now = e.now
+	}
+	endpoint, err := e.edgeEndpoint(request, now())
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	muid, err := edgeConnectionID()
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	headers := http.Header{
+		"Origin":          []string{"chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"},
+		"Pragma":          []string{"no-cache"},
+		"Cache-Control":   []string{"no-cache"},
+		"User-Agent":      []string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"},
+		"Accept-Language": []string{"en-US,en;q=0.9"},
+		"Cookie":          []string{"muid=" + strings.ToUpper(muid) + ";"},
+	}
+	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{
+		HTTPClient: e.client, HTTPHeader: headers, CompressionMode: websocket.CompressionContextTakeover,
+	})
+	if err != nil {
+		if response != nil {
+			return generatedMedia{}, fmt.Errorf("Edge speech provider returned HTTP %d", response.StatusCode)
+		}
+		return generatedMedia{}, err
+	}
+	defer connection.CloseNow()
+	command := "X-Timestamp:" + edgeTimestamp(now()) + "\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n" +
+		`{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}` + "\r\n"
+	if err := connection.Write(ctx, websocket.MessageText, []byte(command)); err != nil {
+		return generatedMedia{}, err
+	}
+	rate := "+0%"
+	if request.Speed > 0 {
+		rate = fmt.Sprintf("%+.0f%%", (request.Speed-1)*100)
+	}
+	requestID, err := edgeConnectionID()
+	if err != nil {
+		return generatedMedia{}, err
+	}
+	ssml := `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='` +
+		html.EscapeString(strings.TrimSpace(request.Voice)) + `'><prosody pitch='+0Hz' rate='` + rate + `' volume='+0%'>` +
+		html.EscapeString(request.Prompt) + `</prosody></voice></speak>`
+	message := "X-RequestId:" + requestID + "\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:" + edgeTimestamp(now()) + "Z\r\nPath:ssml\r\n\r\n" + ssml
+	if err := connection.Write(ctx, websocket.MessageText, []byte(message)); err != nil {
+		return generatedMedia{}, err
+	}
+	data := make([]byte, 0, 64<<10)
+	for {
+		messageType, value, readErr := connection.Read(ctx)
+		if readErr != nil {
+			return generatedMedia{}, readErr
+		}
+		if messageType == websocket.MessageText {
+			if edgeTextPath(value) == "turn.end" {
+				if len(data) == 0 {
+					return generatedMedia{}, errors.New("Edge speech provider returned no audio")
+				}
+				return generatedMedia{Data: data, MIMEType: "audio/mpeg"}, nil
+			}
+			continue
+		}
+		chunk, done, parseErr := parseEdgeAudioFrame(value)
+		if parseErr != nil {
+			return generatedMedia{}, parseErr
+		}
+		if done {
+			continue
+		}
+		if len(data)+len(chunk) > maxGeneratedAudioBytes {
+			return generatedMedia{}, errors.New("Edge speech provider response exceeds size limit")
+		}
+		data = append(data, chunk...)
+	}
+}
+
+func edgeTextPath(value []byte) string {
+	separator := bytes.Index(value, []byte("\r\n\r\n"))
+	if separator < 0 {
+		return ""
+	}
+	for _, line := range strings.Split(string(value[:separator]), "\r\n") {
+		key, item, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(key), "Path") {
+			return strings.TrimSpace(item)
+		}
+	}
+	return ""
+}
+
+func parseEdgeAudioFrame(value []byte) ([]byte, bool, error) {
+	if len(value) < 2 {
+		return nil, false, errors.New("Edge speech returned an invalid audio frame")
+	}
+	headerLength := int(value[0])<<8 | int(value[1])
+	if headerLength < 3 || headerLength+2 > len(value) {
+		return nil, false, fmt.Errorf("Edge speech returned an invalid audio frame (header=%d bytes, frame=%d bytes)", headerLength, len(value))
+	}
+	headers := value[2:headerLength]
+	if edgeTextPath(append(append([]byte(nil), headers...), []byte("\r\n\r\n")...)) != "audio" {
+		return nil, false, errors.New("Edge speech returned an unexpected binary frame")
+	}
+	data := value[headerLength+2:]
+	if len(data) == 0 {
+		return nil, true, nil
+	}
+	return data, false, nil
 }
 
 func generationProviderEndpoint(baseURL, suffix string) (string, error) {

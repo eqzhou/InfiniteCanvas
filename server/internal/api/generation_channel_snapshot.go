@@ -50,6 +50,9 @@ func generationChannelSnapshotAAD(tenantID, jobID, kind, providerID, baseURL, pr
 }
 
 func (s *Server) sealGenerationChannelSecret(tenantID, jobID, kind string, channel adminChannelPublic, apiKey string) (secretEnvelope, error) {
+	if !adminChannelRequiresSecret(channel) {
+		return secretEnvelope{}, nil
+	}
 	if s.secrets == nil {
 		return secretEnvelope{}, errors.New("encrypted secret storage unavailable")
 	}
@@ -65,6 +68,9 @@ func (s *Server) sealGenerationChannelSecret(tenantID, jobID, kind string, chann
 }
 
 func (s *Server) openGenerationChannelSecret(tenantID, jobID, kind string, snapshot generationChannelSnapshot) (string, error) {
+	if snapshot.Protocol == "edge" {
+		return "", nil
+	}
 	nonce, nonceErr := base64.RawStdEncoding.DecodeString(snapshot.Secret.Nonce)
 	ciphertext, cipherErr := base64.RawStdEncoding.DecodeString(snapshot.Secret.Ciphertext)
 	if s.secrets == nil || nonceErr != nil || cipherErr != nil || len(nonce) != s.secrets.NonceSize() {

@@ -331,6 +331,44 @@ func TestServerAudioJobPersistsResultAndSanitizesFailure(t *testing.T) {
 	}
 }
 
+func TestResolveAudioProvidersSupportsAzureAndKeylessEdge(t *testing.T) {
+	for _, fixture := range []struct {
+		protocol string
+		baseURL  string
+		apiKey   string
+	}{
+		{protocol: "azure", baseURL: "https://eastus.tts.speech.microsoft.com", apiKey: azureHeaderFixture},
+		{protocol: "edge", baseURL: "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud"},
+	} {
+		t.Run(fixture.protocol, func(t *testing.T) {
+			backend := newMemoryStore()
+			server, handler := mediaExecutionServer(t, backend, newScriptedVideoExecutor(nil), newScriptedAudioExecutor())
+			t.Cleanup(server.Close)
+			config := []byte(`{"channels":[{"id":"media-main","providers":{"audio":{"baseUrl":"` + fixture.baseURL + `","model":"cloud-tts","protocol":"` + fixture.protocol + `"}}}],"systemPrompt":""}`)
+			if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", config); err != nil {
+				t.Fatal(err)
+			}
+			secrets := []byte(`{"apiKeys":{"media-main":{"audio":"` + fixture.apiKey + `"}},"webdavPass":""}`)
+			if got := putConfigSecrets(t, handler, secrets); got.Code != http.StatusNoContent {
+				t.Fatalf("store secrets: %d %s", got.Code, got.Body.String())
+			}
+			parameters, _ := json.Marshal(persistedMediaJobParameters{
+				Executor: serverExecutorMarker, Voice: "zh-CN-XiaoxiaoNeural", Format: "mp3",
+			})
+			resolved, err := server.resolveMediaGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+				ID: "job-" + fixture.protocol, Kind: "audio", Status: "queued", ProviderID: "media-main",
+				Model: "cloud-tts", Prompt: "你好", Parameters: parameters,
+			})
+			if err != nil {
+				t.Fatalf("resolve %s: %v", fixture.protocol, err)
+			}
+			if resolved.Audio.Protocol != fixture.protocol || resolved.Audio.APIKey != fixture.apiKey {
+				t.Fatalf("resolved request = %#v", resolved.Audio)
+			}
+		})
+	}
+}
+
 func TestServerMediaEndpointsRejectInvalidParameters(t *testing.T) {
 	backend := newMemoryStore()
 	server, handler := mediaExecutionServer(t, backend, newScriptedVideoExecutor(nil), newScriptedAudioExecutor())

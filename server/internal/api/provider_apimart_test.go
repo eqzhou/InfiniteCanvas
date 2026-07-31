@@ -701,7 +701,10 @@ func TestAPIMartProtocolParsingHelpers(t *testing.T) {
 		t.Fatalf("image URLs = %#v", imageURLs)
 	}
 	for input, want := range map[string]string{
-		"1024x1024": "1:1", "1536x1024": "3:2", "2048x2048": "1:1", "custom": "custom",
+		"1024x1024": "1:1", "1536x1024": "3:2", "1024x1536": "2:3",
+		"1024x768": "4:3", "768x1024": "3:4", "1536x864": "16:9", "864x1536": "9:16",
+		"1792x768": "21:9", "1280x1024": "5:4", "1024x1280": "4:5",
+		"2048x2048": "1:1", "custom": "custom",
 	} {
 		if got := apimartImageSize(input); got != want {
 			t.Fatalf("image size %q = %q, want %q", input, got, want)

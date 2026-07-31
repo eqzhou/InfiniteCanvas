@@ -18,7 +18,7 @@ const MAX_CONFIG_FILE_BYTES = 1024 * 1024;
 const MAX_CHANNELS = 32;
 const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const PROVIDER_KINDS: readonly AiProviderKind[] = ["text", "image", "video", "audio"];
-const PROTOCOLS = new Set<AiProtocol>(["openai", "ark", "gemini", "template", "apimart", "kie"]);
+const PROTOCOLS = new Set<AiProtocol>(["openai", "ark", "gemini", "template", "apimart", "kie", "azure", "edge"]);
 
 export type OpenBoardConfigFile = Readonly<{
   schema: typeof CONFIG_FILE_SCHEMA;
@@ -41,6 +41,7 @@ export function exportConfigFile(config: AppConfig): OpenBoardConfigFile {
       plugins: undefined,
       disabledPluginIds: undefined,
       pluginRegistryUrl: undefined,
+      audioRoles: undefined,
     },
   };
 }

@@ -11,6 +11,7 @@ import {
   PanelLeftOpen,
   Trash2,
   Upload,
+  UsersRound,
   X,
 } from "lucide-react";
 import { parseBoardProject } from "@/lib/board-document";
@@ -27,6 +28,7 @@ import {
   getDirectorCaptureOwnerScope,
 } from "@/services/director-capture-store";
 import { directorModelStore } from "@/services/director-model-store";
+import { ProjectAudioRolesDialog } from "@/components/canvas/ProjectAudioRolesDialog";
 
 const NODE_TYPE_LABELS: Record<BoardNode["type"], string> = {
   text: "文本",
@@ -65,6 +67,7 @@ export function HomePage() {
   const [checked, setChecked] = useState<string[]>([]);
   const [checkedNodes, setCheckedNodes] = useState<string[]>([]);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [audioRolesOpen, setAudioRolesOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(config.canvasPanelWidth ?? 256);
   const panelCollapsed = config.canvasPanelCollapsed === true;
   const panelTab = config.canvasPanelTab ?? "projects";
@@ -218,7 +221,7 @@ export function HomePage() {
         className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-elev-1)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
         style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
-        <div className="flex min-h-12 items-center gap-1 border-b border-[var(--ob-line)] px-2 py-2">
+        <div className="flex min-h-12 min-w-0 items-center gap-px overflow-hidden border-b border-[var(--ob-line)] px-1 py-2">
           {panelWidth >= 300 ? (
             <strong className="mr-auto truncate text-sm">工作区</strong>
           ) : (
@@ -250,6 +253,16 @@ export function HomePage() {
                 onClick={() => createProject(`画布 ${projects.length + 1}`)}
               >
                 <FolderPlus size={16} />
+              </button>
+              <button
+                type="button"
+                className="ob-icon-btn h-8 w-8 shrink-0"
+                aria-label="管理当前画布配音角色"
+                title="当前画布配音角色"
+                disabled={!activeProject}
+                onClick={() => setAudioRolesOpen(true)}
+              >
+                <UsersRound size={16} />
               </button>
               <button
                 type="button"
@@ -561,6 +574,9 @@ export function HomePage() {
       <div className="min-w-0 flex-1">
         <BoardCanvas />
       </div>
+      {audioRolesOpen ? (
+        <ProjectAudioRolesDialog open onClose={() => setAudioRolesOpen(false)} />
+      ) : null}
     </div>
   );
 }

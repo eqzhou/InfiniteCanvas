@@ -81,6 +81,7 @@ import {
   type PanoramaGeneratedMedia,
   type PanoramaGenerationDescriptor,
 } from "@/lib/panorama-generation";
+import { migrateLegacyAudioRoles } from "@/lib/project-audio-roles";
 
 type Snapshot = {
   nodes: BoardNode[];
@@ -380,11 +381,27 @@ export const useBoardStore = create<BoardState>((set, get) => ({
                 : [],
             })
           : defaults;
+        const legacyAudioRoleMigration = migrateLegacyAudioRoles(
+          nextProjects,
+          hydratedConfig.audioRoles,
+        );
+        nextProjects = legacyAudioRoleMigration.projects;
+        const nextConfig = hydratedConfig.audioRoles === undefined
+          ? hydratedConfig
+          : { ...hydratedConfig, audioRoles: undefined };
         const [gone] = await Promise.all([
           saveProjects(nextProjects),
           saveAssets(assets),
           savePrompts(personalPrompts),
         ]);
+        // Retire the legacy copy only after the project document has been
+        // durably saved; otherwise a failed project write could lose the cast.
+        if (hydratedConfig.audioRoles !== undefined) {
+          await saveWorkspaceReplacementConfig(() => saveConfig(nextConfig)).catch((error) => {
+            console.error("Failed to retire legacy global audio roles", error);
+            return false;
+          });
+        }
         // A tombstone is authoritative. Drop those ids before the first paint so a
         // tab that still held the pre-delete document does not resurrect them in UI.
         if (gone.length) {
@@ -398,7 +415,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         set({
           ready: true,
           projects: nextProjects,
-          config: hydratedConfig,
+          config: nextConfig,
           assets,
           prompts,
           activeProjectId,
@@ -1272,7 +1289,18 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       promptWrites.flush(),
     ]);
     const current = get();
-    const imported = structuredClone(snapshot);
+    const rawImported = structuredClone(snapshot);
+    const importedAudioRoles = migrateLegacyAudioRoles(
+      rawImported.projects,
+      rawImported.config.audioRoles,
+    );
+    const imported: WorkspaceSnapshot = {
+      ...rawImported,
+      projects: importedAudioRoles.projects,
+      config: rawImported.config.audioRoles === undefined
+        ? rawImported.config
+        : { ...rawImported.config, audioRoles: undefined },
+    };
     const previous: WorkspaceSnapshot = {
       projects: structuredClone(current.projects),
       assets: structuredClone(current.assets),

@@ -103,7 +103,8 @@ canvas.
 
 ### Public Unreleased prompt-source delta
 - Add/edit/disable/remove remote prompt sources with scheduled refresh
-- Built-in catalogs load Image Prompts unified JSON (including Banana Prompt Quicker)
+- Built-in catalogs load the Image Prompts unified JSON set (including Banana Prompt Quicker) plus the Tiger Xianyu GPT Image 2 structured Markdown catalog
+- Image prompt sources accept nested Markdown categories, fenced or numbered prompt blocks, stable IDs, and administrator JSON/Markdown synchronization
 - Source cards show item count, sync status, and last success time
 - Independent source cache keeps last success when refresh fails
 - Prompt center 「我的提示词」: local manage, save from public library, canvas use

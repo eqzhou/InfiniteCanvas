@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -41,17 +43,29 @@ var providerModelHTTPClient = newProviderHTTPClient(10 * time.Minute)
 var providerModelRequestSlots = make(chan struct{}, 8)
 
 func newProviderHTTPClient(timeout time.Duration) *http.Client {
-	return newProviderHTTPClientWithResponseHeaderTimeout(timeout, 0)
+	return newProviderHTTPClientWithResponseHeaderTimeoutAndHTTP2(timeout, 0, true)
 }
 
 func newProviderHTTPClientWithResponseHeaderTimeout(
 	timeout time.Duration,
 	responseHeaderTimeout time.Duration,
 ) *http.Client {
+	return newProviderHTTPClientWithResponseHeaderTimeoutAndHTTP2(timeout, responseHeaderTimeout, true)
+}
+
+func newProviderImageHTTPClient(timeout time.Duration) *http.Client {
+	return newProviderHTTPClientWithResponseHeaderTimeoutAndHTTP2(timeout, 0, false)
+}
+
+func newProviderHTTPClientWithResponseHeaderTimeoutAndHTTP2(
+	timeout time.Duration,
+	responseHeaderTimeout time.Duration,
+	forceHTTP2 bool,
+) *http.Client {
 	transport := &http.Transport{
-		Proxy:                 nil,
+		Proxy:                 providerProxy,
 		DialContext:           safeGenerationDialContext,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     forceHTTP2,
 		MaxIdleConns:          16,
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       30 * time.Second,
@@ -65,6 +79,23 @@ func newProviderHTTPClientWithResponseHeaderTimeout(
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+}
+
+func providerProxy(_ *http.Request) (*url.URL, error) {
+	rawURL := strings.TrimSpace(os.Getenv("OPENBOARD_PROVIDER_PROXY_URL"))
+	if rawURL == "" {
+		return nil, nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("invalid provider proxy URL")
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+		return parsed, nil
+	default:
+		return nil, errors.New("invalid provider proxy URL")
 	}
 }
 

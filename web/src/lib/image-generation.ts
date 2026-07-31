@@ -1,4 +1,9 @@
 import type { CameraPromptConfig, NodeMetadata } from "@/types/board";
+import {
+  imageOutputLimitFor,
+  normalizeImageQualityForProvider,
+  normalizeImageSizeForProvider,
+} from "@/lib/image-generation-options";
 
 export type ImageGenerationRequest = {
   prompt: string;
@@ -32,7 +37,7 @@ export function createImageGenerationMetadata(
   return {
     prompt: request.prompt,
     model: request.model,
-    size: request.size,
+    size: normalizeImageSizeForProvider(request.size),
     quality: request.quality,
     count: request.count,
     transparentBackground: request.transparentBackground,
@@ -40,6 +45,31 @@ export function createImageGenerationMetadata(
     referenceStorageKeys,
     generationChannelId: request.generationChannelId,
     cameraPrompt: request.cameraPrompt ? { ...request.cameraPrompt } : undefined,
+  };
+}
+
+/**
+ * Normalize a saved/request snapshot immediately before it crosses a provider
+ * boundary. Older canvas data can contain a generic quality, ratio, or output
+ * count that is not accepted by the selected model. Keeping this at the
+ * shared metadata boundary prevents individual UI entry points from drifting.
+ */
+export function normalizeImageGenerationForProvider(
+  generation: ImageGenerationMetadata,
+  protocol: string | undefined,
+): ImageGenerationMetadata {
+  const requestedCount = Number(generation.count);
+  const count = Math.min(
+    Math.max(1, Number.isFinite(requestedCount) ? Math.floor(requestedCount) : 1),
+    imageOutputLimitFor(protocol, generation.model),
+  );
+  return {
+    ...generation,
+    size: normalizeImageSizeForProvider(generation.size),
+    quality: normalizeImageQualityForProvider(generation.quality, protocol, generation.model),
+    count,
+    referenceStorageKeys: [...generation.referenceStorageKeys],
+    cameraPrompt: generation.cameraPrompt ? { ...generation.cameraPrompt } : undefined,
   };
 }
 

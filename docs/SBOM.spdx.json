@@ -5,7 +5,7 @@
   "name": "OpenBoard web dependency inventory",
   "documentNamespace": "https://openboard.local/spdx/openboard-web-0.1.0",
   "creationInfo": {
-    "created": "2026-07-30T04:11:22.770Z",
+    "created": "2026-07-31T18:23:43.749Z",
     "creators": [
       "Tool: OpenBoard audit-licenses.mjs"
     ]

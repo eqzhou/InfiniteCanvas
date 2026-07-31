@@ -29,7 +29,17 @@ export type ProviderCapability = Readonly<{
   video?: VideoProviderCapability;
 }>;
 
-const APIMART_CAPABILITIES: readonly ProviderCapability[] = [
+const PROVIDER_CAPABILITIES: readonly ProviderCapability[] = [
+  ...(["gpt-image-1", "gpt-image-1.5", "gpt-image-2"] as const).map((model) => ({
+    protocol: "openai" as const,
+    kind: "image" as const,
+    model,
+    family: model,
+    maxImageReferences: 16,
+    maxOutputs: 4,
+    sizes: ["1:1", "2:3", "3:2"] as const,
+    qualities: ["auto", "low", "medium", "high"] as const,
+  })),
   {
     protocol: "apimart",
     kind: "video",
@@ -178,7 +188,7 @@ export function resolveProviderCapability(
 ): ProviderCapability | undefined {
   const normalizedProtocol = protocol.trim().toLowerCase();
   const normalizedModel = model.trim().toLowerCase();
-  const match = APIMART_CAPABILITIES.find((entry) =>
+  const match = PROVIDER_CAPABILITIES.find((entry) =>
     entry.protocol === normalizedProtocol && entry.kind === kind && entry.model === normalizedModel);
   return match ? freezeCapability(match) : undefined;
 }

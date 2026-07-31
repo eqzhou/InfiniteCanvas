@@ -532,13 +532,117 @@ function extractMarkdownImages(block: string, baseUrl: string): string[] {
   return urls.slice(0, PROMPT_SOURCE_LIMITS.maxResultUrls);
 }
 
-function extractFencedBodies(block: string): string[] {
+function extractFencedBodies(
+  block: string,
+  allowedLanguages?: readonly string[],
+): string[] {
   const bodies: string[] = [];
-  for (const match of block.matchAll(/```[^\n]*\r?\n([\s\S]*?)\r?\n```/g)) {
-    const body = match[1].trim();
+  for (const match of block.matchAll(/(^|\r?\n)(`{3,}|~{3,})([^\n]*)\r?\n([\s\S]*?)\r?\n\2/g)) {
+    const language = match[3]!.trim().toLowerCase();
+    if (allowedLanguages && !allowedLanguages.includes(language)) continue;
+    const body = match[4]!.trim();
     if (body) bodies.push(body);
   }
   return bodies;
+}
+
+type MarkdownHeadingMatch = {
+  heading: string;
+  level: number;
+  index: number;
+};
+
+/** Find headings without treating Markdown code samples as document structure. */
+function extractMarkdownHeadings(text: string): MarkdownHeadingMatch[] {
+  const headings: MarkdownHeadingMatch[] = [];
+  let fenceCharacter = "";
+  let fenceLength = 0;
+  for (const lineMatch of text.matchAll(/[^\n]*(?:\n|$)/g)) {
+    const rawLine = lineMatch[0];
+    if (!rawLine || lineMatch.index === text.length) continue;
+    const line = rawLine.replace(/\r?\n$/, "");
+    const fence = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      const marker = fence[1]![0]!;
+      if (!fenceCharacter) {
+        fenceCharacter = marker;
+        fenceLength = fence[1]!.length;
+      } else if (marker === fenceCharacter && fence[1]!.length >= fenceLength) {
+        fenceCharacter = "";
+        fenceLength = 0;
+      }
+      continue;
+    }
+    if (fenceCharacter) continue;
+    const heading = line.match(/^(#{2,5})\s+(.+?)\s*$/);
+    if (!heading) continue;
+    headings.push({
+      heading: heading[2]!,
+      level: heading[1]!.length,
+      index: lineMatch.index ?? 0,
+    });
+  }
+  return headings;
+}
+
+type NumberedMarkdownPrompt = {
+  ordinal: string;
+  firstLine: string;
+  body: string;
+};
+
+/**
+ * A few community catalogs put reusable prompts in numbered paragraphs under
+ * an H5 section instead of fenced blocks. Parse only those explicit list
+ * entries; ordinary metadata and image-link lists are intentionally ignored.
+ */
+function extractNumberedMarkdownPrompts(block: string): NumberedMarkdownPrompt[] {
+  const lines = block.split(/\r?\n/);
+  const entries: Array<{ ordinal: string; lines: string[] }> = [];
+  let current: { ordinal: string; lines: string[] } | undefined;
+  for (const line of lines) {
+    const numbered = line.match(/^\s*(\d+)[.)、]\s+(.+?)\s*$/);
+    if (numbered) {
+      if (current) entries.push(current);
+      current = { ordinal: numbered[1]!, lines: [numbered[2]!] };
+      continue;
+    }
+    if (current && line.trim()) current.lines.push(line.trim());
+  }
+  if (current) entries.push(current);
+  return entries
+    .map(({ ordinal, lines: entryLines }) => {
+      const firstLine = entryLines[0]?.replace(/^(?:提示词(?:文本)?|prompt)\s*[:：]\s*/i, "").trim() ?? "";
+      const body = entryLines
+        .join("\n")
+        .replace(/^(?:提示词(?:文本)?|prompt)\s*[:：]\s*/i, "")
+        .trim();
+      return { ordinal, firstLine, body };
+    })
+    .filter((entry) => {
+      const firstLine = entry.firstLine.trim();
+      return !/^(?:说明|备注|对应案例图|图片链接)(?:[:：]|$)/i.test(firstLine) &&
+        !/^https?:\/\/\S+$/i.test(entry.body);
+    })
+    .filter((entry) => entry.body.length > 0);
+}
+
+function expandNumberedMarkdownPrompt(entry: NumberedMarkdownPrompt): NumberedMarkdownPrompt[] {
+  const lines = entry.body.split(/\r?\n/);
+  const bullets = lines.slice(1)
+    .map((line) => line.match(/^\s*[-*]\s+(.+?)\s*$/)?.[1]?.trim())
+    .filter((line): line is string => Boolean(line));
+  // The supplemental “推测版” sections use a numbered category followed by
+  // independent reusable bullet prompts. Split those bullets into cards, but
+  // keep explicitly labelled Prompt sections as one multi-line prompt.
+  if (/#\d+/.test(entry.firstLine) && bullets.length) {
+    return bullets.map((body, index) => ({
+      ordinal: entry.ordinal + "." + (index + 1),
+      firstLine: body,
+      body,
+    }));
+  }
+  return [entry];
 }
 
 function extractLabeledPromptBodies(block: string): string[] {
@@ -550,7 +654,7 @@ function extractLabeledPromptBodies(block: string): string[] {
     // Community catalogs often put the prompt body in the next fenced block.
     /\*\*提示词(?:文本)?[:：]\*\*\s*(?:\r?\n)+\s*```[^\n]*\r?\n([\s\S]*?)\r?\n```/g,
     /####[^\n]*提示词[^\n]*\r?\n\s*```[^\n]*\r?\n([\s\S]*?)\r?\n```/g,
-  ];
+ ];
   for (const pattern of patterns) {
     for (const match of block.matchAll(pattern)) {
       const body = match[1].trim();
@@ -562,6 +666,8 @@ function extractLabeledPromptBodies(block: string): string[] {
 
 function extractSectionTags(heading: string): string[] {
   const cleaned = heading
+    // Do not index catalog enumeration markers ("一、" / "2.") as tags.
+    .replace(/^(?:[一二三四五六七八九十百千万]+|\d+)(?:\s*[、.)：:]\s*|\s+)/u, "")
     .replace(/[^\p{L}\p{N}/&、与 \-]+/gu, " ")
     .trim();
   if (!cleaned) return [];
@@ -585,50 +691,124 @@ function normalizeStructuredMarkdownSections(
   text: string,
   source: PromptSourceConfig,
 ): PromptItem[] | null {
-  const headingMatches = [...text.matchAll(/^#{2,3}\s+(.+)$/gm)];
+  // Some community catalogs (including Xianyu GPT-Image-2) use a fourth-level
+  // heading for each prompt: H2 collection -> H3 category -> H4 entry. Keep
+  // the existing H2/H3 format while recognizing that common nested layout.
+  const headingMatches = extractMarkdownHeadings(text);
   if (headingMatches.length < 2) return null;
 
   const items: PromptItem[] = [];
+  let parentSectionTags: string[] = [];
   let sectionTags: string[] = [];
   let structuredHits = 0;
+  const identityCounts = new Map<string, number>();
 
   for (let index = 0; index < headingMatches.length; index += 1) {
     const match = headingMatches[index]!;
-    const heading = stripMarkdownInline(match[1] ?? "");
-    const startOffset = match.index ?? 0;
-    const endOffset = index + 1 < headingMatches.length
-      ? (headingMatches[index + 1]!.index ?? text.length)
-      : text.length;
-    const block = text.slice(startOffset, endOffset);
-    const level = match[0].startsWith("###") ? 3 : 2;
+    const heading = stripMarkdownInline(match.heading);
+    const startOffset = match.index;
+    const level = match.level;
 
-    if (level === 2) {
-      sectionTags = extractSectionTags(heading);
+    if (level <= 2) {
+      parentSectionTags = extractSectionTags(heading);
+      sectionTags = parentSectionTags;
       continue;
     }
 
-    // Structured catalogs require an explicit prompt label. Bare fenced code under
-    // ### headings is common in docs and must not become a prompt entry.
-    const labeledBodies = extractLabeledPromptBodies(block);
-    if (!labeledBodies.length) continue;
-    const fencedBodies = extractFencedBodies(block);
+    const nextMatch = headingMatches[index + 1];
+    const nextLevel = nextMatch?.level ?? 0;
+    const endOffset = nextMatch?.index ?? text.length;
+    let block = text.slice(startOffset, endOffset);
+    let entryHeading = heading;
+
+    if (level >= 5 && /提示词|prompt|指令|关键词|可直接复用|摘录/i.test(heading)) {
+      const numberedPrompts = extractNumberedMarkdownPrompts(block).flatMap(expandNumberedMarkdownPrompt);
+      if (numberedPrompts.length) {
+        const sectionTitle = heading.replace(/\s+/g, " ").trim();
+        const images = extractMarkdownImages(block, source.url);
+        for (const numbered of numberedPrompts) {
+          const title = stripMarkdownInline(numbered.firstLine).slice(0, PROMPT_SOURCE_LIMITS.maxTitleChars) ||
+            sectionTitle + " · " + numbered.ordinal;
+          const identity = [sectionTitle, numbered.ordinal, numbered.body].join("\u0000");
+          const identityOccurrence = (identityCounts.get(identity) ?? 0) + 1;
+          identityCounts.set(identity, identityOccurrence);
+          structuredHits += 1;
+          pushBoundedPrompt(items, {
+            id: stableRemotePromptId(source.id, identity + "\u0000" + identityOccurrence),
+            title,
+            body: numbered.body,
+            tags: [...sectionTags],
+            source: source.name,
+            sourceId: source.id,
+            ...(images[0] ? { coverUrl: images[0] } : {}),
+          });
+        }
+      }
+      continue;
+    }
+
+    // Structured catalogs require an explicit prompt label for the historical
+    // H3 layout. H4 entries are unambiguously prompt cards in nested catalogs,
+    // so a fenced body is sufficient there even when no "提示词:" label exists.
+    let labeledBodies = extractLabeledPromptBodies(block);
+    let fencedBodies = level >= 4
+      ? extractFencedBodies(block, ["", "text", "prompt", "plain", "markdown", "md"])
+      : extractFencedBodies(block);
+    if (!labeledBodies.length && level >= 3 && /提示词|prompt/i.test(heading)) {
+      labeledBodies = fencedBodies;
+    }
+    if (level === 3) {
+      // Every H3 starts a new entry/category scope. Never inherit a preceding
+      // sibling category's tags when a labeled H3 entry follows nested items.
+      sectionTags = parentSectionTags;
+    }
+    if (level === 3 && !labeledBodies.length) {
+      // Each H3 starts a new category (or a legacy H3 entry), so a previous
+      // sibling category must not leak into subsequent H4 prompt tags.
+      // The original catalog also has a legacy H3 title followed by a child
+      // `#### 提示词` heading. Treat the pair as one entry and keep the H3 title.
+      const nextHeading = stripMarkdownInline(nextMatch?.heading ?? "");
+      if (nextLevel === 4 && /(?:提示词|prompt)/i.test(nextHeading)) {
+        const childEndOffset = index + 2 < headingMatches.length
+          ? headingMatches[index + 2]!.index
+          : text.length;
+        block = text.slice(startOffset, childEndOffset);
+        entryHeading = heading;
+        labeledBodies = extractLabeledPromptBodies(block);
+        fencedBodies = extractFencedBodies(block);
+        index += 1;
+      } else {
+        // A label-less H3 is a category heading for nested H4 entries. Preserve
+        // both the parent collection and this category as searchable tags, but
+        // do not turn unrelated documentation headings into sticky tags.
+        if (nextLevel >= 4) {
+          sectionTags = [...parentSectionTags, ...extractSectionTags(heading)]
+            .slice(0, PROMPT_SOURCE_LIMITS.maxTags);
+        }
+        continue;
+      }
+    }
+    if (!labeledBodies.length && !(level >= 4 && fencedBodies.length)) continue;
 
     // Prefer the adjacent fenced body when the labeled capture is only a short
     // leftover and a substantial fence exists in the same section.
-    let body = labeledBodies[0]!;
+    let body = labeledBodies[0] ?? fencedBodies[0]!;
     if (fencedBodies.length) {
-      const labeled = labeledBodies[0]!;
-      if (labeled.length < 24 && fencedBodies[0]!.length > labeled.length) {
+      const labeled = labeledBodies[0];
+      if (labeled && labeled.length < 24 && fencedBodies[0]!.length > labeled.length) {
         body = fencedBodies[0]!;
       }
     }
 
     structuredHits += 1;
     const images = extractMarkdownImages(block, source.url);
-    const titleMatch = heading.match(/^(?:No\.\s*\d+\s*[:：]\s*)?(.+)$/i);
+    const titleMatch = entryHeading.match(/^(?:No\.\s*\d+\s*[:：]\s*)?(.+)$/i);
     const title = stripMarkdownInline(titleMatch?.[1] ?? heading) || `未命名 ${index + 1}`;
+    const identity = `${entryHeading.trim()}\u0000${body}`;
+    const identityOccurrence = (identityCounts.get(identity) ?? 0) + 1;
+    identityCounts.set(identity, identityOccurrence);
     pushBoundedPrompt(items, {
-      id: `${source.id}-${structuredHits}`,
+      id: stableRemotePromptId(source.id, `${identity}\u0000${identityOccurrence}`),
       title,
       body,
       tags: [...sectionTags],

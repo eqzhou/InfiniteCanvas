@@ -119,6 +119,17 @@ select {
   font: inherit;
 }
 
+select {
+  color: var(--ob-ink);
+}
+
+/* Native popup menus do not consistently inherit the select background. */
+select option,
+select optgroup {
+  background-color: var(--ob-panel);
+  color: var(--ob-ink);
+}
+
 button {
   cursor: pointer;
 }

@@ -33,6 +33,13 @@ type FilterablePrompt = {
   tags: string[];
 };
 
+type PromptSourceDraft = {
+  id: string;
+  name: string;
+  url: string;
+  format: "json" | "markdown";
+};
+
 /**
  * Narrows the catalog for the admin list. Filtering stays client-side because
  * the catalog is already fetched whole for editing; each criterion is
@@ -81,7 +88,7 @@ export function AdminPromptCatalogPanel() {
   const [categoryEditing, setCategoryEditing] = useState(false);
   const [prompt, setPrompt] = useState({ id: "", title: "", body: "", categoryId: "", tags: "" });
   const [promptEditing, setPromptEditing] = useState(false);
-  const [source, setSource] = useState({ id: "", name: "", url: "" });
+  const [source, setSource] = useState<PromptSourceDraft>({ id: "", name: "", url: "", format: "json" });
   const [selected, setSelected] = useState<string[]>([]);
   const [filter, setFilter] = useState({ query: "", categoryId: "", tag: "" });
   const load = async () => { try { setCatalog(await getAdminPromptCatalog()); setError(""); } catch (cause) { setError(message(cause)); } };
@@ -132,10 +139,10 @@ export function AdminPromptCatalogPanel() {
     </section>
 
     <section className="space-y-2">
-      <h2 className="font-semibold">JSON 来源与调度</h2>
-      <p className="text-xs text-[var(--ob-muted)]">服务端调度采用持久化 nextRunAt；当前由管理员点击“运行到期任务”触发，适合外部定时器调用同一受保护接口。</p>
-      <div className="grid gap-2 md:grid-cols-3"><input className="ob-field" placeholder="来源 ID" value={source.id} onChange={(event) => setSource({ ...source, id: event.target.value })} /><input className="ob-field" placeholder="来源名称" value={source.name} onChange={(event) => setSource({ ...source, name: event.target.value })} /><input className="ob-field" placeholder="https://…/prompts.json" value={source.url} onChange={(event) => setSource({ ...source, url: event.target.value })} /></div>
-      <button className="ob-btn" type="button" onClick={() => void perform(() => createAdminPromptSource({ ...source, format: "json", enabled: true, scheduleEnabled: false, intervalMinutes: 0 }))}>新增来源</button>
+      <h2 className="font-semibold">提示词来源与调度</h2>
+      <p className="text-xs text-[var(--ob-muted)]">服务端调度采用持久化 nextRunAt；支持统一 JSON 与结构化 Markdown 提示词源。当前由管理员点击“运行到期任务”触发，适合外部定时器调用同一受保护接口。</p>
+      <div className="grid gap-2 md:grid-cols-4"><input className="ob-field" placeholder="来源 ID" value={source.id} onChange={(event) => setSource({ ...source, id: event.target.value })} /><input className="ob-field" placeholder="来源名称" value={source.name} onChange={(event) => setSource({ ...source, name: event.target.value })} /><input className="ob-field" placeholder="https://…/prompts.json 或 README.md" value={source.url} onChange={(event) => setSource({ ...source, url: event.target.value })} /><select className="ob-field" aria-label="提示词来源格式" value={source.format} onChange={(event) => setSource({ ...source, format: event.target.value === "markdown" ? "markdown" : "json" })}><option value="json">JSON</option><option value="markdown">结构化 Markdown</option></select></div>
+      <button className="ob-btn" type="button" onClick={() => void perform(async () => { await createAdminPromptSource({ ...source, enabled: true, scheduleEnabled: false, intervalMinutes: 0 }); setSource({ id: "", name: "", url: "", format: "json" }); })}>新增来源</button>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-[var(--ob-muted)]">内置来源：</span>
         {COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => (
@@ -147,7 +154,7 @@ export function AdminPromptCatalogPanel() {
             disabled={catalog.sources.some((item) => item.id === preset.id || item.url === preset.source.url)}
             onClick={() => void perform(() => createAdminPromptSource({
               id: preset.id, name: preset.name, url: preset.source.url,
-              format: "json", enabled: true, scheduleEnabled: false, intervalMinutes: 0,
+              format: preset.source.format === "markdown" ? "markdown" : "json", enabled: true, scheduleEnabled: false, intervalMinutes: 0,
             }))}
           >
             添加 {preset.name}
@@ -163,7 +170,7 @@ export function AdminPromptCatalogPanel() {
 
 function PromptSourceRow({ source, perform }: { source: AdminPromptSource; perform: (action: () => Promise<unknown>) => Promise<void> }) {
   const [interval, setIntervalValue] = useState(source.intervalMinutes || 30);
-  return <div className="grid gap-2 rounded-xl border border-[var(--ob-line)] p-3 md:grid-cols-[1fr_auto_auto_auto] md:items-center"><div><b>{source.name}</b><div className="text-xs text-[var(--ob-muted)]">{source.url} · {source.scheduleStatus || "disabled"}{source.nextRunAt ? ` · ${new Date(source.nextRunAt).toLocaleString()}` : ""}</div></div><label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={Boolean(source.scheduleEnabled)} onChange={(event) => void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: event.target.checked, intervalMinutes: event.target.checked ? interval : 0 }))} />定时</label><input className="ob-field w-24" aria-label={`${source.name} 同步间隔`} type="number" min={5} max={10080} value={interval} onChange={(event) => setIntervalValue(Number(event.target.value))} onBlur={() => { if (source.scheduleEnabled) void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: true, intervalMinutes: interval })); }} /><div className="flex gap-1"><button className="ob-btn" type="button" onClick={() => void perform(() => syncAdminPromptSource(source.id))}>同步</button><button className="ob-btn" type="button" onClick={() => void perform(() => deleteAdminPromptSource(source.id))}>删除</button></div></div>;
+  return <div className="grid gap-2 rounded-xl border border-[var(--ob-line)] p-3 md:grid-cols-[1fr_auto_auto_auto] md:items-center"><div><b>{source.name}</b><div className="text-xs text-[var(--ob-muted)]">{source.url} · {source.format.toUpperCase()} · {source.scheduleStatus || "disabled"}{source.nextRunAt ? ` · ${new Date(source.nextRunAt).toLocaleString()}` : ""}</div></div><label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={Boolean(source.scheduleEnabled)} onChange={(event) => void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: event.target.checked, intervalMinutes: event.target.checked ? interval : 0 }))} />定时</label><input className="ob-field w-24" aria-label={`${source.name} 同步间隔`} type="number" min={5} max={10080} value={interval} onChange={(event) => setIntervalValue(Number(event.target.value))} onBlur={() => { if (source.scheduleEnabled) void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: true, intervalMinutes: interval })); }} /><div className="flex gap-1"><button className="ob-btn" type="button" onClick={() => void perform(() => syncAdminPromptSource(source.id))}>同步</button><button className="ob-btn" type="button" onClick={() => void perform(() => deleteAdminPromptSource(source.id))}>删除</button></div></div>;
 }
 
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

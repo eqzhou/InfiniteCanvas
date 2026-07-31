@@ -49,7 +49,7 @@ export type AdminStoragePoolProviderStatus = {
   error?: string;
 };
 
-export type AdminChannelProtocol = "openai" | "gemini" | "apimart" | "kie";
+export type AdminChannelProtocol = "openai" | "gemini" | "apimart" | "kie" | "azure" | "edge";
 export type AdminChannel = {
   id: string;
   name: string;
@@ -74,7 +74,7 @@ export type AdminChannel = {
 };
 
 const channelIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
-const channelProtocols = new Set<AdminChannelProtocol>(["openai", "gemini", "apimart", "kie"]);
+const channelProtocols = new Set<AdminChannelProtocol>(["openai", "gemini", "apimart", "kie", "azure", "edge"]);
 
 /** Trim, drop blanks, and keep first-seen order (case-insensitive dedupe). */
 export function cleanAdminChannelModels(values: readonly string[] | undefined): string[] {
@@ -128,7 +128,7 @@ function normalizeAdminChannel(channel: AdminChannel): Omit<AdminChannel, "secre
 export type AdminPromptCategory = { id: string; name: string; order: number };
 export type AdminPromptEntry = { id: string; categoryId?: string; title: string; body: string; tags: string[]; sourceId?: string; updatedAt?: string };
 export type AdminPromptSource = {
-  id: string; name: string; url: string; format: "json"; enabled: boolean;
+  id: string; name: string; url: string; format: "json" | "markdown"; enabled: boolean;
   lastSyncAt?: string; lastSuccessAt?: string; lastError?: string; itemCount?: number;
   scheduleEnabled?: boolean; intervalMinutes?: number; nextRunAt?: string; scheduleStatus?: string;
 };

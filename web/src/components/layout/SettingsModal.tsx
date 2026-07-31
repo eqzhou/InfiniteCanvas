@@ -20,7 +20,6 @@ import { validateProviderTemplate } from "@/lib/provider-template";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "@/lib/app-config";
 import { reconcileProviderModel, resolveSelectableModels } from "@/lib/model-catalog";
 import {
-  AUDIO_FORMATS,
   DEFAULT_GENERATION_DEFAULTS,
   VIDEO_RATIOS,
   VIDEO_RESOLUTIONS,
@@ -32,12 +31,23 @@ import { listAllGenerationJobs } from "@/services/generation-jobs";
 import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
 import { ImageToolbarPreferencesEditor } from "@/components/layout/ImageToolbarPreferencesEditor";
 import {
-  IMAGE_QUALITY_OPTIONS,
-  IMAGE_SIZE_OPTIONS,
+  imageQualityOptionsFor,
+  normalizeImageQualityForProvider,
+  normalizeImageSizeForProvider,
+  imageSizeOptionsFor,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
 import { exportConfigFile, importConfigFile } from "@/lib/config-file";
 import { resolveActiveAIChannel, useSharedChannels } from "@/services/shared-channels";
+import {
+  AUDIO_PROTOCOL_OPTIONS,
+  audioFormatOptions,
+  audioVoiceLabel,
+  audioProtocolRequiresKey,
+  audioProviderPreset,
+  audioVoiceOptions,
+  defaultAudioVoice,
+} from "@/lib/audio-provider";
 import {
   AudioLines,
   CloudDownload,
@@ -166,6 +176,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     sharedChannels,
     config.activeSharedChannelId,
   ) ?? config.channels[0];
+  const imageProvider = channel ? getProvider(channel, "image") : undefined;
+  const imageQualityOptions = imageQualityOptionsFor(imageProvider?.protocol, imageProvider?.model);
+  const imageQuality = normalizeImageQualityForProvider(
+    config.imageQuality,
+    imageProvider?.protocol,
+    imageProvider?.model,
+  );
+  const imageSizeOptions = imageSizeOptionsFor(imageProvider?.protocol, imageProvider?.model);
+  const imageSize = normalizeImageSizeForProvider(config.imageSize);
   const sharedChannelSelected = Boolean(config.activeSharedChannelId);
 
   const updateChannel = (patch: Partial<typeof channel>) => {
@@ -180,7 +199,20 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   const updateProvider = (kind: AiProviderKind, patch: Partial<ReturnType<typeof getProvider>>) => {
     const normalized = normalizeChannel(channel);
-    updateChannel({ providers: { ...normalized.providers!, [kind]: { ...normalized.providers![kind], ...patch } } });
+    const providers = { ...normalized.providers!, [kind]: { ...normalized.providers![kind], ...patch } };
+    const nextProtocol = kind === "audio" ? providers.audio.protocol : undefined;
+    const generationDefaults = nextProtocol && patch.protocol
+      ? {
+          ...(config.generationDefaults ?? DEFAULT_GENERATION_DEFAULTS),
+          audioVoice: defaultAudioVoice(nextProtocol),
+          audioFormat: audioFormatOptions(nextProtocol)[0] ?? "mp3",
+        }
+      : config.generationDefaults;
+    setConfig({
+      ...config,
+      channels: config.channels.map((item) => item.id === channel.id ? { ...item, providers } : item),
+      generationDefaults,
+    });
   };
 
   const pullModels = async (kind: AiProviderKind) => {
@@ -376,15 +408,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
             <div className="grid content-start grid-cols-1 gap-3 sm:grid-cols-3 lg:mt-8 lg:grid-cols-1">
               <Field label="图片尺寸">
-                <select className="ob-field" value={config.imageSize} onChange={(e) => setConfig({ ...config, imageSize: e.target.value })}>
-                  {optionsWithCurrentValue(IMAGE_SIZE_OPTIONS, config.imageSize).map((option) => (
+                <select className="ob-field" value={imageSize} onChange={(e) => setConfig({ ...config, imageSize: e.target.value })}>
+                  {optionsWithCurrentValue(imageSizeOptions, imageSize).map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </Field>
               <Field label="图片质量">
-                <select className="ob-field" value={config.imageQuality} onChange={(e) => setConfig({ ...config, imageQuality: e.target.value })}>
-                  {optionsWithCurrentValue(IMAGE_QUALITY_OPTIONS, config.imageQuality).map((option) => (
+                <select className="ob-field" value={imageQuality} onChange={(e) => setConfig({ ...config, imageQuality: e.target.value })}>
+                  {optionsWithCurrentValue(imageQualityOptions, imageQuality).map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
@@ -406,6 +438,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </p>
             <GenerationDefaultsEditor
               value={config.generationDefaults ?? DEFAULT_GENERATION_DEFAULTS}
+              audioProtocol={getProvider(channel, "audio").protocol}
               onChange={(generationDefaults) => setConfig({ ...config, generationDefaults })}
             />
           </section>
@@ -791,6 +824,18 @@ function ProviderRow({
 }) {
   const label = PROVIDER_LABELS[kind];
   const Icon = kind === "text" ? Type : kind === "image" ? ImageIcon : kind === "video" ? Film : AudioLines;
+  const protocolOptions = kind === "audio"
+    ? AUDIO_PROTOCOL_OPTIONS
+    : [
+        { value: "openai", label: "OpenAI" },
+        { value: "ark", label: "Ark / Seedance" },
+        { value: "gemini", label: "Gemini" },
+        { value: "apimart", label: "APIMart（仅服务端）" },
+        { value: "kie", label: "KIE Market（仅服务端）" },
+        { value: "template", label: "Template" },
+      ] as const;
+  const requiresKey = kind !== "audio" || audioProtocolRequiresKey(provider.protocol);
+  const canPullModels = provider.protocol === "openai" || provider.protocol === "apimart";
   return (
     <div
       className="border-b border-[var(--ob-line)] px-3 py-3 last:border-b-0"
@@ -799,13 +844,11 @@ function ProviderRow({
       <div className="grid gap-2 md:grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] md:items-center">
         <div className="flex items-center gap-2 font-medium"><Icon size={16} className="text-[var(--ob-accent)]" />{label}</div>
         <CompactField label="协议">
-          <select className="ob-field" aria-label={`${label}协议`} value={provider.protocol} disabled={disabled} onChange={(e) => onChange({ protocol: e.target.value as typeof provider.protocol })}>
-            <option value="openai">OpenAI</option>
-            <option value="ark">Ark / Seedance</option>
-            <option value="gemini">Gemini</option>
-            <option value="apimart">APIMart（仅服务端）</option>
-            <option value="kie">KIE Market（仅服务端）</option>
-            <option value="template">Template</option>
+          <select className="ob-field" aria-label={`${label}协议`} value={provider.protocol} disabled={disabled} onChange={(e) => {
+            const protocol = e.target.value as typeof provider.protocol;
+            onChange(kind === "audio" ? { protocol, ...audioProviderPreset(protocol) } : { protocol });
+          }}>
+            {protocolOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </CompactField>
         <CompactField label="服务 URL">
@@ -819,15 +862,15 @@ function ProviderRow({
             type="password"
             autoComplete="new-password"
             value={provider.apiKey}
-            disabled={disabled}
+            disabled={disabled || !requiresKey}
             onChange={(e) => onChange({ apiKey: e.target.value })}
-            placeholder="API Key"
+            placeholder={requiresKey ? "API Key" : "无需 API Key"}
           />
         </CompactField>
         <CompactField label="模型">
           <input className="ob-field" aria-label={`${label}模型`} value={provider.model} disabled={disabled} onChange={(e) => onChange({ model: e.target.value })} placeholder="模型名称" />
         </CompactField>
-        <button type="button" className="ob-icon-btn disabled:opacity-50" aria-label={`拉取${label}模型`} title={`拉取${label}模型`} disabled={disabled} onClick={onPull}>
+        <button type="button" className="ob-icon-btn disabled:opacity-50" aria-label={`拉取${label}模型`} title={canPullModels ? `拉取${label}模型` : "该协议不提供模型列表"} disabled={disabled || !canPullModels} onClick={onPull}>
           <RefreshCw size={16} className={busy ? "animate-spin" : ""} />
         </button>
       </div>
@@ -1007,12 +1050,19 @@ function TemplateEditor({
  */
 function GenerationDefaultsEditor({
   value,
+  audioProtocol,
   onChange,
 }: {
   value: GenerationDefaults;
+  audioProtocol: ReturnType<typeof getProvider>["protocol"];
   onChange: (next: GenerationDefaults) => void;
 }) {
   const update = (patch: Partial<GenerationDefaults>) => onChange({ ...value, ...patch });
+  const protocolVoices = audioVoiceOptions(audioProtocol);
+  const protocolFormats = audioFormatOptions(audioProtocol);
+  const voiceOptions = protocolVoices.some((voice) => voice === value.audioVoice)
+    ? protocolVoices
+    : [value.audioVoice || defaultAudioVoice(audioProtocol), ...protocolVoices];
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Field label="默认视频比例">
@@ -1056,18 +1106,19 @@ function GenerationDefaultsEditor({
           value={value.audioFormat}
           onChange={(event) => update({ audioFormat: event.target.value })}
         >
-          {AUDIO_FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}
+          {(protocolFormats.includes(value.audioFormat) ? protocolFormats : [value.audioFormat, ...protocolFormats])
+            .map((format) => <option key={format} value={format}>{format}</option>)}
         </select>
       </Field>
       <Field label="默认声音">
-        <input
+        <select
           className="ob-field"
           aria-label="默认声音"
-          maxLength={64}
           value={value.audioVoice}
           onChange={(event) => update({ audioVoice: event.target.value })}
-          placeholder={DEFAULT_GENERATION_DEFAULTS.audioVoice}
-        />
+        >
+          {voiceOptions.map((voice) => <option key={voice} value={voice}>{audioVoiceLabel(voice)}</option>)}
+        </select>
       </Field>
       <Field label="默认语速">
         <input
@@ -1114,14 +1165,15 @@ function GenerationDefaultsEditor({
         />
         <span className="text-sm text-[var(--ob-ink)]">默认添加水印</span>
       </label>
-      <Field label="默认语音指令">
+      <Field label={audioProtocol === "openai" ? "默认语音指令" : "默认语音指令（仅 OpenAI）"}>
         <input
           className="ob-field"
           aria-label="默认语音指令"
+          disabled={audioProtocol !== "openai"}
           maxLength={2_000}
           value={value.audioInstructions}
           onChange={(event) => update({ audioInstructions: event.target.value })}
-          placeholder="留空则不发送"
+          placeholder={audioProtocol === "openai" ? "留空则不发送" : "当前语音协议不支持此参数"}
         />
       </Field>
     </div>

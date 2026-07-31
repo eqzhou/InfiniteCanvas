@@ -18,7 +18,13 @@ import {
   type AdminChannelModelDiff,
 } from "@/lib/admin-channel-state";
 
-const protocols: AdminChannelProtocol[] = ["openai", "gemini", "apimart", "kie"];
+const protocols: AdminChannelProtocol[] = ["openai", "gemini", "apimart", "kie", "azure", "edge"];
+
+export function adminChannelCanTest(
+  channel: Pick<AdminChannel, "protocol" | "secretConfigured">,
+): boolean {
+  return channel.protocol === "edge" || channel.secretConfigured;
+}
 
 export function emptyAdminChannel(index: number): AdminChannel {
   return {
@@ -104,7 +110,7 @@ export function AdminChannelsPanel() {
             <Field label="基础 URL"><input className="ob-field" value={channel.baseUrl} onChange={(event) => update(channel.id, { baseUrl: event.target.value })} /></Field>
             <Field label="图片模型"><input className="ob-field" value={channel.defaultImageModel} onChange={(event) => update(channel.id, { defaultImageModel: event.target.value })} /></Field>
             <Field label="视频模型"><input className="ob-field" value={channel.defaultVideoModel} onChange={(event) => update(channel.id, { defaultVideoModel: event.target.value })} /></Field>
-            <Field label="音频模型（仅 OpenAI）"><input className="ob-field" value={channel.defaultAudioModel} disabled={channel.protocol !== "openai"} onChange={(event) => update(channel.id, { defaultAudioModel: event.target.value })} /></Field>
+            <Field label="音频模型"><input className="ob-field" value={channel.defaultAudioModel} disabled={!(["openai", "azure", "edge"] as AdminChannelProtocol[]).includes(channel.protocol)} onChange={(event) => update(channel.id, { defaultAudioModel: event.target.value })} /></Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="权重"><input className="ob-field" type="number" min={1} max={100} value={channel.weight} onChange={(event) => update(channel.id, { weight: Number(event.target.value) })} /></Field>
               <Field label="超时（秒）"><input className="ob-field" type="number" min={1} max={600} value={channel.timeoutSeconds} onChange={(event) => update(channel.id, { timeoutSeconds: Number(event.target.value) })} /></Field>
@@ -128,7 +134,7 @@ export function AdminChannelsPanel() {
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={channel.enabled} onChange={(event) => update(channel.id, { enabled: event.target.checked })} />启用</label>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={channel.allowUserUse} onChange={(event) => update(channel.id, { allowUserUse: event.target.checked })} />允许普通用户</label>
-            <label className="min-w-60 flex-1 text-sm">API 密钥（{channel.secretConfigured ? "已配置，可覆盖" : "未配置"}）<input className="ob-field mt-1" type="password" autoComplete="new-password" value={secrets[channel.id] ?? ""} onChange={(event) => setSecrets((current) => ({ ...current, [channel.id]: event.target.value }))} /></label>
+            <label className="min-w-60 flex-1 text-sm">API 密钥（{channel.protocol === "edge" ? "Edge 无需密钥" : channel.secretConfigured ? "已配置，可覆盖" : "未配置"}）<input className="ob-field mt-1" type="password" autoComplete="new-password" disabled={channel.protocol === "edge"} value={secrets[channel.id] ?? ""} onChange={(event) => setSecrets((current) => ({ ...current, [channel.id]: event.target.value }))} /></label>
             <button type="button" className="ob-btn" disabled={busy !== "" || !(secrets[channel.id] ?? "")} onClick={() => void run(`secret:${channel.id}`, async () => {
 				await putAdminChannelSecret(channel.id, secrets[channel.id] ?? "", channel.secretBindingId ?? "");
               invalidateSharedChannelCatalog();
@@ -136,7 +142,7 @@ export function AdminChannelsPanel() {
               setChannels((current) => current.map((item) => item.id === channel.id ? { ...item, secretConfigured: true } : item));
               return "密钥已加密保存";
             })}>保存密钥</button>
-            <button type="button" className="ob-btn" disabled={busy !== "" || !channel.secretConfigured} onClick={() => void run(`test:${channel.id}`, async () => {
+            <button type="button" className="ob-btn" disabled={busy !== "" || !adminChannelCanTest(channel)} onClick={() => void run(`test:${channel.id}`, async () => {
               const result = await testAdminChannel(channel.id); return `连接成功，发现 ${result.modelCount} 个模型`;
             })}>测试连接</button>
             <button type="button" className="ob-btn" disabled={busy !== "" || !channel.secretConfigured || !["openai", "apimart"].includes(channel.protocol)} onClick={() => void run(`models:${channel.id}`, async () => {

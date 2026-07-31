@@ -2,7 +2,7 @@
 
 This inventory freezes the engineering core to the publicly documented and
 black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
-explicit public interface deltas through `v0.12.0` and the named public
+explicit public interface deltas through `v0.12.1` and the named public
 Unreleased behaviors rechecked on 2026-07-31. It does not
 claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
 an independent implementation with its own architecture, data model, UI,
@@ -47,9 +47,9 @@ are not implementation inputs.
 | APIMart current exact contracts | [verified] exact adapters remain fail-closed and validate only independently documented model identifiers and limits; undocumented marketing names, including Agnes, remain unsupported |
 | Single canvas Agent entry | [verified] the legacy assistant panel and duplicate navigation entry are removed; one dockable `画布 Agent` retains Codex/Claude sessions, approvals, attachments, stop and unified generation-task status |
 
-## Basket v0.11.0–v0.12.0 additive parity
+## Basket v0.11.0–v0.12.1 additive parity
 
-The public `basketikun/infinite-canvas v0.11.0` and `v0.12.0` releases and current public
+The public `basketikun/infinite-canvas v0.11.0`, `v0.12.0` and `v0.12.1` releases and current public
 CHANGELOG were rechecked on 2026-07-31 without reading implementation source,
 styles, fixtures, screenshots, or bundled assets:
 
@@ -68,7 +68,7 @@ styles, fixtures, screenshots, or bundled assets:
 ## Public baseline traceability
 
 The frozen public inputs are the immutable v0.8.2 documents and hashes, plus
-the additive release metadata through v0.12.0, listed
+the additive release metadata through v0.12.1, listed
 in `docs/BEHAVIOR_SPEC.md`. This table maps their named behaviors to local
 implementation and verification surfaces; it does not use upstream source as
 implementation evidence.
@@ -106,7 +106,7 @@ implementation evidence.
 | Public Unreleased client-scoped operations and focused-tab fallback | runtime pin/ownership Go tests and two-tab generation ownership E2E |
 | Public Unreleased shared Codex session/running state, approvals and exact turn completion | Codex replay/state/approval Go tests, `codex-events.test.ts`, and two-tab Codex E2E |
 | Public Unreleased addable custom prompt sources | JSON/HTML/Markdown mappings plus local transform scripts, migration tests, manager E2E, and PostgreSQL reload E2E |
-| Community prompt catalog one-click install | `prompt-source-presets.ts`, structured markdown/JSON parsers, prompt library E2E |
+| Community prompt catalog one-click install | `prompt-source-presets.ts`, unified JSON registry presets plus the Tiger Xianyu GPT-Image-2 Markdown catalog, fence-aware nested H2/H3/H4/H5 parsing (including numbered supplemental prompts), stable prompt identities, and prompt library E2E |
 | Public Unreleased canvas prompt-library tab grouped by source | `CanvasPromptsPanel.tsx`, grouping unit tests, canvas prompt-panel E2E |
 | Public Unreleased keep node prompt after generation | `NodePromptBar.tsx` retains draft text after successful generate |
 | Node prompt multi-line paste and local wheel scroll | `prompt-chip-editor.ts`, `PromptChipInput.tsx`, unit tests and canvas E2E |
@@ -147,7 +147,7 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 654 Bun unit/integration tests at the 2026-07-31 verification baseline; the same run reports 80.78% line and 83.84% function coverage. CI publishes this report but does not currently enforce a numeric threshold
+- [verified] 665 Bun unit/integration tests at the 2026-07-31 verification baseline; the same run reports 80.99% line and 83.96% function coverage. CI publishes this report but does not currently enforce a numeric threshold
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds; the v0.12.0 Agent follow-up also passes the focused API race suite
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)
@@ -172,12 +172,19 @@ Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent S
 
 ### Public release recheck (2026-07-31)
 
-- Basket latest public release is `v0.12.0`; this pass adds real turn-level
+- Basket latest public release is `v0.12.1`; this pass adds real turn-level
   Codex permissions, collapsible process progress, immediate composer/new-chat
   feedback and long-wait status on top of the v0.11.0 reasoning, drag-upload
   and credential-free preferences work. Dated debug files, full history
   management and file-manager reveal are now implemented and verified by the
   local API, Bun service, and Chromium Agent-history tests.
+- Prompt/preset recheck adds the Tiger Xianyu GPT-Image-2 Markdown catalog
+  (nested H2/H3/H4/H5 entries, numbered supplemental prompts, and stable IDs),
+  common 1:1/3:2/2:3/4:3/3:4/16:9/9:16/21:9/5:4/4:5 image-size presets,
+  provider-aware quality controls (GPT Image quality versus APIMart
+  Seedream/Gemini 1K/2K resolution), adaptive size handling, and output-count
+  limits. The admin catalog sync path accepts both JSON and structured Markdown
+  sources.
 - Tiger latest public release remains `v0.4.5`; its current public Unreleased
   entry replaces the separate canvas assistant with an Agent adapted to the
   canvas. OpenBoard now exposes one authoritative `画布 Agent` entry.
@@ -223,6 +230,7 @@ Markdown and layout fixes. No implementation source or assets were read:
 - [verified] Transparent image background capability checks and provider mapping
 - [verified] Image reverse prompting into a connected text node
 - [verified] Reproducible image request metadata, missing-reference preflight failure, and expandable multi-result batches
+- [verified] AI call-log request traceability records the resolved provider endpoint and ordered reference storage keys for image-to-image calls while redacting credentials and binary payloads
 - [verified] Camera/lens/focal-length/aperture prompt expansion for image/video/config nodes; disabled controls leave prompts unchanged and retries never duplicate the camera block
 - [verified] Draggable image split guides with normalized coordinates and lineage
 - [verified] Crop, rotate, multi-angle, mask/inpaint, upscale, replacement, download, grouping, and cascade behavior
@@ -251,7 +259,7 @@ Markdown and layout fixes. No implementation source or assets were read:
 ## Prompt, video, and assistant workflows
 
 - [verified] Prompt search plus independent source/tag filters, multiple saved HTTPS sources, per-source/all refresh, and source removal
-- [verified] One-click community catalog presets for Image Prompts unified JSON registry (including Banana Prompt Quicker)
+- [verified] One-click community catalog presets for the Image Prompts unified JSON registry (including Banana Prompt Quicker) and the Tiger Xianyu GPT Image 2 Markdown catalog
 - [verified] Built-in Image Prompts catalogs are always present after hydrate and preserve enablement/status on merge
 - [verified] Prompt-source cards show count, sync status, and last success time; failed refresh keeps last success cache
 - [verified] Prompt center 「我的提示词」 tab for local manage / save-from-public / canvas use
@@ -260,7 +268,7 @@ Markdown and layout fixes. No implementation source or assets were read:
 - [verified] Custom prompt-source scripts may async fetchText/fetchJson additional URLs (local-friendly source URL policy for loopback/LAN)
 - [verified] Prompt source URLs accept personal local http(s) hosts (127.0.0.1/localhost/private LAN) while public media stays HTTPS-first
 - [verified] Canvas left-panel tab underline slides between projects/elements/assets/prompts
-- [verified] Structured community Markdown parsing for labeled/fenced prompt blocks with section tags and image galleries
+- [verified] Structured community Markdown parsing for labeled/fenced and numbered supplemental prompt blocks (H2-H5), with section tags, stable IDs, and image galleries
 - [verified] Add/edit/disable/delete source manager, legacy URL migration, active-tab scheduling with authoritative persisted merges, nested JSON field paths, bounded HTML selectors, preview, and PostgreSQL reload persistence
 - [verified] Executable source formats, prototype paths, unsafe selectors, credential-bearing URLs, redirects, explicit private hosts, oversized responses, and excessive entries are rejected
 - [verified] Prompt cover and bounded result-image galleries with detail preview and canvas insertion

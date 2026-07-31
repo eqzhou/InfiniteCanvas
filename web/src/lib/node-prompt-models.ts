@@ -39,6 +39,29 @@ export function resolveNodePromptSelectedModel(
   const kind = nodePromptKind(node.type);
   const explicit = (node.metadata.model ?? "").trim();
   if (explicit) return explicit;
+  return resolveInheritedNodePromptModel(channel, kind);
+}
+
+export function resolveNodePromptModelChoices(
+  node: BoardNode,
+  channel: AiChannel | null | undefined,
+  catalog: ModelCatalog | null | undefined = null,
+): { inheritedLabel: string; options: string[] } {
+  if (!isNodePromptType(node.type) || !channel) {
+    return { inheritedLabel: "跟随渠道默认模型", options: [] };
+  }
+  const kind = nodePromptKind(node.type);
+  const inherited = resolveInheritedNodePromptModel(channel, kind);
+  const explicit = (node.metadata.model ?? "").trim();
+  const options = [...new Set(resolveNodePromptModels(channel, kind, catalog))]
+    .filter((model) => explicit || model !== inherited);
+  return {
+    inheritedLabel: inherited ? `跟随渠道（${inherited}）` : "跟随渠道默认模型",
+    options,
+  };
+}
+
+function resolveInheritedNodePromptModel(channel: AiChannel, kind: NodePromptType): string {
   if (kind === "audio") return getProvider(channel, "audio").model;
   return defaultModelForMode(channel, kind === "text" || kind === "video" ? kind : "image");
 }

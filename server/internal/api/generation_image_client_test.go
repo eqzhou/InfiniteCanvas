@@ -26,6 +26,12 @@ func TestImageProviderTransportUsesRequestContextDeadline(t *testing.T) {
 	if !ok {
 		t.Fatalf("transport type = %T", executor.client.Transport)
 	}
+	if transport.ForceAttemptHTTP2 {
+		t.Fatal("provider transport must use HTTP/1.1 by default for long-running image gateways")
+	}
+	if transport.Proxy == nil {
+		t.Fatal("provider transport must honor the process HTTP(S)_PROXY configuration")
+	}
 	if transport.ResponseHeaderTimeout != 0 {
 		t.Fatalf("response header timeout = %s, want request context deadline", transport.ResponseHeaderTimeout)
 	}
@@ -37,6 +43,35 @@ func TestImageProviderTransportUsesRequestContextDeadline(t *testing.T) {
 	}
 	if dialer := newGenerationProviderDialer(); dialer.Timeout != 0 {
 		t.Fatalf("dial timeout = %s, want request context deadline", dialer.Timeout)
+	}
+}
+
+func TestProviderTransportUsesOnlyExplicitOpenBoardProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:7890")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("OPENBOARD_PROVIDER_PROXY_URL", "")
+
+	request, err := http.NewRequest(http.MethodGet, "https://provider.example/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := newProviderHTTPClient(time.Minute).Transport.(*http.Transport)
+	proxyURL, err := transport.Proxy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyURL != nil {
+		t.Fatalf("inherited process proxy was used: %s", proxyURL)
+	}
+
+	t.Setenv("OPENBOARD_PROVIDER_PROXY_URL", "http://127.0.0.1:7899")
+	proxyURL, err = transport.Proxy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyURL == nil || proxyURL.String() != "http://127.0.0.1:7899" {
+		t.Fatalf("explicit provider proxy = %v", proxyURL)
 	}
 }
 
@@ -202,6 +237,30 @@ func TestOpenAIImageExecutorEditsUseMultipartReferences(t *testing.T) {
 			{Data: png, MIMEType: "image/png"},
 			{Data: png},
 		},
+	})
+	if err != nil || len(images) != 1 {
+		t.Fatalf("images = %#v, %v", images, err)
+	}
+}
+
+func TestOpenAIImageExecutorAddsClientRequestID(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Client-Request-Id"); got != "job-image-request-id" {
+			t.Fatalf("client request id = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+onePixelPNGBase64()+`"}]}`)
+	}))
+	defer upstream.Close()
+
+	images, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
+		BaseURL: upstream.URL + "/v1", APIKey: "sk-test", Model: "gpt-image-2",
+		RequestID: "job-image-request-id", Prompt: "edit it", Size: "1024x1024", Quality: "auto", Count: 1,
+		References: []generatedImage{{Data: png, MIMEType: "image/png"}},
 	})
 	if err != nil || len(images) != 1 {
 		t.Fatalf("images = %#v, %v", images, err)

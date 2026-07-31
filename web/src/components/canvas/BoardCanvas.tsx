@@ -40,6 +40,7 @@ import { findOpenNodePosition } from "@/lib/node-placement";
 import { useCanvasGenerationRecovery } from "@/components/canvas/useCanvasGenerationRecovery";
 import { OPENBOARD_ASSET_DRAG_MIME, readOpenBoardAssetDrag } from "@/lib/asset-drag";
 import { resizeFromCorner, type NodeRect, type NodeResizeCorner } from "@/lib/node-resize";
+import { mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -58,6 +59,12 @@ type DragMode =
 export function BoardCanvas() {
   const project = useBoardStore((s) => s.getActive());
 	useCanvasGenerationRecovery();
+  const configuredChannels = useBoardStore((s) => s.config.channels);
+  const sharedChannels = useSharedChannels();
+  const generationChannels = useMemo(
+    () => mergeSharedChannelChoices(configuredChannels, sharedChannels),
+    [configuredChannels, sharedChannels],
+  );
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const connectingFrom = useBoardStore((s) => s.connectingFrom);
   const showMinimap = useBoardStore((s) => s.showMinimap);
@@ -893,6 +900,7 @@ export function BoardCanvas() {
             <BoardNodeView
               key={node.id}
               node={node}
+              generationChannels={generationChannels}
               selected={selectedIds.includes(node.id)}
               related={related.has(node.id)}
               groupHighlighted={groupHoverId === node.id}

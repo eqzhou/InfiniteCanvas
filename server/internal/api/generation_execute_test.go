@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -329,6 +330,29 @@ func TestServerImageJobSurfacesSafeProviderHTTPStatus(t *testing.T) {
 	}
 }
 
+func TestServerImageJobRecordsTransportDetailInAICallLog(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	server, backend, handler := imageExecutionHandler(t, executor)
+	created := postImageJob(t, handler, "job-transport-detail", "fail with EOF")
+	if created.code != http.StatusAccepted {
+		t.Fatalf("create: %d %s", created.code, created.body)
+	}
+	_ = awaitExecutorStart(t, executor)
+	executor.release <- scriptedImageResult{err: &url.Error{
+		Op: "Post", URL: "https://images.example/v1/images/edits", Err: errors.New("unexpected EOF"),
+	}}
+	server.generationWG.Wait()
+
+	job, err := backend.GetGenerationJob(context.Background(), store.DefaultTenantID, "job-transport-detail")
+	if err != nil || job.Error != "模型服务在生成过程中中断了连接，请稍后重试或检查上游网关" {
+		t.Fatalf("failed job = %#v, %v", job, err)
+	}
+	logs, err := backend.ListAICallLogs(context.Background(), store.DefaultTenantID, store.AICallLogQuery{Page: 1, PageSize: 10})
+	if err != nil || len(logs.Items) != 1 || !strings.Contains(logs.Items[0].Error, "unexpected EOF") {
+		t.Fatalf("ai logs = %#v, %v", logs, err)
+	}
+}
+
 func TestImageGenerationFailureMessage(t *testing.T) {
 	tests := []struct {
 		name string
@@ -344,6 +368,7 @@ func TestImageGenerationFailureMessage(t *testing.T) {
 		{name: "wrapped context deadline", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: context.DeadlineExceeded}, want: "图片生成请求超时，请稍后重试或增大渠道超时时间"},
 		{name: "network timeout", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: &net.DNSError{Err: "timeout", Name: "provider.example", IsTimeout: true}}, want: "连接模型服务超时，请检查网络或增大渠道超时时间"},
 		{name: "http2 response header timeout", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: errors.New("http2: timeout awaiting response headers")}, want: "连接模型服务超时，请检查网络或增大渠道超时时间"},
+		{name: "upstream connection interrupted", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: errors.New("unexpected EOF")}, want: "模型服务在生成过程中中断了连接，请稍后重试或检查上游网关"},
 		{name: "network failure", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: errors.New("connection reset")}, want: "连接模型服务失败，请检查服务 URL 和网络"},
 		{name: "unknown status", err: &imageProviderHTTPError{StatusCode: http.StatusTeapot}, want: "图片生成失败（模型服务 HTTP 418）"},
 		{name: "unknown error stays private", err: errors.New("provider failed with sk-private"), want: "图片生成失败，请检查模型服务配置后重试"},
@@ -354,6 +379,20 @@ func TestImageGenerationFailureMessage(t *testing.T) {
 				t.Fatalf("imageGenerationFailureMessage() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestProviderRequestIDIsAStableUUID(t *testing.T) {
+	first := providerRequestID("job_ffNeMYAT5f")
+	second := providerRequestID("job_ffNeMYAT5f")
+	if first != second {
+		t.Fatalf("request IDs are not stable: %q != %q", first, second)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(first) {
+		t.Fatalf("request ID = %q, want RFC 4122 UUID", first)
+	}
+	if first == providerRequestID("job_ZZETNyLZkk") {
+		t.Fatal("different jobs must not share a provider request ID")
 	}
 }
 

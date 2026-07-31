@@ -107,6 +107,14 @@ func decodeAdminPromptCatalog(raw []byte) (adminPromptCatalog, error) {
 	if catalog.SyncRuns == nil {
 		catalog.SyncRuns = []adminPromptSyncRun{}
 	}
+	// Sources created before the format field was introduced were JSON
+	// catalogs. Preserve those records instead of making a reload permanently
+	// unsyncable after the Markdown-capable schema change.
+	for index, source := range catalog.Sources {
+		if strings.TrimSpace(source.Format) == "" {
+			catalog.Sources[index].Format = "json"
+		}
+	}
 	return catalog, nil
 }
 
@@ -202,7 +210,8 @@ func normalizePromptEntry(input adminPromptEntry) (adminPromptEntry, error) {
 func normalizePromptSource(input adminPromptSource) (adminPromptSource, error) {
 	id, err := cleanPromptID(input.ID)
 	name := strings.TrimSpace(input.Name)
-	if err != nil || name == "" || len(name) > 200 || strings.ToLower(strings.TrimSpace(input.Format)) != "json" ||
+	format := strings.ToLower(strings.TrimSpace(input.Format))
+	if err != nil || name == "" || len(name) > 200 || (format != "json" && format != "markdown") ||
 		input.IntervalMinutes < 0 || input.IntervalMinutes > 7*24*60 || (input.ScheduleEnabled && input.IntervalMinutes < 5) {
 		return adminPromptSource{}, store.ErrInvalidInput
 	}
@@ -210,7 +219,7 @@ func normalizePromptSource(input adminPromptSource) (adminPromptSource, error) {
 	if err != nil {
 		return adminPromptSource{}, store.ErrInvalidInput
 	}
-	return adminPromptSource{ID: id, Name: name, URL: parsed.String(), Format: "json", Enabled: input.Enabled,
+	return adminPromptSource{ID: id, Name: name, URL: parsed.String(), Format: format, Enabled: input.Enabled,
 		ScheduleEnabled: input.ScheduleEnabled, IntervalMinutes: input.IntervalMinutes}, nil
 }
 

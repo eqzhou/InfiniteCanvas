@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   invalidateSharedChannelCatalog,
-	getSharedChannelCatalogSnapshot,
+  getSharedChannelCatalogSnapshot,
+  isGenerationChannelReady,
   isServerManagedChannel,
   loadSharedChannelsCached,
   mergeSharedChannelChoices,
@@ -19,6 +20,38 @@ describe("shared channel catalog", () => {
     expect(channel.providers?.text.apiKey).toBe("");
     expect(JSON.stringify(channel)).not.toContain("sk-");
     expect(isServerManagedChannel(channel, "image")).toBe(true);
+  });
+
+  test("allows keyless Edge audio and server-managed audio generation", () => {
+    const personal = createDefaultChannel();
+    const keylessEdge = {
+      ...personal,
+      providers: {
+        ...personal.providers,
+        audio: {
+          ...personal.providers?.audio,
+          protocol: "edge" as const,
+          apiKey: "",
+          model: "edge-tts",
+        },
+      },
+    };
+    const shared = sharedChannelAsAI({
+      id: "shared-audio",
+      name: "Shared audio",
+      protocol: "openai",
+      defaultAudioModel: "gpt-4o-mini-tts",
+    });
+
+    expect(isGenerationChannelReady(keylessEdge, "audio")).toBe(true);
+    expect(isGenerationChannelReady(shared, "audio")).toBe(true);
+    expect(isGenerationChannelReady({
+      ...personal,
+      providers: {
+        ...personal.providers,
+        audio: { ...personal.providers?.audio, protocol: "openai", apiKey: "" },
+      },
+    }, "audio")).toBe(false);
   });
 
   test("publishes the shared models list onto managed providers", () => {

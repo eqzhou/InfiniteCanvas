@@ -14,6 +14,7 @@ import {
   type AICallLogRetention,
 } from "@/services/ai-call-logs";
 import { invalidateAICallLogClientReportCache } from "@/services/generation-activity";
+import { readAICallRequestDetail } from "@/lib/ai-call-log-detail";
 
 function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "-";
@@ -48,6 +49,7 @@ export function AICallLogsPage() {
   const [cleanupDays, setCleanupDays] = useState(30);
   const pageSize = 20;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const requestDetail = detail ? readAICallRequestDetail(detail.request) : null;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -375,10 +377,32 @@ export function AICallLogsPage() {
               <div>耗时：{formatDuration(detail.durationMs)}</div>
               <div>Job：{detail.jobId || "-"}</div>
               <div>时间：{new Date(detail.createdAt).toLocaleString()}</div>
+              <div className="break-all sm:col-span-2">
+                实际接口：{requestDetail?.endpoint ? `${requestDetail.method || "POST"} ${requestDetail.endpoint}` : "未记录"}
+              </div>
             </div>
             {detail.error ? (
               <div className="mt-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-canvas)] p-3 text-sm text-red-500">
                 {detail.error}
+              </div>
+            ) : null}
+            {requestDetail && requestDetail.referenceCount > 0 ? (
+              <div className="mt-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-canvas)] p-3 text-sm">
+                <div className="font-medium text-[var(--ob-ink)]">
+                  {detail.kind === "video" ? "参考媒体" : "参考图（图生图）"} · {requestDetail.referenceCount}{detail.kind === "video" ? " 个" : " 张"}
+                </div>
+                <div className="mt-2 space-y-1 text-xs text-[var(--ob-muted)]">
+                  {requestDetail.references.map((reference) => (
+                    <div key={reference.index} className="break-all">
+                      #{reference.index} · {reference.sourceKnown ? reference.storageKey : "来源未记录"}
+                      {reference.mimeType ? ` · ${reference.mimeType}` : ""}
+                      {reference.bytes ? ` · ${reference.bytes.toLocaleString()} bytes` : ""}
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">
+                  仅记录存储键和基本元数据，未保存参考图二进制内容。
+                </p>
               </div>
             ) : null}
             <div className="mt-4 grid gap-3 lg:grid-cols-2">

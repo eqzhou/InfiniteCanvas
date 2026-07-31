@@ -62,6 +62,30 @@ test("process-owned constants are not overridable from the shell", () => {
   assert.equal(resolved.FORCE_COLOR, "0");
 });
 
+test("desktop shell proxies never leak into pm2 provider traffic", () => {
+  const resolved = resolveDeploymentEnv(
+    { OPENBOARD_TOKEN: "t" },
+    {
+      HTTP_PROXY: "http://127.0.0.1:7890",
+      HTTPS_PROXY: "http://127.0.0.1:7890",
+      ALL_PROXY: "socks5://127.0.0.1:7890",
+    },
+    { root },
+  );
+  assert.equal(resolved.HTTP_PROXY, "");
+  assert.equal(resolved.HTTPS_PROXY, "");
+  assert.equal(resolved.ALL_PROXY, "");
+});
+
+test("an explicit OpenBoard provider proxy remains available", () => {
+  const resolved = resolveDeploymentEnv(
+    { OPENBOARD_TOKEN: "t", OPENBOARD_PROVIDER_PROXY_URL: "http://127.0.0.1:7899" },
+    { HTTPS_PROXY: "http://127.0.0.1:7890" },
+    { root },
+  );
+  assert.equal(resolved.OPENBOARD_PROVIDER_PROXY_URL, "http://127.0.0.1:7899");
+});
+
 test("unrelated .env entries are still passed through", () => {
   const resolved = resolveDeploymentEnv(
     { OPENBOARD_TOKEN: "t", OPENBOARD_MASTER_KEY: "k", OPENBOARD_POSTGRES_PASSWORD: "p" },

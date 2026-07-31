@@ -9,11 +9,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
+
+const azureHeaderFixture = "fixture-value"
 
 func TestHTTPVideoExecutorArkCreateCheckpointPollAndDownload(t *testing.T) {
 	var creates atomic.Int32
@@ -298,6 +303,118 @@ func TestHTTPAudioExecutorForwardsSpeedAndInstructions(t *testing.T) {
 		}); err == nil {
 			t.Fatalf("speed %v accepted", speed)
 		}
+	}
+}
+
+func TestHTTPAudioExecutorAzureSpeechUsesSSMLAndSubscriptionKey(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cognitiveservices/v1" || r.Method != http.MethodPost {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Ocp-Apim-Subscription-Key"); got != azureHeaderFixture {
+			t.Fatalf("subscription key = %q", got)
+		}
+		if got := r.Header.Get("X-Microsoft-OutputFormat"); got != "riff-24khz-16bit-mono-pcm" {
+			t.Fatalf("output format = %q", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/ssml+xml" {
+			t.Fatalf("content type = %q", got)
+		}
+		body, _ := io.ReadAll(r.Body)
+		ssml := string(body)
+		if !strings.Contains(ssml, `voice name="zh-CN-XiaoxiaoNeural"`) ||
+			!strings.Contains(ssml, "你好 &amp; &lt;世界&gt;") || strings.Contains(ssml, "<世界>") {
+			t.Fatalf("SSML = %s", ssml)
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = w.Write([]byte("RIFF\x04\x00\x00\x00WAVE"))
+	}))
+	defer upstream.Close()
+	executor := newHTTPAudioExecutor()
+	executor.client = upstream.Client()
+	media, err := executor.Generate(context.Background(), audioGenerationRequest{
+		Protocol: "azure", BaseURL: upstream.URL, APIKey: azureHeaderFixture, Model: "azure-neural-tts",
+		Prompt: "你好 & <世界>", Voice: "zh-CN-XiaoxiaoNeural", Format: "wav", Speed: 1.25,
+	})
+	if err != nil || media.MIMEType != "audio/wav" || !bytes.HasPrefix(media.Data, []byte("RIFF")) {
+		t.Fatalf("media = %#v, err = %v", media, err)
+	}
+}
+
+func TestEdgeSpeechProtocolHelpers(t *testing.T) {
+	when := time.Date(2026, time.July, 31, 10, 2, 0, 0, time.UTC)
+	first := edgeSecMSGECToken(when)
+	second := edgeSecMSGECToken(when.Add(2 * time.Minute))
+	third := edgeSecMSGECToken(when.Add(4 * time.Minute))
+	if first == "" || first != second || first == third || first != strings.ToUpper(first) {
+		t.Fatalf("unexpected rolling tokens: %q %q %q", first, second, third)
+	}
+	payload := []byte("ID3-audio")
+	header := []byte("Path:audio\r\nContent-Type:audio/mpeg")
+	headerLength := len(header) + 2
+	frame := append([]byte{byte(headerLength >> 8), byte(headerLength)}, append(header, append([]byte("\r\n"), payload...)...)...)
+	got, done, err := parseEdgeAudioFrame(frame)
+	if err != nil || done || !bytes.Equal(got, payload) {
+		t.Fatalf("audio frame = %q done=%v err=%v", got, done, err)
+	}
+}
+
+func TestHTTPAudioExecutorEdgeSpeechStreamsMP3(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			t.Errorf("accept Edge websocket: %v", err)
+			return
+		}
+		defer connection.CloseNow()
+		for index := range 2 {
+			messageType, message, readErr := connection.Read(r.Context())
+			if readErr != nil || messageType != websocket.MessageText {
+				t.Errorf("message %d: type=%v err=%v", index, messageType, readErr)
+				return
+			}
+			if index == 0 && edgeTextPath(message) != "speech.config" {
+				t.Errorf("command = %s", message)
+			}
+			if index == 1 && (edgeTextPath(message) != "ssml" || !bytes.Contains(message, []byte("你好 &amp; 世界"))) {
+				t.Errorf("SSML = %s", message)
+			}
+		}
+		headers := []byte("Path:audio\r\nContent-Type:audio/mpeg")
+		headerLength := len(headers) + 2
+		frame := append([]byte{byte(headerLength >> 8), byte(headerLength)}, append(headers, append([]byte("\r\n"), []byte("ID3-edge-audio")...)...)...)
+		if err := connection.Write(r.Context(), websocket.MessageBinary, frame); err != nil {
+			t.Errorf("write audio: %v", err)
+			return
+		}
+		_ = connection.Write(r.Context(), websocket.MessageText, []byte("Path:turn.end\r\n\r\n"))
+	}))
+	defer upstream.Close()
+	executor := newHTTPAudioExecutor()
+	executor.client = upstream.Client()
+	executor.edgeWebSocketURL = "ws" + strings.TrimPrefix(upstream.URL, "http")
+	executor.now = func() time.Time { return time.Date(2026, time.July, 31, 10, 2, 0, 0, time.UTC) }
+	media, err := executor.Generate(context.Background(), audioGenerationRequest{
+		Protocol: "edge", BaseURL: "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud",
+		Model: "edge-tts", Prompt: "你好 & 世界", Voice: "zh-CN-XiaoxiaoNeural", Format: "mp3",
+	})
+	if err != nil || media.MIMEType != "audio/mpeg" || string(media.Data) != "ID3-edge-audio" {
+		t.Fatalf("media=%#v err=%v", media, err)
+	}
+}
+
+func TestLiveEdgeSpeech(t *testing.T) {
+	if os.Getenv("OPENBOARD_LIVE_EDGE_TTS") != "1" {
+		t.Skip("set OPENBOARD_LIVE_EDGE_TTS=1 to exercise Microsoft's public Edge speech service")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	media, err := newHTTPAudioExecutor().Generate(ctx, audioGenerationRequest{
+		Protocol: "edge", BaseURL: "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud",
+		Model: "edge-tts", Prompt: "你好，这是 OpenBoard 云端语音测试。", Voice: "zh-CN-XiaoxiaoNeural", Format: "mp3",
+	})
+	if err != nil || media.MIMEType != "audio/mpeg" || len(media.Data) < 1_000 {
+		t.Fatalf("live Edge speech bytes=%d mime=%q err=%v", len(media.Data), media.MIMEType, err)
 	}
 }
 

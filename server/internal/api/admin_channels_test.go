@@ -545,3 +545,71 @@ func TestNormalizeAdminChannelCleansModels(t *testing.T) {
 		t.Fatalf("models not cleaned: %#v", channel.Models)
 	}
 }
+
+func TestAzureAndKeylessEdgeSharedAudioChannels(t *testing.T) {
+	azure, azureMessage := normalizeAdminChannel(adminChannelPublic{
+		ID: "azure-tts", Name: "Azure Speech", BaseURL: "https://eastus.tts.speech.microsoft.com",
+		Protocol: "azure", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 60,
+		DefaultAudioModel: "azure-neural-tts",
+	})
+	if azureMessage != "" || !sharedChannelSupports(azure, "audio", "azure-neural-tts") || sharedChannelSupports(azure, "image", "azure-neural-tts") {
+		t.Fatalf("Azure audio channel = %#v, %q", azure, azureMessage)
+	}
+	edge, edgeMessage := normalizeAdminChannel(adminChannelPublic{
+		ID: "edge-tts", Name: "Edge TTS", BaseURL: "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud",
+		Protocol: "edge", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 60,
+		DefaultAudioModel: "edge-tts",
+	})
+	if edgeMessage != "" || !sharedChannelSupports(edge, "audio", "edge-tts") || adminChannelRequiresSecret(edge) {
+		t.Fatalf("Edge audio channel = %#v, %q", edge, edgeMessage)
+	}
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal([]adminChannelPublic{edge})
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelsStateKey, raw); err != nil {
+		t.Fatal(err)
+	}
+	resolved, key, err := server.resolveSharedChannel(context.Background(), store.DefaultTenantID, edge.ID)
+	if err != nil || key != "" || resolved.ID != edge.ID {
+		t.Fatalf("resolve keyless Edge channel = %#v key=%q err=%v", resolved, key, err)
+	}
+	providerID, snapshot, err := server.snapshotGenerationChannel(
+		context.Background(), store.DefaultTenantID, "audio", "job-edge-shared", edge.ID, "edge-tts")
+	if err != nil || providerID != edge.ID || snapshot == nil || snapshot.Secret != (secretEnvelope{}) {
+		t.Fatalf("snapshot keyless Edge channel = %q %#v err=%v", providerID, snapshot, err)
+	}
+}
+
+func TestAdminAzureAudioConnectionUsesSpeechEndpoint(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/cognitiveservices/v1" ||
+			r.Header.Get("Ocp-Apim-Subscription-Key") != "azure-secret" {
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("ID3-azure-test"))
+	}))
+	defer upstream.Close()
+
+	channels, _ := json.Marshal([]adminChannelPublic{{
+		ID: "azure-audio", Name: "Azure audio", BaseURL: upstream.URL, Protocol: "azure",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 15,
+		DefaultAudioModel: "azure-neural-tts",
+	}})
+	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "azure-audio", "azure-secret"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	connection := request(t, router, http.MethodPost, "/api/admin/channels/azure-audio/test", nil)
+	if connection.Code != http.StatusOK {
+		t.Fatalf("Azure connection: %d %s", connection.Code, connection.Body.String())
+	}
+}

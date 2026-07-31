@@ -59,11 +59,14 @@ type videoGenerationRequest struct {
 	Watermark      bool
 	FrameMode      string
 	References     []generatedMedia
-	MultiShot      bool
-	ShotType       string
-	Shots          []videoGenerationShot
-	Elements       []videoGenerationElement
-	Template       *imageProviderTemplate
+	// ReferenceStorageKeys is audit metadata only; provider adapters use the
+	// already-loaded References bytes and never receive this field.
+	ReferenceStorageKeys []string
+	MultiShot            bool
+	ShotType             string
+	Shots                []videoGenerationShot
+	Elements             []videoGenerationElement
+	Template             *imageProviderTemplate
 }
 
 type videoGenerationShot struct {
@@ -79,12 +82,13 @@ type videoGenerationElement struct {
 }
 
 type audioGenerationRequest struct {
-	BaseURL string
-	APIKey  string
-	Model   string
-	Prompt  string
-	Voice   string
-	Format  string
+	Protocol string
+	BaseURL  string
+	APIKey   string
+	Model    string
+	Prompt   string
+	Voice    string
+	Format   string
 	// Speed is the OpenAI-compatible playback rate. Zero means "unset" and is
 	// omitted from the provider request so the provider default applies.
 	Speed        float64
@@ -732,7 +736,7 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 		protocol = "ark"
 	}
 	if (job.Kind == "video" && protocol != "openai" && protocol != "ark" && protocol != "template" && protocol != "apimart" && protocol != "kie") ||
-		(job.Kind == "audio" && protocol != "openai") || len(provider.BaseURL) > 8<<10 {
+		(job.Kind == "audio" && protocol != "openai" && protocol != "azure" && protocol != "edge") || len(provider.BaseURL) > 8<<10 {
 		return resolvedMediaRequest{}, errors.New("unsupported media provider")
 	}
 	if job.Kind == "video" && protocol == "template" {
@@ -743,7 +747,7 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 	if _, err := validateGenerationURL(provider.BaseURL); err != nil {
 		return resolvedMediaRequest{}, err
 	}
-	if apiKey == "" || len(apiKey) > 64<<10 {
+	if (apiKey == "" && protocol != "edge") || len(apiKey) > 64<<10 {
 		return resolvedMediaRequest{}, errors.New("missing media api key")
 	}
 	model := strings.TrimSpace(job.Model)
@@ -788,6 +792,7 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 		request.Video.Seconds, request.Video.Ratio, request.Video.Resolution = parameters.Seconds, parameters.Ratio, parameters.Resolution
 		request.Video.GenerateAudio, request.Video.Watermark = parameters.GenerateAudio, parameters.Watermark
 		request.Video.FrameMode = normalizeVideoFrameMode(parameters.FrameMode)
+		request.Video.ReferenceStorageKeys = append([]string(nil), parameters.ReferenceStorageKeys...)
 		request.Video.NegativePrompt, request.Video.Mode = parameters.NegativePrompt, parameters.Mode
 		request.Video.MultiShot, request.Video.ShotType = parameters.MultiShot, parameters.ShotType
 		request.Video.Shots = append([]videoGenerationShot(nil), parameters.Shots...)
@@ -806,7 +811,7 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 		request.Checkpoint = result.UpstreamTask
 	} else {
 		request.Audio = audioGenerationRequest{
-			BaseURL: provider.BaseURL, APIKey: apiKey, Model: model, Prompt: prompt,
+			Protocol: protocol, BaseURL: provider.BaseURL, APIKey: apiKey, Model: model, Prompt: prompt,
 			Voice: parameters.Voice, Format: parameters.Format,
 			Speed: parameters.Speed, Instructions: parameters.Instructions,
 		}

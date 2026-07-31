@@ -17,6 +17,11 @@ import { authFetch as apiFetch } from "@/services/auth-session";
 import { isServerManagedChannel } from "@/services/shared-channels";
 import { usesBrowserE2EGeneration } from "@/services/generation-jobs";
 import { providerFetch, providerFetchUrl, ProviderHttpError } from "@/services/provider-http";
+import {
+  imageOutputLimitFor,
+  normalizeImageQualityForProvider,
+  normalizeImageSizeForProvider,
+} from "@/lib/image-generation-options";
 
 const MAX_IMAGE_PROVIDER_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_PROVIDER_ERROR_BYTES = 64 * 1024;
@@ -326,15 +331,21 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     channel,
     model,
     prompt,
-    size = "1024x1024",
-    quality = "auto",
-    n = 1,
     referenceDataUrls = [],
     referenceBlobs = [],
     transparentBackground = false,
     systemPrompt = "",
     signal,
   } = options;
+  const provider = getProvider(channel, "image");
+  const size = normalizeImageSizeForProvider(options.size ?? "1024x1024");
+  const quality = normalizeImageQualityForProvider(options.quality ?? "auto", provider.protocol, model);
+  const requestedCount = Number(options.n ?? 1);
+  // Keep the public 1..8 validation for arbitrary providers while reducing
+  // legacy counts for known model contracts before their request is built.
+  const n = Number.isSafeInteger(requestedCount) && requestedCount >= 1 && requestedCount <= 8
+    ? Math.min(requestedCount, imageOutputLimitFor(provider.protocol, model))
+    : requestedCount;
   if (!Number.isSafeInteger(n) || n < 1 || n > 8) {
     throw new Error("Image generation count must be between 1 and 8");
   }
@@ -343,7 +354,6 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     throw new Error("Image generation references exceed the supported limit");
   }
   const effectivePrompt = applySystemPrompt(systemPrompt, prompt);
-  const provider = getProvider(channel, "image");
   if (provider.protocol === "apimart" || provider.protocol === "kie") {
     throw new Error(`${provider.protocol} image generation requires the protected server runtime`);
   }

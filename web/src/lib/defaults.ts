@@ -105,6 +105,7 @@ export function createProject(title = "未命名画布"): BoardProject {
     activeChatId: session.id,
     backgroundMode: "dots",
     viewport: { x: 0, y: 0, k: 1 },
+    audioRoles: [],
   };
 }
 

@@ -301,6 +301,39 @@ describe("generateVideo provider contracts", () => {
     }]);
   });
 
+  test("normalizes legacy ratio values before direct OpenAI image requests", async () => {
+    let body: Record<string, unknown> = {};
+    globalThis.fetch = mock(async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return json({ data: [{ url: "https://cdn.example/legacy.png" }] });
+    }) as typeof fetch;
+
+    await generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "legacy ratio",
+      size: "3:2",
+    });
+
+    expect(body.size).toBe("1536x1024");
+  });
+
+  test("keeps invalid direct output counts rejected after provider normalization", async () => {
+    let requests = 0;
+    globalThis.fetch = mock(async () => {
+      requests += 1;
+      return json({ data: [{ url: "https://cdn.example/should-not-run.png" }] });
+    }) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "invalid count",
+      n: 0,
+    })).rejects.toThrow("between 1 and 8");
+    expect(requests).toBe(0);
+  });
+
   test("uses the OpenAI edits endpoint and image[] multipart fields for image-to-image requests", async () => {
     const requests: Array<{ url: string; method?: string; body: FormData }> = [];
     globalThis.fetch = mock(async (input, init) => {

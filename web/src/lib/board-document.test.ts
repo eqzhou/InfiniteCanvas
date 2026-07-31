@@ -43,6 +43,23 @@ describe("parseBoardProject", () => {
     );
   });
 
+  test("persists bounded project-level audio roles", () => {
+    const input = {
+      ...validProject(),
+      audioRoles: [{
+        id: "narrator",
+        name: "旁白",
+        voices: { openai: "coral", edge: "zh-CN-XiaoxiaoNeural" },
+      }],
+    };
+
+    expect(parseBoardProject(input).audioRoles).toEqual(input.audioRoles);
+    expect(() => parseBoardProject({
+      ...input,
+      audioRoles: [...input.audioRoles, { ...input.audioRoles[0] }],
+    })).toThrow("audioRoles");
+  });
+
   test("rejects non-finite geometry", () => {
     const input = validProject();
     input.nodes[0]!.position.x = Number.NaN;
