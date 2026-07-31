@@ -2,6 +2,19 @@ import type { BoardProject } from "@/types/board";
 import { parseBoardProject } from "@/lib/board-document";
 import { readBoundedResponse } from "@/services/remote-content";
 import { getSessionToken } from "@/services/auth-session";
+import type {
+  CodexHistoryEvent,
+  CodexHistoryMessage,
+  CodexHistoryRecord,
+  CodexHistorySummary,
+} from "./codex-history";
+
+export type {
+  CodexHistoryEvent,
+  CodexHistoryMessage,
+  CodexHistoryRecord,
+  CodexHistorySummary,
+} from "./codex-history";
 
 export type SyncDirection = "push" | "pull" | "none";
 
@@ -63,6 +76,7 @@ export type AgentStatus = {
 export type CodexSession = {
   id: string;
   threadId?: string;
+  historyId?: string;
   profile?: string;
   reused?: boolean;
   running?: boolean;
@@ -164,6 +178,61 @@ async function boundedJSON(response: Response, maxBytes: number): Promise<unknow
   }
 }
 
+const CODEX_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+function validateCodexHistorySummary(value: unknown): CodexHistorySummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Agent returned an invalid Codex history record");
+  }
+  const record = value as Partial<CodexHistorySummary>;
+  if (!CODEX_ID_PATTERN.test(record.id ?? "") || !CODEX_ID_PATTERN.test(record.profile ?? "") ||
+      typeof record.threadId !== "string" || record.threadId !== "" && !CODEX_ID_PATTERN.test(record.threadId) ||
+      typeof record.title !== "string" || !record.title || record.title.length > 256 ||
+      typeof record.createdAt !== "string" || typeof record.updatedAt !== "string" ||
+      typeof record.status !== "string" || typeof record.messageCount !== "number" ||
+      !Number.isSafeInteger(record.messageCount) || record.messageCount < 0 || record.messageCount > 512 ||
+      record.preview !== undefined && typeof record.preview !== "string") {
+    throw new Error("Agent returned an invalid Codex history record");
+  }
+  const id = record.id ?? "";
+  const profile = record.profile ?? "";
+  return {
+    id,
+    profile,
+    threadId: record.threadId,
+    title: record.title,
+    ...(record.preview ? { preview: record.preview } : {}),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    status: record.status,
+    messageCount: record.messageCount,
+  };
+}
+
+function validateCodexHistoryRecord(value: unknown): CodexHistoryRecord {
+  const summary = validateCodexHistorySummary(value);
+  const record = value as Partial<CodexHistoryRecord>;
+  if (!Array.isArray(record.messages) || record.messages.length > 512 ||
+      !record.messages.every((message) => message && typeof message === "object" &&
+        CODEX_ID_PATTERN.test((message as CodexHistoryMessage).id) &&
+        ((message as CodexHistoryMessage).role === "user" || (message as CodexHistoryMessage).role === "assistant") &&
+        typeof (message as CodexHistoryMessage).text === "string" && (message as CodexHistoryMessage).text.length <= 100_000 &&
+        typeof (message as CodexHistoryMessage).createdAt === "string") ||
+      !Array.isArray(record.events) || record.events.length > 2_048) {
+    throw new Error("Agent returned an invalid Codex history transcript");
+  }
+  return {
+    ...summary,
+    ...(typeof record.cwd === "string" ? { cwd: record.cwd } : {}),
+    messages: record.messages as CodexHistoryMessage[],
+    events: record.events as CodexHistoryEvent[],
+  };
+}
+
+function validateCodexHistoryID(id: string): void {
+  if (!CODEX_ID_PATTERN.test(id)) throw new Error("Codex history id is invalid");
+}
+
 export async function createCodexSession(
   connection: AgentConnection,
   cwdOrOptions?: string | { cwd?: string; profile?: string; fresh?: boolean },
@@ -200,6 +269,114 @@ export async function getCodexSession(
     throw new Error("Agent returned an invalid Codex session status");
   }
   return value as CodexSession;
+}
+
+export async function listCodexHistory(
+  connection: AgentConnection,
+  profile = "default",
+  fetcher: Fetcher = fetch,
+): Promise<CodexHistorySummary[]> {
+  if (!CODEX_ID_PATTERN.test(profile)) throw new Error("Codex profile is invalid");
+  const response = await agentFetch(connection, `api/codex/history?profile=${encodeURIComponent(profile)}`, {
+    method: "GET",
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex history list failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 2 * 1024 * 1024);
+  if (!Array.isArray(value) || value.length > 200) throw new Error("Agent returned an invalid Codex history list");
+  return value.map(validateCodexHistorySummary);
+}
+
+export async function getCodexHistory(
+  connection: AgentConnection,
+  id: string,
+  profile = "default",
+  fetcher: Fetcher = fetch,
+): Promise<CodexHistoryRecord> {
+  validateCodexHistoryID(id);
+  if (!CODEX_ID_PATTERN.test(profile)) throw new Error("Codex profile is invalid");
+  const response = await agentFetch(connection, `api/codex/history/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`, {
+    method: "GET",
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex history read failed: HTTP ${response.status}`);
+  return validateCodexHistoryRecord(await boundedJSON(response, 8 * 1024 * 1024));
+}
+
+export async function restoreCodexHistory(
+  connection: AgentConnection,
+  id: string,
+  fetcher: Fetcher = fetch,
+): Promise<{ session: CodexSession; history: CodexHistoryRecord }> {
+  validateCodexHistoryID(id);
+  const response = await agentFetch(connection, `api/codex/history/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex history restore failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 8 * 1024 * 1024);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Agent returned an invalid Codex history restore response");
+  }
+  const result = value as { session?: unknown; history?: unknown };
+  const session = result.session as Partial<CodexSession> | undefined;
+  if (!session || typeof session.id !== "string" || typeof session.running !== "boolean") {
+    throw new Error("Agent returned an invalid restored Codex session");
+  }
+  return { session: session as CodexSession, history: validateCodexHistoryRecord(result.history) };
+}
+
+export async function deleteCodexHistory(
+  connection: AgentConnection,
+  id: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  validateCodexHistoryID(id);
+  const response = await agentFetch(connection, `api/codex/history/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  }, fetcher);
+  if (!response.ok && response.status !== 404) throw new Error(`Codex history delete failed: HTTP ${response.status}`);
+}
+
+export async function bulkDeleteCodexHistory(
+  connection: AgentConnection,
+  ids: readonly string[],
+  fetcher: Fetcher = fetch,
+): Promise<number> {
+  if (!ids.length || ids.length > 100) throw new Error("Select between 1 and 100 Codex histories");
+  ids.forEach(validateCodexHistoryID);
+  const response = await agentFetch(connection, "api/codex/history/bulk-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex history bulk delete failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 64 * 1024);
+  const deleted = value && typeof value === "object" ? (value as { deleted?: unknown }).deleted : undefined;
+  if (typeof deleted !== "number" || !Number.isSafeInteger(deleted) || deleted < 0 || deleted > ids.length) {
+    throw new Error("Agent returned an invalid Codex history delete count");
+  }
+  return deleted;
+}
+
+export async function revealCodexFile(
+  connection: AgentConnection,
+  sessionId: string,
+  path: string,
+  fetcher: Fetcher = fetch,
+): Promise<string> {
+  if (!CODEX_ID_PATTERN.test(sessionId) || !path.trim() || path.length > 16_000) {
+    throw new Error("Codex file path is invalid");
+  }
+  const response = await agentFetch(connection, "api/codex/reveal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, path }),
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex file reveal failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 64 * 1024);
+  const revealedPath = value && typeof value === "object" ? (value as { path?: unknown }).path : undefined;
+  if (typeof revealedPath !== "string" || !revealedPath) throw new Error("Agent returned an invalid revealed path");
+  return revealedPath;
 }
 
 export async function sendCodexMessage(

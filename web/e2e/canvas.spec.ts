@@ -4557,6 +4557,111 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await expect(page.getByText("hello from Codex")).toHaveCount(0);
 });
 
+test("Codex history manager restores, batch deletes, and reveals file paths", async ({ page }) => {
+  let restored = false;
+  let deletedIds: string[] = [];
+  let revealedPath: string | undefined;
+  await page.route("**/api/agent/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ connected: true, bridges: ["codex"], tools: [] }),
+    });
+  });
+  await page.route(/\/api\/codex\/session(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 404, body: "not found" });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ id: "session-history", threadId: "thread-history", profile: "default", running: false, historyId: "history-new" }),
+    });
+  });
+  await page.route("**/api/codex/session/*", async (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/codex/events?sessionId=**", async (route) => route.fulfill({
+    contentType: "text/event-stream",
+    body: "",
+  }));
+  await page.route(/\/api\/codex\/history(?:\/.*)?(?:\?.*)?$/, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname.endsWith("/api/codex/history")) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "history-old", profile: "default", threadId: "thread-old", title: "旧会话",
+            createdAt: "2026-07-30T00:00:00Z", updatedAt: "2026-07-30T00:00:01Z",
+            messageCount: 2, preview: "检查文件", status: "completed",
+          },
+          {
+            id: "history-second", profile: "default", threadId: "thread-second", title: "第二个会话",
+            createdAt: "2026-07-29T00:00:00Z", updatedAt: "2026-07-29T00:00:01Z",
+            messageCount: 1, preview: "另一个任务", status: "completed",
+          },
+        ]),
+      });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname.endsWith("/history-old/restore")) {
+      restored = true;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          session: { id: "session-restored", threadId: "thread-old", profile: "default", running: false, historyId: "history-old" },
+          history: {
+            id: "history-old", profile: "default", threadId: "thread-old", title: "旧会话",
+            createdAt: "2026-07-30T00:00:00Z", updatedAt: "2026-07-30T00:00:01Z",
+            messageCount: 2, preview: "检查文件", status: "completed",
+            messages: [
+              { id: "old-user", role: "user", text: "检查文件", createdAt: "2026-07-30T00:00:00Z" },
+              { id: "old-assistant", role: "assistant", text: "已定位", createdAt: "2026-07-30T00:00:01Z" },
+            ],
+            events: [
+              { type: "notification", method: "item/completed", params: { item: { id: "file-old", type: "fileChange", path: "web/src/App.tsx", status: "completed" } } },
+            ],
+          },
+        }),
+      });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname.endsWith("/history/bulk-delete")) {
+      deletedIds = (JSON.parse(request.postData() ?? "{}").ids ?? []) as string[];
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted: deletedIds.length }) });
+      return;
+    }
+    await route.fulfill({ status: 204 });
+  });
+  await page.route("**/api/codex/reveal", async (route) => {
+    revealedPath = (JSON.parse(route.request().postData() ?? "{}").path ?? undefined) as string | undefined;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ path: revealedPath }) });
+  });
+
+  await openFreshBoard(page);
+  await openLocalAgentPanel(page);
+  await page.getByLabel("本地地址").fill(agentUrl);
+  await page.getByLabel("连接令牌").fill("e2e-token");
+  await page.getByRole("button", { name: "连接" }).click();
+  await page.getByRole("button", { name: "启动 Codex 会话" }).click();
+  await page.getByRole("button", { name: "历史记录" }).click();
+  const history = page.getByRole("region", { name: "Codex 会话历史" });
+  await expect(history).toBeVisible();
+  await expect(history.getByText("旧会话", { exact: true })).toBeVisible();
+  await history.getByRole("button", { name: /恢复.*旧会话/ }).click();
+  await expect.poll(() => restored).toBe(true);
+  await expect(page.getByText("检查文件", { exact: true })).toBeVisible();
+  await expect(page.getByText("修改文件", { exact: true })).toBeVisible();
+  await page.getByTitle("在文件管理器中定位").click();
+  await expect.poll(() => revealedPath).toBe("web/src/App.tsx");
+
+  await page.getByRole("button", { name: "历史记录" }).click();
+  const secondHistory = page.getByRole("region", { name: "Codex 会话历史" });
+  await secondHistory.getByLabel("选择会话 旧会话").check();
+  await secondHistory.getByLabel("选择会话 第二个会话").check();
+  await secondHistory.getByRole("button", { name: /删除选中/ }).click();
+  await expect.poll(() => deletedIds).toEqual(["history-old", "history-second"]);
+});
+
 test("Codex session and running state stay synchronized across browser tabs", async ({ page, context }) => {
   let created = false;
   let running = false;

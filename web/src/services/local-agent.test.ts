@@ -12,6 +12,11 @@ import {
   parseCodexSseRecords,
   resolveAgentBaseUrl,
   respondCodexApproval,
+  listCodexHistory,
+  deleteCodexHistory,
+  bulkDeleteCodexHistory,
+  restoreCodexHistory,
+  revealCodexFile,
   sendCodexMessage,
   subscribeCodexEvents,
   uploadCodexAttachments,
@@ -36,6 +41,62 @@ describe("local agent project synchronization", () => {
       "none",
     );
     expect(decideProjectSync("invalid", "2026-07-15T00:00:00.000Z")).toBe("none");
+  });
+});
+
+describe("Codex history and file-manager APIs", () => {
+  test("lists, restores, deletes history and reveals a local path with bounded requests", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.endsWith("/api/codex/history?profile=default")) {
+        return new Response(JSON.stringify([{
+          id: "history-one", profile: "default", threadId: "thread-one", title: "检查画布",
+          createdAt: "2026-07-31T00:00:00Z", updatedAt: "2026-07-31T00:00:01Z",
+          messageCount: 2, preview: "已完成", status: "completed",
+        }]), { headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/codex/history/history-one/restore")) {
+        return new Response(JSON.stringify({
+          session: { id: "session-one", threadId: "thread-one", profile: "default", running: false, historyId: "history-one" },
+          history: {
+            id: "history-one", profile: "default", threadId: "thread-one", title: "检查画布",
+            createdAt: "2026-07-31T00:00:00Z", updatedAt: "2026-07-31T00:00:01Z",
+            messageCount: 2, preview: "已完成", status: "completed",
+            messages: [
+              { id: "user-one", role: "user", text: "检查画布", createdAt: "2026-07-31T00:00:00Z" },
+              { id: "assistant-one", role: "assistant", text: "已完成", createdAt: "2026-07-31T00:00:01Z" },
+            ], events: [],
+          },
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/codex/reveal")) {
+        return new Response(JSON.stringify({ path: "web/src/App.tsx" }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ deleted: 2, ok: true }), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const connection = { baseUrl: "http://localhost:5173", token: "secret" };
+    const history = await listCodexHistory(connection, "default", fetcher);
+    expect(history[0]?.title).toBe("检查画布");
+    const restored = await restoreCodexHistory(connection, "history-one", fetcher);
+    expect(restored.session.historyId).toBe("history-one");
+    await bulkDeleteCodexHistory(connection, ["history-one", "history-two"], fetcher);
+    await deleteCodexHistory(connection, "history-one", fetcher);
+    await revealCodexFile(connection, "session-one", "web/src/App.tsx", fetcher);
+    expect(requests.map((request) => request.url)).toEqual([
+      "http://localhost:5173/api/codex/history?profile=default",
+      "http://localhost:5173/api/codex/history/history-one/restore",
+      "http://localhost:5173/api/codex/history/bulk-delete",
+      "http://localhost:5173/api/codex/history/history-one",
+      "http://localhost:5173/api/codex/reveal",
+    ]);
+    expect(JSON.parse(String(requests[2].init?.body))).toEqual({ ids: ["history-one", "history-two"] });
+    expect(JSON.parse(String(requests[4].init?.body))).toEqual({ sessionId: "session-one", path: "web/src/App.tsx" });
   });
 });
 

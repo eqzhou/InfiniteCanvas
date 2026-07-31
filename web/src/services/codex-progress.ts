@@ -4,6 +4,7 @@ export type CodexProgressUpdate = {
   itemId?: string;
   itemType: string;
   label: string;
+  path?: string;
   detail?: string;
   appendDetail?: boolean;
   status: CodexProgressStatus;
@@ -14,6 +15,7 @@ export type CodexProgressItem = {
   id: string;
   itemType: string;
   label: string;
+  path?: string;
   detail?: string;
   status: CodexProgressStatus;
   error?: string;
@@ -40,6 +42,7 @@ export function reduceCodexProgress(
     id,
     itemType: update.itemType,
     label: update.label,
+    ...(update.path ? { path: update.path } : {}),
     ...(detail ? { detail } : {}),
     status: update.status,
     ...(update.error ? { error: update.error } : {}),

@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -29,6 +31,8 @@ const (
 )
 
 func main() {
+	debugFlag := flag.Bool("debug", false, "write dated Agent diagnostics under OPENBOARD_DATA/debug")
+	flag.Parse()
 	addr := env("OPENBOARD_ADDR", "127.0.0.1:8790")
 	dataDir := env("OPENBOARD_DATA", appdir.DefaultDataDir())
 	token := os.Getenv("OPENBOARD_TOKEN")
@@ -38,6 +42,17 @@ func main() {
 	origins := parseOrigins(env("OPENBOARD_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"))
 	if err := api.SecureDataDir(dataDir); err != nil {
 		log.Fatal(err)
+	}
+	var debugLog io.WriteCloser
+	if *debugFlag || strings.EqualFold(strings.TrimSpace(os.Getenv("OPENBOARD_DEBUG")), "true") {
+		var err error
+		debugLog, err = api.NewDatedDebugLogWriter(dataDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer debugLog.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, debugLog))
+		log.Printf("dated debug logging enabled (data=%s)", dataDir)
 	}
 
 	r := chi.NewRouter()
@@ -68,6 +83,9 @@ func main() {
 		appServer = api.NewServer(dataDir)
 	}
 	defer appServer.Close()
+	if debugLog != nil {
+		appServer.SetDebugLogWriter(debugLog)
+	}
 	if config, err := blobStorageConfigFromEnv(); err != nil {
 		log.Fatal(err)
 	} else if config != nil {

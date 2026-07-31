@@ -37,6 +37,7 @@ type Server struct {
 	mu                      sync.Mutex
 	uploads                 chan struct{}
 	codex                   *codexManager
+	codexHistory            *codexHistoryStore
 	claude                  *claudeManager
 	runtime                 *runtimeHub
 	runtimeOrigins          map[string]struct{}
@@ -77,6 +78,8 @@ type Server struct {
 	audioWorkersOnce        sync.Once
 	audioWake               chan struct{}
 	processToken            string
+	debugWriter             io.Writer
+	fileManagerLauncher     fileManagerLaunch
 }
 
 func Mount(r chi.Router, dataDir string) {
@@ -92,12 +95,18 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
 		r.Get("/codex/session", s.getCodexSession)
+		r.Get("/codex/history", s.listCodexHistory)
+		r.Get("/codex/history/{id}", s.getCodexHistory)
+		r.Post("/codex/history/{id}/restore", s.restoreCodexHistory)
+		r.Post("/codex/history/bulk-delete", s.bulkDeleteCodexHistory)
+		r.Delete("/codex/history/{id}", s.deleteCodexHistory)
 		r.Post("/codex/message", s.sendCodexMessage)
 		r.Post("/codex/interrupt", s.interruptCodex)
 		r.Post("/codex/attachments", s.uploadCodexAttachments)
 		r.Delete("/codex/attachments/{id}", s.deleteCodexAttachment)
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
+		r.Post("/codex/reveal", s.revealCodexFile)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
 		r.Post("/claude/session", s.createClaudeSession)
 		r.Get("/claude/session", s.getClaudeSession)
@@ -202,11 +211,12 @@ func NewServer(dataDir string) *Server {
 	generationRoot, stopGeneration := context.WithCancel(context.Background())
 	promptSchedulerRoot, stopPromptScheduler := context.WithCancel(context.Background())
 	return &Server{
-		dataDir: dataDir,
-		uploads: make(chan struct{}, 2),
-		codex:   newCodexManager(),
-		claude:  newClaudeManager(),
-		runtime: newRuntimeHub(),
+		dataDir:      dataDir,
+		uploads:      make(chan struct{}, 2),
+		codex:        newCodexManager(),
+		codexHistory: newCodexHistoryStore(dataDir),
+		claude:       newClaudeManager(),
+		runtime:      newRuntimeHub(),
 		runtimeOrigins: map[string]struct{}{
 			"http://localhost:5173": {},
 			"http://127.0.0.1:5173": {},
@@ -228,6 +238,10 @@ func NewServer(dataDir string) *Server {
 
 func (s *Server) SetProcessToken(token string) {
 	s.processToken = strings.TrimSpace(token)
+}
+
+func (s *Server) SetDebugLogWriter(writer io.Writer) {
+	s.debugWriter = writer
 }
 
 func (s *Server) SetRuntimeOrigins(origins map[string]struct{}) {
@@ -334,12 +348,18 @@ func MountServer(r chi.Router, s *Server) {
 		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
 		r.Get("/codex/session", s.getCodexSession)
+		r.Get("/codex/history", s.listCodexHistory)
+		r.Get("/codex/history/{id}", s.getCodexHistory)
+		r.Post("/codex/history/{id}/restore", s.restoreCodexHistory)
+		r.Post("/codex/history/bulk-delete", s.bulkDeleteCodexHistory)
+		r.Delete("/codex/history/{id}", s.deleteCodexHistory)
 		r.Post("/codex/message", s.sendCodexMessage)
 		r.Post("/codex/interrupt", s.interruptCodex)
 		r.Post("/codex/attachments", s.uploadCodexAttachments)
 		r.Delete("/codex/attachments/{id}", s.deleteCodexAttachment)
 		r.Post("/codex/approval", s.respondCodexApproval)
 		r.Get("/codex/events", s.codexEvents)
+		r.Post("/codex/reveal", s.revealCodexFile)
 		r.Delete("/codex/session/{id}", s.closeCodexSession)
 		r.Post("/claude/session", s.createClaudeSession)
 		r.Get("/claude/session", s.getClaudeSession)

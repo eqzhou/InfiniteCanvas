@@ -71,6 +71,7 @@ type codexSession struct {
 	id                 string
 	scope              agentScope
 	profile            string
+	cwd                string
 	threadID           string
 	turnID             string
 	turnStarting       bool
@@ -87,12 +88,15 @@ type codexSession struct {
 	runtimeClientID    string
 	releaseRuntime     func()
 	eventSequence      uint64
+	historyStore       *codexHistoryStore
+	historyID          string
 }
 
 type codexSessionSnapshot struct {
 	ID              string `json:"id"`
 	ThreadID        string `json:"threadId,omitempty"`
 	Profile         string `json:"profile"`
+	HistoryID       string `json:"historyId,omitempty"`
 	Reused          bool   `json:"reused"`
 	Running         bool   `json:"running"`
 	RuntimeClientID string `json:"runtimeClientId,omitempty"`
@@ -288,7 +292,7 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 	defer s.codex.startupWG.Done()
 	// The HTTP request context ends as soon as this response is sent. A Codex
 	// session must outlive the request and is cancelled explicitly on close.
-	session, err := startCodexSessionForScope(managerRoot, scope, cwd)
+	session, err := startCodexSessionForScopeWithThreadAndDebug(managerRoot, scope, cwd, "", s.debugWriter)
 	if err != nil {
 		message := "codex app-server unavailable: " + err.Error()
 		http.Error(w, message, http.StatusServiceUnavailable)
@@ -300,6 +304,23 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 	}
 	session.profile = profile
 	session.scope = scope
+	session.cwd = cwd
+	session.historyStore = s.codexHistory
+	session.historyID = randomID("history")
+	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.codexHistory.put(scope, codexHistoryRecord{
+		ID: session.historyID, Profile: profile, ThreadID: session.threadID,
+		Title: "新对话", CreatedAt: createdAt, UpdatedAt: createdAt,
+		Status: "idle", CWD: cwd,
+	}); err != nil {
+		session.close()
+		s.codex.mu.Lock()
+		delete(s.codex.creating, profileKey)
+		creation.complete(codexSessionSnapshot{}, http.StatusInternalServerError, "failed to persist Codex history")
+		s.codex.mu.Unlock()
+		http.Error(w, "failed to persist Codex history", http.StatusInternalServerError)
+		return
+	}
 	s.codex.mu.Lock()
 	if s.codex.closed {
 		delete(s.codex.creating, profileKey)
@@ -356,7 +377,7 @@ func (s *codexSession) snapshot(reused bool) codexSessionSnapshot {
 
 func (s *codexSession) snapshotLocked(reused bool) codexSessionSnapshot {
 	return codexSessionSnapshot{
-		ID: s.id, ThreadID: s.threadID, Profile: s.profile, Reused: reused,
+		ID: s.id, ThreadID: s.threadID, Profile: s.profile, HistoryID: s.historyID, Reused: reused,
 		Running: s.turnStarting || s.turnID != "", RuntimeClientID: s.runtimeClientID,
 	}
 }
@@ -370,6 +391,14 @@ func startCodexSession(parent context.Context, cwd string) (*codexSession, error
 }
 
 func startCodexSessionForScope(parent context.Context, scope agentScope, cwd string) (*codexSession, error) {
+	return startCodexSessionForScopeWithThread(parent, scope, cwd, "")
+}
+
+func startCodexSessionForScopeWithThread(parent context.Context, scope agentScope, cwd, resumeThreadID string) (*codexSession, error) {
+	return startCodexSessionForScopeWithThreadAndDebug(parent, scope, cwd, resumeThreadID, nil)
+}
+
+func startCodexSessionForScopeWithThreadAndDebug(parent context.Context, scope agentScope, cwd, resumeThreadID string, debugWriter io.Writer) (*codexSession, error) {
 	bin := strings.TrimSpace(os.Getenv("OPENBOARD_CODEX_BIN"))
 	if bin == "" {
 		bin = "codex"
@@ -402,7 +431,11 @@ func startCodexSessionForScope(parent context.Context, scope agentScope, cwd str
 		cancel()
 		return nil, err
 	}
-	go io.Copy(io.Discard, stderr)
+	stderrWriter := io.Writer(io.Discard)
+	if debugWriter != nil {
+		stderrWriter = debugWriter
+	}
+	go func() { _, _ = io.Copy(stderrWriter, stderr) }()
 	client := codexbridge.NewClient(stdout, stdin)
 	session := &codexSession{
 		id: randomID("codex"), client: client, cmd: cmd, cancel: cancel,
@@ -417,10 +450,26 @@ func startCodexSessionForScope(parent context.Context, scope agentScope, cwd str
 	// The app-server protocol uses a notification to complete initialization.
 	_ = client.Notify(startupContext, "initialized", map[string]any{})
 	var thread map[string]any
-	if err := client.Call(startupContext, "thread/start", map[string]any{"cwd": cwd}, &thread); err != nil {
-		_ = client.Close()
-		cancel()
-		return nil, err
+	threadMethod := "thread/start"
+	threadParams := map[string]any{"cwd": cwd}
+	if resumeThreadID != "" {
+		threadMethod = "thread/resume"
+		threadParams = map[string]any{"threadId": resumeThreadID}
+	}
+	if err := client.Call(startupContext, threadMethod, threadParams, &thread); err != nil {
+		if resumeThreadID == "" {
+			_ = client.Close()
+			cancel()
+			return nil, err
+		}
+		// Older app-server versions may not expose thread/resume. Falling back
+		// keeps the archived transcript usable while starting a fresh live thread.
+		thread = nil
+		if fallbackErr := client.Call(startupContext, "thread/start", map[string]any{"cwd": cwd}, &thread); fallbackErr != nil {
+			_ = client.Close()
+			cancel()
+			return nil, fallbackErr
+		}
 	}
 	if v, ok := thread["thread"]; ok {
 		if obj, ok := v.(map[string]any); ok {
@@ -430,6 +479,10 @@ func startCodexSessionForScope(parent context.Context, scope agentScope, cwd str
 	if session.threadID == "" {
 		session.threadID, _ = thread["id"].(string)
 	}
+	if session.threadID == "" {
+		session.threadID = resumeThreadID
+	}
+	session.cwd = cwd
 	go session.consume()
 	go func() { _ = cmd.Wait(); session.close() }()
 	return session, nil
@@ -511,8 +564,8 @@ func (s *codexSession) trackTurnNotification(method string, params json.RawMessa
 
 func (s *codexSession) publish(event codexEvent) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return
 	}
 	s.history = append(s.history, event)
@@ -522,6 +575,10 @@ func (s *codexSession) publish(event codexEvent) {
 	if len(s.history) > codexHistoryLimit {
 		s.history = append([]codexEvent(nil), s.history[len(s.history)-codexHistoryLimit:]...)
 	}
+	historyStore := s.historyStore
+	historyID := s.historyID
+	historyProfile := s.profile
+	historyScope := s.scope
 	for ch := range s.subs {
 		select {
 		case ch <- event:
@@ -530,6 +587,10 @@ func (s *codexSession) publish(event codexEvent) {
 			close(ch)
 		}
 	}
+	if historyStore != nil && historyID != "" && event.Method != "openboard/session_state" {
+		_ = historyStore.appendEvent(historyScope, historyProfile, historyID, event)
+	}
+	s.mu.Unlock()
 }
 
 func (s *codexSession) publishState() {
@@ -590,6 +651,14 @@ func (s *codexSession) close() {
 		return
 	}
 	s.closed = true
+	historyStore := s.historyStore
+	historyScope := s.scope
+	historyProfile := s.profile
+	historyID := s.historyID
+	historyStatus := "completed"
+	if s.turnStarting || s.turnID != "" {
+		historyStatus = "failed"
+	}
 	attachments := make([]codexAttachment, 0, len(s.pendingAttachments)+len(s.activeAttachments))
 	release := s.releaseRuntime
 	s.releaseRuntime = nil
@@ -609,9 +678,14 @@ func (s *codexSession) close() {
 		release()
 	}
 	removeCodexAttachments(attachments)
-	_ = s.client.Close()
+	if s.client != nil {
+		_ = s.client.Close()
+	}
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if historyStore != nil && historyID != "" {
+		_ = historyStore.finish(historyScope, historyProfile, historyID, historyStatus)
 	}
 }
 

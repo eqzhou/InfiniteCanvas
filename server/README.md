@@ -13,6 +13,10 @@ go run ./cmd/server
 Listens on `127.0.0.1:8790` by default. The local Vite origins are allowed for
 cross-origin requests; additional origins must be explicit:
 
+Use `go run ./cmd/server --debug` (or `OPENBOARD_DEBUG=true`) to append the
+standard server/Agent diagnostics to restrictive, local-date files under
+`OPENBOARD_DATA/debug/debug-YYYY-MM-DD.log`.
+
 ```bash
 OPENBOARD_ADDR=127.0.0.1:8790 \
 OPENBOARD_ORIGINS=http://localhost:5173,http://127.0.0.1:5173 \
@@ -34,12 +38,17 @@ limits, upload concurrency and disk quotas, and cross-process write locking.
 - `POST /api/runtime/command` — execute an identified command in the bound tab
 - `GET /api/codex/session?profile=...` — inspect the shared session and running state
 - `POST /api/codex/session` — start a local `codex app-server --stdio` session
+- `GET /api/codex/history?profile=...` — list the scoped, durable Codex session history
+- `GET /api/codex/history/{id}` — read one archived transcript
+- `POST /api/codex/history/{id}/restore` — restore an archived transcript into a live thread
+- `POST /api/codex/history/bulk-delete` / `DELETE /api/codex/history/{id}` — bounded history deletion
 - `POST /api/codex/message` — start a streamed turn (`sessionId`, `text`)
 - `POST /api/codex/interrupt` — stop the active turn
 - `POST /api/codex/attachments` — upload bounded owner-only images
 - `DELETE /api/codex/attachments/{id}?sessionId=...` — cancel a pending image attachment
 - `POST /api/codex/approval` — explicitly approve or deny a server request
 - `GET /api/codex/events?sessionId=...` — SSE notifications and approval requests
+- `POST /api/codex/reveal` — locate a Codex-reported path in the native file manager
 - `DELETE /api/codex/session/{id}` — close a Codex session
 - `POST /api/files` — multipart upload
 - `GET /api/files/{name}`

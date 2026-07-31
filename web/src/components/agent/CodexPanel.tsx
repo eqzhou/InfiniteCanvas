@@ -1,22 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, ImagePlus, Plus, Send, Square, Unplug, X } from "lucide-react";
+import { ArrowDown, Check, FolderOpen, History, ImagePlus, Plus, Send, Square, Trash2, Unplug, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   closeCodexSession,
+  bulkDeleteCodexHistory,
   createCodexSession,
   deleteCodexAttachment,
+  deleteCodexHistory,
   getCodexSession,
+  listCodexHistory,
   interruptCodexTurn,
+  revealCodexFile,
   respondCodexApproval,
+  restoreCodexHistory,
   sendCodexMessage,
   subscribeCodexEvents,
   uploadCodexAttachments,
   type AgentConnection,
   type CodexEvent,
+  type CodexHistoryRecord,
+  type CodexHistorySummary,
   type CodexPermissionMode,
   type CodexSession,
 } from "@/services/local-agent";
+import {
+  normalizeCodexHistorySelection,
+  sortCodexHistory,
+  toggleCodexHistorySelection,
+} from "@/services/codex-history";
 import {
   classifyCodexEvent,
   codexApprovalKey,
@@ -57,6 +69,44 @@ function MarkdownMessage({ text }: { text: string }) {
       {text}
     </ReactMarkdown>
   );
+}
+
+function historyTurnStatus(status: string, running: boolean): TurnStatus {
+  if (running || status === "running") return "running";
+  if (status === "failed") return "failed";
+  if (status === "completed") return "completed";
+  return "idle";
+}
+
+function replayHistoryProgress(record: CodexHistoryRecord): {
+  progress: CodexProgressItem[];
+  logs: string[];
+} {
+  let progress: CodexProgressItem[] = [];
+  const logs: string[] = [];
+  for (const rawEvent of record.events) {
+    const effect = classifyCodexEvent(rawEvent as CodexEvent);
+    if (effect.kind !== "item") continue;
+    logs.push([effect.text, effect.status, effect.detail].filter(Boolean).join(" · "));
+    progress = reduceCodexProgress(progress, {
+      itemId: effect.itemId,
+      itemType: effect.itemType,
+      label: effect.label,
+      path: effect.path,
+      detail: effect.appendDetail
+        ? effect.detail ?? effect.text
+        : effect.command ?? effect.path ?? effect.detail ?? effect.text,
+      appendDetail: effect.appendDetail,
+      status: effect.status,
+      error: effect.error,
+    });
+  }
+  return { progress, logs: logs.slice(-100) };
+}
+
+function formatHistoryDate(value: string): string {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : value;
 }
 
 
@@ -131,6 +181,10 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [history, setHistory] = useState<CodexHistorySummary[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySelected, setHistorySelected] = useState<string[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [showJumpBottom, setShowJumpBottom] = useState(false);
   const syncRef = useRef<ReturnType<typeof createCodexSessionSync> | null>(null);
@@ -287,6 +341,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           itemId: effect.itemId,
           itemType: effect.itemType,
           label: effect.label,
+          path: effect.path,
           detail: effect.appendDetail
             ? effect.detail ?? effect.text
             : effect.command ?? effect.path ?? effect.detail ?? effect.text,
@@ -327,6 +382,97 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     });
     return () => source.close();
   }, [connection, sessionId, session?.threadId]);
+
+  const loadHistory = async () => {
+    setHistoryBusy(true);
+    try {
+      const records = sortCodexHistory(await listCodexHistory(connection, CODEX_PROFILE));
+      setHistory(records);
+      setHistorySelected((current) => normalizeCodexHistorySelection(records, current));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
+
+  const restoreHistory = async (summary: CodexHistorySummary) => {
+    if (historyBusy || turnStatusRef.current === "running") return;
+    setHistoryBusy(true);
+    setBusy(true);
+    setError(null);
+    sharedRevisionRef.current += 1;
+    try {
+      const restored = await restoreCodexHistory(connection, summary.id);
+      const nextStatus = historyTurnStatus(restored.history.status, restored.session.running === true);
+      const replay = replayHistoryProgress(restored.history);
+      sessionIdRef.current = restored.session.id;
+      setSession(restored.session);
+      setMessages(restored.history.messages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+      })).slice(-120));
+      setLogs(replay.logs);
+      setProgress(replay.progress);
+      setProgressOpen(replay.progress.length > 0);
+      setApprovals([]);
+      setFiles([]);
+      setTurnStartedAt(nextStatus === "running" ? Date.now() : null);
+      setElapsedNow(Date.now());
+      setTurnStatus(nextStatus);
+      turnStatusRef.current = nextStatus;
+      syncRef.current?.publish(restored.session, nextStatus);
+      setHistorySelected([]);
+      setHistoryOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+      setHistoryBusy(false);
+    }
+  };
+
+  const removeHistory = async (id: string) => {
+    if (historyBusy) return;
+    setHistoryBusy(true);
+    setError(null);
+    try {
+      await deleteCodexHistory(connection, id);
+      setHistory((current) => current.filter((record) => record.id !== id));
+      setHistorySelected((current) => current.filter((value) => value !== id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
+
+  const removeSelectedHistory = async () => {
+    const selected = normalizeCodexHistorySelection(history, historySelected);
+    if (!selected.length || historyBusy) return;
+    setHistoryBusy(true);
+    setError(null);
+    try {
+      await bulkDeleteCodexHistory(connection, selected);
+      const selectedSet = new Set(selected);
+      setHistory((current) => current.filter((record) => !selectedSet.has(record.id)));
+      setHistorySelected([]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
+
+  const revealFile = async (path: string) => {
+    if (!session) return;
+    try {
+      await revealCodexFile(connection, session.id, path);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
 
   const start = async (fresh: boolean) => {
     sharedRevisionRef.current += 1;
@@ -461,11 +607,25 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
             <p className="truncate text-[10px] text-[var(--ob-muted)]" title={session.threadId}>{session.threadId}</p>
           ) : null}
         </div>
+        <button
+          type="button"
+          className="ob-icon-btn ml-auto h-7 w-7"
+          title="历史记录"
+          aria-label="历史记录"
+          disabled={historyBusy}
+          onClick={() => {
+            const next = !historyOpen;
+            setHistoryOpen(next);
+            if (next) void loadHistory();
+          }}
+        >
+          <History size={13} />
+        </button>
         {session ? (
           <>
             <button
               type="button"
-              className="ob-icon-btn ml-auto h-7 w-7"
+              className="ob-icon-btn h-7 w-7"
               title="新会话"
               aria-label="新会话"
               onClick={() => void start(true)}
@@ -496,6 +656,75 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           </>
         ) : null}
       </div>
+      {historyOpen ? (
+        <section
+          role="region"
+          aria-label="Codex 会话历史"
+          className="mb-2 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_50%,transparent)] p-2.5"
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <strong className="text-xs font-semibold">历史记录</strong>
+            <span className="text-[10px] text-[var(--ob-muted)]">{history.length} 个会话</span>
+          </div>
+          {history.length ? (
+            <div className="max-h-56 space-y-1.5 overflow-auto">
+              {history.map((record) => (
+                <div key={record.id} className="flex min-w-0 items-start gap-1.5 rounded-lg border border-[var(--ob-line)] px-2 py-1.5">
+                  <input
+                    type="checkbox"
+                    aria-label={`选择会话 ${record.title}`}
+                    checked={historySelected.includes(record.id)}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      setHistorySelected((current) => toggleCodexHistorySelection(current, record.id, checked));
+                    }}
+                    className="mt-1"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      className="block max-w-full truncate text-left text-[11px] font-medium text-[var(--ob-ink)] hover:underline"
+                      aria-label={`恢复 ${record.title}`}
+                      title={`恢复 ${record.title}`}
+                      disabled={historyBusy || turnStatus === "running"}
+                      onClick={() => void restoreHistory(record)}
+                    >
+                      {record.title}
+                    </button>
+                    <div className="truncate text-[10px] text-[var(--ob-muted)]">
+                      {record.preview || "暂无回复"} · {formatHistoryDate(record.updatedAt)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ob-icon-btn h-6 w-6 shrink-0"
+                    title="删除会话"
+                    aria-label={`删除会话 ${record.title}`}
+                    disabled={historyBusy || turnStatus === "running"}
+                    onClick={() => void removeHistory(record.id)}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="py-4 text-center text-[11px] text-[var(--ob-muted)]">暂无 Codex 会话历史</p>
+          )}
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] text-[var(--ob-muted)]">已选 {historySelected.length} 个</span>
+            <button
+              type="button"
+              className="ob-btn-danger px-2 py-1 text-[10px]"
+              aria-label={`删除选中 ${historySelected.length} 个会话`}
+              disabled={historyBusy || !historySelected.length || turnStatus === "running"}
+              onClick={() => void removeSelectedHistory()}
+            >
+              删除选中
+            </button>
+          </div>
+        </section>
+      ) : null}
       {!session ? (
         <button
           type="button"
@@ -574,6 +803,17 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                       {item.detail ? <span className="ml-1 break-all text-[var(--ob-muted)]">{item.detail}</span> : null}
                       {item.error ? <span className="block text-[var(--ob-danger)]">{item.error}</span> : null}
                     </span>
+                    {item.path ? (
+                      <button
+                        type="button"
+                        className="ob-icon-btn ml-auto h-6 w-6 shrink-0"
+                        title="在文件管理器中定位"
+                        aria-label={`在文件管理器中定位 ${item.path}`}
+                        onClick={() => void revealFile(item.path ?? "")}
+                      >
+                        <FolderOpen size={12} />
+                      </button>
+                    ) : null}
                   </li>
                 ))}
               </ol>

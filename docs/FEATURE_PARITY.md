@@ -63,7 +63,7 @@ styles, fixtures, screenshots, or bundled assets:
 | Collapsible task progress, dynamic tool status and process timeline | [verified] item lifecycle events merge by stable item id into bounded Chinese progress rows with running/completed/failed state, failure reason, incremental reasoning/command detail and a collapsible presentation |
 | Immediate send/new-conversation feedback and long-wait status | [verified] sending clears the composer and renders an optimistic user message before attachment/network completion; new conversation clears the prior transcript before thread creation; running turns show elapsed time and a stop affordance |
 | Turn-only stop, incremental assistant output and copy-safe Agent text | [verified existing] stop calls `turn/interrupt` without ending the service; assistant deltas stream incrementally; canvas shortcuts ignore textarea/input/contenteditable targets |
-| Dated debug files, full history manager and file-manager reveal | [not yet claimed] these remain separate follow-up behaviors; OpenBoard does not claim complete v0.12.0 parity for them |
+| Dated debug files, full history manager and file-manager reveal | [verified] `--debug`/`OPENBOARD_DEBUG` writes permission-restricted local-date debug files; Codex history is bounded, tenant/profile-scoped and durable with list/detail/restore/delete/bulk-delete plus transcript and progress replay; changed-file progress can reveal the validated path in the host file manager |
 
 ## Public baseline traceability
 
@@ -94,6 +94,7 @@ implementation evidence.
 | Seedance 9 image/3 video/3 audio references, ratios, 480p/720p/1080p and smart/4-15s duration | `NodeActions.tsx`, `BoardNodeView.tsx`, `CreativeWorkbench.tsx`, `video-generation.test.ts` |
 | Video first/last-frame reference mode for ordered image refs | `video-generation.ts`, Ark role mapping in `ai-client.ts` / server media executor, config/video/workbench UI, unit + Go + workbench E2E |
 | Unified canvas Agent, project context, approvals, attachments, stop, Codex/Claude continuity and generation status | Agent runtime/MCP/Codex/Claude integration tests and single-entry canvas E2E |
+| v0.12.0 dated Agent diagnostics, history and file-manager reveal | `server/internal/api/debug_log.go`, `codex_history.go`, `file_manager.go`, `server/internal/api/*_test.go`, `web/src/services/codex-history.test.ts`, `local-agent.test.ts`, and the Chromium Codex history-manager E2E; verified with Bun, Go (including `-race`/`vet`) and Playwright |
 | Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and declaratively mapped remote sources | prompt detail/library E2E, prompt-source manager E2E, formal storage E2E, and `prompt-sources.test.ts` |
 | Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | full asset-library E2E and formal-storage E2E |
 | WebDAV project and full-workspace backup/restore with workflow templates, nested workflow media, deduplication and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
@@ -146,8 +147,8 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 650 Bun unit/integration tests at the 2026-07-31 verification baseline; the same run reports 80.78% line and 83.84% function coverage. CI publishes this report but does not currently enforce a numeric threshold
-- [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
+- [verified] 654 Bun unit/integration tests at the 2026-07-31 verification baseline; the same run reports 80.78% line and 83.84% function coverage. CI publishes this report but does not currently enforce a numeric threshold
+- [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds; the v0.12.0 Agent follow-up also passes the focused API race suite
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)
 - [verified] 52 passed and 12 intentional desktop-only skips in production mobile Chromium
@@ -175,7 +176,8 @@ Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent S
   Codex permissions, collapsible process progress, immediate composer/new-chat
   feedback and long-wait status on top of the v0.11.0 reasoning, drag-upload
   and credential-free preferences work. Dated debug files, full history
-  management and file-manager reveal are explicitly not claimed yet.
+  management and file-manager reveal are now implemented and verified by the
+  local API, Bun service, and Chromium Agent-history tests.
 - Tiger latest public release remains `v0.4.5`; its current public Unreleased
   entry replaces the separate canvas assistant with an Agent adapted to the
   canvas. OpenBoard now exposes one authoritative `画布 Agent` entry.
