@@ -3213,7 +3213,7 @@ test("an image can continue into a durable connected result through the in-app d
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
 });
 
-test("local video and audio nodes persist, render native players, and download", async ({ page, browserName }) => {
+test("local video and audio nodes persist, render media players, and download", async ({ page, browserName }) => {
   await openFreshBoard(page);
   await page.locator('input[type="file"][accept="video/*"]').setInputFiles({
     name: "local-video.mp4",
@@ -3230,11 +3230,13 @@ test("local video and audio nodes persist, render native players, and download",
   const videoNode = page.locator('[data-node-type="video"]');
   const audioNode = page.locator('[data-node-type="audio"]');
   // Media imports are queued and persisted asynchronously; wait for both nodes
-  // before asserting browser-specific native controls.
+  // before asserting the native video and custom audio controls.
   await expect(videoNode).toHaveCount(1, { timeout: 15_000 });
   await expect(audioNode).toHaveCount(1, { timeout: 15_000 });
   await expect(videoNode.locator("video[controls]")).toHaveCount(1);
-  await expect(audioNode.locator("audio[controls]")).toHaveCount(1);
+  await expect(audioNode.locator("audio")).toHaveCount(1);
+  await expect(audioNode.getByRole("button", { name: "播放音频" })).toHaveCount(1);
+  await expect(audioNode.getByRole("slider", { name: "音频播放进度" })).toHaveCount(1);
   await expect(audioNode).toContainText("audio/mpeg");
 
   await page.getByTestId("canvas-surface").click({ position: { x: 16, y: 16 } });
@@ -3261,7 +3263,7 @@ test("local video and audio nodes persist, render native players, and download",
   const audioSrc = await audioNode.locator("audio").getAttribute("src");
   await page.reload();
   const reloadedVideo = page.locator('[data-node-type="video"] video[controls]');
-  const reloadedAudio = page.locator('[data-node-type="audio"] audio[controls]');
+  const reloadedAudio = page.locator('[data-node-type="audio"] audio');
   await expect(reloadedVideo).toHaveAttribute("src", /^(blob:|data:video\/|\/api\/media\/references\/)/);
   await expect(reloadedAudio).toHaveAttribute("src", /^(blob:|data:audio\/|\/api\/media\/references\/)/);
   expect(videoSrc).toMatch(/^(blob:|data:video\/)/);
@@ -3938,7 +3940,8 @@ test("node camera settings persist, stay screen-sized, and expand generation pro
   const configImageResult = page.locator('[data-node-type="image"]').last();
   await configImageResult.locator("[data-node-header]").click();
   await expect(configImageResult.getByTitle("摄像机设置（已启用）")).toBeVisible();
-  await expect(configImageResult.getByText("最终实际发送的提示词（只读）")).toHaveCount(0);
+  await expect(configImageResult.getByText("最终实际发送的提示词（只读）")).toBeVisible();
+  await expect(configImageResult.getByLabel("最终实际发送的提示词")).toContainText("config camera scene");
   await expect(configImageResult.getByRole("textbox", { name: "节点生成提示词" })).toHaveText("");
 
   await configNode.locator("[data-node-header]").click();
@@ -5072,7 +5075,7 @@ test("global generation defaults are editable and seed new nodes", async ({ page
   // editor they are frozen at the built-in values and the feature is inert.
   await settings.getByLabel("默认视频比例").selectOption("9:16");
   await settings.getByLabel("默认清晰度").selectOption("1080p");
-  await settings.getByLabel("默认声音").fill("verse");
+  await settings.getByLabel("默认声音").selectOption("verse");
   await closeSettings(page);
 
   // A newly created node inherits them.
@@ -5169,8 +5172,8 @@ test("workbench history refills the form without generating", async ({ page }) =
 
   // Move the form away from the record so a successful refill is unambiguous.
   await prompt.fill("另一个草稿");
-  await page.getByLabel("尺寸").fill("1024x1024");
-  await page.getByLabel("质量").fill("auto");
+  await page.getByLabel("尺寸").selectOption("1024x1024");
+  await page.getByLabel("质量").selectOption("auto");
   await page.getByLabel("数量").fill("1");
 
   await refill.click();
