@@ -65,6 +65,11 @@ import {
   withPreferredModel,
   type ImageAspectSelection,
 } from "@/lib/workbench-preferences";
+import {
+  acceptsWorkbenchReference,
+  MAX_REFERENCE_FILES,
+  mergeReferenceFiles,
+} from "@/lib/reference-files";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const config = useBoardStore((state) => state.config);
@@ -101,6 +106,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     negativePrompt: "", mode: "std", multiShot: false, shotType: "intelligence", shots: [], elements: [],
   });
   const [references, setReferences] = useState<File[]>([]);
+  const [referenceDropActive, setReferenceDropActive] = useState(false);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [category, setCategory] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(WORKBENCH_ALL_CATEGORIES);
@@ -934,14 +940,58 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 ) : null}
               </div>
             )}
-            <label className="block">
+            <label
+              aria-label="参考素材拖放区"
+              className={`block rounded-xl border border-dashed p-3 transition-colors ${
+                referenceDropActive
+                  ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]"
+                  : "border-[var(--ob-line)]"
+              }`}
+              onDragEnter={(event) => {
+                if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+                event.preventDefault();
+                setReferenceDropActive(true);
+              }}
+              onDragOver={(event) => {
+                if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setReferenceDropActive(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setReferenceDropActive(false);
+                const incoming = Array.from(event.dataTransfer.files)
+                  .filter((file) => acceptsWorkbenchReference(file, kind, provider?.protocol));
+                setReferences((current) => mergeReferenceFiles(
+                  current,
+                  incoming,
+                  MAX_REFERENCE_FILES,
+                ));
+              }}
+            >
               <span className="ob-label">参考素材</span>
+              <span className="mt-1 block text-xs text-[var(--ob-muted)]">
+                拖拽文件到这里，或点击选择（最多 {MAX_REFERENCE_FILES} 个）
+              </span>
               <input
                 type="file"
                 multiple
                 accept={kind === "image" ? "image/png,image/jpeg" : provider?.protocol === "apimart" ? "image/png,image/jpeg,image/webp,image/gif" : "image/*,video/*,audio/*"}
                 className="mt-1 block w-full cursor-pointer text-xs file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--ob-accent-soft)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--ob-accent)] hover:file:bg-[var(--ob-accent)] hover:file:text-white"
-                onChange={(event) => setReferences(Array.from(event.target.files ?? []))}
+                onChange={(event) => {
+                  const incoming = Array.from(event.target.files ?? [])
+                    .filter((file) => acceptsWorkbenchReference(file, kind, provider?.protocol));
+                  setReferences((current) => mergeReferenceFiles(
+                    current,
+                    incoming,
+                    MAX_REFERENCE_FILES,
+                  ));
+                  event.currentTarget.value = "";
+                }}
               />
               {references.length ? (
                 <p className="mt-1.5 text-xs text-[var(--ob-muted)]">已选 {references.length} 个参考文件</p>

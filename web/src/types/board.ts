@@ -3,6 +3,7 @@ export type BackgroundMode = "dots" | "lines" | "blank";
 export type GenMode = "text" | "image" | "video";
 export type NodeStatus = "idle" | "loading" | "success" | "error";
 export type AssistantMode = "ask" | "image";
+export type TextReasoningEffort = "low" | "medium" | "high";
 export type CameraPromptCamera = "cinema" | "mirrorless" | "dslr" | "drone" | "action";
 export type CameraPromptLens = "wide" | "standard" | "telephoto" | "macro" | "anamorphic";
 export type CameraPromptConfig = {
@@ -136,6 +137,7 @@ export type NodeMetadata = {
   fontSize?: number;
   generationMode?: GenMode;
   model?: string;
+  reasoningEffort?: TextReasoningEffort;
   size?: string;
   count?: number;
   quality?: string;

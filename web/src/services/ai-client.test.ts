@@ -110,6 +110,7 @@ describe("generateVideo provider contracts", () => {
       model: "text",
       prompt: "hello",
       systemPrompt: "Be concise",
+      reasoningEffort: "high",
     })).resolves.toBe("gateway response");
 
     expect(requests).toHaveLength(1);
@@ -121,6 +122,7 @@ describe("generateVideo provider contracts", () => {
       prompt: "hello",
       images: [],
       systemPromptProfile: "global",
+      reasoningEffort: "high",
     });
   });
 
@@ -140,11 +142,12 @@ describe("generateVideo provider contracts", () => {
   });
 
   test("keeps loopback text providers browser-direct in server storage mode", async () => {
-    const requests: Array<{ url: string; authorization: string | null }> = [];
+    const requests: Array<{ url: string; authorization: string | null; body: unknown }> = [];
     globalThis.fetch = mock(async (input, init) => {
       requests.push({
         url: String(input),
         authorization: new Headers(init?.headers).get("Authorization"),
+        body: JSON.parse(String(init?.body ?? "{}")),
       });
       return json({ output_text: "local response" });
     }) as typeof fetch;
@@ -153,10 +156,16 @@ describe("generateVideo provider contracts", () => {
       channel: channel("http://127.0.0.1:11434/v1"),
       model: "local-model",
       prompt: "hello",
+      reasoningEffort: "medium",
     })).resolves.toBe("local response");
     expect(requests).toEqual([{
       url: "http://127.0.0.1:11434/v1/responses",
       authorization: "Bearer secret",
+      body: {
+        model: "local-model",
+        input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+        reasoning: { effort: "medium" },
+      },
     }]);
   });
 

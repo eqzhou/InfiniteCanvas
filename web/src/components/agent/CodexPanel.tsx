@@ -14,6 +14,7 @@ import {
   uploadCodexAttachments,
   type AgentConnection,
   type CodexEvent,
+  type CodexPermissionMode,
   type CodexSession,
 } from "@/services/local-agent";
 import {
@@ -22,6 +23,11 @@ import {
   codexApprovalResolutionKey,
   codexEventThreadId,
 } from "@/services/codex-events";
+import {
+  formatCodexElapsed,
+  reduceCodexProgress,
+  type CodexProgressItem,
+} from "@/services/codex-progress";
 import {
   createCodexSessionSync,
   shouldResetCodexTranscript,
@@ -115,7 +121,12 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const [text, setText] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
+  const [progress, setProgress] = useState<CodexProgressItem[]>([]);
+  const [progressOpen, setProgressOpen] = useState(true);
   const [turnStatus, setTurnStatus] = useState<TurnStatus>("idle");
+  const [permissionMode, setPermissionMode] = useState<CodexPermissionMode>("workspace-auto");
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
+  const [elapsedNow, setElapsedNow] = useState(() => Date.now());
   const [approvals, setApprovals] = useState<CodexEvent[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +144,13 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
 
   useEffect(() => {
     turnStatusRef.current = turnStatus;
+  }, [turnStatus]);
+
+  useEffect(() => {
+    if (turnStatus !== "running") return;
+    setElapsedNow(Date.now());
+    const timer = window.setInterval(() => setElapsedNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
   }, [turnStatus]);
 
   useEffect(() => {
@@ -174,6 +192,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       if (shouldResetCodexTranscript(sessionIdRef.current, nextSessionId)) {
         setMessages([]);
         setLogs([]);
+        setProgress([]);
         setFiles([]);
         setApprovals([]);
       }
@@ -195,6 +214,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
         if (shouldResetCodexTranscript(sessionIdRef.current, current?.id)) {
           setMessages([]);
           setLogs([]);
+          setProgress([]);
           setFiles([]);
           setApprovals([]);
         }
@@ -263,8 +283,23 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       }
       if (effect.kind === "item") {
         setLogs((current) => [...current.slice(-99), [effect.text, effect.status, effect.detail].filter(Boolean).join(" · ")]);
+        setProgress((current) => reduceCodexProgress(current, {
+          itemId: effect.itemId,
+          itemType: effect.itemType,
+          label: effect.label,
+          detail: effect.appendDetail
+            ? effect.detail ?? effect.text
+            : effect.command ?? effect.path ?? effect.detail ?? effect.text,
+          appendDetail: effect.appendDetail,
+          status: effect.status,
+          error: effect.error,
+        }));
       }
       if (effect.kind === "turn") {
+        if (effect.status === "running") {
+          setTurnStartedAt((current) => current ?? Date.now());
+          setProgressOpen(true);
+        }
         setTurnStatus(effect.status);
         turnStatusRef.current = effect.status;
         setSession((current) => {
@@ -298,6 +333,14 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     setBusy(true);
     setError(null);
     setReconnecting(false);
+    if (fresh) {
+      setMessages([]);
+      setLogs([]);
+      setProgress([]);
+      setFiles([]);
+      setApprovals([]);
+      setTurnStartedAt(null);
+    }
     try {
       const previousSessionId = sessionIdRef.current;
       const next = await createCodexSession(connection, { profile: "default", fresh });
@@ -311,6 +354,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       if (fresh || shouldResetCodexTranscript(previousSessionId, next.id)) {
         setMessages([]);
         setLogs([]);
+        setProgress([]);
         setFiles([]);
       }
     } catch (cause) {
@@ -323,13 +367,27 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const send = async () => {
     if (!session || !text.trim() || busy || turnStatusRef.current === "running") return;
     const prompt = text.trim();
+    const pendingFiles = files.slice();
+    const clientMessageId = uid("message");
     sharedRevisionRef.current += 1;
     setBusy(true);
     setError(null);
     setReconnecting(false);
+    setText("");
+    setFiles([]);
+    const optimisticMessage: Message = { id: clientMessageId, role: "user", text: prompt };
+    setMessages((current) => [...current, optimisticMessage].slice(-120));
+    setProgress([]);
+    setProgressOpen(true);
+    setTurnStartedAt(Date.now());
+    setElapsedNow(Date.now());
+    setTurnStatus("running");
+    turnStatusRef.current = "running";
+    const runningSession = { ...session, running: true };
+    setSession(runningSession);
+    syncRef.current?.publish(runningSession, "running");
     let attachments: Awaited<ReturnType<typeof uploadCodexAttachments>> = [];
     try {
-      const pendingFiles = files.slice();
       if (pendingFiles.length) {
         try {
           await insertAttachmentImageNodes(pendingFiles);
@@ -343,19 +401,17 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       attachments = pendingFiles.length
         ? await uploadCodexAttachments(connection, session.id, pendingFiles)
         : [];
-      setText("");
-      setFiles([]);
-      setTurnStatus("running");
-      const next = { ...session, running: true };
-      setSession(next);
-      syncRef.current?.publish(next, "running");
       await sendCodexMessage(
         connection,
         session.id,
         prompt,
         fetch,
-        attachments.map((item) => item.id),
-        getRuntimeClientId(),
+        {
+          attachmentIds: attachments.map((item) => item.id),
+          clientId: getRuntimeClientId(),
+          clientMessageId,
+          permissionMode,
+        },
       );
     } catch (cause) {
       await Promise.allSettled(attachments.map((attachment) =>
@@ -369,6 +425,10 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
         return next;
       });
       setError(cause instanceof Error ? cause.message : String(cause));
+      setLogs((current) => [
+        ...current.slice(-99),
+        `Codex: ${cause instanceof Error ? cause.message : String(cause)}`,
+      ]);
     } finally {
       setBusy(false);
     }
@@ -492,9 +552,35 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               </button>
             ) : null}
           </div>
-          {logs.length ? (
-            <details className="mb-2 rounded-lg border border-[var(--ob-line)] px-2.5 py-1.5">
-              <summary className="cursor-pointer text-[11px] font-medium">运行日志 · {logs.length}</summary>
+          {progress.length ? (
+            <details
+              className="mb-2 rounded-lg bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] px-2.5 py-1.5"
+              open={progressOpen}
+              onToggle={(event) => setProgressOpen(event.currentTarget.open)}
+            >
+              <summary className="cursor-pointer text-[11px] font-medium">
+                任务进度 · {progress.filter((item) => item.status === "completed").length}/{progress.length}
+              </summary>
+              <ol className="mt-1 max-h-32 space-y-1 overflow-auto text-[10px]">
+                {progress.map((item) => (
+                  <li key={item.id} className="flex min-w-0 items-start gap-1.5">
+                    <span
+                      className="ob-status-dot mt-1"
+                      data-status={item.status === "completed" ? "succeeded" : item.status}
+                      aria-hidden
+                    />
+                    <span className="min-w-0">
+                      <span className="font-medium text-[var(--ob-ink)]">{item.label}</span>
+                      {item.detail ? <span className="ml-1 break-all text-[var(--ob-muted)]">{item.detail}</span> : null}
+                      {item.error ? <span className="block text-[var(--ob-danger)]">{item.error}</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </details>
+          ) : logs.length ? (
+            <details className="mb-2 rounded-lg px-2.5 py-1.5">
+              <summary className="cursor-pointer text-[11px] font-medium">诊断信息 · {logs.length}</summary>
               <ol className="mt-1 max-h-24 list-decimal overflow-auto pl-4 text-[10px] text-[var(--ob-muted)]">
                 {logs.map((log, index) => <li key={`${index}-${log}`}>{log}</li>)}
               </ol>
@@ -521,54 +607,81 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               }
               aria-hidden
             />
-            {turnStatus === "running" ? "处理中" : turnStatus === "completed" ? "已完成" : turnStatus === "failed" ? "失败" : "空闲"}
+            {turnStatus === "running"
+              ? `处理中 · ${formatCodexElapsed(elapsedNow - (turnStartedAt ?? elapsedNow))} · 可随时停止`
+              : turnStatus === "completed" ? "已完成" : turnStatus === "failed" ? "失败" : "空闲"}
             {reconnecting ? " · 事件流重连中" : ""}
             {session.reused ? " · 连续 thread" : ""}
           </div>
-          <div className="ob-composer flex items-end gap-1.5 p-1.5">
-            <textarea
-              disabled={turnStatus === "running"}
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  void send();
-                }
-              }}
-              className="min-h-16 min-w-0 flex-1 resize-y border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)] disabled:opacity-50"
-              placeholder="发送消息"
-            />
-            <label className="ob-icon-btn h-8 w-8 shrink-0 cursor-pointer" title="添加图片" aria-label="添加图片">
-              <ImagePlus size={14} />
-              <input
+          <div className="ob-composer p-1.5">
+            <div className="mb-1 flex items-center gap-1.5 px-1">
+              <label htmlFor="codex-permission-mode" className="text-[10px] text-[var(--ob-muted)]">权限</label>
+              <select
+                id="codex-permission-mode"
                 disabled={turnStatus === "running"}
-                type="file"
-                accept="image/png,image/jpeg,image/gif,image/webp"
-                multiple
-                className="hidden"
+                value={permissionMode}
                 onChange={(event) => {
-                  setFiles(Array.from(event.target.files ?? []).slice(0, 10));
-                  event.currentTarget.value = "";
+                  const next = event.target.value as CodexPermissionMode;
+                  if (next === "full-access" && !window.confirm(
+                    "完全访问允许 Codex 绕过沙箱并访问工作区之外的文件。确认只对下一次及后续发送启用？",
+                  )) {
+                    event.currentTarget.value = permissionMode;
+                    return;
+                  }
+                  setPermissionMode(next);
                 }}
-              />
-            </label>
-            {turnStatus === "running" ? (
-              <button type="button" className="ob-btn-danger rounded-lg p-2" onClick={() => void stop()} title="停止" aria-label="停止">
-                <Square size={14} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="ob-btn-primary rounded-lg p-2 disabled:opacity-50"
-                onClick={() => void send()}
-                title="发送"
-                aria-label="发送"
-                disabled={busy || !text.trim()}
+                className="min-w-0 flex-1 border-0 bg-transparent text-[10px] text-[var(--ob-ink)] outline-none disabled:opacity-50"
               >
-                <Send size={14} />
-              </button>
-            )}
+                <option value="read-only">只读（操作需审批）</option>
+                <option value="workspace-auto">工作区自动执行（无网络）</option>
+                <option value="full-access">完全访问（高风险）</option>
+              </select>
+            </div>
+            <div className="flex items-end gap-1.5">
+              <textarea
+                disabled={turnStatus === "running"}
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void send();
+                  }
+                }}
+                className="min-h-16 min-w-0 flex-1 resize-y border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)] disabled:opacity-50"
+                placeholder="发送消息"
+              />
+              <label className="ob-icon-btn h-8 w-8 shrink-0 cursor-pointer" title="添加图片" aria-label="添加图片">
+                <ImagePlus size={14} />
+                <input
+                  disabled={turnStatus === "running"}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    setFiles(Array.from(event.target.files ?? []).slice(0, 10));
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+              {turnStatus === "running" ? (
+                <button type="button" className="ob-btn-danger rounded-lg p-2" onClick={() => void stop()} title="停止" aria-label="停止">
+                  <Square size={14} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ob-btn-primary rounded-lg p-2 disabled:opacity-50"
+                  onClick={() => void send()}
+                  title="发送"
+                  aria-label="发送"
+                  disabled={busy || !text.trim()}
+                >
+                  <Send size={14} />
+                </button>
+              )}
+            </div>
           </div>
         </>
       )}

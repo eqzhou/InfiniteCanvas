@@ -629,15 +629,27 @@ func (s *Server) findCodexForScope(scope agentScope, id string) (*codexSession, 
 func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCodexBody)
 	var req struct {
-		SessionID     string   `json:"sessionId"`
-		Text          string   `json:"text"`
-		AttachmentIDs []string `json:"attachmentIds"`
-		ClientID      string   `json:"clientId"`
+		SessionID       string   `json:"sessionId"`
+		Text            string   `json:"text"`
+		AttachmentIDs   []string `json:"attachmentIds"`
+		ClientID        string   `json:"clientId"`
+		ClientMessageID string   `json:"clientMessageId"`
+		PermissionMode  string   `json:"permissionMode"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if dec.Decode(&req) != nil || strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.Text) == "" {
 		http.Error(w, "sessionId and text are required", http.StatusBadRequest)
+		return
+	}
+	permissionParams, err := codexTurnPermissionParams(req.PermissionMode)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	clientMessageID := strings.TrimSpace(req.ClientMessageID)
+	if clientMessageID != "" && !projectIDPattern.MatchString(clientMessageID) {
+		http.Error(w, "invalid Codex client message id", http.StatusBadRequest)
 		return
 	}
 	scope := requestAgentScope(r)
@@ -700,10 +712,22 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		input = append(input, map[string]any{"type": "localImage", "path": attachment.Path})
 	}
 	session.reserveTurnAttachments(attachments)
-	params := map[string]any{"threadId": session.threadID, "input": input}
+	params := map[string]any{
+		"threadId":       session.threadID,
+		"input":          input,
+		"approvalPolicy": permissionParams["approvalPolicy"],
+		"sandboxPolicy":  permissionParams["sandboxPolicy"],
+	}
+	messageID := clientMessageID
+	if messageID == "" {
+		messageID = randomID("message")
+	}
 	session.publish(codexEvent{
 		Type: "notification", Method: "openboard/user_message",
-		Data: map[string]any{"id": randomID("message"), "text": strings.TrimSpace(req.Text)},
+		Data: map[string]any{
+			"id":   messageID,
+			"text": strings.TrimSpace(req.Text),
+		},
 	})
 	var turn map[string]any
 	turnContext, cancelTurnStart := context.WithTimeout(context.Background(), codexTurnStartTimeout)
@@ -721,6 +745,39 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	session.publishState()
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func codexTurnPermissionParams(mode string) (map[string]any, error) {
+	switch strings.TrimSpace(mode) {
+	case "read-only":
+		return map[string]any{
+			"approvalPolicy": "on-request",
+			"sandboxPolicy": map[string]any{
+				"type":          "readOnly",
+				"networkAccess": false,
+			},
+		}, nil
+	case "", "workspace-auto":
+		return map[string]any{
+			"approvalPolicy": "never",
+			"sandboxPolicy": map[string]any{
+				"type":                "workspaceWrite",
+				"writableRoots":       []string{},
+				"networkAccess":       false,
+				"excludeTmpdirEnvVar": false,
+				"excludeSlashTmp":     false,
+			},
+		}, nil
+	case "full-access":
+		return map[string]any{
+			"approvalPolicy": "never",
+			"sandboxPolicy": map[string]any{
+				"type": "dangerFullAccess",
+			},
+		}, nil
+	default:
+		return nil, errors.New("invalid Codex permission mode")
+	}
 }
 
 func (s *codexSession) takeAttachments(ids []string) ([]codexAttachment, error) {

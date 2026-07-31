@@ -2,8 +2,8 @@
 
 This inventory freezes the engineering core to the publicly documented and
 black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
-explicit public interface delta listed for `v0.9.0` and the four public
-Unreleased behaviors recorded on 2026-07-19 (public CHANGELOG names rechecked 2026-07-24; still no newer release tag than v0.9.0). It does not
+explicit public interface deltas through `v0.12.0` and the named public
+Unreleased behaviors rechecked on 2026-07-31. It does not
 claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
 an independent implementation with its own architecture, data model, UI,
 plugins, SDK, fixtures, and assets.
@@ -45,11 +45,30 @@ are not implementation inputs.
 | Preferred image models and aspect ratios | [verified] image workbench preferences persist bounded quick-model choices and common aspect ratios while retaining explicit dimensions and provider capability validation |
 | Admin shared-channel model reconciliation | [verified] fetched models are previewed as selectable added/existing/removed differences before an administrator confirms the bounded replacement |
 | APIMart current exact contracts | [verified] exact adapters remain fail-closed and validate only independently documented model identifiers and limits; undocumented marketing names, including Agnes, remain unsupported |
+| Single canvas Agent entry | [verified] the legacy assistant panel and duplicate navigation entry are removed; one dockable `画布 Agent` retains Codex/Claude sessions, approvals, attachments, stop and unified generation-task status |
+
+## Basket v0.11.0–v0.12.0 additive parity
+
+The public `basketikun/infinite-canvas v0.11.0` and `v0.12.0` releases and current public
+CHANGELOG were rechecked on 2026-07-31 without reading implementation source,
+styles, fixtures, screenshots, or bundled assets:
+
+| Public behavior | Local status |
+|---|---|
+| Text-generation reasoning effort | [verified] text and text-config nodes persist low/medium/high effort and forward it through direct and server OpenAI-compatible requests |
+| Drag-upload references in image/video workbenches | [verified] both workbenches accept up to ten filtered, de-duplicated dropped files and pass them into the existing reference pipeline |
+| Configuration and preference import/export | [verified] versioned bounded JSON export excludes provider, object-storage and WebDAV credentials plus executable extension surfaces; import strictly validates channels, preserves current credentials/plugins/prompt sources, and flushes preferences to the database |
+| Ark protocol and multi-file toolbar upload | [verified existing] exact Ark/Seedance mapping and multi-file media imports were already covered before this recheck |
+| Three Codex permission levels and in-conversation approval | [verified] the input area selects read-only, workspace auto-execution without network (default), or explicit full access; the server validates the mode and sends matching turn-level approval/sandbox policies to Codex, while approval cards remain available |
+| Collapsible task progress, dynamic tool status and process timeline | [verified] item lifecycle events merge by stable item id into bounded Chinese progress rows with running/completed/failed state, failure reason, incremental reasoning/command detail and a collapsible presentation |
+| Immediate send/new-conversation feedback and long-wait status | [verified] sending clears the composer and renders an optimistic user message before attachment/network completion; new conversation clears the prior transcript before thread creation; running turns show elapsed time and a stop affordance |
+| Turn-only stop, incremental assistant output and copy-safe Agent text | [verified existing] stop calls `turn/interrupt` without ending the service; assistant deltas stream incrementally; canvas shortcuts ignore textarea/input/contenteditable targets |
+| Dated debug files, full history manager and file-manager reveal | [not yet claimed] these remain separate follow-up behaviors; OpenBoard does not claim complete v0.12.0 parity for them |
 
 ## Public baseline traceability
 
 The frozen public inputs are the immutable v0.8.2 documents and hashes, plus
-the v0.9.0 release metadata, listed
+the additive release metadata through v0.12.0, listed
 in `docs/BEHAVIOR_SPEC.md`. This table maps their named behaviors to local
 implementation and verification surfaces; it does not use upstream source as
 implementation evidence.
@@ -74,7 +93,7 @@ implementation evidence.
 | OpenAI text/image/video/audio and Ark/Seedance video contracts | `ai-client.test.ts`, `video-generation.test.ts`, image-to-video E2E |
 | Seedance 9 image/3 video/3 audio references, ratios, 480p/720p/1080p and smart/4-15s duration | `NodeActions.tsx`, `BoardNodeView.tsx`, `CreativeWorkbench.tsx`, `video-generation.test.ts` |
 | Video first/last-frame reference mode for ordered image refs | `video-generation.ts`, Ark role mapping in `ai-client.ts` / server media executor, config/video/workbench UI, unit + Go + workbench E2E |
-| Assistant selected/upstream context, text/image generation, sessions, retry, insert and single/batch deletion | full assistant generation E2E and `assistant-sessions.test.ts` |
+| Unified canvas Agent, project context, approvals, attachments, stop, Codex/Claude continuity and generation status | Agent runtime/MCP/Codex/Claude integration tests and single-entry canvas E2E |
 | Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and declaratively mapped remote sources | prompt detail/library E2E, prompt-source manager E2E, formal storage E2E, and `prompt-sources.test.ts` |
 | Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | full asset-library E2E and formal-storage E2E |
 | WebDAV project and full-workspace backup/restore with workflow templates, nested workflow media, deduplication and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
@@ -127,7 +146,7 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 592 Bun unit/integration tests at the 2026-07-28 verification baseline; the same run reports 78.76% line and 82.66% function coverage. CI publishes this report but does not currently enforce a numeric threshold
+- [verified] 650 Bun unit/integration tests at the 2026-07-31 verification baseline; the same run reports 80.78% line and 83.84% function coverage. CI publishes this report but does not currently enforce a numeric threshold
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)
@@ -149,6 +168,17 @@ Public CHANGELOG still lists only these Unreleased names (no new release tag aft
 | Unified Agent generation task status query | [verified] `generation_get_status` MCP/runtime |
 
 Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent SDK Adapter; remains **not targeted**.
+
+### Public release recheck (2026-07-31)
+
+- Basket latest public release is `v0.12.0`; this pass adds real turn-level
+  Codex permissions, collapsible process progress, immediate composer/new-chat
+  feedback and long-wait status on top of the v0.11.0 reasoning, drag-upload
+  and credential-free preferences work. Dated debug files, full history
+  management and file-manager reveal are explicitly not claimed yet.
+- Tiger latest public release remains `v0.4.5`; its current public Unreleased
+  entry replaces the separate canvas assistant with an Agent adapted to the
+  canvas. OpenBoard now exposes one authoritative `画布 Agent` entry.
 
 ### Tiger public release recheck (2026-07-28)
 
@@ -239,7 +269,7 @@ Markdown and layout fixes. No implementation source or assets were read:
 - [verified] Smart Seedance duration and Ark fast-model `1080p` preflight rejection
 - [verified] Video first/last-frame mode maps ordered image references to Ark `first_frame` / `last_frame` roles on canvas config/video nodes and the video workbench, persists through retry/reload, and is enforced at document import and server job validation
 - [verified] Config nodes preview ordered text, image, video, and audio inputs; reordering changes the actual Ark reference request order
-- [verified] Assistant pasted-image preview, removal, direct insertion, and later message-image reinsertion
+- [verified] Canvas Agent image attachments are validated, cancellable and inserted into an image/config flow before the turn starts
 
 ## Agent and MCP
 
@@ -252,11 +282,13 @@ Markdown and layout fixes. No implementation source or assets were read:
 - [verified] `generation_get_status` queries canvas `nodeIds` and workbench `taskId` with client ownership validation
 - [verified] Codex turns pin all tools to the initiating browser ID; disconnect falls back only to the most recently focused same-project tab and foreign results are ignored
 - [verified] Shared Codex session, user-message history, approval resolution and running state synchronize across tabs; sequenced SSE reconnects without replay duplicates, events are thread-filtered, and only exact turn completion unlocks input
-- [verified] Turn interrupt, concurrent-start prevention, turn-ID race handling, and structured logs
+- [verified] Turn interrupt, concurrent-start prevention, turn-ID race handling, three validated turn-level permission modes, and structured progress
 - [verified] Up to ten image attachments/30MB, MIME validation, `0600` files, explicit pending-upload cancellation, completion/failure/close cleanup, and orphan purge on restart
 - [verified] Safe Markdown/GFM output, raw-HTML suppression, remote-image suppression, previews, stop, and approvals
 - [verified] Codex user messages render as right-biased accent bubbles; assistant replies stay open left Markdown without role labels
 - [verified] Codex transcript sticks to the latest message and exposes a jump-to-bottom control when the user scrolls up
+- [verified] Codex tool/reasoning item events merge into a collapsible process timeline with Chinese labels, per-step status, bounded incremental detail and failure reasons
+- [verified] Codex send/new-conversation actions update the visible transcript immediately; long-running turns display elapsed time and retain a stop action
 - [verified] Codex image attachments become canvas image nodes connected into an image-generation config flow before the agent turn starts
 - [verified] Independent `plugins/openboard` installer and Claude standard-MCP instructions
 

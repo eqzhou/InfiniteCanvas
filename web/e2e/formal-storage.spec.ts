@@ -791,7 +791,9 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();
 
   await page.goto("/");
-  await page.getByTitle("本地 Agent").click();
+  await page.getByRole("group", { name: "全局工具" })
+    .getByRole("button", { name: "画布 Agent", exact: true })
+    .click();
 	await page.getByLabel("本地地址").fill("http://127.0.0.1:8793");
 	await page.getByLabel("连接令牌").fill("e2e-token");
   await page.getByRole("button", { name: "连接" }).click();

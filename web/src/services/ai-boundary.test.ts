@@ -7,7 +7,6 @@ const unifiedTransportConsumers = [
 ];
 
 const textGenerationConsumers = [
-  "../components/assistant/AssistantPanel.tsx",
   "../components/canvas/NodeActions.tsx",
   "../components/canvas/NodePromptBar.tsx",
   "../components/canvas/PluginNodeFrame.tsx",

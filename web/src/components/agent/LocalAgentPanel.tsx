@@ -33,7 +33,6 @@ function initialAgentToken(): string {
 
 export function LocalAgentPanel() {
   const show = useBoardStore((s) => s.showLocalAgent);
-  const showAssistant = useBoardStore((s) => s.showAssistant);
   const setShow = useBoardStore((s) => s.setShowLocalAgent);
   const config = useBoardStore((s) => s.config);
   const setConfig = useBoardStore((s) => s.setConfig);
@@ -134,14 +133,18 @@ export function LocalAgentPanel() {
   if (!show) return null;
 
   return (
-    <div className={`ob-surface absolute bottom-16 left-2 right-2 z-[60] max-h-[calc(100vh-5rem)] w-auto overflow-auto p-3 shadow-[var(--ob-elev-2)] sm:left-auto sm:w-96 ${showAssistant ? "sm:right-[356px]" : "sm:right-4"}`}>
+    <aside
+      id="canvas-agent"
+      aria-label="画布 Agent"
+      className="ob-drawer fixed bottom-0 right-0 top-14 z-[60] flex w-full flex-col overflow-auto p-3 shadow-[var(--ob-elev-2)] sm:w-[420px] xl:static xl:h-full xl:w-[380px] xl:shrink-0"
+    >
       <div className="mb-3 flex items-center gap-2">
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
           <Bot size={16} />
         </span>
         <div className="min-w-0">
-          <p className="ob-page-kicker !mb-0">Runtime</p>
-          <strong className="text-sm font-semibold tracking-tight">本地 Agent</strong>
+          <p className="ob-page-kicker !mb-0">Canvas runtime</p>
+          <strong className="text-sm font-semibold tracking-tight">画布 Agent</strong>
         </div>
         <button
           type="button"
@@ -155,8 +158,8 @@ export function LocalAgentPanel() {
         <button
           type="button"
           className="ob-icon-btn h-8 w-8"
-          aria-label="关闭本地 Agent"
-          title="关闭本地 Agent"
+          aria-label="关闭画布 Agent"
+          title="关闭画布 Agent"
           onClick={() => setShow(false)}
         >
           <Unplug size={14} />
@@ -300,6 +303,6 @@ export function LocalAgentPanel() {
           </Suspense>
         </div>
       )}
-    </div>
+    </aside>
   );
 }

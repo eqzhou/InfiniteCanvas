@@ -219,13 +219,14 @@ async function openCodexPanel(page: Page) {
 }
 
 async function openLocalAgentPanel(page: Page) {
-  const desktopButton = page.getByRole("button", { name: "本地 Agent", exact: true });
+  const desktopButton = page.getByRole("group", { name: "全局工具" })
+    .getByRole("button", { name: "画布 Agent", exact: true });
   if (await desktopButton.isVisible().catch(() => false)) {
     await desktopButton.click();
   } else {
     await page.getByTitle("更多").click();
     await page.getByRole("menu", { name: "更多操作" })
-      .getByRole("menuitem", { name: "本地 Agent" })
+      .getByRole("menuitem", { name: "画布 Agent" })
       .click();
   }
   await expect(page.getByLabel("本地地址")).toBeVisible();
@@ -1555,9 +1556,9 @@ test("Escape closes settings, shortcuts, and the local Agent panel", async ({ pa
   await expect(page.getByRole("heading", { name: "画布快捷键" })).toHaveCount(0);
 
   await openLocalAgentPanel(page);
-  await expect(page.getByText("本地 Agent", { exact: true })).toBeVisible();
+  await expect(page.getByText("画布 Agent", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByText("本地 Agent", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("画布 Agent", { exact: true })).toHaveCount(0);
 });
 
 test("Escape dismisses only the topmost canvas overlay", async ({ page }) => {
@@ -1567,7 +1568,7 @@ test("Escape dismisses only the topmost canvas overlay", async ({ page }) => {
   );
   await openFreshBoard(page);
   await openLocalAgentPanel(page);
-  await expect(page.getByText("本地 Agent", { exact: true })).toBeVisible();
+  await expect(page.getByText("画布 Agent", { exact: true })).toBeVisible();
 
   await page.getByTestId("canvas-surface").dispatchEvent("contextmenu", {
     button: 2,
@@ -1578,10 +1579,10 @@ test("Escape dismisses only the topmost canvas overlay", async ({ page }) => {
 
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menuitem", { name: "新建文本" })).toHaveCount(0);
-  await expect(page.getByText("本地 Agent", { exact: true })).toBeVisible();
+  await expect(page.getByText("画布 Agent", { exact: true })).toBeVisible();
 
   await page.keyboard.press("Escape");
-  await expect(page.getByText("本地 Agent", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("画布 Agent", { exact: true })).toHaveCount(0);
 });
 
 test("a same-frame drag commits group membership before pointerup reconciliation", async ({ page }) => {
@@ -1969,6 +1970,7 @@ test("node title, font size, and model overrides are editable and persistent", a
 
   const model = node.getByLabel("文本节点模型");
   await model.fill("local-text-model");
+  await node.getByLabel("文本推理强度").selectOption("high");
   const editor = page.getByPlaceholder("写下提示词或说明…");
   await editor.fill("toolbar editing target");
   await page.getByTitle("适应").click();
@@ -1981,13 +1983,18 @@ test("node title, font size, and model overrides are editable and persistent", a
     .not.toBe(initialSize);
 
   await expect.poll(async () => (await readServerProjects(page)).some((project) =>
-    project?.nodes?.some((item: { title?: string; metadata?: { model?: string } }) =>
-      item.title === "本地创作节点" && item.metadata?.model === "local-text-model"))).toBe(true);
+    project?.nodes?.some((item: {
+      title?: string;
+      metadata?: { model?: string; reasoningEffort?: string };
+    }) => item.title === "本地创作节点" &&
+      item.metadata?.model === "local-text-model" &&
+      item.metadata?.reasoningEffort === "high"))).toBe(true);
 
   await page.reload();
   await expect(page.locator('[data-node-type="text"]').locator("[data-node-title]")).toHaveText("本地创作节点");
   await page.locator('[data-node-type="text"]').first().locator("[data-node-header]").click();
   await expect(page.getByLabel("文本节点模型")).toHaveValue("local-text-model");
+  await expect(page.getByLabel("文本推理强度")).toHaveValue("high");
 });
 
 test("compact node controls keep long models, multiline text, and image actions usable", async ({ page }) => {
@@ -2099,6 +2106,57 @@ test("settings keeps provider configuration structured without responsive overfl
     await expect(dialog.getByRole("button", { name: "关闭" })).toBeVisible();
     await closeSettings(page);
   }
+});
+
+test("settings exports credential-free preferences and imports them into database storage", async ({ page }) => {
+  await openFreshBoard(page, { requireProjectPanel: false });
+  await page.getByTitle("设置").click();
+  const settings = page.getByRole("dialog", { name: "设置" });
+  await settings.getByLabel("文本 URL").fill("https://config-file.example/v1");
+  await settings.getByLabel("文本 API Key").fill("config-file-secret");
+  await settings.getByLabel("文本模型", { exact: true }).fill("config-file-model");
+  await settings.getByLabel("默认数量").fill("2");
+
+  const downloadPromise = page.waitForEvent("download");
+  await settings.getByRole("button", { name: "导出配置" }).click();
+  const download = await downloadPromise;
+  const downloadedPath = await download.path();
+  expect(downloadedPath).not.toBeNull();
+  const exported = JSON.parse(await readFile(downloadedPath!, "utf8")) as {
+    schema?: string;
+    version?: number;
+    config?: Record<string, any>;
+  };
+  expect(exported.schema).toBe("openboard-config");
+  expect(exported.version).toBe(1);
+  expect(JSON.stringify(exported)).not.toContain("config-file-secret");
+  expect(exported.config?.channels?.[0]?.providers?.text?.apiKey).toBe("");
+
+  const imported = {
+    ...exported,
+    config: {
+      ...exported.config,
+      imageCount: 4,
+      systemPrompt: "Imported database preference",
+    },
+  };
+  page.once("dialog", (dialog) => dialog.accept());
+  await settings.getByLabel("导入配置文件").setInputFiles({
+    name: "openboard-config.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(imported)),
+  });
+  await expect(settings.getByLabel("默认数量")).toHaveValue("4");
+  await expect(settings.getByLabel("全局系统提示词")).toHaveValue("Imported database preference");
+  await closeSettings(page);
+
+  await expect.poll(async () => {
+    const persisted = await readServerConfig(page);
+    return [persisted.imageCount, persisted.systemPrompt];
+  }).toEqual([4, "Imported database preference"]);
+  await page.reload();
+  await page.getByTitle("设置").click();
+  await expect(page.getByRole("dialog", { name: "设置" }).getByLabel("默认数量")).toHaveValue("4");
 });
 
 test("text-to-image creates a connected blank config that reads its upstream text", async ({ page }) => {
@@ -2393,6 +2451,50 @@ test("image workbench reuses My Assets and shows reference thumbnails", async ({
   const history = page.locator("article").filter({ hasText: "reuse asset reference" });
   await expect(history).toContainText("成功");
   await expect(history.getByLabel("任务参考图").locator("img")).toHaveCount(1);
+});
+
+test("image workbench accepts a dragged reference and sends it through image editing", async ({ page }) => {
+  let editRequests = 0;
+  let requestBody = "";
+  await page.route("https://drag-reference.example/v1/images/edits", async (route) => {
+    editRequests += 1;
+    requestBody = route.request().postDataBuffer()?.toString("latin1") ?? "";
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data: [{ b64_json: pngPixelBase64 }] }),
+    });
+  });
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  await page.getByLabel("生图 URL").fill("https://drag-reference.example/v1");
+  await page.getByLabel("生图 API Key").fill("drag-reference-key");
+  await page.getByLabel("生图模型", { exact: true }).fill("drag-reference-model");
+  await closeSettings(page);
+  await page.goto("/workbench/image");
+
+  const dropZone = page.getByLabel("参考素材拖放区");
+  await dropZone.evaluate((element, base64) => {
+    const transfer = new DataTransfer();
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    transfer.items.add(new File([bytes], "dragged-reference.png", {
+      type: "image/png",
+      lastModified: 1,
+    }));
+    const event = new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    });
+    element.dispatchEvent(event);
+  }, pngPixelBase64);
+  await expect(dropZone).toContainText("已选 1 个参考文件");
+  await page.getByLabel("提示词").fill("continue from dragged reference");
+  await page.getByRole("button", { name: "生成", exact: true }).click();
+  await expect.poll(() => editRequests).toBe(1);
+  expect(requestBody).toContain('name="image[]"; filename="ref-0.png"');
+  expect(requestBody).toContain("Content-Type: image/png");
+  await expect(page.locator("article").filter({ hasText: "continue from dragged reference" }))
+    .toContainText("成功");
 });
 
 test("Agent sees one unified running generation task from the image workbench", async ({ page, request, context }) => {
@@ -3098,6 +3200,15 @@ test("an image can continue into a durable connected result through the in-app d
   await expect.poll(() => editRequests).toBe(1);
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
+  const result = page.locator('[data-node-type="image"]').last();
+  await result.locator("[data-node-header]").click();
+  const resultPrompt = result.getByRole("textbox", { name: "节点生成提示词" });
+  await expect(resultPrompt).toContainText("extend the scene to the right");
+  await resultPrompt.fill("extend the same source image to the left");
+  await result.getByRole("button", { name: "发送提示词" }).click();
+  await expect.poll(() => editRequests).toBe(2);
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
+  await expect(resultPrompt).toContainText("extend the same source image to the left");
   await page.reload();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
 });
@@ -3118,6 +3229,10 @@ test("local video and audio nodes persist, render native players, and download",
 
   const videoNode = page.locator('[data-node-type="video"]');
   const audioNode = page.locator('[data-node-type="audio"]');
+  // Media imports are queued and persisted asynchronously; wait for both nodes
+  // before asserting browser-specific native controls.
+  await expect(videoNode).toHaveCount(1, { timeout: 15_000 });
+  await expect(audioNode).toHaveCount(1, { timeout: 15_000 });
   await expect(videoNode.locator("video[controls]")).toHaveCount(1);
   await expect(audioNode.locator("audio[controls]")).toHaveCount(1);
   await expect(audioNode).toContainText("audio/mpeg");
@@ -3569,8 +3684,21 @@ test("canvas prompt panel groups library entries by source and inserts them", as
   await expect(panel.getByRole("tab", { name: "提示词", selected: true })).toBeVisible();
 });
 
-test("node prompt bar keeps the draft after a successful image generation", async ({ page }) => {
+test("node prompt bar keeps and edits a standalone generated image prompt in place", async ({ page }) => {
+  const generationPrompts: string[] = [];
+  let editRequests = 0;
   await page.route("https://keep-prompt.example/v1/images/generations", async (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}") as { prompt?: string };
+    generationPrompts.push(body.prompt ?? "");
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC" }],
+      }),
+    });
+  });
+  await page.route("https://keep-prompt.example/v1/images/edits", async (route) => {
+    editRequests += 1;
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -3594,6 +3722,17 @@ test("node prompt bar keeps the draft after a successful image generation", asyn
   await promptInput.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
   await expect.poll(async () => imageNode.locator("img").count()).toBeGreaterThan(0);
   await expect(promptInput).toContainText("keep this cinematic still prompt");
+  await expect.poll(() => generationPrompts).toEqual(["keep this cinematic still prompt"]);
+
+  await promptInput.fill("replace the scene with a rainy cinematic street");
+  await imageNode.getByRole("button", { name: "发送提示词" }).click();
+  await expect.poll(() => generationPrompts).toEqual([
+    "keep this cinematic still prompt",
+    "replace the scene with a rainy cinematic street",
+  ]);
+  expect(editRequests).toBe(0);
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
+  await expect(promptInput).toContainText("replace the scene with a rainy cinematic street");
 });
 
 test("node prompt bar preserves multiline paste and keeps wheel scrolling local", async ({ page }) => {
@@ -4141,143 +4280,15 @@ test("asset library supports persistence, search, type filters, pagination, copy
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
 });
 
-test("assistant can batch-delete sessions and preserves one active session", async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1440) < 768, "assistant is intentionally closed by default on mobile; desktop panel flow is covered separately");
+test("canvas Agent is the single assistant entry", async ({ page }) => {
   await openFreshBoard(page);
-  const assistant = page.locator("aside").filter({ hasText: "画布助手" });
-  await assistant.getByTitle("新会话").click();
-  await assistant.getByTitle("新会话").click();
-  await assistant.getByTitle("管理会话").click();
-  const checkboxes = assistant.locator('input[type="checkbox"]');
-  await expect(checkboxes).toHaveCount(3);
-  await checkboxes.nth(0).check();
-  await checkboxes.nth(1).check();
-  await assistant.getByRole("button", { name: "删除 2 个会话" }).click();
-
-  await assistant.getByTitle("管理会话").click();
-  await expect(assistant.locator('input[type="checkbox"]')).toHaveCount(1);
-});
-
-test("assistant ignores the submit shortcut while IME composition is active", async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1440) < 768, "assistant is intentionally closed by default on mobile; desktop panel flow is covered separately");
-  await openFreshBoard(page);
-  const input = page.getByPlaceholder("问点什么…（可粘贴图片）");
-  await input.fill("组合输入");
-  let dialogs = 0;
-  page.on("dialog", async (dialog) => {
-    dialogs += 1;
-    await dialog.dismiss();
-  });
-  await input.dispatchEvent("keydown", {
-    key: "Enter",
-    code: "Enter",
-    ctrlKey: true,
-    isComposing: true,
-  });
-  await expect.poll(() => dialogs).toBe(0);
-  await input.dispatchEvent("keydown", {
-    key: "Enter",
-    code: "Enter",
-    ctrlKey: true,
-    isComposing: false,
-  });
-  await expect.poll(() => dialogs).toBe(1);
-});
-
-test("assistant previews pasted images and inserts them without sending", async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1440) < 768, "desktop assistant paste flow is covered here");
-  await openFreshBoard(page);
-  const input = page.getByPlaceholder("问点什么…（可粘贴图片）");
-  await input.evaluate((element) => {
-    const bytes = Uint8Array.from(
-      atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC"),
-      (character) => character.charCodeAt(0),
-    );
-    const transfer = new DataTransfer();
-    transfer.items.add(new File([bytes], "pasted.png", { type: "image/png" }));
-    const event = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "clipboardData", { value: transfer });
-    element.dispatchEvent(event);
-  });
-  const preview = page.getByAltText("待发送图片");
-  await expect(preview).toBeVisible();
-  const assistant = page.locator("aside").filter({ hasText: "画布助手" });
-  await assistant.getByRole("button", { name: "插入画布", exact: true }).click();
-  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
-  await expect(preview).toHaveCount(0);
-});
-
-test("assistant generates, retries, inserts, deletes, and reloads text and images", async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop assistant generation workflow is covered here.");
-  let textRequests = 0;
-  await page.route("https://assistant-flow.example/v1/responses", async (route) => {
-    textRequests += 1;
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ output_text: `assistant answer ${textRequests}` }),
-    });
-  });
-  await page.route("https://assistant-flow.example/v1/images/generations", async (route) => {
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        data: [{ b64_json: pngPixelBase64 }],
-      }),
-    });
-  });
-  await openFreshBoard(page);
-  await page.getByTitle("设置").click();
-  await page.getByLabel("文本 URL").fill("https://assistant-flow.example/v1");
-  await page.getByLabel("文本 API Key").fill("assistant-text-key");
-  await page.getByLabel("文本模型", { exact: true }).fill("assistant-text-model");
-  await page.getByLabel("生图 URL").fill("https://assistant-flow.example/v1");
-  await page.getByLabel("生图 API Key").fill("assistant-image-key");
-  await page.getByLabel("生图模型", { exact: true }).fill("assistant-image-model");
-  await closeSettings(page);
-
-  test.setTimeout(90_000);
-  if (await page.locator("#canvas-assistant").count() === 0) {
-    await page.getByTitle("助手面板").click();
-  }
-  const assistant = page.locator("#canvas-assistant");
-  await expect(assistant).toBeVisible();
-  const askInput = assistant.getByPlaceholder("问点什么…（可粘贴图片）");
-  await askInput.fill("assistant draft");
-  await askInput.press("ControlOrMeta+Enter");
-  await expect.poll(() => textRequests, { timeout: 20_000 }).toBeGreaterThan(0);
-  let answer = assistant.getByTestId("assistant-message-assistant").filter({ hasText: "assistant answer 1" });
-  await expect(answer).toBeVisible({ timeout: 20_000 });
-  await answer.getByRole("button", { name: "插入画布" }).click();
-  await expect(page.locator('[data-node-type="text"]').getByPlaceholder("写下提示词或说明…").first()).toHaveValue("assistant answer 1");
-
-  await answer.getByRole("button", { name: "重试" }).click();
-  await expect.poll(() => textRequests, { timeout: 20_000 }).toBe(2);
-  answer = assistant.getByTestId("assistant-message-assistant").filter({ hasText: "assistant answer 2" });
-  await expect(answer).toBeVisible({ timeout: 20_000 });
-  const userMessage = assistant.getByTestId("assistant-message-user").filter({ hasText: "assistant draft" });
-  await userMessage.getByRole("button", { name: "删除" }).click();
-  await expect(userMessage).toHaveCount(0);
-
-  await assistant.getByRole("tab", { name: "生图" }).click();
-  const imageInput = assistant.getByPlaceholder("描述想生成的图片…（可粘贴图片）");
-  await imageInput.fill("assistant image");
-  await imageInput.press("ControlOrMeta+Enter");
-  const imageAnswer = assistant.getByTestId("assistant-message-assistant").filter({ hasText: "已生成图片" });
-  await imageAnswer.scrollIntoViewIfNeeded();
-  await imageAnswer.getByRole("button", { name: "插入画布" }).click();
-  await page.getByTitle("适应").click();
-  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
-
-  await page.reload();
-  await expect(assistant.getByText("assistant answer 2", { exact: true })).toBeVisible();
-  await expect(assistant.getByText("已生成图片", { exact: true })).toBeVisible();
-  await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
-  await assistant
-    .getByTestId("assistant-message-assistant")
-    .filter({ hasText: "已生成图片" })
-    .getByRole("button", { name: "删除" })
-    .click();
-  await expect(assistant.getByTestId("assistant-message-assistant").filter({ hasText: "已生成图片" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "助手面板" })).toHaveCount(0);
+  await expect(page.locator("#canvas-assistant")).toHaveCount(0);
+  await openLocalAgentPanel(page);
+  const agent = page.getByRole("complementary", { name: "画布 Agent" });
+  await expect(agent).toBeVisible();
+  await expect(agent.getByRole("tab", { name: "Codex" })).toBeVisible();
+  await expect(agent.getByRole("tab", { name: "Claude" })).toBeVisible();
 });
 
 test("local Agent connects to the real Go service with a session token", async ({ page }) => {
@@ -4394,6 +4405,8 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   let approvalBody: Record<string, unknown> | null = null;
   let messageBody: Record<string, unknown> | null = null;
   let interrupted = false;
+  let releaseMessageRequest!: () => void;
+  const messageRequest = new Promise<void>((resolve) => { releaseMessageRequest = resolve; });
   let codexSessionCreated = false;
   let activeCodexSessionId = "session-e2e";
   const sessionBodies: Record<string, unknown>[] = [];
@@ -4434,6 +4447,7 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   });
   await page.route("**/api/codex/message", async (route) => {
     messageBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
+    await messageRequest;
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
   });
   await page.route("**/api/codex/attachments", async (route) => {
@@ -4463,12 +4477,16 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   });
   await page.route("**/api/codex/events?sessionId=*", async (route) => {
     eventStreamCount += 1;
-    const event = eventStreamCount === 1
-      ? { type: "notification", method: "agent_message_delta", params: { delta: "**hello from Codex** <script>bad()</script>" } }
-      : { type: "approval", method: "item/tool/call", id: "approval-e2e", params: { tool: "board.add_node" } };
+    const events = eventStreamCount === 1
+      ? [
+          { type: "notification", method: "item/started", params: { item: { id: "tool-e2e", type: "mcpToolCall", text: "board.list_nodes" } } },
+          { type: "notification", method: "item/completed", params: { item: { id: "tool-e2e", type: "mcpToolCall", text: "board.list_nodes", status: "completed" } } },
+          { type: "notification", method: "agent_message_delta", params: { delta: "**hello from Codex** <script>bad()</script>" } },
+        ]
+      : [{ type: "approval", method: "item/tool/call", id: "approval-e2e", params: { tool: "board.add_node" } }];
     await route.fulfill({
       contentType: "text/event-stream",
-      body: `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      body: events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
     });
   });
 
@@ -4484,6 +4502,8 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await expect(page.getByText("Agent project read failed: HTTP 503", { exact: false })).toBeVisible();
   await expect(page.getByPlaceholder("发送消息")).toBeVisible();
   await expect(page.getByText("hello from Codex")).toBeVisible();
+  await expect(page.getByText("任务进度 · 1/1")).toBeVisible();
+  await expect(page.getByText("调用工具", { exact: true })).toBeVisible();
   await expect(page.locator("script").filter({ hasText: "bad()" })).toHaveCount(0);
   await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({
     name: "pixel.png",
@@ -4492,13 +4512,26 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   });
   await expect(page.getByAltText("pixel.png")).toBeVisible();
   const codexComposer = page.getByPlaceholder("发送消息").locator("..");
+  await expect(page.getByLabel("权限")).toHaveValue("workspace-auto");
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("工作区之外");
+    await dialog.dismiss();
+  });
+  await page.getByLabel("权限").selectOption("full-access");
+  await expect(page.getByLabel("权限")).toHaveValue("workspace-auto");
+  await page.getByLabel("权限").selectOption("read-only");
   await codexComposer.getByPlaceholder("发送消息").fill("inspect this image");
   await codexComposer.getByTitle("发送").click();
+  await expect(page.getByRole("log", { name: "Codex 消息记录" }).getByText("inspect this image")).toBeVisible();
+  await expect(page.getByPlaceholder("发送消息")).toHaveValue("");
   await expect.poll(() => messageBody).toMatchObject({
     sessionId: "session-e2e",
     text: "inspect this image",
     attachmentIds: ["image-e2e"],
+    permissionMode: "read-only",
   });
+  expect(String(messageBody?.clientMessageId)).toMatch(/^message_[A-Za-z0-9_-]+$/);
+  releaseMessageRequest();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
   await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
   await expect(page.locator('[data-node-type="config"]')).toHaveClass(/border-\[var\(--ob-select\)\]/);
@@ -4646,14 +4679,14 @@ test("mobile asset and prompt pages keep primary actions usable", async ({ page 
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test("mobile assistant can be opened and closed without hiding the canvas", async ({ page }) => {
+test("mobile canvas Agent can be opened and closed without hiding the canvas", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFreshBoard(page);
-  await page.getByRole("button", { name: "助手面板" }).last().click();
-  await expect(page.getByText("画布助手", { exact: true })).toBeVisible();
-  await page.getByTitle("关闭助手").click();
+  await page.getByRole("button", { name: "画布 Agent" }).last().click();
+  await expect(page.getByRole("complementary", { name: "画布 Agent" })).toBeVisible();
+  await page.getByTitle("关闭画布 Agent").click();
   await expect(page.getByTestId("canvas-surface")).toBeVisible();
-  await expect(page.getByText("画布助手", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "画布 Agent" })).toHaveCount(0);
 });
 
 test("compact navigation keeps secondary actions reachable", async ({ page }) => {
@@ -4662,7 +4695,7 @@ test("compact navigation keeps secondary actions reachable", async ({ page }) =>
 
   await page.getByTitle("更多").click();
   const menu = page.getByRole("menu", { name: "更多操作" });
-  await expect(menu.getByRole("menuitem", { name: "本地 Agent" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "画布 Agent" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "快捷键" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "切换主题" })).toBeVisible();
   const versionItem = menu.getByTitle("查看版本更新");
@@ -4739,7 +4772,8 @@ for (const viewport of [
     await openFreshBoard(page, { requireProjectPanel: false });
 
     const surface = page.getByTestId("canvas-surface");
-    const assistant = page.getByRole("complementary", { name: "画布助手" });
+    await openLocalAgentPanel(page);
+    const assistant = page.getByRole("complementary", { name: "画布 Agent" });
     const projectPanel = page.getByRole("complementary", { name: "项目侧栏" });
     await expect(surface).toBeVisible();
     await expect(assistant).toBeVisible();
@@ -4758,7 +4792,7 @@ for (const viewport of [
     expect(surfaceBox!.height).toBeGreaterThan(500);
     expect(assistantBox!.x + assistantBox!.width).toBeLessThanOrEqual(viewport.width + 1);
 
-    await assistant.getByTitle("关闭助手").click();
+    await assistant.getByTitle("关闭画布 Agent").click();
     await expect(assistant).toHaveCount(0);
     await expect(projectPanel).toBeVisible();
     await expect(surface).toBeVisible();

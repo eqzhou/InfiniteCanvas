@@ -557,5 +557,7 @@ describe("parseBoardProject", () => {
     expect(() => parseBoardProject(input)).toThrow("sorted normalized");
     input.nodes[0]!.metadata = { model: "x".repeat(501) };
     expect(() => parseBoardProject(input)).toThrow("model");
+    input.nodes[0]!.metadata = { reasoningEffort: "extreme" };
+    expect(() => parseBoardProject(input)).toThrow("reasoningEffort");
   });
 });

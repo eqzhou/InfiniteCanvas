@@ -26,8 +26,46 @@ describe("Codex event classification", () => {
     expect(codexEventThreadId({ type: "notification", params: { turn: { threadId: "thread-two" } } })).toBe("thread-two");
   });
   test("summarizes command and file items", () => {
-    expect(classifyCodexEvent({ type: "notification", method: "item/commandExecution", params: { item: { type: "command", command: "go test ./...", status: "completed", description: "verification" } } })).toEqual({ kind: "item", itemType: "command", command: "go test ./...", path: undefined, status: "completed", detail: "verification", text: "command: go test ./..." });
-    expect(classifyCodexEvent({ type: "notification", method: "item/fileChange", params: { path: "web/src/App.tsx" } })).toEqual({ kind: "item", itemType: "item/fileChange", command: undefined, path: "web/src/App.tsx", status: undefined, detail: undefined, text: "item/fileChange: web/src/App.tsx" });
+    expect(classifyCodexEvent({
+      type: "notification",
+      method: "item/completed",
+      params: {
+        item: {
+          id: "command-1",
+          type: "commandExecution",
+          command: "go test ./...",
+          status: "completed",
+          description: "verification",
+        },
+      },
+    })).toEqual({
+      kind: "item",
+      itemId: "command-1",
+      itemType: "commandExecution",
+      label: "运行命令",
+      command: "go test ./...",
+      path: undefined,
+      status: "completed",
+      detail: "verification",
+      error: undefined,
+      text: "commandExecution: go test ./...",
+    });
+    expect(classifyCodexEvent({
+      type: "notification",
+      method: "item/started",
+      params: { item: { id: "file-1", type: "fileChange", path: "web/src/App.tsx" } },
+    })).toEqual({
+      kind: "item",
+      itemId: "file-1",
+      itemType: "fileChange",
+      label: "修改文件",
+      command: undefined,
+      path: "web/src/App.tsx",
+      status: "running",
+      detail: undefined,
+      error: undefined,
+      text: "fileChange: web/src/App.tsx",
+    });
   });
   test("preserves approval events", () => {
     const event = { type: "approval" as const, method: "item/tool/call", id: 1 };
@@ -36,5 +74,20 @@ describe("Codex event classification", () => {
     expect(codexApprovalKey({ type: "approval", method: "tool/call", params: { tool: "board.add_node" } })).toBe('request:tool/call:{"tool":"board.add_node"}');
     expect(codexApprovalResolutionKey({ type: "notification", method: "openboard/approval_resolved", id: 1 })).toBe("id:1");
     expect(codexApprovalResolutionKey({ type: "notification", method: "item/completed", id: 1 })).toBeUndefined();
+  });
+
+  test("keeps incremental reasoning summaries in the process timeline", () => {
+    expect(classifyCodexEvent({
+      type: "notification",
+      method: "item/reasoning/summaryTextDelta",
+      params: { itemId: "reasoning-1", delta: "检查画布状态" },
+    })).toMatchObject({
+      kind: "item",
+      itemId: "reasoning-1",
+      label: "思考",
+      status: "running",
+      detail: "检查画布状态",
+      appendDetail: true,
+    });
   });
 });

@@ -15,6 +15,8 @@ import { uid } from "@/lib/id";
 import { Send } from "lucide-react";
 import { getProvider } from "@/lib/ai-config";
 import {
+  canRegenerateImageFromPrompt,
+  imagePromptInheritsFromUpstream,
   initialNodePrompt,
   isNodePromptType,
   nodePromptKind,
@@ -59,7 +61,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   const updateNode = useBoardStore((s) => s.updateNode);
   const updateActive = useBoardStore((s) => s.updateActive);
   const persistNow = useBoardStore((s) => s.persistNow);
-  const [text, setText] = useState(() => initialNodePrompt(node));
+  const inheritsUpstreamPrompt = imagePromptInheritsFromUpstream(project, node);
+  const [text, setText] = useState(() => initialNodePrompt(node, inheritsUpstreamPrompt));
   const [busy, setBusy] = useState(false);
   const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const sharedChannels = useSharedChannels();
@@ -117,8 +120,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   }, []);
 
   useEffect(() => {
-    setText(initialNodePrompt(node));
-  }, [node.id, node.type, node.metadata.content, node.metadata.storageKey]);
+    setText(initialNodePrompt(node, inheritsUpstreamPrompt));
+  }, [node.id, node.type, node.metadata.content, node.metadata.storageKey, inheritsUpstreamPrompt]);
 
   if (!promptable) return null;
 
@@ -126,6 +129,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     busy ||
     (node.metadata.status === "loading" && Boolean(node.metadata.generationJobId));
   const effectivePrompt = text.trim() || (!hasImageContent && node.type === "image" ? upstream.texts.join("\n\n") : "");
+  const regenerateImageInPlace = canRegenerateImageFromPrompt(node, inheritsUpstreamPrompt);
 
   const placeRight = (created: BoardNode[]) => {
     updateActive((p) => ({
@@ -141,9 +145,17 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   const send = async () => {
     if (!effectivePrompt || generationBusy) return;
     const kind = nodePromptKind(promptType);
+    const savedChannel = regenerateImageInPlace && node.metadata.generationChannelId
+      ? channelChoices.find((choice) => choice.id === node.metadata.generationChannelId)
+      : undefined;
+    if (regenerateImageInPlace && node.metadata.generationChannelId && !savedChannel) {
+      alert("原生成渠道已不可用，无法按修改后的提示词重新生成");
+      return;
+    }
+    const requestChannel = savedChannel ?? channel;
     if (
-      !channel ||
-      (!isServerManagedChannel(channel, kind) && !getProvider(channel, kind).apiKey)
+      !requestChannel ||
+      (!isServerManagedChannel(requestChannel, kind) && !getProvider(requestChannel, kind).apiKey)
     ) {
       alert("请先在设置中配置 API Key");
       return;
@@ -152,6 +164,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     const rawPrompt = effectivePrompt;
     if (node.type !== "image" || !hasImageContent) {
       updateNode(node.id, { metadata: { prompt: rawPrompt, status: "loading", errorDetails: undefined } });
+    } else if (!inheritsUpstreamPrompt) {
+      updateNode(node.id, { metadata: { prompt: rawPrompt } });
     }
     try {
       const activeReferences = activePromptReferences(text, references);
@@ -160,11 +174,12 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           ? `原文本：\n${node.metadata.content}\n\n修改要求：${text.trim()}`
           : rawPrompt;
         const out = await generateText({
-          channel,
-          model: node.metadata.model || getProvider(channel, "text").model,
+          channel: requestChannel,
+          model: node.metadata.model || getProvider(requestChannel, "text").model,
           prompt,
           images: await resolvePromptReferences(activeReferences, "image", 9),
           systemPrompt: config.systemPrompt,
+          reasoningEffort: node.metadata.reasoningEffort,
         });
         if (!node.metadata.content) {
           updateNode(node.id, { metadata: { content: out, status: "success" } });
@@ -173,26 +188,44 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
             createNode(
               "text",
               { x: node.position.x + node.width + 60, y: node.position.y },
-              { metadata: { content: out, status: "success" } },
+              { metadata: {
+                content: out,
+                reasoningEffort: node.metadata.reasoningEffort,
+                status: "success",
+              } },
             ),
           ]);
           updateNode(node.id, { metadata: { status: "success" } });
         }
       } else if (node.type === "image") {
-        const imageReferences: PromptReference[] = [
-          ...(hasImageContent
-            ? [{
-                nodeId: node.id,
-                kind: "image" as const,
-                label: "当前图片",
-                title: node.title,
-                ...(node.metadata.storageKey ? { storageKey: node.metadata.storageKey } : {}),
-                ...(node.metadata.content ? { content: node.metadata.content } : {}),
-              }]
-            : []),
-          ...(hasImageContent ? [] : upstream.images),
-          ...activeReferences.filter((reference) => reference.kind === "image"),
-        ];
+        const savedReferenceKeys = regenerateImageInPlace
+          ? [...(node.metadata.referenceStorageKeys ?? [])]
+          : [];
+        if (regenerateImageInPlace && node.metadata.generationType === "image-to-image" && savedReferenceKeys.length === 0) {
+          throw new Error("原参考图关系已丢失，无法按修改后的提示词重新生成");
+        }
+        const imageReferences: PromptReference[] = regenerateImageInPlace
+          ? savedReferenceKeys.map((storageKey, index) => ({
+              nodeId: `saved-reference-${index}`,
+              kind: "image",
+              label: `原参考图${index + 1}`,
+              title: `原参考图 ${index + 1}`,
+              storageKey,
+            }))
+          : [
+              ...(hasImageContent
+                ? [{
+                    nodeId: node.id,
+                    kind: "image" as const,
+                    label: "当前图片",
+                    title: node.title,
+                    ...(node.metadata.storageKey ? { storageKey: node.metadata.storageKey } : {}),
+                    ...(node.metadata.content ? { content: node.metadata.content } : {}),
+                  }]
+                : []),
+              ...(hasImageContent ? [] : upstream.images),
+              ...activeReferences.filter((reference) => reference.kind === "image"),
+            ];
         const uniqueImageReferences = [...new Map(imageReferences.map((reference) => [reference.nodeId, reference])).values()];
         const referenceStorageKeys = uniqueImageReferences
           .map((reference) => reference.storageKey)
@@ -200,17 +233,17 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         const refs = await resolvePromptReferences(uniqueImageReferences, "image", 9);
         const generation = createImageGenerationMetadata({
           prompt: rawPrompt,
-          model: node.metadata.model || getProvider(channel, "image").model,
-          size: config.imageSize,
-          quality: config.imageQuality,
-          count: config.imageCount,
+          model: node.metadata.model || getProvider(requestChannel, "image").model,
+          size: regenerateImageInPlace ? node.metadata.size || config.imageSize : config.imageSize,
+          quality: regenerateImageInPlace ? node.metadata.quality || config.imageQuality : config.imageQuality,
+          count: regenerateImageInPlace ? 1 : config.imageCount,
           transparentBackground: Boolean(node.metadata.transparentBackground),
           referenceStorageKeys,
-          generationChannelId: channel.id,
+          generationChannelId: requestChannel.id,
           cameraPrompt: node.metadata.cameraPrompt,
         });
         const requestPrompt = applyCameraPrompt(generation.prompt, generation.cameraPrompt);
-        const provider = getProvider(channel, "image");
+        const provider = getProvider(requestChannel, "image");
         if (usesServerGenerationJobs() && (provider.protocol === "openai" || provider.protocol === "gemini" ||
             (provider.protocol === "template" && Boolean(provider.template))) &&
             uniqueImageReferences.every((reference) => Boolean(reference.storageKey))) {
@@ -223,14 +256,20 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           const jobId = uid("job");
           let placeholdersApplied = false;
           try {
-            updateActive((current) => applyServerImagePlaceholders(current, node.id, jobId, generation));
+            updateActive((current) => applyServerImagePlaceholders(
+              current,
+              node.id,
+              jobId,
+              generation,
+              { replaceExisting: regenerateImageInPlace },
+            ));
             placeholdersApplied = true;
             await persistNow();
             await createServerImageGenerationJob({
               id: jobId,
               projectId: project?.id,
               prompt: requestPrompt,
-              providerId: channel.id,
+              providerId: requestChannel.id,
               model: generation.model,
               parameters: {
                 size: generation.size,
@@ -261,7 +300,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           return;
         }
         const urls = await generateImages({
-          channel,
+          channel: requestChannel,
           model: generation.model,
           prompt: requestPrompt,
           size: generation.size,
@@ -271,7 +310,9 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           transparentBackground: generation.transparentBackground,
           systemPrompt: config.systemPrompt,
         });
-        await placeImageResults(node, urls, generation, updateActive);
+        await placeImageResults(node, urls, generation, updateActive, {
+          replaceExisting: regenerateImageInPlace,
+        });
       } else if (node.type === "video") {
         const ownVideo: PromptReference[] = node.metadata.storageKey || node.metadata.content
           ? [{
@@ -283,7 +324,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
               ...(node.metadata.content ? { content: node.metadata.content } : {}),
             }]
           : [];
-        const videoProvider = getProvider(channel, "video");
+        const videoProvider = getProvider(requestChannel, "video");
         const durableReferences = [...ownVideo, ...activeReferences];
         const referenceStorageKeys = durableReferences
           .map((reference) => reference.storageKey)
@@ -295,7 +336,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           const job = await createServerVideoGenerationJob({
             projectId: project?.id,
             prompt: applyCameraPrompt(rawPrompt, node.metadata.cameraPrompt),
-            providerId: channel.id,
+            providerId: requestChannel.id,
             model: node.metadata.model || videoProvider.model,
             parameters: {
               size: node.metadata.size,
@@ -331,8 +372,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           return;
         }
         const result = await generateVideo({
-          channel,
-          model: node.metadata.model || getProvider(channel, "video").model,
+          channel: requestChannel,
+          model: node.metadata.model || getProvider(requestChannel, "video").model,
           prompt: applyCameraPrompt(rawPrompt, node.metadata.cameraPrompt),
           size: node.metadata.size,
           seconds: resolveVideoDuration(
@@ -378,12 +419,12 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           updateNode(node.id, { metadata: { status: "success" } });
         }
       } else if (node.type === "audio") {
-        const audioProvider = getProvider(channel, "audio");
+        const audioProvider = getProvider(requestChannel, "audio");
         if (usesServerGenerationJobs() && audioProvider.protocol === "openai") {
           const job = await createServerAudioGenerationJob({
             projectId: project?.id,
             prompt: rawPrompt,
-            providerId: channel.id,
+            providerId: requestChannel.id,
             model: node.metadata.model || audioProvider.model,
             parameters: audioJobParameters(node.metadata.voice, config.generationDefaults),
           });
@@ -404,8 +445,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           return;
         }
         const speech = await generateSpeech({
-          channel,
-          model: node.metadata.model || getProvider(channel, "audio").model,
+          channel: requestChannel,
+          model: node.metadata.model || getProvider(requestChannel, "audio").model,
           input: text.trim(),
           ...audioSpeechOptions(node.metadata.voice, config.generationDefaults),
         });
@@ -460,7 +501,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
 
 ${body}` : body;
     setText(next);
-    if (!(node.type === "image" && hasImageContent)) {
+    if (!(node.type === "image" && inheritsUpstreamPrompt)) {
       updateNode(node.id, { metadata: { prompt: next } }, { history: false });
     }
   };
@@ -518,7 +559,7 @@ ${body}` : body;
             references={references}
             onChange={(value) => {
               setText(value);
-              if (!(node.type === "image" && hasImageContent)) {
+              if (!(node.type === "image" && inheritsUpstreamPrompt)) {
                 updateNode(node.id, { metadata: { prompt: value } }, { history: false });
               }
             }}
@@ -563,7 +604,35 @@ async function placeImageResults(
   urls: string[],
   generation: ReturnType<typeof createImageGenerationMetadata>,
   updateActive: ReturnType<typeof useBoardStore.getState>["updateActive"],
+  options: { replaceExisting?: boolean } = {},
 ) {
+  if (options.replaceExisting) {
+    const url = urls[0];
+    if (!url) throw new Error("图片服务没有返回结果");
+    const uploaded = await uploadMedia(url, "image");
+    updateActive((project) => ({
+      ...project,
+      nodes: project.nodes.map((candidate) => candidate.id === node.id ? {
+        ...candidate,
+        metadata: {
+          ...candidate.metadata,
+          ...generation,
+          content: uploaded.url,
+          storageKey: uploaded.storageKey,
+          naturalWidth: uploaded.width,
+          naturalHeight: uploaded.height,
+          bytes: uploaded.bytes,
+          mimeType: uploaded.mimeType,
+          status: "success",
+          errorDetails: undefined,
+          generationJobId: undefined,
+          generationResultIndex: 0,
+        },
+      } : candidate),
+    }));
+    return;
+  }
+
   const created: BoardNode[] = [];
   for (const [i, url] of urls.entries()) {
     const uploaded = await uploadMedia(url, "image");

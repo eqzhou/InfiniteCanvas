@@ -221,8 +221,28 @@ export function BoardNodeView({
                 onChange={(event) => updateNode(node.id, { metadata: { model: event.target.value || undefined } })}
               />
               <select
+                aria-label="文本推理强度"
+                title="推理强度"
+                className="w-[4.5rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
+                value={node.metadata.reasoningEffort ?? ""}
+                onChange={(event) => updateNode(node.id, {
+                  metadata: {
+                    reasoningEffort: event.target.value === "low" ||
+                      event.target.value === "medium" ||
+                      event.target.value === "high"
+                      ? event.target.value
+                      : undefined,
+                  },
+                })}
+              >
+                <option value="">默认</option>
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </select>
+              <select
                 aria-label="提示词库"
-                className="w-[38%] min-w-[5.5rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
+                className="w-[32%] min-w-[4.5rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
                 value=""
                 onChange={(event) => {
                   const prompt = prompts.find((item) => item.id === event.target.value);
@@ -403,6 +423,30 @@ export function BoardNodeView({
                 }
               />
             </label>
+            {(node.metadata.generationMode ?? "image") === "text" ? (
+              <label className="flex flex-col gap-1">
+                推理强度
+                <select
+                  aria-label="配置节点文本推理强度"
+                  className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                  value={node.metadata.reasoningEffort ?? ""}
+                  onChange={(event) => updateNode(node.id, {
+                    metadata: {
+                      reasoningEffort: event.target.value === "low" ||
+                        event.target.value === "medium" ||
+                        event.target.value === "high"
+                        ? event.target.value
+                        : undefined,
+                    },
+                  })}
+                >
+                  <option value="">跟随模型默认</option>
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                </select>
+              </label>
+            ) : null}
             <label className="flex min-h-0 flex-1 flex-col gap-1">
               提示词
               <textarea

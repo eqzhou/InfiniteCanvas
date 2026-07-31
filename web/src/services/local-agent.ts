@@ -82,6 +82,13 @@ export type CodexEvent = {
   params?: unknown;
   data?: unknown;
 };
+export type CodexPermissionMode = "read-only" | "workspace-auto" | "full-access";
+export type SendCodexMessageOptions = {
+  attachmentIds?: string[];
+  clientId?: string;
+  clientMessageId?: string;
+  permissionMode?: CodexPermissionMode;
+};
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -200,9 +207,14 @@ export async function sendCodexMessage(
   sessionId: string,
   text: string,
   fetcher: Fetcher = fetch,
-  attachmentIds: string[] = [],
-  clientId = "",
+  options: SendCodexMessageOptions = {},
 ): Promise<void> {
+  const {
+    attachmentIds = [],
+    clientId = "",
+    clientMessageId = "",
+    permissionMode = "workspace-auto",
+  } = options;
   const response = await agentFetch(connection, "api/codex/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -211,6 +223,8 @@ export async function sendCodexMessage(
       text,
       ...(attachmentIds.length ? { attachmentIds } : {}),
       ...(clientId ? { clientId } : {}),
+      ...(clientMessageId ? { clientMessageId } : {}),
+      permissionMode,
     }),
   }, fetcher);
   if (!response.ok) throw new Error(`Codex message failed: HTTP ${response.status}`);

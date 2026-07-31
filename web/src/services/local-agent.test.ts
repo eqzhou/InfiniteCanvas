@@ -143,7 +143,17 @@ describe("local agent connection", () => {
       new File(["pixel"], "pixel.png", { type: "image/png" }),
     ], fetcher);
     await deleteCodexAttachment(connection, session.id, attachments[0].id, fetcher);
-    await sendCodexMessage(connection, session.id, "hello", fetcher, attachments.map((item) => item.id));
+    await sendCodexMessage(
+      connection,
+      session.id,
+      "hello",
+      fetcher,
+      {
+        attachmentIds: attachments.map((item) => item.id),
+        clientMessageId: "message-one",
+        permissionMode: "read-only",
+      },
+    );
     await interruptCodexTurn(connection, session.id, fetcher);
     await respondCodexApproval(connection, session.id, 7, true, fetcher);
     await closeCodexSession(connection, session.id, fetcher);
@@ -159,7 +169,13 @@ describe("local agent connection", () => {
     ]);
     expect(active?.threadId).toBe("thread-1");
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({ cwd: "/tmp/board" });
-    expect(JSON.parse(String(requests[4].init?.body))).toEqual({ sessionId: "session-1", text: "hello", attachmentIds: ["image-1"] });
+    expect(JSON.parse(String(requests[4].init?.body))).toEqual({
+      sessionId: "session-1",
+      text: "hello",
+      attachmentIds: ["image-1"],
+      clientMessageId: "message-one",
+      permissionMode: "read-only",
+    });
     expect(JSON.parse(String(requests[6].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
 	  expect(new Headers(requests[4].init?.headers).get("Authorization")).toBeNull();
 	  expect(requests.every((request) => new Headers(request.init?.headers).get("X-OpenBoard-Session") === "user-session-1")).toBe(true);

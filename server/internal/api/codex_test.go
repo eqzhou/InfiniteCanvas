@@ -375,3 +375,35 @@ func TestCodexUserMessagesAreReplayedToNewTabs(t *testing.T) {
 		t.Fatalf("replayed user message = %s", encoded)
 	}
 }
+
+func TestCodexTurnPermissionParams(t *testing.T) {
+	tests := []struct {
+		mode           string
+		approvalPolicy string
+		sandboxType    string
+	}{
+		{mode: "", approvalPolicy: "never", sandboxType: "workspaceWrite"},
+		{mode: "read-only", approvalPolicy: "on-request", sandboxType: "readOnly"},
+		{mode: "workspace-auto", approvalPolicy: "never", sandboxType: "workspaceWrite"},
+		{mode: "full-access", approvalPolicy: "never", sandboxType: "dangerFullAccess"},
+	}
+	for _, test := range tests {
+		params, err := codexTurnPermissionParams(test.mode)
+		if err != nil {
+			t.Fatalf("mode %q: %v", test.mode, err)
+		}
+		if params["approvalPolicy"] != test.approvalPolicy {
+			t.Fatalf("mode %q approvalPolicy=%v", test.mode, params["approvalPolicy"])
+		}
+		sandbox, ok := params["sandboxPolicy"].(map[string]any)
+		if !ok || sandbox["type"] != test.sandboxType {
+			t.Fatalf("mode %q sandboxPolicy=%#v", test.mode, params["sandboxPolicy"])
+		}
+		if test.mode == "workspace-auto" && sandbox["networkAccess"] != false {
+			t.Fatalf("workspace-auto unexpectedly enabled network access: %#v", sandbox)
+		}
+	}
+	if _, err := codexTurnPermissionParams("unknown"); err == nil {
+		t.Fatal("unknown permission mode was accepted")
+	}
+}

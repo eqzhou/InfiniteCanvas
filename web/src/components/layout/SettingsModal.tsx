@@ -36,6 +36,7 @@ import {
   IMAGE_SIZE_OPTIONS,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
+import { exportConfigFile, importConfigFile } from "@/lib/config-file";
 import { resolveActiveAIChannel, useSharedChannels } from "@/services/shared-channels";
 import {
   AudioLines,
@@ -602,6 +603,57 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               const validation = validateObjectStorageConfig(normalizeObjectStorage(config.objectStorage));
               return validation ? <p className="mt-2 text-xs text-[var(--ob-danger)]">{validation}</p> : null;
             })()}
+          </section>
+          <section>
+            <SectionTitle title="配置与偏好文件" />
+            <p className="mb-3 text-xs text-[var(--ob-muted)]">
+              导出模型地址、模型名、界面与生成偏好；API Key、对象存储密钥和 WebDAV 密码不会写入文件。
+              插件与可执行提示词来源继续通过各自的授权流程管理。导入时会保留当前账号已保存的密钥。
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="ob-btn"
+                onClick={() => {
+                  const payload = JSON.stringify(exportConfigFile(
+                    useBoardStore.getState().config,
+                  ), null, 2);
+                  const url = URL.createObjectURL(new Blob([payload], {
+                    type: "application/json",
+                  }));
+                  const anchor = document.createElement("a");
+                  anchor.href = url;
+                  anchor.download = "openboard-config.json";
+                  anchor.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                <CloudDownload size={15} /> 导出配置
+              </button>
+              <label className="ob-btn cursor-pointer">
+                <CloudUpload size={15} /> 导入配置
+                <input
+                  type="file"
+                  aria-label="导入配置文件"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.currentTarget.value = "";
+                    if (!file) return;
+                    void file.text().then(async (raw) => {
+                      const state = useBoardStore.getState();
+                      const next = importConfigFile(raw, state.config);
+                      state.setConfig(next);
+                      await state.flushConfig();
+                      alert("配置与偏好已导入，现有密钥保持不变");
+                    }).catch((cause) => {
+                      alert(cause instanceof Error ? cause.message : String(cause));
+                    });
+                  }}
+                />
+              </label>
+            </div>
           </section>
           <section>
             <SectionTitle title="WebDAV 备份" />

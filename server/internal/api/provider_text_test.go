@@ -106,6 +106,10 @@ func TestProviderTextUsesResponsesAPI(t *testing.T) {
 			body["instructions"] != "Be concise" {
 			t.Fatalf("unexpected request body: %#v", body)
 		}
+		reasoning, ok := body["reasoning"].(map[string]any)
+		if !ok || reasoning["effort"] != "high" {
+			t.Fatalf("reasoning effort missing from Responses request: %#v", body)
+		}
 		_, _ = w.Write([]byte(`{"output_text":"gateway response"}`))
 	}))
 	defer upstream.Close()
@@ -114,9 +118,23 @@ func TestProviderTextUsesResponsesAPI(t *testing.T) {
 		BaseURL: upstream.URL, APIKey: providerFixtureKey("provider"), Protocol: "openai",
 	}, providerTextRequest{
 		ChannelID: "personal", Model: "gpt-test", Prompt: "hello", SystemPrompt: "Be concise",
+		ReasoningEffort: "high",
 	}, upstream.Client(), true)
 	if err != nil || text != "gateway response" {
 		t.Fatalf("text=%q err=%v", text, err)
+	}
+}
+
+func TestProviderTextRejectsUnknownReasoningEffort(t *testing.T) {
+	input := providerTextRequest{
+		ChannelID: "personal", Model: "gpt-test", Prompt: "hello", ReasoningEffort: "extreme",
+	}
+	if err := validateProviderTextRequest(input); err == nil {
+		t.Fatal("unknown reasoning effort was accepted")
+	}
+	input.ReasoningEffort = "medium"
+	if err := validateProviderTextRequest(input); err != nil {
+		t.Fatalf("valid reasoning effort was rejected: %v", err)
 	}
 }
 

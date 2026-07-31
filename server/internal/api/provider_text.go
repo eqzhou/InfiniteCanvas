@@ -34,6 +34,7 @@ type providerTextRequest struct {
 	Prompt              string   `json:"prompt"`
 	Images              []string `json:"images"`
 	SystemPromptProfile string   `json:"systemPromptProfile,omitempty"`
+	ReasoningEffort     string   `json:"reasoningEffort,omitempty"`
 	SystemPrompt        string   `json:"-"`
 }
 
@@ -117,6 +118,10 @@ func validateProviderTextRequest(input providerTextRequest) error {
 	if input.SystemPromptProfile != "" && input.SystemPromptProfile != "global" &&
 		input.SystemPromptProfile != "workflow" {
 		return errors.New("invalid system prompt profile")
+	}
+	if input.ReasoningEffort != "" && input.ReasoningEffort != "low" &&
+		input.ReasoningEffort != "medium" && input.ReasoningEffort != "high" {
+		return errors.New("invalid reasoning effort")
 	}
 	if strings.TrimSpace(input.Prompt) == "" && len(input.Images) == 0 {
 		return errors.New("text generation prompt is required")
@@ -382,6 +387,9 @@ func fetchProviderTextWithClient(
 		return "", err
 	}
 	responsesBody := map[string]any{"model": input.Model, "input": providerTextInput(input)}
+	if input.ReasoningEffort != "" {
+		responsesBody["reasoning"] = map[string]any{"effort": input.ReasoningEffort}
+	}
 	if system := strings.TrimSpace(input.SystemPrompt); system != "" {
 		responsesBody["instructions"] = system
 	}
@@ -402,9 +410,15 @@ func fetchProviderTextWithClient(
 	if err != nil {
 		return "", err
 	}
-	status, body, err = requestProviderText(requestCtx, client, chatEndpoint, connection.APIKey, "openai", map[string]any{
+	chatBody := map[string]any{
 		"model": input.Model, "messages": providerChatMessages(input),
-	})
+	}
+	if input.ReasoningEffort != "" {
+		chatBody["reasoning_effort"] = input.ReasoningEffort
+	}
+	status, body, err = requestProviderText(
+		requestCtx, client, chatEndpoint, connection.APIKey, "openai", chatBody,
+	)
 	if err != nil {
 		return "", err
 	}

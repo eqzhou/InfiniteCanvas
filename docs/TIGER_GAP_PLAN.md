@@ -62,7 +62,7 @@
 | 图片/视频/音频持久化任务和恢复 | 已覆盖 | Go generation workers、job API、formal E2E |
 | 图片/视频工作台、首尾帧、声音、水印、历史和重试 | 已覆盖 | `CreativeWorkbench.tsx`、生成服务测试 |
 | 公开/个人创作工作流与 AI 草稿 | 已覆盖 | workflow 页面、服务、DAG 和 formal E2E |
-| 画布助手上下文、会话、重试和结果插入 | 已覆盖 | `AssistantPanel.tsx` 与 assistant E2E |
+| 统一画布 Agent、上下文、审批、附件、停止与结果插入 | 已覆盖 | `LocalAgentPanel.tsx` 与 Agent/runtime E2E |
 | 注册登录、Linux.do OAuth、本地多租户、额度扣减/退款和模型成本读取基础 | 已覆盖 | auth/admin API、PostgreSQL store 测试 |
 | 用户级 S3/R2 | 已覆盖 | Settings、blob S3、tenant storage 测试 |
 | 提示词来源、个人提示词、素材和服务器素材库 | 已覆盖 | prompts/assets/library 页面和测试 |

@@ -9,7 +9,6 @@ import {
   BookOpen,
   LayoutDashboard,
   Library,
-  MessageSquare,
   MoreHorizontal,
   Moon,
   Puzzle,
@@ -38,8 +37,6 @@ export function TopNav({
   const theme = useBoardStore((s) => s.config.theme);
   const setConfig = useBoardStore((s) => s.setConfig);
   const config = useBoardStore((s) => s.config);
-  const showAssistant = useBoardStore((s) => s.showAssistant);
-  const setShowAssistant = useBoardStore((s) => s.setShowAssistant);
   const setShowShortcuts = useBoardStore((s) => s.setShowShortcuts);
   const showLocalAgent = useBoardStore((s) => s.showLocalAgent);
   const setShowLocalAgent = useBoardStore((s) => s.setShowLocalAgent);
@@ -130,20 +127,11 @@ export function TopNav({
           ) : null}
           <button
             type="button"
-            className={cn("ob-icon-btn", showAssistant && "is-active")}
-            title="助手面板"
-            aria-label="助手面板"
-            aria-controls="canvas-assistant"
-            aria-expanded={showAssistant}
-            onClick={() => setShowAssistant(!showAssistant)}
-          >
-            <MessageSquare size={18} />
-          </button>
-          <button
-            type="button"
             className={cn("ob-icon-btn", showLocalAgent && "is-active")}
-            title="本地 Agent"
-            aria-label="本地 Agent"
+            title="画布 Agent"
+            aria-label="画布 Agent"
+            aria-controls="canvas-agent"
+            aria-expanded={showLocalAgent}
             onClick={() => setShowLocalAgent(!showLocalAgent)}
           >
             <Bot size={18} />
@@ -176,17 +164,17 @@ export function TopNav({
           </button>
           <VersionReleaseModal />
         </div>
-        {/* Mobile still needs assistant quick access */}
+        {/* Mobile keeps the same single Agent entry. */}
         <button
           type="button"
-          className={cn("ob-icon-btn lg:hidden", showAssistant && "is-active")}
-          title="助手面板"
-          aria-label="助手面板"
-          aria-controls="canvas-assistant"
-          aria-expanded={showAssistant}
-          onClick={() => setShowAssistant(!showAssistant)}
+          className={cn("ob-icon-btn lg:hidden", showLocalAgent && "is-active")}
+          title="画布 Agent"
+          aria-label="画布 Agent"
+          aria-controls="canvas-agent"
+          aria-expanded={showLocalAgent}
+          onClick={() => setShowLocalAgent(!showLocalAgent)}
         >
-          <MessageSquare size={18} />
+          <Bot size={18} />
         </button>
         <div className="lg:hidden">
           <button
@@ -237,7 +225,7 @@ export function TopNav({
                   }}
                 >
                   <Bot size={16} />
-                  本地 Agent
+                  画布 Agent
                 </button>
                 <button
                   type="button"

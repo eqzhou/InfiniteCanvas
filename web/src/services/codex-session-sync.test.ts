@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   parseCodexSharedState,
+  createCodexSessionSync,
   shouldResetCodexTranscript,
   statusForCodexSnapshot,
 } from "./codex-session-sync";
@@ -31,5 +32,120 @@ describe("Codex shared session state", () => {
     expect(statusForCodexSnapshot("running", false)).toBe("completed");
     expect(statusForCodexSnapshot("failed", false)).toBe("failed");
     expect(statusForCodexSnapshot("idle", true)).toBe("running");
+  });
+
+  test("publishes, receives, orders, and closes cross-tab session state", () => {
+    const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const priorStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const priorChannel = Object.getOwnPropertyDescriptor(globalThis, "BroadcastChannel");
+    const values = new Map<string, string>();
+    const fakeWindow = new EventTarget();
+    const channels: FakeChannel[] = [];
+    class FakeChannel {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      posted: unknown[] = [];
+      closed = false;
+      constructor(readonly name: string) {
+        channels.push(this);
+      }
+      postMessage(value: unknown) {
+        this.posted.push(structuredClone(value));
+      }
+      close() {
+        this.closed = true;
+      }
+    }
+    Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    Object.defineProperty(globalThis, "BroadcastChannel", { configurable: true, value: FakeChannel });
+    const initial = {
+      profile: "default",
+      session: { id: "session-initial", running: false },
+      turnStatus: "idle",
+      updatedAt: 10,
+      sourceId: "tab-initial",
+    };
+    values.set("openboard:codex-session:default", JSON.stringify(initial));
+    const received: unknown[] = [];
+    try {
+      const sync = createCodexSessionSync("default", (state) => received.push(state));
+      expect(sync.initial).toEqual(initial);
+      sync.publish({ id: "session-next", running: true }, "running");
+      const published = JSON.parse(values.get("openboard:codex-session:default") ?? "{}");
+      expect(published).toMatchObject({
+        profile: "default",
+        session: { id: "session-next", running: true },
+        turnStatus: "running",
+      });
+      expect(channels[0].name).toBe("openboard:codex-session");
+      expect(channels[0].posted).toHaveLength(1);
+
+      channels[0].onmessage?.({ data: {
+        profile: "default",
+        session: { id: "session-remote", running: false },
+        turnStatus: "completed",
+        updatedAt: published.updatedAt + 1,
+        sourceId: "tab-remote",
+      } } as MessageEvent);
+      channels[0].onmessage?.({ data: {
+        profile: "default",
+        session: { id: "session-stale", running: false },
+        turnStatus: "idle",
+        updatedAt: 1,
+        sourceId: "tab-stale",
+      } } as MessageEvent);
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ session: { id: "session-remote" } });
+
+      sync.close();
+      expect(channels[0].closed).toBe(true);
+    } finally {
+      if (priorWindow) Object.defineProperty(globalThis, "window", priorWindow);
+      else delete (globalThis as { window?: unknown }).window;
+      if (priorStorage) Object.defineProperty(globalThis, "localStorage", priorStorage);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
+      if (priorChannel) Object.defineProperty(globalThis, "BroadcastChannel", priorChannel);
+      else delete (globalThis as { BroadcastChannel?: unknown }).BroadcastChannel;
+    }
+  });
+
+  test("ignores malformed stored state and survives unavailable browser transports", () => {
+    const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const priorStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const priorChannel = Object.getOwnPropertyDescriptor(globalThis, "BroadcastChannel");
+    const fakeWindow = new EventTarget();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: () => "{bad json",
+        setItem: () => { throw new Error("storage disabled"); },
+      },
+    });
+    Object.defineProperty(globalThis, "BroadcastChannel", {
+      configurable: true,
+      value: class { constructor() { throw new Error("channel disabled"); } },
+    });
+    try {
+      const sync = createCodexSessionSync("default", () => {
+        throw new Error("invalid state must not be delivered");
+      });
+      expect(sync.initial).toBeNull();
+      expect(() => sync.publish(null, "idle")).not.toThrow();
+      expect(() => sync.close()).not.toThrow();
+    } finally {
+      if (priorWindow) Object.defineProperty(globalThis, "window", priorWindow);
+      else delete (globalThis as { window?: unknown }).window;
+      if (priorStorage) Object.defineProperty(globalThis, "localStorage", priorStorage);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
+      if (priorChannel) Object.defineProperty(globalThis, "BroadcastChannel", priorChannel);
+      else delete (globalThis as { BroadcastChannel?: unknown }).BroadcastChannel;
+    }
   });
 });

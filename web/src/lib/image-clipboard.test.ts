@@ -109,4 +109,25 @@ describe("image clipboard", () => {
       convertToPng: mock(async (blob) => blob),
     })).rejects.toThrow("不是可复制的图片");
   });
+
+  test("reports missing and unreadable image sources", async () => {
+    const dependencies = {
+      clipboard: { write: async (items: unknown[]) => {
+        await (items[0] as { items: Record<string, Promise<Blob>> }).items["image/png"];
+      } },
+      ClipboardItemCtor: class { constructor(readonly items: Record<string, Promise<Blob>>) {} },
+      convertToPng: mock(async (blob: Blob) => blob),
+    };
+    await expect(copyImageSourceToClipboard(null, dependencies))
+      .rejects.toThrow("没有可复制的图片");
+
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => new Response("missing", { status: 404 }));
+    try {
+      await expect(copyImageSourceToClipboard("https://example.invalid/missing.png", dependencies))
+        .rejects.toThrow("读取图片失败（404）");
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
 });

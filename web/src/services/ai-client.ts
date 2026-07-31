@@ -1,4 +1,4 @@
-import type { AiChannel } from "@/types/board";
+import type { AiChannel, TextReasoningEffort } from "@/types/board";
 import { arkImageReferenceRoles, normalizeVideoFrameMode, validateArkVideoRequest } from "@/lib/video-generation";
 import { getProvider } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
@@ -148,6 +148,7 @@ type TextGenerationOptions = {
   images?: string[];
   systemPrompt?: string;
   systemPromptProfile?: "global" | "workflow";
+  reasoningEffort?: TextReasoningEffort;
 };
 
 export async function generateText(options: TextGenerationOptions): Promise<string> {
@@ -173,6 +174,7 @@ async function generateTextRequest(options: TextGenerationOptions): Promise<stri
       prompt,
       images,
       options.systemPromptProfile ?? "global",
+      options.reasoningEffort,
     );
   }
   if (provider.protocol === "gemini") {
@@ -198,6 +200,7 @@ async function generateTextRequest(options: TextGenerationOptions): Promise<stri
       method: "POST",
       body: JSON.stringify({
         model,
+        ...(options.reasoningEffort ? { reasoning: { effort: options.reasoningEffort } } : {}),
         ...(systemPrompt.trim() ? { instructions: systemPrompt.trim() } : {}),
         input: [{ role: "user", content }],
       }),
@@ -238,7 +241,11 @@ async function generateTextRequest(options: TextGenerationOptions): Promise<stri
   ];
   const res = await authFetch(channel, "/chat/completions", {
     method: "POST",
-    body: JSON.stringify({ model, messages }),
+    body: JSON.stringify({
+      model,
+      messages,
+      ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+    }),
   }, "text");
   const data = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
@@ -252,12 +259,20 @@ async function generateTextThroughServer(
   prompt: string,
   images: string[],
   systemPromptProfile: "global" | "workflow",
+  reasoningEffort?: TextReasoningEffort,
 ): Promise<string> {
   let response: Response;
   try {
     response = await apiFetch("provider-text", {
       method: "POST",
-      body: JSON.stringify({ channelId, model, prompt, images, systemPromptProfile }),
+      body: JSON.stringify({
+        channelId,
+        model,
+        prompt,
+        images,
+        systemPromptProfile,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      }),
     });
   } catch {
     throw new Error("文本生成服务不可用，请检查 OpenBoard 服务连接");

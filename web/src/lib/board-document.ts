@@ -99,6 +99,11 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   optionalString(input.prompt, `${path}.prompt`, 100_000);
   optionalString(input.generationChannelId, `${path}.generationChannelId`, 128);
   optionalString(input.model, `${path}.model`, 500);
+  if (input.reasoningEffort !== undefined &&
+      input.reasoningEffort !== "low" && input.reasoningEffort !== "medium" &&
+      input.reasoningEffort !== "high") {
+    throw new Error(`${path}.reasoningEffort is invalid`);
+  }
   optionalString(input.size, `${path}.size`, 100);
   optionalString(input.quality, `${path}.quality`, 100);
   optionalString(input.storageKey, `${path}.storageKey`, 512);

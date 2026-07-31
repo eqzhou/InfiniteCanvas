@@ -1,4 +1,4 @@
-import type { AiChannel } from "@/types/board";
+import type { AiChannel, TextReasoningEffort } from "@/types/board";
 import { generateText } from "@/services/ai-client";
 
 export type TextBatchOptions = {
@@ -7,6 +7,7 @@ export type TextBatchOptions = {
   prompt: string;
   images?: string[];
   systemPrompt?: string;
+  reasoningEffort?: TextReasoningEffort;
   count: number;
 };
 
@@ -20,6 +21,7 @@ export async function generateTextBatch(options: TextBatchOptions): Promise<stri
     prompt: options.prompt,
     images: [...(options.images ?? [])],
     systemPrompt: options.systemPrompt,
+    reasoningEffort: options.reasoningEffort,
   };
   let results: string[] = [];
   for (let offset = 0; offset < options.count; offset += 2) {

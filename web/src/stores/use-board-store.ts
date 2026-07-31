@@ -109,7 +109,6 @@ type BoardState = {
   prompts: PromptItem[];
   connectingFrom: string | null;
   showMinimap: boolean;
-  showAssistant: boolean;
   showShortcuts: boolean;
   showLocalAgent: boolean;
   hydrate: (promptCatalogScope?: string) => Promise<void>;
@@ -181,7 +180,6 @@ type BoardState = {
   addAssetFromNode: (nodeId: string) => Promise<void>;
   insertAsset: (assetId: string, position: Point) => Promise<void>;
   setShowMinimap: (v: boolean) => void;
-  setShowAssistant: (v: boolean) => void;
   setShowShortcuts: (v: boolean) => void;
   setShowLocalAgent: (v: boolean) => void;
   alignSelected: (mode: "left" | "right" | "top" | "bottom" | "hcenter" | "vcenter") => void;
@@ -329,7 +327,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   prompts: [],
   connectingFrom: null,
   showMinimap: true,
-  showAssistant: true,
   showShortcuts: false,
   showLocalAgent: false,
 
@@ -1158,7 +1155,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   setShowMinimap: (v) => set({ showMinimap: v }),
-  setShowAssistant: (v) => set({ showAssistant: v }),
   setShowShortcuts: (v) => set({ showShortcuts: v }),
   setShowLocalAgent: (v) => set({ showLocalAgent: v }),
 

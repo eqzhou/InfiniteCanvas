@@ -42,7 +42,7 @@ trap cleanup EXIT INT TERM
 
 cd web
 set +e
-OPENBOARD_E2E_FORMAL=1 bunx playwright test
+OPENBOARD_E2E_FORMAL=1 bunx playwright test "$@"
 test_status=$?
 set -e
 cd "$ROOT"

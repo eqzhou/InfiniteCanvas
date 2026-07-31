@@ -15,6 +15,8 @@ behaviors at commits `d4130bbb79`, `bdca6b0a5c`, `062e4569aa`, and
 `5e1fd7a825` were adopted on 2026-07-19. A public recheck on 2026-07-23
 confirmed the latest public release is still `v0.9.0` and the public TODO only
 lists a Claude Agent SDK adapter follow-up (not yet adopted as a parity target).
+The public deltas through `v0.12.0` and Tiger's current Agent-consolidation
+entry were independently rechecked and adopted on 2026-07-31.
 Unlisted later upstream changes remain out of scope. The implementation team
 did not use upstream source, CSS, plugins, fixtures, screenshots, or assets as
 implementation input.
@@ -107,13 +109,16 @@ implementation input.
 | 2026-07-28 | Exact APIMart contracts | Submit exact Seedream 5.0 Pro, Gemini 3.1 Flash Lite Image / Nano Banana 2 Lite, HappyHorse 1.1 and Kling 3.0 Turbo requests, including promptless first-frame video | Only documented exact IDs, bounds, reference modes and JSON fields are accepted; promptless video reaches the worker only for documented first-frame modes; unknown names including Agnes fail closed | high |
 | 2026-07-28 | Optional account boundary | Create the first account, then request projects, state, blobs and shared channels with no session or only the process token | Protected data-plane routes return 401 and the SPA shows the login wall while preserving the requested route; `off` remains the only no-account mode | high |
 | 2026-07-25 | Left-panel asset drag | Drag a sidebar asset card onto the canvas surface | Asset is inserted as a node near the drop world point; click insert still works | high |
+| 2026-07-31 | Basket v0.11.0 public recheck | Read the public v0.11.0 release and CHANGELOG behavior names without inspecting implementation source | Text nodes expose persisted reasoning effort; image/video workbenches accept bounded drag-upload references; versioned configuration/preferences files exclude secrets and import into the authoritative database | high |
+| 2026-07-31 | Basket v0.12.0 public recheck | Read the public v0.12.0 release and CHANGELOG behavior names without inspecting implementation source | Codex offers three real turn-level permission modes, retains in-conversation approval, folds item events into collapsible step progress, shows elapsed waiting, and updates send/new-conversation feedback immediately; debug-file/history/file-manager behaviors remain unclaimed | high |
+| 2026-07-31 | Tiger Agent consolidation | Read the public Tiger Unreleased behavior name without inspecting implementation source | The legacy assistant and duplicate navigation entry are absent; one dockable canvas Agent provides the existing Codex/Claude, approval, attachment, stop and generation-status workflows | high |
 
 ## Evidence
 
 - Automated evidence is in `web/src/**/*.test.ts`, `web/e2e/canvas.spec.ts`,
   `server/**/**_test.go`, and CI workflow definitions.
 - The feature-to-evidence matrix is maintained in `docs/FEATURE_PARITY.md` and
-  covers the v0.8.2 core, the explicitly listed v0.9.0 public delta, and the
+  covers the v0.8.2 core, the explicitly listed deltas through v0.12.0, and the
   current Tiger v0.4.5 convergence.
 - Public protocol evidence includes OpenAI-compatible HTTP conventions, MCP
   transport conventions, JSON-RPC, and browser pointer events.
@@ -133,11 +138,14 @@ implementation input.
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.8.2 | 2026-07-17 | Frozen release identifier and public release notes; URL availability verified without reading source files |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.9.0 | 2026-07-18 | Public release metadata used to define the additive interface delta; no release source, styles, screenshots, plugins, or assets were used |
 | https://github.com/basketikun/infinite-canvas/releases | 2026-07-23 | Public release list recheck; latest tag remains `v0.9.0` |
+| https://github.com/basketikun/infinite-canvas/releases/tag/v0.11.0 | 2026-07-31 | Public release metadata and user-visible change names for the v0.11 additive interface delta; no implementation source, styles, screenshots, plugins, or assets were used |
+| https://github.com/basketikun/infinite-canvas/releases/tag/v0.12.0 | 2026-07-31 | Public release metadata and user-visible Agent behavior names; no implementation source, styles, screenshots, plugins, or assets were used |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/overview/features.mdx | 2026-07-23 | Public feature inventory recheck (docs only; no source trees) |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/progress/todo.mdx | 2026-07-23 | Public remaining-work recheck; Claude Agent SDK adapter noted as not-targeted |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-24 | Public Unreleased behavior names for prompt sources, generation status, tab ownership, and Codex synchronization |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/docs/content/docs/progress/pending-test.mdx | 2026-07-19 | Public black-box acceptance descriptions and exact `generation_get_status` interoperability name |
 | https://raw.githubusercontent.com/tigerowo/infinite-canvas/main/CHANGELOG.md | 2026-07-25 | Public Tiger behavior names for persistent generation, workflows, S3/R2 configuration, panorama, camera controls, 3D director, grouping and pointer/layout refinements; SHA-256 `38111d82f76b2d46fe4f425a9112c307692970bbc462b5068fe9ef205662bc4b`; no implementation source inspected |
+| https://raw.githubusercontent.com/tigerowo/infinite-canvas/main/CHANGELOG.md | 2026-07-31 | Public Tiger Unreleased Agent-consolidation behavior name; no implementation source inspected |
 | https://github.com/tigerowo/infinite-canvas/blob/main/docs/overview/features.md | 2026-07-25 | Public image-workbench behavior inventory: side/bottom layout, concurrent tasks, persistent categories, reference/result metadata, reusable assets, and draggable workflow entrance; documentation only, no implementation source or assets inspected |
 | https://api.github.com/repos/tigerowo/infinite-canvas/releases/latest | 2026-07-25 | Historical release metadata snapshot: at that date the latest tag was `v0.4.4`; superseded by the v0.4.5 row below |
 | https://github.com/tigerowo/infinite-canvas/releases/tag/v0.4.5 | 2026-07-28 | Public v0.4.5 release metadata and user-visible change names; tag commit `9435f1c`; no implementation source or assets inspected |

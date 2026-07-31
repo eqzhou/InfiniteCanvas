@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { BoardCanvas } from "@/components/canvas/BoardCanvas";
-import { AssistantPanel } from "@/components/assistant/AssistantPanel";
 import {
   Archive,
   Download,
@@ -133,7 +132,7 @@ export function HomePage() {
       .querySelector<HTMLElement>('[data-testid="canvas-surface"]')
       ?.getBoundingClientRect();
     const assistantRect = document
-      .querySelector<HTMLElement>('aside[aria-label="画布助手"]')
+      .querySelector<HTMLElement>('aside[aria-label="画布 Agent"]')
       ?.getBoundingClientRect();
     const visibleCanvasWidth = canvasRect && assistantRect && assistantRect.left < canvasRect.right
       ? Math.max(1, assistantRect.left - canvasRect.left)
@@ -562,7 +561,6 @@ export function HomePage() {
       <div className="min-w-0 flex-1">
         <BoardCanvas />
       </div>
-      <AssistantPanel />
     </div>
   );
 }

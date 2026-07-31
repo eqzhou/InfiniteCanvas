@@ -44,4 +44,17 @@ describe("HistoryStack", () => {
     expect(snapshots.map((item) => item.id)).toEqual([1, 3]);
     expect(history.snapshots()).not.toBe(snapshots);
   });
+
+  test("clears both branches and exposes undo availability", () => {
+    const history = new HistoryStack<number>();
+    expect(history.canUndo).toBe(false);
+    history.push(1);
+    expect(history.canUndo).toBe(true);
+    expect(history.undo(2)).toBe(1);
+    expect(history.canRedo).toBe(true);
+    history.clear();
+    expect(history.canUndo).toBe(false);
+    expect(history.canRedo).toBe(false);
+    expect(history.snapshots()).toEqual([]);
+  });
 });

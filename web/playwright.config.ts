@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { resolveE2EEnvironment, type E2EMode } from "./e2e/environment";
 
 const { mode, production, formal, webPort, agentPort, origin } = resolveE2EEnvironment();
+const canvasSuite = process.env.OPENBOARD_E2E_CANVAS === "1";
 const chromiumExecutable = process.env.OPENBOARD_CHROMIUM_EXECUTABLE;
 const dataDir = production
   ? "$(mktemp -d \"${TMPDIR:-/tmp}/openboard-e2e-prod.XXXXXX\")"
@@ -52,7 +53,7 @@ export function createWebServerCommand({
 export default defineConfig({
 	timeout: formal ? 120_000 : 60_000,
   testDir: "./e2e",
-  testMatch: formal ? "formal-storage.spec.ts" : "canvas.spec.ts",
+  testMatch: canvasSuite ? "canvas.spec.ts" : formal ? "formal-storage.spec.ts" : "canvas.spec.ts",
   outputDir: "./node_modules/.cache/playwright-test-results",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),

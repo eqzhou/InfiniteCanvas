@@ -336,6 +336,7 @@ export function NodeActions({
           prompt,
           images: await resolveNodeImageDataUrls(imageKeys),
           systemPrompt: config.systemPrompt,
+          reasoningEffort: node.metadata.reasoningEffort,
           count: node.metadata.count || 1,
         });
         const created = outputs.map((content, index) => createNode(
@@ -344,7 +345,13 @@ export function NodeActions({
             x: node.position.x + node.width + 60,
             y: node.position.y + index * 40,
           },
-          { metadata: { content, model, prompt, status: "success" } },
+          { metadata: {
+            content,
+            model,
+            prompt,
+            reasoningEffort: node.metadata.reasoningEffort,
+            status: "success",
+          } },
         ));
         placeRight(created);
       } else if (mode === "image") {
@@ -546,6 +553,7 @@ export function NodeActions({
         model: node.metadata.model || getProvider(channel, "text").model,
         prompt: `原文本：\n${node.metadata.content ?? ""}\n\n改写要求：${instruction}`,
         systemPrompt: config.systemPrompt,
+        reasoningEffort: node.metadata.reasoningEffort,
       });
       if (!node.metadata.content) {
         updateNode(node.id, { metadata: { content: out, status: "success" } });
@@ -553,7 +561,11 @@ export function NodeActions({
         const created = createNode(
           "text",
           { x: node.position.x + node.width + 60, y: node.position.y },
-          { metadata: { content: out, status: "success" } },
+          { metadata: {
+            content: out,
+            reasoningEffort: node.metadata.reasoningEffort,
+            status: "success",
+          } },
         );
         placeRight([created]);
         updateNode(node.id, { metadata: { status: "success" } });

@@ -80,7 +80,7 @@ export function App() {
 
   useEffect(() => {
     if (window.matchMedia("(max-width: 767px)").matches) {
-      useBoardStore.getState().setShowAssistant(false);
+      useBoardStore.getState().setShowLocalAgent(false);
     }
   }, []);
 
@@ -106,7 +106,7 @@ export function App() {
     const controlPluginPanel = (event: Event) => {
       const detail = (event as CustomEvent<{ open?: unknown }>).detail;
       if (typeof detail?.open === "boolean") {
-        useBoardStore.getState().setShowAssistant(detail.open);
+        useBoardStore.getState().setShowLocalAgent(detail.open);
       }
     };
     window.addEventListener("openboard:plugin-panel", controlPluginPanel);
@@ -155,29 +155,31 @@ export function App() {
             </button>
           </div>
         ) : null}
-        <main className="min-h-0 flex-1">
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/assets" element={<AssetsPage />} />
-            <Route path="/library" element={<ServerLibraryPage />} />
-            <Route path="/ai-logs" element={<AICallLogsPage />} />
-            <Route path="/prompts" element={<PromptsPage />} />
-            <Route path="/plugins" element={<PluginsPage />} />
-            <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
-            <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="/help" element={<HelpPage />} />
-            <Route path="/workbench/workflows" element={(
-              <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载工作流…</div>}>
-                <WorkflowWorkbenchPage />
-              </Suspense>
-            )} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </main>
+        <div className="flex min-h-0 flex-1">
+          <main className="min-h-0 min-w-0 flex-1">
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/assets" element={<AssetsPage />} />
+              <Route path="/library" element={<ServerLibraryPage />} />
+              <Route path="/ai-logs" element={<AICallLogsPage />} />
+              <Route path="/prompts" element={<PromptsPage />} />
+              <Route path="/plugins" element={<PluginsPage />} />
+              <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
+              <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="/help" element={<HelpPage />} />
+              <Route path="/workbench/workflows" element={(
+                <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载工作流…</div>}>
+                  <WorkflowWorkbenchPage />
+                </Suspense>
+              )} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+          <LocalAgentPanel />
+        </div>
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <ShortcutsModal />
-        <LocalAgentPanel />
         <BrowserRuntime />
         <PromptSourceScheduler />
         <AnalyticsTracker />

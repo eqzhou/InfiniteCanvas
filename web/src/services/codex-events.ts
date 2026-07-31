@@ -2,7 +2,19 @@ import type { CodexEvent } from "./local-agent";
 
 export type CodexEventEffect =
   | { kind: "assistant-delta"; text: string }
-  | { kind: "item"; text: string; itemType: string; command?: string; path?: string; status?: string; detail?: string }
+  | {
+      kind: "item";
+      text: string;
+      itemId?: string;
+      itemType: string;
+      label: string;
+      command?: string;
+      path?: string;
+      status: "running" | "completed" | "failed";
+      detail?: string;
+      appendDetail?: boolean;
+      error?: string;
+    }
   | { kind: "turn"; status: "running" | "completed" | "failed"; error?: string }
   | { kind: "approval"; event: CodexEvent }
   | { kind: "ignore" };
@@ -46,6 +58,24 @@ function errorText(value: unknown): string | undefined {
   return undefined;
 }
 
+function itemLabel(itemType: string): string {
+  const value = itemType.toLowerCase();
+  if (value.includes("command")) return "运行命令";
+  if (value.includes("filechange") || value.includes("file_change")) return "修改文件";
+  if (value.includes("mcptool") || value.includes("toolcall") || value.includes("tool_call")) return "调用工具";
+  if (value.includes("reasoning")) return "思考";
+  if (value.includes("plan")) return "更新计划";
+  if (value.includes("websearch") || value.includes("web_search")) return "搜索网页";
+  return "处理步骤";
+}
+
+function itemStatus(method: string, rawStatus: unknown, error?: string): "running" | "completed" | "failed" {
+  const status = typeof rawStatus === "string" ? rawStatus.toLowerCase() : "";
+  if (error || status.includes("fail") || status.includes("error")) return "failed";
+  if (method.endsWith("/completed") || status.includes("complete") || status === "success") return "completed";
+  return "running";
+}
+
 export function classifyCodexEvent(event: CodexEvent): CodexEventEffect {
   if (event.type === "approval") return { kind: "approval", event };
   const params = record(event.params);
@@ -66,13 +96,29 @@ export function classifyCodexEvent(event: CodexEvent): CodexEventEffect {
   if (method.includes("item/")) {
     const item = record(params?.item) ?? params;
     const kind = typeof item?.type === "string" ? item.type : method;
+    const itemId = typeof item?.id === "string" ? item.id
+      : typeof params?.itemId === "string" ? params.itemId
+        : undefined;
     const command = typeof item?.command === "string" ? item.command : undefined;
     const path = typeof item?.path === "string" ? item.path : undefined;
-    const detail = command ?? path ?? (typeof item?.text === "string" ? item.text : "");
-    const status = typeof item?.status === "string" ? item.status : undefined;
+    const streamDelta = typeof params?.delta === "string" ? params.delta : undefined;
+    const detail = command ?? path ?? (typeof item?.text === "string" ? item.text : streamDelta ?? "");
     const extra = typeof item?.description === "string" ? item.description
       : typeof item?.reason === "string" ? item.reason : undefined;
-    return { kind: "item", itemType: kind, command, path, status, detail: extra, text: detail ? `${kind}: ${detail}` : kind };
+    const itemError = errorText(item?.error) ?? errorText(item?.failure) ?? (method.includes("failed") ? extra : undefined);
+    return {
+      kind: "item",
+      itemId,
+      itemType: kind,
+      label: itemLabel(kind),
+      command,
+      path,
+      status: itemStatus(method, item?.status, itemError),
+      detail: extra ?? streamDelta,
+      ...(streamDelta ? { appendDetail: true } : {}),
+      error: itemError,
+      text: detail ? `${kind}: ${detail}` : kind,
+    };
   }
   return { kind: "ignore" };
 }
