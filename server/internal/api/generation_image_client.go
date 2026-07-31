@@ -226,6 +226,7 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 		return nil, err
 	}
 	httpRequest.Header.Set("Content-Type", contentType)
+	httpRequest.Header.Set("Accept", "application/json")
 	if request.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+request.APIKey)
 	}

@@ -33,6 +33,9 @@ const (
 
 var imageSizePattern = regexp.MustCompile(`^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$`)
 var geminiImageModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,499}$`)
+var networkURLPattern = regexp.MustCompile(`(?i)https?://[^\s"]+`)
+var networkHostnamePattern = regexp.MustCompile(`(?i)(?:[a-z0-9-]+\.)+[a-z]{2,}|(?:[0-9]{1,3}\.){3}[0-9]{1,3}`)
+var networkSecretPattern = regexp.MustCompile(`(?i)\b(?:sk|key|token|secret)[-_][a-z0-9._-]+\b`)
 var generatedImageDecodeSlot = make(chan struct{}, 1)
 
 func imageProviderStatusCode(err error) (int, bool) {
@@ -57,7 +60,7 @@ func imageGenerationFailureMessage(err error) string {
 	}
 	var networkErr *url.Error
 	if errors.As(err, &networkErr) {
-		if networkErr.Timeout() {
+		if imageProviderNetworkTimeout(networkErr) {
 			return "连接模型服务超时，请检查网络或增大渠道超时时间"
 		}
 		return "连接模型服务失败，请检查服务 URL 和网络"
@@ -91,15 +94,54 @@ func imageGenerationFailureLogDetail(err error) string {
 	var networkErr *url.Error
 	if errors.As(err, &networkErr) {
 		category := "network error"
-		if networkErr.Timeout() {
+		if imageProviderNetworkTimeout(networkErr) {
 			category = "network timeout"
 		}
-		return fmt.Sprintf("%s (%T)", category, innermostError(networkErr.Err))
+		return fmt.Sprintf("%s (%T): %s", category, innermostError(networkErr.Err), sanitizedNetworkError(networkErr.Err))
 	}
 	if statusCode, ok := imageProviderStatusCode(err); ok {
 		return fmt.Sprintf("HTTP %d", statusCode)
 	}
 	return fmt.Sprintf("error type %T", err)
+}
+
+// imageProviderNetworkTimeout covers transport implementations that report a
+// response-header timeout as a plain error string instead of implementing
+// net.Error. Go's HTTP/2 transport uses this form, so relying solely on
+// url.Error.Timeout() would misclassify an upstream timeout as a generic
+// URL/network failure.
+func imageProviderNetworkTimeout(err *url.Error) bool {
+	if err == nil {
+		return false
+	}
+	if err.Timeout() {
+		return true
+	}
+	if errors.Is(err.Err, context.DeadlineExceeded) {
+		return true
+	}
+	if err.Err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Err.Error())
+	return strings.Contains(message, "timeout awaiting response headers") || message == "context deadline exceeded"
+}
+
+func sanitizedNetworkError(err error) string {
+	if err == nil {
+		return "unknown transport error"
+	}
+	message := networkURLPattern.ReplaceAllString(strings.TrimSpace(err.Error()), "<provider-url>")
+	message = networkHostnamePattern.ReplaceAllString(message, "<provider-host>")
+	message = networkSecretPattern.ReplaceAllString(message, "<redacted>")
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) > 256 {
+		message = message[:256] + "…"
+	}
+	if message == "" {
+		return "unknown transport error"
+	}
+	return message
 }
 
 func innermostError(err error) error {

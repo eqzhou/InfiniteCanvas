@@ -343,6 +343,7 @@ func TestImageGenerationFailureMessage(t *testing.T) {
 		{name: "context deadline", err: context.DeadlineExceeded, want: "图片生成请求超时，请稍后重试或增大渠道超时时间"},
 		{name: "wrapped context deadline", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: context.DeadlineExceeded}, want: "图片生成请求超时，请稍后重试或增大渠道超时时间"},
 		{name: "network timeout", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: &net.DNSError{Err: "timeout", Name: "provider.example", IsTimeout: true}}, want: "连接模型服务超时，请检查网络或增大渠道超时时间"},
+		{name: "http2 response header timeout", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: errors.New("http2: timeout awaiting response headers")}, want: "连接模型服务超时，请检查网络或增大渠道超时时间"},
 		{name: "network failure", err: &url.Error{Op: "Post", URL: "https://provider.example/v1/images/edits", Err: errors.New("connection reset")}, want: "连接模型服务失败，请检查服务 URL 和网络"},
 		{name: "unknown status", err: &imageProviderHTTPError{StatusCode: http.StatusTeapot}, want: "图片生成失败（模型服务 HTTP 418）"},
 		{name: "unknown error stays private", err: errors.New("provider failed with sk-private"), want: "图片生成失败，请检查模型服务配置后重试"},
@@ -353,6 +354,21 @@ func TestImageGenerationFailureMessage(t *testing.T) {
 				t.Fatalf("imageGenerationFailureMessage() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestImageGenerationFailureLogDetailIncludesSanitizedTransportReason(t *testing.T) {
+	err := &url.Error{
+		Op:  "Post",
+		URL: "https://provider.example/v1/images/edits?api_key=sk-private",
+		Err: errors.New(`Post "https://provider.example/v1/images/edits?api_key=sk-private": http2: timeout awaiting response headers`),
+	}
+	detail := imageGenerationFailureLogDetail(err)
+	if !strings.Contains(detail, "network timeout") || !strings.Contains(detail, "timeout awaiting response headers") {
+		t.Fatalf("transport detail = %q", detail)
+	}
+	if strings.Contains(detail, "provider.example") || strings.Contains(detail, "sk-private") {
+		t.Fatalf("transport detail leaked provider URL: %q", detail)
 	}
 }
 

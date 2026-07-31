@@ -98,6 +98,9 @@ func TestOpenAIImageExecutorGenerationsRequestAndBase64Result(t *testing.T) {
 		if r.URL.Path != "/v1/images/generations" || r.Header.Get("Authorization") != "Bearer sk-test" {
 			t.Errorf("unexpected request: %s %#v", r.URL.Path, r.Header)
 		}
+		if r.Header.Get("Accept") != "application/json" {
+			t.Errorf("accept = %q", r.Header.Get("Accept"))
+		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -147,6 +150,9 @@ func TestOpenAIImageExecutorEditsUseMultipartReferences(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/images/edits" {
 			t.Errorf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Accept") != "application/json" {
+			t.Errorf("accept = %q", r.Header.Get("Accept"))
 		}
 		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || mediaType != "multipart/form-data" {
