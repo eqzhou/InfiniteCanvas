@@ -156,6 +156,20 @@ export function buildPanoramaPrompt(prompt: string): string {
 
 export function panoramaGenerationError(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
+  const safeServerErrorPrefixes = [
+    "图片生成请求超时",
+    "连接模型服务超时",
+    "模型服务在生成过程中中断了连接",
+    "连接模型服务失败",
+    "图片生成失败，请检查模型服务配置后重试",
+    "模型服务拒绝了图片请求",
+    "模型服务鉴权失败",
+    "图片请求或参考素材过大",
+    "模型服务请求过于频繁",
+    "模型服务暂时不可用",
+    "图片生成失败（模型服务 HTTP",
+  ];
+  if (safeServerErrorPrefixes.some((prefix) => message.startsWith(prefix))) return message;
   if (/^生成服务应返回 [1-8] 张全景图片，实际返回 [0-9]+ 张$/.test(message)) return message;
   if (message === "有参考图片已丢失，请重新连接后再生成" ||
       message === "全景生成质量无效" ||
@@ -164,6 +178,9 @@ export function panoramaGenerationError(error: unknown): string {
       message === "全景生成参考图片总大小超过 24 MB" ||
       message === "全景生成批次超出 64 MB 或 6400 万像素限制" ||
       message === "全景批次子结果不可独立修改" ||
+      message === "全景图生成已取消" ||
+      message === "全景生成结果已丢失或内容不一致" ||
+      message === "全景生成结果尺寸信息不一致" ||
       message === "无法从图片头读取全景尺寸") return message;
   const known = [
     "请先配置图片生成渠道",

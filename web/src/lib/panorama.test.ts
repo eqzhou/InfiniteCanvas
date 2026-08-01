@@ -76,6 +76,11 @@ describe("native panorama behavior", () => {
       .toBe("有参考图片已丢失，请重新连接后再生成");
   });
 
+  test("preserves safe server image task errors", () => {
+    const message = "模型服务拒绝了图片请求（HTTP 400），请检查模型、尺寸和参数";
+    expect(panoramaGenerationError(new Error(message))).toBe(message);
+  });
+
   test("classifies only strict 2:1 JPEG/PNG/WebP as import candidates", () => {
     expect(isStrictTwoToOnePanoramaCandidate("image/png", 2048, 1024)).toBe(true);
     expect(isStrictTwoToOnePanoramaCandidate("image/jpeg", 4000, 2000)).toBe(true);

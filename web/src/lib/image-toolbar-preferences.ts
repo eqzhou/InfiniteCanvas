@@ -92,3 +92,7 @@ export function orderedVisibleImageActions(value: unknown): ImageToolbarAction[]
   const hidden = new Set(preferences.hidden);
   return preferences.order.filter((action) => mandatoryActions.has(action) || !hidden.has(action));
 }
+
+export function orderedVisiblePanoramaActions(value: unknown): ImageToolbarAction[] {
+  return orderedVisibleImageActions(value).filter((action) => action === "copy" || action === "download");
+}

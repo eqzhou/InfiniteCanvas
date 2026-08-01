@@ -100,6 +100,7 @@ describe("panorama generation planning", () => {
       model: "image-model",
       quality: "high",
       referenceStorageKeys: ["image:reference"],
+      generationJobId: "job-panorama",
     });
 
     expect(project).toEqual(snapshot);
@@ -116,12 +117,14 @@ describe("panorama generation planning", () => {
         isBatchRoot: true,
         primaryImageId: panorama.id,
         referenceStorageKeys: ["image:reference"],
+        generationJobId: "job-panorama",
         panoramaProjection: "equirectangular",
       },
     });
     expect(root.metadata.batchChildIds).toEqual(children.map((node) => node.id));
     expect(children).toHaveLength(2);
     expect(children.every((node) => node.type === "panorama" && node.metadata.panoramaProjection === "equirectangular")).toBe(true);
+    expect(children.every((node) => node.metadata.generationJobId === "job-panorama")).toBe(true);
     expect(children[0]!.position.x + children[0]!.width).toBeLessThanOrEqual(children[1]!.position.x);
 
     const grouped = {

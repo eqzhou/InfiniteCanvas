@@ -31,6 +31,7 @@ import {
 import { getProvider } from "@/lib/ai-config";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
 import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
+import { showsFloatingNodeActions } from "@/lib/node-action-visibility";
 
 const DirectorDialog = lazy(() => import("@/components/director/DirectorDialog").then((module) => ({
   default: module.DirectorDialog,
@@ -825,7 +826,7 @@ export function BoardNodeView({
         ) : null}
       </div>
 
-      {selected && node.type !== "group" && node.type !== "plugin" && node.type !== "director" && node.type !== "panorama" ? (
+      {selected && showsFloatingNodeActions(node.type) ? (
         <NodeActions
           node={node}
           avoidTopToolbarOverlap={Boolean(project && (

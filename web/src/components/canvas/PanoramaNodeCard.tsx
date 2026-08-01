@@ -22,19 +22,39 @@ import {
   type PanoramaGeneratedMedia,
 } from "@/lib/panorama-generation";
 import { getProvider } from "@/lib/ai-config";
+import { usesServerGenerationJobs } from "@/services/generation-jobs";
+import {
+  resumePanoramaServerGeneration,
+  runPanoramaServerGeneration,
+} from "@/services/panorama-server-generation";
+import {
+  resolveActiveAIChannel,
+  useSharedChannels,
+} from "@/services/shared-channels";
+import { nextPanoramaPreviewZoom } from "@/lib/panorama-zoom";
 
 export function PanoramaNodeCard({ node }: { node: BoardNode }) {
   const project = useBoardStore((state) => state.getActive());
   const config = useBoardStore((state) => state.config);
   const updateNode = useBoardStore((state) => state.updateNode);
   const commitPanoramaBatch = useBoardStore((state) => state.commitPanoramaBatch);
+  const persistNow = useBoardStore((state) => state.persistNow);
+  const sharedChannels = useSharedChannels();
+  const channel = resolveActiveAIChannel(
+    config.channels,
+    config.activeChannelId,
+    sharedChannels,
+    config.activeSharedChannelId,
+  );
   const [open, setOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const generationRef = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [previewZoom, setPreviewZoom] = useState(1);
   useEscapeDismiss(open, () => setOpen(false), 130);
+  useEffect(() => setPreviewZoom(1), [node.metadata.content]);
   useEffect(() => () => {
     generationRef.current?.abort(new DOMException("Panorama node closed", "AbortError"));
     generationRef.current = null;
@@ -164,7 +184,6 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
       if (!historyProject) throw new Error("全景项目不存在");
       const currentNode = historyProject.nodes.find((candidate) => candidate.id === node.id);
       if (!currentNode || currentNode.type !== "panorama") throw new Error("全景节点不存在");
-      const channel = config.channels.find((candidate) => candidate.id === config.activeChannelId) ?? config.channels[0];
       if (!channel) throw new Error("请先配置图片生成渠道");
       const imageProvider = getProvider(channel, "image");
       if (!imageProvider.apiKey || !imageProvider.baseUrl || !imageProvider.model) {
@@ -173,11 +192,62 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
       const prompt = buildPanoramaPrompt(currentNode.metadata.prompt ?? "");
       const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
       const referenceInputs = getPanoramaReferenceInputs(historyProject, currentNode.id);
+      const referenceStorageKeys = referenceInputs.map((input) => input.storageKey);
+      const model = currentNode.metadata.model || imageProvider.model;
+      if (usesServerGenerationJobs()) {
+        const supported = imageProvider.protocol === "openai" || imageProvider.protocol === "gemini" ||
+          (imageProvider.protocol === "template" && Boolean(imageProvider.template)) || imageProvider.protocol === "apimart" ||
+          imageProvider.protocol === "kie";
+        if (!supported) throw new Error(`当前图片协议（${imageProvider.protocol}）不支持服务端全景生成`);
+        const result = await runPanoramaServerGeneration({
+          projectId: historyProject.id,
+          prompt,
+          providerId: channel.id,
+          model,
+          size: settings.size,
+          quality: settings.quality,
+          count: settings.count,
+          referenceStorageKeys,
+          signal: operation.signal,
+          onCreated: async (job) => {
+            updateNode(currentNode.id, { metadata: {
+              status: "loading",
+              errorDetails: undefined,
+              generationJobId: job.id,
+              prompt: currentNode.metadata.prompt ?? "",
+              model,
+              quality: settings.quality,
+              count: settings.count,
+              referenceStorageKeys,
+              generationType: referenceStorageKeys.length > 0 ? "image-to-image" : "text-to-image",
+            } }, { history: false });
+            await persistNow();
+          },
+        });
+        if (writeWasSuperseded(operation)) {
+          result.media.forEach((media) => URL.revokeObjectURL(media.content));
+          throw operation.signal.reason ?? new DOMException("Panorama generation superseded", "AbortError");
+        }
+        commitAttempted = true;
+        try {
+          await commitPanoramaBatch(historyProject.id, currentNode.id, result.media, {
+            prompt: currentNode.metadata.prompt ?? "",
+            model,
+            quality: settings.quality,
+            referenceStorageKeys,
+            generationJobId: result.jobId,
+          }, structuredClone(historyProject), false);
+        } catch (cause) {
+          result.media.forEach((media) => URL.revokeObjectURL(media.content));
+          throw cause;
+        }
+        return;
+      }
       const referenceBlobs = await loadPanoramaReferenceBlobs(referenceInputs, (storageKey) => getBlob("image", storageKey));
       updateNode(currentNode.id, { metadata: { status: "loading", errorDetails: undefined } }, { history: false });
       const urls = await generateImages({
         channel,
-        model: currentNode.metadata.model || imageProvider.model,
+        model,
         prompt,
         size: settings.size,
         quality: settings.quality,
@@ -203,9 +273,9 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
       commitAttempted = true;
       await commitPanoramaBatch(historyProject.id, currentNode.id, uploadedResults, {
         prompt: currentNode.metadata.prompt ?? "",
-        model: currentNode.metadata.model || imageProvider.model,
+        model,
         quality: settings.quality,
-        referenceStorageKeys: referenceInputs.map((input) => input.storageKey),
+        referenceStorageKeys,
       }, structuredClone(historyProject), true);
       uploadedResults = [];
     } catch (cause) {
@@ -224,11 +294,81 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
     }
   };
 
+  useEffect(() => {
+    const jobId = node.metadata.generationJobId;
+    if (!usesServerGenerationJobs() || node.metadata.status !== "loading" || !jobId ||
+        isBatchChild || generationRef.current) return;
+    const operation = beginWrite();
+    void (async () => {
+      try {
+        const historyProject = useBoardStore.getState().getActive();
+        if (!historyProject) throw new Error("全景项目不存在");
+        const currentNode = historyProject.nodes.find((candidate) => candidate.id === node.id);
+        if (!currentNode || currentNode.type !== "panorama") throw new Error("全景节点不存在");
+        const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
+        const media = await resumePanoramaServerGeneration(
+          jobId,
+          historyProject.id,
+          settings.count,
+          operation.signal,
+        );
+        if (writeWasSuperseded(operation)) {
+          media.forEach((item) => URL.revokeObjectURL(item.content));
+          return;
+        }
+        try {
+          await commitPanoramaBatch(historyProject.id, currentNode.id, media, {
+            prompt: currentNode.metadata.prompt ?? "",
+            model: currentNode.metadata.model ?? "",
+            quality: settings.quality,
+            referenceStorageKeys: [...(currentNode.metadata.referenceStorageKeys ?? [])],
+            generationJobId: jobId,
+          }, structuredClone(historyProject), false);
+        } catch (cause) {
+          media.forEach((item) => URL.revokeObjectURL(item.content));
+          throw cause;
+        }
+      } catch (cause) {
+        if (!writeWasSuperseded(operation)) {
+          const message = panoramaGenerationError(cause);
+          setError(message);
+          updateNode(node.id, { metadata: { status: "error", errorDetails: message } }, { history: false });
+        }
+      } finally {
+        finishWrite(operation);
+      }
+    })();
+    return () => {
+      operation.abort(new DOMException("Panorama node closed", "AbortError"));
+      finishWrite(operation);
+    };
+  }, [node.id, node.metadata.generationJobId, node.metadata.status]);
+
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 text-white" onPointerDown={(event) => event.stopPropagation()}>
       {node.metadata.content ? (
         <>
-          <img src={node.metadata.content} alt={node.title} className="min-h-0 flex-1 object-cover" draggable={false} />
+          <div
+            className="relative min-h-0 flex-1 overflow-hidden"
+            onWheel={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setPreviewZoom((current) => nextPanoramaPreviewZoom(current, event.deltaY));
+            }}
+          >
+            <img
+              src={node.metadata.content}
+              alt={node.title}
+              className="h-full w-full object-cover transition-transform duration-75 will-change-transform"
+              style={{ transform: `scale(${previewZoom})` }}
+              draggable={false}
+            />
+            {previewZoom > 1 ? (
+              <span aria-live="polite" className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/65 px-1.5 py-0.5 text-[10px] tabular-nums">
+                {Math.round(previewZoom * 100)}%
+              </span>
+            ) : null}
+          </div>
           <button type="button" aria-label="打开 360° 全景" className="absolute right-2 top-2 rounded bg-black/65 p-2 hover:bg-black/80" onClick={() => setOpen(true)}><Expand size={15} /></button>
         </>
       ) : (

@@ -4,6 +4,7 @@ import {
   IMAGE_TOOLBAR_ACTIONS,
   IMAGE_TOOLBAR_PREFERENCES_VERSION,
   normalizeImageToolbarPreferences,
+  orderedVisiblePanoramaActions,
   orderedVisibleImageActions,
 } from "./image-toolbar-preferences";
 
@@ -39,6 +40,17 @@ describe("image toolbar preferences", () => {
     expect(visible[0]).toBe("download");
     expect(visible[1]).toBe("copy");
     expect(visible).not.toContain("mask");
+  });
+
+  test("gives panorama nodes the same ordered copy and download actions as images", () => {
+    const visible = orderedVisiblePanoramaActions({
+      order: ["download", "crop", "copy", ...IMAGE_TOOLBAR_ACTIONS.filter((id) =>
+        id !== "download" && id !== "crop" && id !== "copy")],
+      hidden: ["copy", "download"],
+      showLabels: true,
+    });
+
+    expect(visible).toEqual(["download", "copy"]);
   });
 
   test("migrates unversioned values and stamps the current schema version", () => {

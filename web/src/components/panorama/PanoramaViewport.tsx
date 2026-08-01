@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  nextPanoramaFieldOfView,
+  nextPanoramaViewerZoom,
+} from "@/lib/panorama-zoom";
 
 function mountFallback(container: HTMLDivElement, sourceUrl: string, onError?: (message: string) => void): () => void {
   const canvas = document.createElement("canvas");
@@ -60,6 +64,13 @@ function mountFallback(container: HTMLDivElement, sourceUrl: string, onError?: (
   canvas.addEventListener("pointermove", pointerMove);
   canvas.addEventListener("pointerup", pointerUp);
   canvas.addEventListener("pointercancel", pointerUp);
+  const wheel = (event: WheelEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    zoom = nextPanoramaViewerZoom(zoom, event.deltaY);
+    draw();
+  };
+  canvas.addEventListener("wheel", wheel, { passive: false });
   const keyDown = (event: KeyboardEvent) => {
     if (event.key === "ArrowLeft") offset += 32;
     else if (event.key === "ArrowRight") offset -= 32;
@@ -77,6 +88,7 @@ function mountFallback(container: HTMLDivElement, sourceUrl: string, onError?: (
     canvas.removeEventListener("pointermove", pointerMove);
     canvas.removeEventListener("pointerup", pointerUp);
     canvas.removeEventListener("pointercancel", pointerUp);
+    canvas.removeEventListener("wheel", wheel);
     container.removeEventListener("keydown", keyDown);
     canvas.remove();
   };
@@ -112,7 +124,7 @@ export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; on
     scene.add(new THREE.Mesh(geometry, material));
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false;
-    controls.enableZoom = true;
+    controls.enableZoom = false;
     controls.rotateSpeed = -0.35;
     controls.minDistance = 0.1;
     controls.maxDistance = 0.1;
@@ -148,6 +160,13 @@ export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; on
     const observer = new ResizeObserver(resize);
     observer.observe(container);
     resize();
+    const wheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      camera.fov = nextPanoramaFieldOfView(camera.fov, event.deltaY);
+      camera.updateProjectionMatrix();
+    };
+    container.addEventListener("wheel", wheel, { passive: false, capture: true });
     const keyDown = (event: KeyboardEvent) => {
       const step = THREE.MathUtils.degToRad(8);
       if (event.key === "ArrowLeft") controls.rotateLeft(step);
@@ -173,6 +192,7 @@ export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; on
       disposed = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
+      container.removeEventListener("wheel", wheel, { capture: true });
       container.removeEventListener("keydown", keyDown);
       controls.dispose();
       texture?.dispose();

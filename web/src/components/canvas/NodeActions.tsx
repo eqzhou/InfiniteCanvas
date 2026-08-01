@@ -70,6 +70,7 @@ import {
 import {
   normalizeImageToolbarPreferences,
   orderedVisibleImageActions,
+  orderedVisiblePanoramaActions,
   type ImageToolbarAction,
 } from "@/lib/image-toolbar-preferences";
 import { CameraPromptPanel } from "@/components/canvas/CameraPromptPanel";
@@ -1138,6 +1139,7 @@ export function NodeActions({
 
   const imageToolbarPreferences = normalizeImageToolbarPreferences(config.imageToolbar);
   const imageToolbarActions = orderedVisibleImageActions(imageToolbarPreferences);
+  const panoramaToolbarActions = orderedVisiblePanoramaActions(imageToolbarPreferences);
   const imageToolLabel = (label: string) => imageToolbarPreferences.showLabels ? label : undefined;
   const renderImageToolbarAction = (action: ImageToolbarAction) => {
     switch (action) {
@@ -1254,6 +1256,7 @@ return (
             ) : null}
           </>
         ) : null}
+        {node.type === "panorama" ? panoramaToolbarActions.map(renderImageToolbarAction) : null}
         {node.type === "video" ? (
           <>
 			<IconBtn
