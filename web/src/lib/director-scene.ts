@@ -31,8 +31,15 @@ const MAX_SCENE_POPULATION = 4_096;
 const MAX_CROWD_RENDER_BATCHES = 128;
 const MAX_MODEL_BYTES = 100 * 1024 * 1024;
 const SAFE_FILE_NAME = /^[^/\\\u0000-\u001f\u007f]{1,160}\.glb$/i;
+const STAGE_SLOT_GAP = 1.8;
+const STAGE_CLEARANCE = 0.25;
+const CHARACTER_STAGE_RADIUS = 0.7;
 
 const vector = (x: number, y: number, z: number): DirectorVector3 => ({ x, y, z });
+const DEFAULT_DIRECTOR_VIEW = {
+  position: vector(10, 7, 12),
+  target: vector(0, 1, 0),
+} as const;
 
 function defaultTransform(position = vector(0, 0, 0)): DirectorTransform {
   return {
@@ -40,6 +47,44 @@ function defaultTransform(position = vector(0, 0, 0)): DirectorTransform {
     rotation: vector(0, 0, 0),
     scale: vector(1, 1, 1),
   };
+}
+
+function stageSlots(): DirectorVector3[] {
+  const slots = [vector(0, 0, 0)];
+  for (let radius = 1; radius <= 12; radius += 1) {
+    slots.push(vector(radius * STAGE_SLOT_GAP, 0, 0), vector(-radius * STAGE_SLOT_GAP, 0, 0));
+    for (let x = -radius; x <= radius; x += 1) {
+      slots.push(
+        vector(x * STAGE_SLOT_GAP, 0, radius * STAGE_SLOT_GAP),
+        vector(x * STAGE_SLOT_GAP, 0, -radius * STAGE_SLOT_GAP),
+      );
+    }
+  }
+  return slots;
+}
+
+function stageRadius(object: DirectorObject): number {
+  const scale = Math.max(Math.abs(object.transform.scale.x), Math.abs(object.transform.scale.z), 0.01);
+  if (object.kind === "crowd" && object.crowd) {
+    const halfWidth = Math.max(0, object.crowd.columns - 1) * object.crowd.spacingX / 2;
+    const halfDepth = Math.max(0, object.crowd.rows - 1) * object.crowd.spacingZ / 2;
+    return Math.hypot(halfWidth, halfDepth) + CHARACTER_STAGE_RADIUS * scale;
+  }
+  if (object.kind === "character") return CHARACTER_STAGE_RADIUS * scale;
+  return scale;
+}
+
+function openStagePosition(
+  objects: DirectorObject[],
+  ignoreId?: string,
+  candidateRadius = CHARACTER_STAGE_RADIUS,
+): DirectorVector3 {
+  const occupied = objects
+    .filter((object) => object.id !== ignoreId && object.kind !== "light")
+    .map((object) => ({ position: object.transform.position, radius: stageRadius(object) }));
+  return stageSlots().find((candidate) => occupied.every(({ position, radius }) =>
+    Math.hypot(candidate.x - position.x, candidate.z - position.z) >= candidateRadius + radius + STAGE_CLEARANCE)) ??
+    vector(0, 0, (occupied.length + 1) * STAGE_SLOT_GAP);
 }
 
 type BuiltInDirectorObjectKind = Exclude<DirectorObjectKind, "model" | "crowd">;
@@ -52,7 +97,7 @@ function createObject(kind: BuiltInDirectorObjectKind, index: number): DirectorO
       locked: false,
       color: "#d1d5db",
       intensity: 1,
-      transform: defaultTransform(vector((index - 1) * 1.5, 0, 0)),
+      transform: defaultTransform(vector((index - 1) * STAGE_SLOT_GAP, 0, 0)),
       character: { ...DEFAULT_CHARACTER_CONFIG },
     },
     prop: {
@@ -95,10 +140,7 @@ export function createDefaultDirectorScene(): DirectorScene {
     showRuleOfThirds: false,
     showSafeFrame: false,
     viewMode: "director",
-    directorView: {
-      position: vector(10, 7, 12),
-      target: vector(0, 1, 0),
-    },
+    directorView: structuredClone(DEFAULT_DIRECTOR_VIEW),
     selectedObjectId: character.id,
     activeCameraId: camera.id,
     cameras: [camera],
@@ -166,10 +208,20 @@ export function updateDirectorView(
   };
 }
 
+export function resetDirectorView(scene: DirectorScene): DirectorScene {
+  if (JSON.stringify(scene.directorView) === JSON.stringify(DEFAULT_DIRECTOR_VIEW) && scene.viewMode === "director") {
+    return scene;
+  }
+  return { ...scene, viewMode: "director", directorView: structuredClone(DEFAULT_DIRECTOR_VIEW) };
+}
+
 export function addDirectorObject(scene: DirectorScene, kind: BuiltInDirectorObjectKind): DirectorScene {
   if (scene.objects.length >= MAX_OBJECTS) return scene;
   const count = scene.objects.filter((object) => object.kind === kind).length + 1;
-  const object = createObject(kind, count);
+  const created = createObject(kind, count);
+  const object = kind === "character"
+    ? { ...created, transform: defaultTransform(openStagePosition(scene.objects)) }
+    : created;
   return { ...scene, objects: [...scene.objects, object], selectedObjectId: object.id };
 }
 
@@ -231,7 +283,7 @@ export function addDirectorCharacter(
     locked: false,
     color: preset.outfitColor,
     intensity: 1,
-    transform: defaultTransform(vector((count - 1) * 1.5, 0, 0)),
+    transform: defaultTransform(openStagePosition(scene.objects)),
     character: safe,
   };
   return { ...scene, objects: [...scene.objects, object], selectedObjectId: object.id };
@@ -409,6 +461,17 @@ export function updateDirectorObjectTransform(
     };
   });
   return changed ? { ...scene, objects } : scene;
+}
+
+export function resetDirectorObjectTransform(scene: DirectorScene, id: string): DirectorScene {
+  const target = scene.objects.find((object) => object.id === id);
+  if (!target) return scene;
+  const transform = defaultTransform({ ...target.transform.position });
+  if (JSON.stringify(target.transform) === JSON.stringify(transform)) return scene;
+  return {
+    ...scene,
+    objects: scene.objects.map((object) => object.id === id ? { ...object, transform } : object),
+  };
 }
 
 const cleanTransformNumber = (value: number, min: number, max: number): number => {

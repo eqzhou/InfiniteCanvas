@@ -108,6 +108,65 @@ describe("director panorama graph binding", () => {
       .toEqual([image.id]);
   });
 
+  test("prefers a strict panorama over an ordinary image only for automatic fallback", () => {
+    const project = createProject("Environment fallback");
+    const image = createNode("image", { x: 0, y: 0 }, { metadata: {
+      content: "blob:image",
+      storageKey: "image:ordinary",
+      naturalWidth: 1024,
+      naturalHeight: 1536,
+    } });
+    const panorama = createNode("panorama", { x: 0, y: 300 }, { metadata: {
+      content: "blob:panorama",
+      storageKey: "image:panorama",
+      naturalWidth: 2048,
+      naturalHeight: 1024,
+      panoramaProjection: "equirectangular",
+    } });
+    const director = createNode("director", { x: 500, y: 0 });
+    const connected = {
+      ...project,
+      nodes: [image, panorama, director],
+      edges: [
+        { id: "edge_image", from: image.id, to: director.id },
+        { id: "edge_panorama", from: panorama.id, to: director.id },
+      ],
+    };
+
+    expect(resolveDirectorPanorama(connected, director.id)?.id).toBe(panorama.id);
+    expect(resolveDirectorPanorama(bindDirectorPanorama(connected, director.id, image.id), director.id)?.id)
+      .toBe(image.id);
+  });
+
+  test("prefers a strict equirectangular image node during automatic fallback", () => {
+    const project = createProject("Image panorama fallback");
+    const ordinary = createNode("image", { x: 0, y: 0 }, { metadata: {
+      content: "blob:ordinary",
+      storageKey: "image:ordinary",
+      naturalWidth: 1280,
+      naturalHeight: 720,
+    } });
+    const spherical = createNode("image", { x: 0, y: 300 }, { metadata: {
+      content: "blob:spherical",
+      storageKey: "image:spherical",
+      naturalWidth: 2048,
+      naturalHeight: 1024,
+      panoramaProjection: "equirectangular",
+    } });
+    const director = createNode("director", { x: 500, y: 0 });
+    const connected = {
+      ...project,
+      nodes: [ordinary, spherical, director],
+      edges: [
+        { id: "edge_ordinary", from: ordinary.id, to: director.id },
+        { id: "edge_spherical", from: spherical.id, to: director.id },
+      ],
+    };
+
+    expect(isSphericalDirectorEnvironment(spherical)).toBe(true);
+    expect(resolveDirectorPanorama(connected, director.id)?.id).toBe(spherical.id);
+  });
+
 
   test("lists only connected image/panorama environments for a director", () => {
     const project = createProject("Connected environments");

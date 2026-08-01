@@ -53,7 +53,9 @@ export function listDirectorEnvironmentOptions(
     seen.add(candidate.id);
     options.push(candidate);
   }
-  return options;
+  return [...options].sort((left, right) =>
+    Number(isSphericalDirectorEnvironment(right)) - Number(isSphericalDirectorEnvironment(left)),
+  );
 }
 
 export function resolveDirectorPanorama(project: BoardProject, directorId: string): BoardNode | undefined {
@@ -69,6 +71,11 @@ export function resolveDirectorPanorama(project: BoardProject, directorId: strin
     ) {
       return preferred;
     }
+  }
+  for (const edge of project.edges) {
+    if (edge.to !== directorId) continue;
+    const candidate = project.nodes.find((node) => node.id === edge.from);
+    if (isUsableDirectorEnvironment(candidate) && isSphericalDirectorEnvironment(candidate)) return candidate;
   }
   for (const edge of project.edges) {
     if (edge.to !== directorId) continue;

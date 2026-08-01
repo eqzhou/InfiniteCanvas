@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls, type TransformControlsMode } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import type { DirectorCamera, DirectorObject, DirectorScene, DirectorTransform } from "@/types/board";
+import type { DirectorCamera, DirectorObject, DirectorScene, DirectorTransform, DirectorVector3 } from "@/types/board";
 import { directorTransformFromRadians, getActiveDirectorCamera, getDirectorPopulation } from "@/lib/director-scene";
 import {
   createDirectorCharacterRoot,
@@ -11,6 +11,7 @@ import {
   createDirectorPrimitiveRoot,
   directorObjectRenderSignature,
 } from "@/lib/director-three-cast";
+import { flatEnvironmentLayout, isSafeDirectorFrameSphere } from "@/lib/director-framing";
 
 function aspectValue(aspect: DirectorCamera["aspect"]): number {
   const [width, height] = aspect.split(":").map(Number);
@@ -201,6 +202,7 @@ export function DirectorViewport({
   environmentUrl,
   environmentMode = "spherical",
   captureRef,
+  actionsRef,
   onSelect,
   onViewChange,
   modelSources,
@@ -213,6 +215,7 @@ export function DirectorViewport({
   /** spherical = equirect skybox; flat = ordinary photo backdrop. */
   environmentMode?: "spherical" | "flat";
   captureRef: React.MutableRefObject<(() => Promise<DirectorRenderedCapture>) | null>;
+  actionsRef: React.MutableRefObject<DirectorViewportActions | null>;
   onSelect: (id: string | null) => void;
   onViewChange: (
     mode: DirectorScene["viewMode"],
@@ -289,8 +292,8 @@ export function DirectorViewport({
     const environmentSphere = new THREE.Mesh(environmentGeometry, environmentMaterial);
     scene.add(environmentSphere);
     const environmentPlaneMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false, transparent: false });
-    const environmentPlane = new THREE.Mesh(new THREE.PlaneGeometry(40, 20), environmentPlaneMaterial);
-    environmentPlane.position.set(0, 8, -18);
+    const environmentPlane = new THREE.Mesh(new THREE.PlaneGeometry(16, 9), environmentPlaneMaterial);
+    environmentPlane.position.set(0, 4.5, -14);
     environmentPlane.visible = false;
     scene.add(environmentPlane);
 
@@ -359,6 +362,9 @@ export function DirectorViewport({
       renderer.domElement.style.transform = "translate(-50%, -50%)";
       camera.aspect = desiredRatio;
       camera.updateProjectionMatrix();
+      const transformSize = Math.min(0.75, Math.max(0.55, Math.min(availableWidth, availableHeight) / 1000));
+      transformControls.setSize(transformSize);
+      renderer.domElement.dataset.transformControlSize = transformSize.toFixed(2);
       setFrameSize((current) => current.width === width && current.height === height
         ? current
         : { width, height });
@@ -438,6 +444,51 @@ export function DirectorViewport({
         current?.resize();
       }
     };
+    const frameObjects = (scope: "selected" | "all"): DirectorViewPose | null => {
+      const currentDocument = documentRef.current;
+      const ids = scope === "selected"
+        ? currentDocument.selectedObjectId ? [currentDocument.selectedObjectId] : []
+        : currentDocument.objects
+          .filter((object) => object.visible && object.kind !== "light")
+          .map((object) => object.id);
+      const bounds = new THREE.Box3();
+      let hasBounds = false;
+      for (const id of ids) {
+        const objectDocument = currentDocument.objects.find((object) => object.id === id);
+        const instance = runtimeRef.current?.instances.get(id);
+        if (!instance || !objectDocument?.visible || objectDocument.kind === "light") continue;
+        instance.updateWorldMatrix(true, true);
+        const objectBounds = new THREE.Box3().setFromObject(instance);
+        if (objectBounds.isEmpty()) continue;
+        bounds.union(objectBounds);
+        hasBounds = true;
+      }
+      if (!hasBounds || bounds.isEmpty()) return null;
+      const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+      if (!isSafeDirectorFrameSphere(sphere.center, sphere.radius)) return null;
+      const direction = camera.position.clone().sub(controls.target);
+      if (direction.lengthSq() < 0.0001) direction.set(1, 0.6, 1);
+      direction.normalize();
+      const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+      const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+      const limitingFov = Math.max(0.1, Math.min(verticalFov, horizontalFov));
+      const distance = Math.max(2.5, sphere.radius / Math.sin(limitingFov / 2) * 1.3);
+      const target = sphere.center;
+      const position = target.clone().add(direction.multiplyScalar(distance));
+      if (!isSafeDirectorFrameSphere(position, 0)) return null;
+      camera.position.copy(position);
+      controls.target.copy(target);
+      camera.lookAt(target);
+      controls.update();
+      return {
+        position: { x: position.x, y: position.y, z: position.z },
+        target: { x: target.x, y: target.y, z: target.z },
+      };
+    };
+    actionsRef.current = {
+      focusSelected: () => frameObjects("selected"),
+      fitScene: () => frameObjects("all"),
+    };
     runtimeRef.current = {
       scene,
       camera,
@@ -472,6 +523,7 @@ export function DirectorViewport({
       }
       runtimeRef.current = null;
       captureRef.current = null;
+      actionsRef.current = null;
       cancelAnimationFrame(frame);
       observer.disconnect();
       renderer.domElement.removeEventListener("dblclick", selectFromPointer);
@@ -636,6 +688,7 @@ export function DirectorViewport({
     runtime.environmentPlane.material.map = null;
     runtime.environmentPlane.material.visible = false;
     runtime.environmentPlane.visible = false;
+    delete runtime.renderer.domElement.dataset.flatEnvironmentSize;
     runtime.environmentError = false;
     runtime.renderer.domElement.dataset.environmentLoaded = environmentUrl ? "false" : "fallback";
     runtime.renderer.domElement.dataset.environmentMode = runtime.environmentMode;
@@ -661,21 +714,25 @@ export function DirectorViewport({
       if (mode === "flat") {
         const width = Math.max(1, image?.width ?? 2);
         const height = Math.max(1, image?.height ?? 1);
-        const aspect = width / height;
-        const planeHeight = 18;
-        const planeWidth = planeHeight * aspect;
+        const foregroundMinZ = documentRef.current.objects
+          .filter((object) => object.visible && object.kind !== "light")
+          .reduce((minimum, object) => Math.min(minimum, object.transform.position.z), -10);
+        const layout = flatEnvironmentLayout(width, height, foregroundMinZ);
         runtime.environmentPlane.geometry.dispose();
-        runtime.environmentPlane.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+        runtime.environmentPlane.geometry = new THREE.PlaneGeometry(layout.width, layout.height);
+        runtime.environmentPlane.position.set(0, layout.y, layout.z);
         runtime.environmentPlane.material.map = texture;
         runtime.environmentPlane.material.visible = true;
         runtime.environmentPlane.material.needsUpdate = true;
         runtime.environmentPlane.visible = true;
         runtime.environmentSphere.material.visible = false;
+        runtime.renderer.domElement.dataset.flatEnvironmentSize = `${layout.width}x${layout.height}`;
       } else {
         runtime.environmentSphere.material.map = texture;
         runtime.environmentSphere.material.visible = true;
         runtime.environmentSphere.material.needsUpdate = true;
         runtime.environmentPlane.visible = false;
+        delete runtime.renderer.domElement.dataset.flatEnvironmentSize;
       }
       runtime.environmentReady = true;
       runtime.environmentError = false;
@@ -696,6 +753,8 @@ export function DirectorViewport({
       ref={containerRef}
       className="relative h-full min-h-0 w-full overflow-hidden bg-black"
       data-view-mode={document.viewMode}
+      data-director-view-position={`${document.directorView.position.x},${document.directorView.position.y},${document.directorView.position.z}`}
+      data-director-view-target={`${document.directorView.target.x},${document.directorView.target.y},${document.directorView.target.z}`}
     >
       <div ref={mountRef} className="absolute inset-0" />
       <div
@@ -727,4 +786,14 @@ export type DirectorRenderedCapture = {
   blob: Blob;
   width: number;
   height: number;
+};
+
+export type DirectorViewPose = {
+  position: DirectorVector3;
+  target: DirectorVector3;
+};
+
+export type DirectorViewportActions = {
+  focusSelected: () => DirectorViewPose | null;
+  fitScene: () => DirectorViewPose | null;
 };

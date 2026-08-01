@@ -12,6 +12,8 @@ import {
   getActiveDirectorCamera,
   removeDirectorCamera,
   removeDirectorObject,
+  resetDirectorObjectTransform,
+  resetDirectorView,
   relinkDirectorModel,
   renameDirectorCamera,
   selectDirectorCamera,
@@ -25,7 +27,7 @@ import {
   updateDirectorPrimitive,
   getDirectorPopulation,
 } from "@/lib/director-scene";
-import { DirectorViewport, type DirectorRenderedCapture } from "@/components/director/DirectorViewport";
+import { DirectorViewport, type DirectorRenderedCapture, type DirectorViewportActions } from "@/components/director/DirectorViewport";
 import { DirectorCaptureTray, type DirectorCaptureView } from "@/components/director/DirectorCaptureTray";
 import { DirectorFigurePicker } from "@/components/director/DirectorFigurePicker";
 import {
@@ -79,6 +81,7 @@ export function DirectorDialog({
   onPanoramaChange: (panoramaId: string | null) => void;
 }) {
   const captureRef = useRef<(() => Promise<DirectorRenderedCapture>) | null>(null);
+  const viewportActionsRef = useRef<DirectorViewportActions | null>(null);
   const captureInFlightRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -291,6 +294,11 @@ export function DirectorDialog({
       ? updateDirectorView(scene, { position, target })
       : updateDirectorCamera(scene, { position, target }));
   }, [onChange, scene]);
+  const applyDirectorFraming = useCallback((action: keyof DirectorViewportActions) => {
+    const pose = viewportActionsRef.current?.[action]();
+    if (!pose) return;
+    onChange(updateDirectorView(setDirectorViewMode(scene, "director"), pose));
+  }, [onChange, scene]);
   if (!open) return null;
 
   const patchObject = (patch: Partial<DirectorObject>) => {
@@ -445,6 +453,7 @@ export function DirectorDialog({
           environmentUrl={panoramaOptions.find((option) => option.id === activePanoramaId)?.url}
           environmentMode={panoramaOptions.find((option) => option.id === activePanoramaId)?.spherical ? "spherical" : "flat"}
           captureRef={captureRef}
+          actionsRef={viewportActionsRef}
           onSelect={selectObject}
           onViewChange={persistView}
           modelSources={modelSources}
@@ -452,12 +461,36 @@ export function DirectorDialog({
           onTransformCommit={(id, transform) => onTransformCommit(updateDirectorObjectTransform(scene, id, transform))}
           onModelStatus={(id, status) => setModelStatuses((current) => current[id] === status ? current : { ...current, [id]: status })}
         />
-        <div className="absolute bottom-44 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded border border-white/10 bg-black/65 p-1 text-xs backdrop-blur" aria-label="3D 变换工具">
+        <div className="absolute bottom-44 left-1/2 z-10 flex max-w-[min(92%,48rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded border border-white/10 bg-black/65 p-1 text-xs backdrop-blur" aria-label="3D 变换工具">
           {(["translate", "rotate", "scale"] as const).map((mode) => (
             <button key={mode} type="button" aria-pressed={transformMode === mode} className={`rounded px-3 py-1.5 ${transformMode === mode ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => setTransformMode(mode)}>
               {{ translate: "移动", rotate: "旋转", scale: "缩放" }[mode]}
             </button>
           ))}
+          <span className="mx-1 h-5 border-l border-white/15" />
+          <button
+            type="button"
+            className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
+            disabled={!selected || !selected.visible || selected.kind === "light"}
+            onClick={() => applyDirectorFraming("focusSelected")}
+          >聚焦选中对象</button>
+          <button
+            type="button"
+            className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
+            disabled={!scene.objects.some((object) => object.visible && object.kind !== "light")}
+            onClick={() => applyDirectorFraming("fitScene")}
+          >适应全部场景</button>
+          <button
+            type="button"
+            className="rounded px-2 py-1.5 hover:bg-white/10"
+            onClick={() => onChange(resetDirectorView(scene))}
+          >重置导演视角</button>
+          <button
+            type="button"
+            className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
+            disabled={!selected || selected.locked}
+            onClick={() => selected && onTransformCommit(resetDirectorObjectTransform(scene, selected.id))}
+          >重置选中对象变换</button>
         </div>
         <DirectorCaptureTray
           captures={captureViews}
@@ -595,7 +628,7 @@ export function DirectorDialog({
           ) : <p className="text-slate-500">从左侧场景层级选择一个对象。</p>}
 
           <section className="mt-6 border-t border-white/10 pt-4">
-            <h3 className="mb-3 text-sm font-semibold">全景环境</h3>
+            <h3 className="mb-3 text-sm font-semibold">场景环境</h3>
             <label className="block">环境来源
               <select aria-label="导演台全景环境" className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={activePanoramaId ?? ""} onChange={(event) => onPanoramaChange(event.target.value || null)}>
                 <option value="">纯色环境</option>

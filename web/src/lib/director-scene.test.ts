@@ -13,6 +13,8 @@ import {
   parseDirectorScene,
   removeDirectorCamera,
   removeDirectorObject,
+  resetDirectorObjectTransform,
+  resetDirectorView,
   relinkDirectorModel,
   renameDirectorCamera,
   selectDirectorCamera,
@@ -69,6 +71,42 @@ describe("director scene model", () => {
       role: "actor",
     });
     expect(character.character).toEqual({ preset: "future", pose: "celebrate", role: "extra" });
+  });
+
+  test("places newly added characters in distinct stage slots", () => {
+    const scene = createDefaultDirectorScene();
+    const second = addDirectorCharacter(scene);
+    const third = addDirectorCharacter(second);
+    const positions = third.objects
+      .filter((object) => object.kind === "character")
+      .map((object) => `${object.transform.position.x}:${object.transform.position.z}`);
+
+    expect(new Set(positions).size).toBe(3);
+  });
+
+  test("resets a staged object and the independent director view immutably", () => {
+    const scene = addDirectorCharacter(createDefaultDirectorScene());
+    const selected = scene.objects.at(-1)!;
+    const transformed = updateDirectorObjectTransform(scene, selected.id, {
+      position: { x: 3, y: 4, z: 5 },
+      rotation: { x: -54, y: -72, z: -55 },
+      scale: { x: 4, y: 3, z: 2 },
+    });
+    const movedView = updateDirectorView(transformed, {
+      position: { x: -40, y: 20, z: 18 },
+      target: { x: 8, y: 3, z: -2 },
+    });
+
+    const resetObject = resetDirectorObjectTransform(movedView, selected.id);
+    const reset = resetDirectorView(resetObject);
+    const object = reset.objects.find((candidate) => candidate.id === selected.id)!;
+
+    expect(object.transform.rotation).toEqual({ x: 0, y: 0, z: 0 });
+    expect(object.transform.scale).toEqual({ x: 1, y: 1, z: 1 });
+    expect(object.transform.position).toEqual({ x: 3, y: 4, z: 5 });
+    expect(reset.directorView).toEqual(createDefaultDirectorScene().directorView);
+    expect(movedView.objects.find((candidate) => candidate.id === selected.id)?.transform.rotation)
+      .toEqual({ x: -54, y: -72, z: -55 });
   });
 
   test("adds editable primitive geometry and crowd arrays within aggregate budgets", () => {

@@ -927,9 +927,7 @@ export function BoardNodeView({
             scene={node.metadata.directorScene ?? createDefaultDirectorScene()}
             panoramaOptions={(project ? listDirectorEnvironmentOptions(project, node.id) : []).map((candidate) => ({
               id: candidate.id,
-              label: candidate.type === "image"
-                ? `${candidate.title}（${isSphericalDirectorEnvironment(candidate) ? "全景图片" : "图片"}）`
-                : candidate.title,
+              label: `${candidate.title}（${isSphericalDirectorEnvironment(candidate) ? "360° 球形全景" : "平面背景"}）`,
               url: candidate.metadata.content!,
               spherical: isSphericalDirectorEnvironment(candidate),
             }))}

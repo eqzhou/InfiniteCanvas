@@ -623,10 +623,25 @@ test("director manages multiple cameras and independent composition guides", asy
   expect(Math.abs(frameBox!.width - frameBox!.height)).toBeLessThan(3);
   await dialog.getByLabel("显示地面网格").uncheck();
   await expect(dialog.getByTestId("director-rule-of-thirds")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "聚焦选中对象" })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: "适应全部场景" })).toBeEnabled();
+  const viewport = dialog.locator('[data-view-mode="camera"]');
+  const initialDirectorPosition = await viewport.getAttribute("data-director-view-position");
+  const initialDirectorTarget = await viewport.getAttribute("data-director-view-target");
+  await dialog.getByRole("button", { name: "聚焦选中对象" }).click();
+  await expect(dialog.locator('[data-view-mode="director"]')).not.toHaveAttribute("data-director-view-position", initialDirectorPosition!);
+  await expect(dialog.locator('[data-view-mode="director"]')).not.toHaveAttribute("data-director-view-target", initialDirectorTarget!);
+  await expect(dialog.locator('canvas[data-testid="director-viewport-canvas"]'))
+    .toHaveAttribute("data-transform-control-size", /0\.(55|[6-7][0-9])/);
   await dialog.getByLabel("旋转（度） X").fill("999");
   await dialog.getByLabel("缩放 X").fill("5000");
   await expect(dialog.getByLabel("旋转（度） X")).toHaveValue("360");
   await expect(dialog.getByLabel("缩放 X")).toHaveValue("1000");
+  await dialog.getByRole("button", { name: "重置选中对象变换" }).click();
+  await expect(dialog.getByLabel("旋转（度） X")).toHaveValue("0");
+  await expect(dialog.getByLabel("缩放 X")).toHaveValue("1");
+  await dialog.getByRole("button", { name: "重置导演视角" }).click();
+  await expect(dialog.locator('[data-view-mode="director"]')).toBeVisible();
 
   await dialog.getByRole("button", { name: "关闭导演台" }).click();
   await page.reload();
@@ -636,8 +651,8 @@ test("director manages multiple cameras and independent composition guides", asy
   await expect(dialog.getByLabel("显示九宫格")).toBeChecked();
   await expect(dialog.getByLabel("显示比例框")).toBeChecked();
   await expect(dialog.getByLabel("显示地面网格")).not.toBeChecked();
-  await expect(dialog.getByLabel("旋转（度） X")).toHaveValue("360");
-  await expect(dialog.getByLabel("缩放 X")).toHaveValue("1000");
+  await expect(dialog.getByLabel("旋转（度） X")).toHaveValue("0");
+  await expect(dialog.getByLabel("缩放 X")).toHaveValue("1");
 
   await dialog.getByRole("button", { name: "删除活动机位" }).click();
   await expect(dialog.getByLabel("场景层级").getByRole("button", { name: "选择机位 主摄像机" })).toHaveAttribute("aria-current", "true");
@@ -888,7 +903,7 @@ test("native panorama uploads, previews, persists, and lights the director envir
   await directorNode.getByRole("button", { name: "打开导演台" }).click();
   const directorDialog = page.getByRole("dialog", { name: "3D 导演台" });
   const environmentSelect = directorDialog.getByLabel("导演台全景环境");
-  await environmentSelect.selectOption({ label: "360° 全景" });
+  await environmentSelect.selectOption({ label: "360° 全景（360° 球形全景）" });
   const directorCanvas = directorDialog.locator('canvas[data-testid="director-viewport-canvas"]');
   await expect(directorCanvas).toHaveAttribute("data-environment-loaded", "true", { timeout: 10_000 });
 
@@ -1013,7 +1028,7 @@ test("panorama generation accepts ordinary image references and commits a persis
   await directorNode.getByTitle("输入端口").click();
   await directorNode.getByRole("button", { name: "打开导演台" }).click();
   const directorDialog = page.getByRole("dialog", { name: "3D 导演台" });
-  await directorDialog.getByLabel("导演台全景环境").selectOption({ label: "360° 全景 2" });
+  await directorDialog.getByLabel("导演台全景环境").selectOption({ label: "360° 全景 2（360° 球形全景）" });
   await expect(directorDialog.locator('canvas[data-testid="director-viewport-canvas"]')).toHaveAttribute("data-environment-loaded", "true", { timeout: 10_000 });
   await directorDialog.getByRole("button", { name: "关闭导演台" }).click();
 });
