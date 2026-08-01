@@ -95,6 +95,251 @@ done
 	}
 }
 
+func TestCodexMessageForwardsModelAndEffort(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-codex-models.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    thread/start) printf '{"id":%s,"result":{"thread":{"id":"thread-model-test"}}}\n' "$id" ;;
+    model/list) printf '{"id":%s,"result":{"data":[{"id":"gpt-5.6-terra","model":"gpt-5.6-terra","displayName":"GPT-5.6-Terra","description":"Balanced","defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high","description":"Deep"}],"isDefault":true},{"id":"gpt-5.6-sol","model":"gpt-5.6-sol","displayName":"GPT-5.6-Sol","description":"Fast","defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low","description":"Fast"}],"isDefault":false}]}}\n' "$id" ;;
+    turn/start)
+      case "$line" in *'"model":"gpt-5.6-terra"'*) ;; *) printf '{"id":%s,"error":{"code":-1,"message":"missing model"}}\n' "$id"; continue ;; esac
+      case "$line" in *'"effort":"high"'*) ;; *) printf '{"id":%s,"error":{"code":-1,"message":"missing effort"}}\n' "$id"; continue ;; esac
+      printf '{"id":%s,"result":{"turn":{"id":"turn-model-test"}}}\n' "$id" ;;
+  esac
+done
+`
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_CODEX_BIN", bin)
+	handler := testHandler(t)
+	created := request(t, handler, http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var session codexSessionSnapshot
+	if json.Unmarshal(created.Body.Bytes(), &session) != nil || session.ID == "" {
+		t.Fatalf("session=%s", created.Body.String())
+	}
+	invalid := request(t, handler, http.MethodPost, "/api/codex/message", []byte(
+		`{"sessionId":"`+session.ID+`","text":"hello","model":"bad model","effort":"high"}`))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid model status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	missingAttachment := request(t, handler, http.MethodPost, "/api/codex/message", []byte(
+		`{"sessionId":"`+session.ID+`","text":"hello","model":"gpt-5.6-terra","effort":"high","attachmentIds":["missing-attachment"]}`))
+	if missingAttachment.Code != http.StatusBadRequest {
+		t.Fatalf("missing attachment status=%d body=%s", missingAttachment.Code, missingAttachment.Body.String())
+	}
+	unchanged := request(t, handler, http.MethodGet, "/api/codex/session?profile=default", nil)
+	var unchangedSelection codexSessionSnapshot
+	if json.Unmarshal(unchanged.Body.Bytes(), &unchangedSelection) != nil || unchangedSelection.Model != "" || unchangedSelection.Effort != "" {
+		t.Fatalf("failed message changed selection=%s", unchanged.Body.String())
+	}
+	message := request(t, handler, http.MethodPost, "/api/codex/message", []byte(
+		`{"sessionId":"`+session.ID+`","text":"hello","model":"gpt-5.6-terra","effort":"high"}`))
+	if message.Code != http.StatusOK {
+		t.Fatalf("message status=%d body=%s", message.Code, message.Body.String())
+	}
+	conflict := request(t, handler, http.MethodPost, "/api/codex/message", []byte(
+		`{"sessionId":"`+session.ID+`","text":"second","model":"gpt-5.6-sol","effort":"low"}`))
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("concurrent message status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+	status := request(t, handler, http.MethodGet, "/api/codex/session?profile=default", nil)
+	var selected codexSessionSnapshot
+	if json.Unmarshal(status.Body.Bytes(), &selected) != nil || selected.Model != "gpt-5.6-terra" || selected.Effort != "high" {
+		t.Fatalf("selection=%s", status.Body.String())
+	}
+}
+
+func TestCodexMessageDoesNotOverwriteNewerPreference(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-codex-preference-race.sh")
+	started := filepath.Join(dir, "turn-started")
+	release := filepath.Join(dir, "release-turn")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    thread/start) printf '{"id":%s,"result":{"thread":{"id":"thread-preference-race"}}}\n' "$id" ;;
+    model/list) printf '{"id":%s,"result":{"data":[{"id":"model-one","model":"model-one","displayName":"Model One","description":"First","defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"Balanced"}],"isDefault":true},{"id":"model-two","model":"model-two","displayName":"Model Two","description":"Second","defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high","description":"Deep"}],"isDefault":false}]}}\n' "$id" ;;
+    turn/start)
+      : > "` + started + `"
+      while [ ! -f "` + release + `" ]; do sleep 0.01; done
+      printf '{"id":%s,"result":{"turn":{"id":"turn-preference-race"}}}\n' "$id" ;;
+  esac
+done
+`
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_CODEX_BIN", bin)
+	handler := testHandler(t)
+	created := request(t, handler, http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var session codexSessionSnapshot
+	if json.Unmarshal(created.Body.Bytes(), &session) != nil || session.ID == "" {
+		t.Fatalf("session=%s", created.Body.String())
+	}
+
+	messageDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/codex/message", strings.NewReader(
+			`{"sessionId":"`+session.ID+`","text":"hello","model":"model-one","effort":"medium"}`,
+		))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		messageDone <- response
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		select {
+		case response := <-messageDone:
+			t.Fatalf("message finished before blocked turn/start: status=%d body=%s", response.Code, response.Body.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("turn/start did not block")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	preference := request(t, handler, http.MethodPost, "/api/codex/preferences", []byte(
+		`{"sessionId":"`+session.ID+`","model":"model-two","effort":"high"}`))
+	if preference.Code != http.StatusOK {
+		t.Fatalf("preference status=%d body=%s", preference.Code, preference.Body.String())
+	}
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case response := <-messageDone:
+		if response.Code != http.StatusOK {
+			t.Fatalf("message status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("message did not finish")
+	}
+	status := request(t, handler, http.MethodGet, "/api/codex/session?profile=default", nil)
+	var selected codexSessionSnapshot
+	if json.Unmarshal(status.Body.Bytes(), &selected) != nil || selected.Model != "model-two" || selected.Effort != "high" {
+		t.Fatalf("newer preference was overwritten: %s", status.Body.String())
+	}
+}
+
+func TestValidateCodexModelListBounds(t *testing.T) {
+	valid := codexModelListResponse{Data: []codexModelOption{{
+		ID: "gpt-5.6-terra", Model: "gpt-5.6-terra", DisplayName: "GPT-5.6-Terra",
+		Description: "Balanced", DefaultReasoningEffort: "medium", IsDefault: true,
+		SupportedReasoningEfforts: []codexReasoningEffort{{ReasoningEffort: "medium", Description: "Balanced"}},
+	}}}
+	if err := validateCodexModelList(valid); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := codexModelListResponse{Data: append(append([]codexModelOption{}, valid.Data...), valid.Data[0])}
+	if err := validateCodexModelList(duplicate); err == nil {
+		t.Fatal("duplicate model catalog was accepted")
+	}
+	invalidDefault := valid
+	invalidDefault.Data = append([]codexModelOption{}, valid.Data...)
+	invalidDefault.Data[0].DefaultReasoningEffort = "xhigh"
+	if err := validateCodexModelList(invalidDefault); err == nil {
+		t.Fatal("unavailable default effort was accepted")
+	}
+	duplicateModelName := valid
+	duplicateModelName.Data = append(append([]codexModelOption{}, valid.Data...), valid.Data[0])
+	duplicateModelName.Data[1].ID = "gpt-5.6-terra-alias"
+	if err := validateCodexModelList(duplicateModelName); err == nil {
+		t.Fatal("duplicate model name was accepted")
+	}
+	duplicateEffort := valid
+	duplicateEffort.Data = append([]codexModelOption{}, valid.Data...)
+	duplicateEffort.Data[0].SupportedReasoningEfforts = append(
+		append([]codexReasoningEffort{}, valid.Data[0].SupportedReasoningEfforts...),
+		valid.Data[0].SupportedReasoningEfforts[0],
+	)
+	if err := validateCodexModelList(duplicateEffort); err == nil {
+		t.Fatal("duplicate reasoning effort was accepted")
+	}
+	custom := valid
+	custom.Data = append([]codexModelOption{}, valid.Data...)
+	custom.Data[0].ID = "provider/model+preview"
+	custom.Data[0].Model = "provider/model+preview"
+	if err := validateCodexModelList(custom); err != nil {
+		t.Fatalf("safe custom model was rejected: %v", err)
+	}
+}
+
+func TestCodexModelListFollowsPagination(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-codex-paginated-models.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+  case "$method" in
+    initialize) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    thread/start) printf '{"id":%s,"result":{"thread":{"id":"thread-pagination-test"}}}\n' "$id" ;;
+    model/list)
+      case "$line" in
+        *'"cursor":"page-2"'*) printf '{"id":%s,"result":{"data":[{"id":"model-two","model":"model-two","displayName":"Model Two","description":"Second","defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high","description":"Deep"}],"isDefault":false}],"nextCursor":null}}\n' "$id" ;;
+        *) printf '{"id":%s,"result":{"data":[{"id":"model-one","model":"model-one","displayName":"Model One","description":"First","defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"Balanced"}],"isDefault":true}],"nextCursor":"page-2"}}\n' "$id" ;;
+      esac ;;
+  esac
+done
+`
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_CODEX_BIN", bin)
+	handler := testHandler(t)
+	created := request(t, handler, http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var session codexSessionSnapshot
+	if json.Unmarshal(created.Body.Bytes(), &session) != nil || session.ID == "" {
+		t.Fatalf("session=%s", created.Body.String())
+	}
+	models := request(t, handler, http.MethodGet, "/api/codex/models?sessionId="+session.ID, nil)
+	var catalog codexModelListResponse
+	if models.Code != http.StatusOK || json.Unmarshal(models.Body.Bytes(), &catalog) != nil || len(catalog.Data) != 2 {
+		t.Fatalf("models status=%d body=%s", models.Code, models.Body.String())
+	}
+}
+
+func TestCodexPreferencesPersistPerAgentScope(t *testing.T) {
+	fixture := newAgentIsolationFixture(t, agentIsolationActors())
+	ownerSessionID := decodeAgentSessionID(t, fixture.request(t, "owner", http.MethodPost, "/api/codex/session", []byte(`{}`)))
+	trailing := fixture.request(t, "owner", http.MethodPost, "/api/codex/preferences", []byte(
+		`{"sessionId":"`+ownerSessionID+`","model":"gpt-5.6-terra","effort":"medium"}{}`))
+	if trailing.Code != http.StatusBadRequest {
+		t.Fatalf("trailing preference status=%d body=%s", trailing.Code, trailing.Body.String())
+	}
+	updated := fixture.request(t, "owner", http.MethodPost, "/api/codex/preferences", []byte(
+		`{"sessionId":"`+ownerSessionID+`","model":"gpt-5.6-terra","effort":"medium"}`))
+	if updated.Code != http.StatusOK {
+		t.Fatalf("preference status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	closed := fixture.request(t, "owner", http.MethodDelete, "/api/codex/session/"+ownerSessionID, nil)
+	if closed.Code != http.StatusNoContent {
+		t.Fatalf("close status=%d body=%s", closed.Code, closed.Body.String())
+	}
+	recreated := fixture.request(t, "owner", http.MethodPost, "/api/codex/session", []byte(`{"fresh":true}`))
+	var owner codexSessionSnapshot
+	if json.Unmarshal(recreated.Body.Bytes(), &owner) != nil || owner.Model != "gpt-5.6-terra" || owner.Effort != "medium" {
+		t.Fatalf("owner preference was not restored: %s", recreated.Body.String())
+	}
+	peer := fixture.request(t, "same-tenant", http.MethodPost, "/api/codex/session", []byte(`{}`))
+	var peerSnapshot codexSessionSnapshot
+	if json.Unmarshal(peer.Body.Bytes(), &peerSnapshot) != nil || peerSnapshot.Model != "" || peerSnapshot.Effort != "" {
+		t.Fatalf("owner preference leaked to peer: %s", peer.Body.String())
+	}
+}
+
 func TestCodexStartupHonorsDeadlineWithoutBindingSessionLifetime(t *testing.T) {
 	dir := t.TempDir()
 	stalled := filepath.Join(dir, "stalled-codex.sh")

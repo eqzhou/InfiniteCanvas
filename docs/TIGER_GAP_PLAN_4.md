@@ -4,9 +4,9 @@
 >
 > 实施起始基准：`main@b701b7a35bf4303909c2e0b8194bd60c3a0b3c69`
 >
-> 对照基准：`tigerowo/infinite-canvas main@9435f1c76130448ed7c41357b7b8ec5b60046538`
+> 对照基准：`tigerowo/infinite-canvas main@2fad4630d7478b630169e85ca35cc678ec57c7c1`
 >
-> 对照版本：`v0.4.5`（tag 与 main 同一提交）
+> 对照版本：最新 release `v0.4.5@9435f1c`；current main 含已覆盖的 Agent consolidation
 
 ## 1. 审查边界
 
@@ -25,7 +25,10 @@
 
 ## 2. 最新版本确认
 
-- Tiger 当前 `main`、`VERSION` 与最新 tag 均为 `v0.4.5@9435f1c`。
+- Tiger 最新 release 仍为 `v0.4.5@9435f1c`；2026-08-01 复核时当前
+  `main` 为 `2fad4630d7478b630169e85ca35cc678ec57c7c1`。
+- tag 之后唯一明确的用户可见增量是把旧画布助手收敛为 Creative Agent，
+  本地已经通过单一 `画布 Agent` 入口覆盖。
 - `v0.4.5` 相对旧计划的 `v0.4.4` 新增/修复：组节点、未登录本地渠道生图任务、普通节点 `@` 引用输入、提示词库展开后的画布性能、连续鼠标拖动画布、提示词详情 Markdown 文本、悬浮工具栏和长模型名布局。
 - 旧计划使用的 `main@64cb00a` 已过期，不能继续作为“最新功能”结论的依据。
 
@@ -55,7 +58,8 @@
 - 提示词来源、公共/个人提示词、图片预览和服务器素材库。
 - 注册登录、Linux.do OAuth、管理员后台、用户/额度/模型成本/AI 日志。
 - 共享渠道、模型拉取/测试、权重/超时、普通用户云渠道权限。
-- 用户 S3/R2、租户存储池、登录迁移、PostgreSQL/Redis 正式存储。
+- 用户 S3/R2、租户存储池、PostgreSQL/Redis 正式存储；账号模式只使用
+  数据库权威状态，不再提供浏览器工作区迁移或浏览器存储兜底。
 - New API URL 自动配置；公网环境使用 fragment，legacy query 只允许 loopback，安全性强于直接在公网 query 携带 key。
 - 本地额外提供插件 SDK、Browser Runtime/MCP、Codex/Claude 面板和 WebDAV 工作区备份。
 
@@ -75,7 +79,7 @@
 | R4-GAP-10 | APIMart `happyhorse-1.1` 精确适配 | 已覆盖 | 3–15 秒、五种比例、720P/1080P、首帧与 1–9 多图互斥 |
 | R4-GAP-11 | APIMart `Agnes` 图片/视频最新参数 | 有意未支持 | 官方公开契约不足，前后端继续 exact fail-closed，不用相近模型冒充 |
 | R4-GAP-12 | SQLite / MySQL 正式数据库后端 | 未实现、有意不同 | 不进入当前开发队列；正式部署继续 PostgreSQL + Redis，出现明确单文件/客户数据库需求后另立项 |
-| R4-GAP-13 | 登录后按 `updatedAt` 自动覆盖式多设备合并 | 有意不同 | 保持指纹冲突 + 显式迁移；若要增强，做字段级/操作级合并，不做静默 last-write-wins |
+| R4-GAP-13 | 登录后按 `updatedAt` 自动覆盖式多设备合并 | 有意不同 | 账号模式以数据库为唯一权威存储；不恢复浏览器迁移或静默 last-write-wins，未来若增强只做数据库内的显式冲突处理 |
 | R4-GAP-14 | 账号模式仍允许未登录访客使用本地渠道和本地画布 | 有意不同 | 保持登录墙与服务端数据面一致；仅 auth-off 本地部署保留无账号模式 |
 
 ### 4.3 不应误列为缺口

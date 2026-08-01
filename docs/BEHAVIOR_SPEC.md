@@ -15,8 +15,10 @@ behaviors at commits `d4130bbb79`, `bdca6b0a5c`, `062e4569aa`, and
 `5e1fd7a825` were adopted on 2026-07-19. A public recheck on 2026-07-23
 confirmed the latest public release is still `v0.9.0` and the public TODO only
 lists a Claude Agent SDK adapter follow-up (not yet adopted as a parity target).
-The public deltas through `v0.12.0` and Tiger's current Agent-consolidation
-entry were independently rechecked and adopted on 2026-07-31.
+The public deltas through Basket `v0.12.1`, Basket current
+`main@ee5804e586a95a3cc127caa37f2b87e6ade5c28f`, and Tiger current
+`main@2fad4630d7478b630169e85ca35cc678ec57c7c1` were independently rechecked
+and adopted through 2026-08-01.
 Unlisted later upstream changes remain out of scope. The implementation team
 did not use upstream source, CSS, plugins, fixtures, screenshots, or assets as
 implementation input.
@@ -112,10 +114,13 @@ implementation input.
 | 2026-07-25 | Left-panel asset drag | Drag a sidebar asset card onto the canvas surface | Asset is inserted as a node near the drop world point; click insert still works | high |
 | 2026-07-31 | Basket v0.11.0 public recheck | Read the public v0.11.0 release and CHANGELOG behavior names without inspecting implementation source | Text nodes expose persisted reasoning effort; image/video workbenches accept bounded drag-upload references; versioned configuration/preferences files exclude secrets and import into the authoritative database | high |
 | 2026-07-31 | Basket v0.12.0 public recheck | Read the public v0.12.0 release and CHANGELOG behavior names without inspecting implementation source | Codex offers three real turn-level permission modes, retains in-conversation approval, folds item events into collapsible step progress, shows elapsed waiting, and updates send/new-conversation feedback immediately; dated debug files, durable full history management, and validated file-manager reveal are implemented and verified locally | high |
-| 2026-07-31 | Basket v0.12.1 public recheck | Read the public v0.12.1 release and current CHANGELOG behavior names without inspecting implementation source | Release metadata/version checks, public log unification and stream presentation are recorded; account-level Codex model/reasoning selection remains intentionally outside this prompt/preset parity pass | medium |
+| 2026-07-31 | Basket v0.12.1 public recheck | Read the public v0.12.1 release and current CHANGELOG behavior names without inspecting implementation source | Codex reads the current account's advertised model/reasoning catalog, safely falls back to Codex defaults, and retains valid choices for later turns without storing them in browser storage | high |
 | 2026-07-31 | Prompt and preset parity recheck | Read public Basket/Tiger CHANGELOG and feature documentation plus the named public Xianyu catalog shape | The prompt center includes the Tiger Xianyu nested H2-H5 Markdown source with stable IDs; admin sync accepts JSON/Markdown; image size, quality/resolution and output-count controls are shared, normalized at every request boundary, and filtered by known model capabilities | high |
 | 2026-07-31 | Project-scoped voice cast | Configure narrator/character voices for one canvas, bind an audio node, change or remove the role, export/import and reload | Provider/default voice stays global; reusable roles persist only inside that project document; nodes follow role changes unless they explicitly override the voice; removing a role clears only the stale binding and legacy global roles migrate once after the project write succeeds | high |
 | 2026-07-31 | Tiger Agent consolidation | Read the public Tiger Unreleased behavior name without inspecting implementation source | The legacy assistant and duplicate navigation entry are absent; one dockable canvas Agent provides the existing Codex/Claude, approval, attachment, stop and generation-status workflows | high |
+| 2026-08-01 | Basket structured Agent diagnostics | Read public CHANGELOG and commit titles without inspecting implementation source | Codex and Claude expose fixed diagnostic filters above an independently scrollable log, expandable details, and consecutive duplicate collapse | high |
+| 2026-08-01 | Basket Agent follow behavior | Read public CHANGELOG and commit titles without inspecting implementation source | Conversation and diagnostic logs follow new output while at the bottom, pause when the reader scrolls upward, and expose the same centered jump-to-bottom control | high |
+| 2026-08-01 | Tiger current-main recheck | Read public release/CHANGELOG metadata and commit titles without inspecting implementation source | The sole post-v0.4.5 user-visible delta is the already-covered single canvas Agent consolidation; no additional local gap was found | high |
 
 ## Evidence
 
@@ -144,10 +149,12 @@ implementation input.
 | https://github.com/basketikun/infinite-canvas/releases | 2026-07-23 | Public release list recheck; latest tag remains `v0.9.0` |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.11.0 | 2026-07-31 | Public release metadata and user-visible change names for the v0.11 additive interface delta; no implementation source, styles, screenshots, plugins, or assets were used |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.12.0 | 2026-07-31 | Public release metadata and user-visible Agent behavior names; no implementation source, styles, screenshots, plugins, or assets were used |
+| https://github.com/basketikun/infinite-canvas/releases/tag/v0.12.1 | 2026-08-01 | Public Codex current-account model and reasoning-selection behavior names; tag commit `6f1b6633b76e485312382f4d916d49af8a23afaa` |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/overview/features.mdx | 2026-07-23 | Public feature inventory recheck (docs only; no source trees) |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/progress/todo.mdx | 2026-07-23 | Public remaining-work recheck; Claude Agent SDK adapter noted as not-targeted |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-24 | Public Unreleased behavior names for prompt sources, generation status, tab ownership, and Codex synchronization |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-31 | Public v0.12.1 release and current Unreleased behavior names for Agent/model/version/log/stream updates |
+| https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-08-01 | Public current-main behavior names for structured diagnostic filters, duplicate collapse, expandable details, and centered follow controls; main commit `ee5804e586a95a3cc127caa37f2b87e6ade5c28f` |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/docs/content/docs/progress/pending-test.mdx | 2026-07-19 | Public black-box acceptance descriptions and exact `generation_get_status` interoperability name |
 | https://raw.githubusercontent.com/tigerowo/infinite-canvas/main/CHANGELOG.md | 2026-07-25 | Public Tiger behavior names for persistent generation, workflows, S3/R2 configuration, panorama, camera controls, 3D director, grouping and pointer/layout refinements; SHA-256 `38111d82f76b2d46fe4f425a9112c307692970bbc462b5068fe9ef205662bc4b`; no implementation source inspected |
 | https://raw.githubusercontent.com/tigerowo/infinite-canvas/main/CHANGELOG.md | 2026-07-31 | Public Tiger Unreleased Agent-consolidation behavior name; no implementation source inspected |
@@ -155,6 +162,8 @@ implementation input.
 | https://github.com/tigerowo/infinite-canvas/blob/main/docs/overview/features.md | 2026-07-25 | Public image-workbench behavior inventory: side/bottom layout, concurrent tasks, persistent categories, reference/result metadata, reusable assets, and draggable workflow entrance; documentation only, no implementation source or assets inspected |
 | https://api.github.com/repos/tigerowo/infinite-canvas/releases/latest | 2026-07-25 | Historical release metadata snapshot: at that date the latest tag was `v0.4.4`; superseded by the v0.4.5 row below |
 | https://github.com/tigerowo/infinite-canvas/releases/tag/v0.4.5 | 2026-07-28 | Public v0.4.5 release metadata and user-visible change names; tag commit `9435f1c`; no implementation source or assets inspected |
+| https://api.github.com/repos/tigerowo/infinite-canvas/commits | 2026-08-01 | Public post-tag commit metadata only; current main `2fad4630d7478b630169e85ca35cc678ec57c7c1` names the already-covered Agent consolidation |
+| https://learn.chatgpt.com/docs/app-server.md | 2026-08-01 | Official Codex App Server `model/list` catalog and `turn/start` model/effort override contract |
 | https://docs.apimart.ai/en/api-reference/images/seedream-5-0-pro/generation | 2026-07-28 | Exact Seedream 5.0 Pro model ID, output count, resolution, ratio and reference-image contract |
 | https://docs.apimart.ai/en/api-reference/images/gemini-3.1-flash/generation-lite | 2026-07-28 | Exact Gemini 3.1 Flash Lite Image / Nano Banana 2 Lite aliases, resolution and reference-image contract |
 | https://docs.apimart.ai/en/api-reference/videos/happyhorse-1.1/generation | 2026-07-28 | Exact HappyHorse 1.1 model, duration, ratio, resolution and reference-mode contract |

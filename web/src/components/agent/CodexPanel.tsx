@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, FolderOpen, History, ImagePlus, Plus, Send, Square, Trash2, Unplug, X } from "lucide-react";
+import { Check, FolderOpen, History, ImagePlus, Plus, Send, Square, Trash2, Unplug, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -10,6 +10,7 @@ import {
   deleteCodexHistory,
   getCodexSession,
   listCodexHistory,
+  listCodexModels,
   interruptCodexTurn,
   revealCodexFile,
   respondCodexApproval,
@@ -17,10 +18,12 @@ import {
   sendCodexMessage,
   subscribeCodexEvents,
   uploadCodexAttachments,
+  updateCodexPreferences,
   type AgentConnection,
   type CodexEvent,
   type CodexHistoryRecord,
   type CodexHistorySummary,
+  type CodexModel,
   type CodexPermissionMode,
   type CodexSession,
 } from "@/services/local-agent";
@@ -50,6 +53,9 @@ import { getRuntimeClientId } from "@/services/runtime-identity";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import { attachUploadedImage, useBoardStore } from "@/stores/use-board-store";
+import { AgentDiagnosticLog } from "@/components/agent/AgentDiagnosticLog";
+import { AgentJumpToLatest } from "@/components/agent/AgentJumpToLatest";
+import { CodexModelControls, resolveCodexReasoningEffort } from "@/components/agent/CodexModelControls";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = SharedTurnStatus;
@@ -187,9 +193,16 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const [historyBusy, setHistoryBusy] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [showJumpBottom, setShowJumpBottom] = useState(false);
+  const [models, setModels] = useState<CodexModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedEffort, setSelectedEffort] = useState("");
+  const [modelCatalogError, setModelCatalogError] = useState<string | undefined>();
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(false);
   const syncRef = useRef<ReturnType<typeof createCodexSessionSync> | null>(null);
   const turnStatusRef = useRef<TurnStatus>("idle");
   const sharedRevisionRef = useRef(0);
+  const preferenceWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const preferenceRevisionRef = useRef(0);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -209,7 +222,83 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
+    preferenceRevisionRef.current += 1;
   }, [sessionId]);
+
+  const queueCodexPreference = (
+    model: string,
+    effort: string,
+    previous: { model: string; effort: string },
+  ) => {
+    if (!sessionId) return;
+    const targetSessionId = sessionId;
+    const revision = preferenceRevisionRef.current + 1;
+    preferenceRevisionRef.current = revision;
+    const write = preferenceWriteRef.current
+      .catch(() => undefined)
+      .then(() => updateCodexPreferences(connection, targetSessionId, model, effort));
+    preferenceWriteRef.current = write;
+    void write.catch((cause) => {
+      if (preferenceRevisionRef.current !== revision || sessionIdRef.current !== targetSessionId) return;
+      setSelectedModel(previous.model);
+      setSelectedEffort(previous.effort);
+      setError(cause instanceof Error ? cause.message : String(cause));
+    });
+  };
+
+  useEffect(() => {
+    if (!sessionId) {
+      setModels([]);
+      setSelectedModel("");
+      setSelectedEffort("");
+      setModelCatalogError(undefined);
+      setModelCatalogLoading(false);
+      return;
+    }
+    let active = true;
+    setModels([]);
+    setSelectedModel("");
+    setSelectedEffort("");
+    setModelCatalogError(undefined);
+    setModelCatalogLoading(true);
+    void listCodexModels(connection, sessionId)
+      .then((catalog) => {
+        if (!active) return;
+        setModelCatalogLoading(false);
+        setModels(catalog);
+        const preferredModel = session?.model || "";
+        const selected = catalog.find((item) => item.model === preferredModel)
+          ?? catalog.find((item) => item.isDefault)
+          ?? catalog[0];
+        if (!selected) {
+          setSelectedModel("");
+          setSelectedEffort("");
+          return;
+        }
+        const preferredEffort = session?.effort || "";
+        const effort = resolveCodexReasoningEffort(selected, preferredEffort);
+        setSelectedModel(selected.model);
+        setSelectedEffort(effort);
+      })
+      .catch((cause) => {
+        if (!active) return;
+        setModelCatalogLoading(false);
+        setModels([]);
+        setModelCatalogError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      active = false;
+    };
+  }, [connection, sessionId]);
+
+  useEffect(() => {
+    if (!session?.model || !models.length) return;
+    const selected = models.find((item) => item.model === session.model);
+    if (!selected) return;
+    const effort = resolveCodexReasoningEffort(selected, session.effort);
+    setSelectedModel(selected.model);
+    setSelectedEffort(effort);
+  }, [models, session?.effort, session?.model]);
 
   useEffect(() => () => previews.forEach((preview) => URL.revokeObjectURL(preview.url)), [previews]);
 
@@ -557,6 +646,9 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           clientId: getRuntimeClientId(),
           clientMessageId,
           permissionMode,
+          ...(models.some((item) => item.model === selectedModel) ? { model: selectedModel } : {}),
+          ...(models.find((item) => item.model === selectedModel)?.supportedReasoningEfforts
+            .some((item) => item.reasoningEffort === selectedEffort) ? { effort: selectedEffort } : {}),
         },
       );
     } catch (cause) {
@@ -770,15 +862,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               )}
             </div>
             {showJumpBottom ? (
-              <button
-                type="button"
-                title="回到底部"
-                className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full border border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-1 text-[10px] shadow-[var(--ob-elev-1)]"
-                onClick={() => scrollTranscriptToBottom("smooth")}
-              >
-                <ArrowDown size={12} />
-                回到底部
-              </button>
+              <AgentJumpToLatest onClick={() => scrollTranscriptToBottom("smooth")} />
             ) : null}
           </div>
           {progress.length ? (
@@ -818,14 +902,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 ))}
               </ol>
             </details>
-          ) : logs.length ? (
-            <details className="mb-2 rounded-lg px-2.5 py-1.5">
-              <summary className="cursor-pointer text-[11px] font-medium">诊断信息 · {logs.length}</summary>
-              <ol className="mt-1 max-h-24 list-decimal overflow-auto pl-4 text-[10px] text-[var(--ob-muted)]">
-                {logs.map((log, index) => <li key={`${index}-${log}`}>{log}</li>)}
-              </ol>
-            </details>
           ) : null}
+          <AgentDiagnosticLog logs={logs} />
           {previews.length ? (
             <div className="mb-2 flex gap-1.5 overflow-x-auto">
               {previews.map((preview) => (
@@ -854,6 +932,30 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
             {session.reused ? " · 连续 thread" : ""}
           </div>
           <div className="ob-composer p-1.5">
+            <CodexModelControls
+              models={models}
+              model={selectedModel}
+              effort={selectedEffort}
+              error={modelCatalogError}
+              loading={modelCatalogLoading}
+              disabled={turnStatus === "running"}
+              onModelChange={(model) => {
+                const selected = models.find((item) => item.model === model);
+                if (!selected) return;
+                const effort = resolveCodexReasoningEffort(selected);
+                const previous = { model: selectedModel, effort: selectedEffort };
+                setSelectedModel(model);
+                setSelectedEffort(effort);
+                queueCodexPreference(model, effort, previous);
+              }}
+              onEffortChange={(effort) => {
+                const selected = models.find((item) => item.model === selectedModel);
+                if (!selected?.supportedReasoningEfforts.some((item) => item.reasoningEffort === effort)) return;
+                const previous = { model: selectedModel, effort: selectedEffort };
+                setSelectedEffort(effort);
+                queueCodexPreference(selectedModel, effort, previous);
+              }}
+            />
             <div className="mb-1 flex items-center gap-1.5 px-1">
               <label htmlFor="codex-permission-mode" className="text-[10px] text-[var(--ob-muted)]">权限</label>
               <select

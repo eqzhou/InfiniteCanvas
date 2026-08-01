@@ -64,6 +64,8 @@ styles, fixtures, screenshots, or bundled assets:
 | Immediate send/new-conversation feedback and long-wait status | [verified] sending clears the composer and renders an optimistic user message before attachment/network completion; new conversation clears the prior transcript before thread creation; running turns show elapsed time and a stop affordance |
 | Turn-only stop, incremental assistant output and copy-safe Agent text | [verified existing] stop calls `turn/interrupt` without ending the service; assistant deltas stream incrementally; canvas shortcuts ignore textarea/input/contenteditable targets |
 | Dated debug files, full history manager and file-manager reveal | [verified] `--debug`/`OPENBOARD_DEBUG` writes permission-restricted local-date debug files; Codex history is bounded, tenant/profile-scoped and durable with list/detail/restore/delete/bulk-delete plus transcript and progress replay; changed-file progress can reveal the validated path in the host file manager |
+| Current-account Codex model and reasoning selection | [verified] the local bridge follows the official paginated `model/list` catalog, validates bounded model/effort pairs, exposes only advertised choices, sends optional `turn/start` overrides, retains valid choices in a tenant/user/profile-isolated database record, and falls back to Codex defaults when the catalog is unavailable, empty or stale |
+| Structured Agent diagnostics and shared follow behavior | [verified] Codex and Claude diagnostics use fixed error/warning/activity filters, an independently scrollable expandable list, consecutive duplicate collapse, upward-scroll pause, and the same centered jump-to-bottom control as conversation history |
 
 ## Public baseline traceability
 
@@ -147,7 +149,7 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 665 Bun unit/integration tests at the 2026-07-31 verification baseline; the same run reports 80.99% line and 83.96% function coverage. CI publishes this report but does not currently enforce a numeric threshold
+- [verified] 700 Bun unit/integration tests at the 2026-08-01 verification baseline; the same run reports 81.46% line and 83.50% function coverage. CI publishes this report but does not currently enforce a numeric threshold
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds; the v0.12.0 Agent follow-up also passes the focused API race suite
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)
@@ -178,6 +180,10 @@ Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent S
   and credential-free preferences work. Dated debug files, full history
   management and file-manager reveal are now implemented and verified by the
   local API, Bun service, and Chromium Agent-history tests.
+- The 2026-08-01 current-main recheck adds the current-account Codex model and
+  reasoning picker plus structured Agent diagnostics and centered, reader-aware
+  follow controls. These are implemented with the official Codex App Server
+  `model/list` and `turn/start` contracts and shared local presentation code.
 - Prompt/preset recheck adds the Tiger Xianyu GPT-Image-2 Markdown catalog
   (nested H2/H3/H4/H5 entries, numbered supplemental prompts, and stable IDs),
   common 1:1/3:2/2:3/4:3/3:4/16:9/9:16/21:9/5:4/4:5 image-size presets,
@@ -185,9 +191,10 @@ Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent S
   Seedream/Gemini 1K/2K resolution), adaptive size handling, and output-count
   limits. The admin catalog sync path accepts both JSON and structured Markdown
   sources.
-- Tiger latest public release remains `v0.4.5`; its current public Unreleased
-  entry replaces the separate canvas assistant with an Agent adapted to the
-  canvas. OpenBoard now exposes one authoritative `画布 Agent` entry.
+- Tiger latest public release remains `v0.4.5`; current main is now
+  `2fad4630d7478b630169e85ca35cc678ec57c7c1`, whose only post-tag public
+  user-visible delta is the already-covered replacement of the separate canvas
+  assistant with one authoritative `画布 Agent` entry.
 
 ### Tiger public release recheck (2026-07-28)
 

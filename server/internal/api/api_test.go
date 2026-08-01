@@ -27,6 +27,7 @@ func fakeCodexBinary(t *testing.T) string {
 		"  case \"$method\" in\n" +
 		"    initialize) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\" ;;\n" +
 		"    thread/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"thread\":{\"id\":\"thread-test\"}}}\\n' \"$id\" ;;\n" +
+		"    model/list) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"data\":[{\"id\":\"gpt-5.6-terra\",\"model\":\"gpt-5.6-terra\",\"displayName\":\"GPT-5.6-Terra\",\"description\":\"Fast coding model\",\"hidden\":false,\"defaultReasoningEffort\":\"medium\",\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\",\"description\":\"Fast\"},{\"reasoningEffort\":\"medium\",\"description\":\"Balanced\"}],\"isDefault\":true}]}}\\n' \"$id\" ;;\n" +
 		"    turn/start) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"turn\":{\"id\":\"turn-test\"}}}\\n' \"$id\" ;;\n" +
 		"    turn/interrupt) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{}}\\n' \"$id\"; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-test\"}}}' ;;\n" +
 		"  esac\n" +
@@ -58,9 +59,20 @@ func TestCodexSessionLifecycle(t *testing.T) {
 	if json.Unmarshal(reused.Body.Bytes(), &reusedSession) != nil || reusedSession.ID != session.ID || !reusedSession.Reused {
 		t.Fatalf("session was not reused: %s", reused.Body.String())
 	}
-	message := request(t, handler, http.MethodPost, "/api/codex/message", []byte(`{"sessionId":"`+session.ID+`","text":"hello"}`))
+	models := request(t, handler, http.MethodGet, "/api/codex/models?sessionId="+session.ID, nil)
+	var catalog codexModelListResponse
+	if models.Code != http.StatusOK || json.Unmarshal(models.Body.Bytes(), &catalog) != nil ||
+		len(catalog.Data) != 1 || catalog.Data[0].Model != "gpt-5.6-terra" {
+		t.Fatalf("models status=%d body=%s", models.Code, models.Body.String())
+	}
+	message := request(t, handler, http.MethodPost, "/api/codex/message", []byte(`{"sessionId":"`+session.ID+`","text":"hello","model":"gpt-5.6-terra","effort":"medium"}`))
 	if message.Code != http.StatusOK {
 		t.Fatalf("message status=%d body=%s", message.Code, message.Body.String())
+	}
+	statusWithSelection := request(t, handler, http.MethodGet, "/api/codex/session?profile=default", nil)
+	var selected codexSessionSnapshot
+	if json.Unmarshal(statusWithSelection.Body.Bytes(), &selected) != nil || selected.Model != "gpt-5.6-terra" || selected.Effort != "medium" {
+		t.Fatalf("session did not retain model selection: %s", statusWithSelection.Body.String())
 	}
 	interrupted := request(t, handler, http.MethodPost, "/api/codex/interrupt", []byte(`{"sessionId":"`+session.ID+`"}`))
 	if interrupted.Code != http.StatusOK {

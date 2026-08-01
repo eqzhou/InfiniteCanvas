@@ -4448,6 +4448,34 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await page.route("**/api/codex/session/*", async (route) => {
     await route.fulfill({ status: 204 });
   });
+  await page.route("**/api/codex/models?sessionId=*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [
+          {
+            id: "gpt-5.6-terra", model: "gpt-5.6-terra", displayName: "GPT-5.6-Terra",
+            description: "Balanced", defaultReasoningEffort: "medium", isDefault: true,
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "Fast" },
+              { reasoningEffort: "medium", description: "Balanced" },
+            ],
+          },
+          {
+            id: "gpt-5.6-sol", model: "gpt-5.6-sol", displayName: "GPT-5.6-Sol",
+            description: "Deep reasoning", defaultReasoningEffort: "high", isDefault: false,
+            supportedReasoningEfforts: [
+              { reasoningEffort: "high", description: "Deep" },
+              { reasoningEffort: "xhigh", description: "Deepest" },
+            ],
+          },
+        ],
+      }),
+    });
+  });
+  await page.route("**/api/codex/preferences", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
   await page.route("**/api/codex/message", async (route) => {
     messageBody = JSON.parse(route.request().postData() ?? "null") as Record<string, unknown>;
     await messageRequest;
@@ -4484,6 +4512,7 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
       ? [
           { type: "notification", method: "item/started", params: { item: { id: "tool-e2e", type: "mcpToolCall", text: "board.list_nodes" } } },
           { type: "notification", method: "item/completed", params: { item: { id: "tool-e2e", type: "mcpToolCall", text: "board.list_nodes", status: "completed" } } },
+          { type: "notification", method: "item/completed", params: { item: { id: "tool-e2e", type: "mcpToolCall", text: "board.list_nodes", status: "completed" } } },
           { type: "notification", method: "agent_message_delta", params: { delta: "**hello from Codex** <script>bad()</script>" } },
         ]
       : [{ type: "approval", method: "item/tool/call", id: "approval-e2e", params: { tool: "board.add_node" } }];
@@ -4507,6 +4536,8 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await expect(page.getByText("hello from Codex")).toBeVisible();
   await expect(page.getByText("任务进度 · 1/1")).toBeVisible();
   await expect(page.getByText("调用工具", { exact: true })).toBeVisible();
+  await expect(page.getByText("×2", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("诊断信息筛选")).toBeVisible();
   await expect(page.locator("script").filter({ hasText: "bad()" })).toHaveCount(0);
   await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({
     name: "pixel.png",
@@ -4515,6 +4546,10 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   });
   await expect(page.getByAltText("pixel.png")).toBeVisible();
   const codexComposer = page.getByPlaceholder("发送消息").locator("..");
+  await expect(page.getByLabel("Codex 模型")).toHaveValue("gpt-5.6-terra");
+  await page.getByLabel("Codex 模型").selectOption("gpt-5.6-sol");
+  await expect(page.getByLabel("Codex 推理强度")).toHaveValue("high");
+  await page.getByLabel("Codex 推理强度").selectOption("xhigh");
   await expect(page.getByLabel("权限")).toHaveValue("workspace-auto");
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toContain("工作区之外");
@@ -4532,6 +4567,8 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
     text: "inspect this image",
     attachmentIds: ["image-e2e"],
     permissionMode: "read-only",
+    model: "gpt-5.6-sol",
+    effort: "xhigh",
   });
   expect(String(messageBody?.clientMessageId)).toMatch(/^message_[A-Za-z0-9_-]+$/);
   releaseMessageRequest();

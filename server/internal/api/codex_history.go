@@ -681,6 +681,7 @@ func (s *Server) restoreCodexHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	session.profile = profile
 	session.scope = scope
+	s.applyStoredCodexPreferences(session)
 	session.cwd = cwd
 	session.historyStore = s.codexHistory
 	session.historyID = record.ID

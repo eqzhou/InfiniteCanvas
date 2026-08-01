@@ -11,13 +11,17 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/codexbridge"
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 const maxCodexBody = 256 << 10
@@ -26,8 +30,15 @@ const codexHistoryLimit = 128
 const codexSubscriberBuffer = codexHistoryLimit + 64
 const codexStartupTimeout = 15 * time.Second
 const codexTurnStartTimeout = 30 * time.Second
+const codexModelListTimeout = 10 * time.Second
+const codexPreferenceWriteTimeout = 5 * time.Second
+const maxCodexModels = 200
+const codexModelPageSize = 100
+const codexModelCatalogTTL = 30 * time.Second
 
 var errCodexHistoryGap = errors.New("Codex event history is no longer available")
+var errCodexModelDiscoveryBusy = errors.New("too many Codex model discovery requests")
+var codexModelRequestSlots = make(chan struct{}, 8)
 
 type codexManager struct {
 	mu                   sync.RWMutex
@@ -86,6 +97,14 @@ type codexSession struct {
 	pendingAttachments map[string]codexAttachment
 	activeAttachments  []codexAttachment
 	runtimeClientID    string
+	model              string
+	effort             string
+	modelCatalogMu     sync.Mutex
+	modelCatalog       codexModelListResponse
+	modelCatalogAt     time.Time
+	modelCatalogFlight *codexModelCatalogFlight
+	preferenceMu       sync.Mutex
+	preferenceRevision uint64
 	releaseRuntime     func()
 	eventSequence      uint64
 	historyStore       *codexHistoryStore
@@ -100,6 +119,40 @@ type codexSessionSnapshot struct {
 	Reused          bool   `json:"reused"`
 	Running         bool   `json:"running"`
 	RuntimeClientID string `json:"runtimeClientId,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+}
+
+type codexReasoningEffort struct {
+	ReasoningEffort string `json:"reasoningEffort"`
+	Description     string `json:"description"`
+}
+
+type codexModelOption struct {
+	ID                        string                 `json:"id"`
+	Model                     string                 `json:"model"`
+	DisplayName               string                 `json:"displayName"`
+	Description               string                 `json:"description"`
+	DefaultReasoningEffort    string                 `json:"defaultReasoningEffort"`
+	SupportedReasoningEfforts []codexReasoningEffort `json:"supportedReasoningEfforts"`
+	IsDefault                 bool                   `json:"isDefault"`
+}
+
+type codexModelListResponse struct {
+	Data       []codexModelOption `json:"data"`
+	NextCursor *string            `json:"nextCursor,omitempty"`
+}
+
+type codexPreferences struct {
+	Version int    `json:"version"`
+	Model   string `json:"model"`
+	Effort  string `json:"effort,omitempty"`
+}
+
+type codexModelCatalogFlight struct {
+	done   chan struct{}
+	result codexModelListResponse
+	err    error
 }
 
 type codexAttachment struct {
@@ -304,6 +357,7 @@ func (s *Server) createCodexSession(w http.ResponseWriter, r *http.Request) {
 	}
 	session.profile = profile
 	session.scope = scope
+	s.applyStoredCodexPreferences(session)
 	session.cwd = cwd
 	session.historyStore = s.codexHistory
 	session.historyID = randomID("history")
@@ -379,7 +433,326 @@ func (s *codexSession) snapshotLocked(reused bool) codexSessionSnapshot {
 	return codexSessionSnapshot{
 		ID: s.id, ThreadID: s.threadID, Profile: s.profile, HistoryID: s.historyID, Reused: reused,
 		Running: s.turnStarting || s.turnID != "", RuntimeClientID: s.runtimeClientID,
+		Model: s.model, Effort: s.effort,
 	}
+}
+
+func validCodexPickerValue(value string) bool {
+	return value != "" && len(value) <= 128 && utf8.ValidString(value) &&
+		strings.TrimSpace(value) == value && strings.IndexFunc(value, unicode.IsControl) < 0
+}
+
+func validateCodexModelList(result codexModelListResponse) error {
+	if len(result.Data) > maxCodexModels {
+		return errors.New("Codex returned too many models")
+	}
+	seenIDs := make(map[string]struct{}, len(result.Data))
+	seenModels := make(map[string]struct{}, len(result.Data))
+	for _, model := range result.Data {
+		if !validCodexPickerValue(model.ID) || !validCodexPickerValue(model.Model) ||
+			strings.TrimSpace(model.DisplayName) == "" || len(model.DisplayName) > 160 ||
+			len(model.Description) > 2000 || !validCodexPickerValue(model.DefaultReasoningEffort) ||
+			len(model.SupportedReasoningEfforts) > 32 {
+			return errors.New("Codex returned an invalid model catalog")
+		}
+		if _, duplicate := seenIDs[model.ID]; duplicate {
+			return errors.New("Codex returned duplicate models")
+		}
+		if _, duplicate := seenModels[model.Model]; duplicate {
+			return errors.New("Codex returned duplicate models")
+		}
+		seenIDs[model.ID] = struct{}{}
+		seenModels[model.Model] = struct{}{}
+		defaultFound := len(model.SupportedReasoningEfforts) == 0
+		seenEfforts := make(map[string]struct{}, len(model.SupportedReasoningEfforts))
+		for _, effort := range model.SupportedReasoningEfforts {
+			if !validCodexPickerValue(effort.ReasoningEffort) || len(effort.Description) > 500 {
+				return errors.New("Codex returned an invalid reasoning effort")
+			}
+			if _, duplicate := seenEfforts[effort.ReasoningEffort]; duplicate {
+				return errors.New("Codex returned duplicate reasoning efforts")
+			}
+			seenEfforts[effort.ReasoningEffort] = struct{}{}
+			defaultFound = defaultFound || effort.ReasoningEffort == model.DefaultReasoningEffort
+		}
+		if !defaultFound {
+			return errors.New("Codex returned an unavailable default reasoning effort")
+		}
+	}
+	return nil
+}
+
+func codexPreferencesStateKey(scope agentScope, profile string) string {
+	return "__codex_preferences_v1:" + strings.TrimSuffix(historyScopeFilename(scope), ".json") + ":" + profile
+}
+
+func codexPreferenceTenant(scope agentScope) string {
+	if scope.tenantID != "" {
+		return scope.tenantID
+	}
+	return store.DefaultTenantID
+}
+
+func (s *Server) loadCodexPreferences(ctx context.Context, scope agentScope, profile string) (codexPreferences, error) {
+	if s.store == nil {
+		return codexPreferences{}, nil
+	}
+	raw, err := s.store.GetState(ctx, codexPreferenceTenant(scope), codexPreferencesStateKey(scope, profile))
+	if errors.Is(err, store.ErrNotFound) {
+		return codexPreferences{}, nil
+	}
+	if err != nil || len(raw) > 4096 {
+		return codexPreferences{}, errors.New("failed to read Codex preferences")
+	}
+	var preferences codexPreferences
+	if json.Unmarshal(raw, &preferences) != nil || preferences.Version != 1 ||
+		!validCodexPickerValue(preferences.Model) ||
+		(preferences.Effort != "" && !validCodexPickerValue(preferences.Effort)) {
+		return codexPreferences{}, errors.New("stored Codex preferences are invalid")
+	}
+	return preferences, nil
+}
+
+func (s *Server) storeCodexPreferences(ctx context.Context, scope agentScope, profile string, preferences codexPreferences) error {
+	if s.store == nil {
+		return nil
+	}
+	raw, err := json.Marshal(preferences)
+	if err != nil {
+		return err
+	}
+	return s.store.PutState(ctx, codexPreferenceTenant(scope), codexPreferencesStateKey(scope, profile), raw)
+}
+
+func (s *Server) persistCodexPreferences(
+	ctx context.Context,
+	scope agentScope,
+	session *codexSession,
+	preferences codexPreferences,
+) error {
+	session.preferenceMu.Lock()
+	defer session.preferenceMu.Unlock()
+	return s.persistCodexPreferencesLocked(ctx, scope, session, preferences)
+}
+
+func (s *Server) persistCodexPreferencesLocked(
+	ctx context.Context,
+	scope agentScope,
+	session *codexSession,
+	preferences codexPreferences,
+) error {
+	if err := s.storeCodexPreferences(ctx, scope, session.profile, preferences); err != nil {
+		return err
+	}
+	session.mu.Lock()
+	session.model = preferences.Model
+	session.effort = preferences.Effort
+	session.mu.Unlock()
+	session.preferenceRevision++
+	session.publishState()
+	return nil
+}
+
+func (s *Server) applyStoredCodexPreferences(session *codexSession) {
+	ctx, cancel := context.WithTimeout(context.Background(), codexPreferenceWriteTimeout)
+	defer cancel()
+	preferences, err := s.loadCodexPreferences(ctx, session.scope, session.profile)
+	if err != nil {
+		if s.debugWriter != nil {
+			_, _ = fmt.Fprintf(s.debugWriter, "Codex preferences: %v\n", err)
+		}
+		return
+	}
+	session.mu.Lock()
+	session.model = preferences.Model
+	session.effort = preferences.Effort
+	session.mu.Unlock()
+}
+
+func fetchCodexModelList(ctx context.Context, session *codexSession) (codexModelListResponse, error) {
+	result := codexModelListResponse{Data: []codexModelOption{}}
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for {
+		params := map[string]any{"limit": codexModelPageSize, "includeHidden": false}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		var page codexModelListResponse
+		if err := session.client.Call(ctx, "model/list", params, &page); err != nil {
+			return codexModelListResponse{}, errors.New("failed to list Codex models")
+		}
+		if len(result.Data)+len(page.Data) > maxCodexModels {
+			return codexModelListResponse{}, errors.New("Codex returned too many models")
+		}
+		result.Data = append(result.Data, page.Data...)
+		if page.NextCursor == nil {
+			break
+		}
+		next := strings.TrimSpace(*page.NextCursor)
+		if next == "" {
+			break
+		}
+		if len(next) > 512 || !utf8.ValidString(next) || strings.IndexFunc(next, unicode.IsControl) >= 0 {
+			return codexModelListResponse{}, errors.New("Codex returned an invalid model cursor")
+		}
+		if _, duplicate := seenCursors[next]; duplicate {
+			return codexModelListResponse{}, errors.New("Codex returned a repeated model cursor")
+		}
+		seenCursors[next] = struct{}{}
+		cursor = next
+	}
+	if err := validateCodexModelList(result); err != nil {
+		return codexModelListResponse{}, err
+	}
+	return result, nil
+}
+
+func cloneCodexModelList(source codexModelListResponse) codexModelListResponse {
+	result := codexModelListResponse{Data: make([]codexModelOption, len(source.Data))}
+	for index, model := range source.Data {
+		model.SupportedReasoningEfforts = slices.Clone(model.SupportedReasoningEfforts)
+		result.Data[index] = model
+	}
+	return result
+}
+
+func cachedCodexModelList(ctx context.Context, session *codexSession) (codexModelListResponse, error) {
+	session.modelCatalogMu.Lock()
+	if !session.modelCatalogAt.IsZero() && time.Since(session.modelCatalogAt) < codexModelCatalogTTL {
+		result := cloneCodexModelList(session.modelCatalog)
+		session.modelCatalogMu.Unlock()
+		return result, nil
+	}
+	if flight := session.modelCatalogFlight; flight != nil {
+		session.modelCatalogMu.Unlock()
+		select {
+		case <-flight.done:
+			return cloneCodexModelList(flight.result), flight.err
+		case <-ctx.Done():
+			return codexModelListResponse{}, ctx.Err()
+		}
+	}
+	flight := &codexModelCatalogFlight{done: make(chan struct{})}
+	session.modelCatalogFlight = flight
+	session.modelCatalogMu.Unlock()
+	var result codexModelListResponse
+	var err error
+	select {
+	case codexModelRequestSlots <- struct{}{}:
+		func() {
+			defer func() { <-codexModelRequestSlots }()
+			fetchContext, cancelFetch := context.WithTimeout(context.Background(), codexModelListTimeout)
+			defer cancelFetch()
+			result, err = fetchCodexModelList(fetchContext, session)
+		}()
+	default:
+		err = errCodexModelDiscoveryBusy
+	}
+	session.modelCatalogMu.Lock()
+	if err == nil {
+		session.modelCatalog = cloneCodexModelList(result)
+		session.modelCatalogAt = time.Now()
+	}
+	flight.result = cloneCodexModelList(result)
+	flight.err = err
+	session.modelCatalogFlight = nil
+	close(flight.done)
+	session.modelCatalogMu.Unlock()
+	return result, err
+}
+
+func validateCodexSelection(catalog codexModelListResponse, model, effort string) error {
+	for _, option := range catalog.Data {
+		if option.Model != model {
+			continue
+		}
+		if effort == "" || slices.ContainsFunc(
+			option.SupportedReasoningEfforts,
+			func(candidate codexReasoningEffort) bool { return candidate.ReasoningEffort == effort },
+		) {
+			return nil
+		}
+		break
+	}
+	return errors.New("Codex selection is not available")
+}
+
+func (s *Server) listCodexModels(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
+	if !projectIDPattern.MatchString(sessionID) {
+		http.Error(w, "invalid Codex session id", http.StatusBadRequest)
+		return
+	}
+	session, ok := s.findCodexForScope(requestAgentScope(r), sessionID)
+	if !ok {
+		http.Error(w, "codex session not found", http.StatusNotFound)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), codexModelListTimeout)
+	defer cancel()
+	result, err := cachedCodexModelList(ctx, session)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, errCodexModelDiscoveryBusy) {
+			status = http.StatusTooManyRequests
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) updateCodexPreferences(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCodexBody)
+	var req struct {
+		SessionID string `json:"sessionId"`
+		Model     string `json:"model"`
+		Effort    string `json:"effort"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || ensureJSONEOF(dec) != nil {
+		http.Error(w, "invalid Codex preference request", http.StatusBadRequest)
+		return
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	req.Model = strings.TrimSpace(req.Model)
+	req.Effort = strings.TrimSpace(req.Effort)
+	if !projectIDPattern.MatchString(req.SessionID) || !validCodexPickerValue(req.Model) ||
+		(req.Effort != "" && !validCodexPickerValue(req.Effort)) {
+		http.Error(w, "invalid Codex preferences", http.StatusBadRequest)
+		return
+	}
+	scope := requestAgentScope(r)
+	session, ok := s.findCodexForScope(scope, req.SessionID)
+	if !ok {
+		http.Error(w, "codex session not found", http.StatusNotFound)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), codexModelListTimeout)
+	defer cancel()
+	catalog, err := cachedCodexModelList(ctx, session)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, errCodexModelDiscoveryBusy) {
+			status = http.StatusTooManyRequests
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	if validateCodexSelection(catalog, req.Model, req.Effort) != nil {
+		http.Error(w, "Codex preference is not available", http.StatusBadRequest)
+		return
+	}
+	preferences := codexPreferences{Version: 1, Model: req.Model, Effort: req.Effort}
+	preferenceContext, cancelPreference := context.WithTimeout(context.Background(), codexPreferenceWriteTimeout)
+	defer cancelPreference()
+	if err := s.persistCodexPreferences(preferenceContext, scope, session, preferences); err != nil {
+		http.Error(w, "failed to persist Codex preferences", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (s *codexSession) stateEventLocked() codexEvent {
@@ -709,6 +1082,8 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		ClientID        string   `json:"clientId"`
 		ClientMessageID string   `json:"clientMessageId"`
 		PermissionMode  string   `json:"permissionMode"`
+		Model           string   `json:"model"`
+		Effort          string   `json:"effort"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -719,6 +1094,20 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 	permissionParams, err := codexTurnPermissionParams(req.PermissionMode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Model = strings.TrimSpace(req.Model)
+	req.Effort = strings.TrimSpace(req.Effort)
+	if req.Model != "" && !validCodexPickerValue(req.Model) {
+		http.Error(w, "invalid Codex model", http.StatusBadRequest)
+		return
+	}
+	if req.Effort != "" && !validCodexPickerValue(req.Effort) {
+		http.Error(w, "invalid Codex reasoning effort", http.StatusBadRequest)
+		return
+	}
+	if req.Effort != "" && req.Model == "" {
+		http.Error(w, "Codex reasoning effort requires a model", http.StatusBadRequest)
 		return
 	}
 	clientMessageID := strings.TrimSpace(req.ClientMessageID)
@@ -732,13 +1121,16 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return
 	}
+	session.preferenceMu.Lock()
 	session.mu.Lock()
 	sessionClosed := session.closed
 	turnRunning := session.turnID != "" || session.turnStarting
 	if !turnRunning && !sessionClosed {
 		session.turnStarting = true
 	}
+	preferenceRevision := session.preferenceRevision
 	session.mu.Unlock()
+	session.preferenceMu.Unlock()
 	if sessionClosed {
 		http.Error(w, "codex session not found", http.StatusNotFound)
 		return
@@ -746,6 +1138,25 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 	if turnRunning {
 		http.Error(w, "codex turn is already running", http.StatusConflict)
 		return
+	}
+	if req.Model != "" {
+		catalogContext, cancelCatalog := context.WithTimeout(r.Context(), codexModelListTimeout)
+		catalog, catalogErr := cachedCodexModelList(catalogContext, session)
+		cancelCatalog()
+		if catalogErr != nil {
+			status := http.StatusBadGateway
+			if errors.Is(catalogErr, errCodexModelDiscoveryBusy) {
+				status = http.StatusTooManyRequests
+			}
+			session.cancelTurnStart()
+			http.Error(w, catalogErr.Error(), status)
+			return
+		}
+		if validateCodexSelection(catalog, req.Model, req.Effort) != nil {
+			session.cancelTurnStart()
+			http.Error(w, "Codex selection is not available", http.StatusBadRequest)
+			return
+		}
 	}
 	if !s.codex.claimTurn(scope, session.id) {
 		session.cancelTurnStart()
@@ -792,6 +1203,12 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		"approvalPolicy": permissionParams["approvalPolicy"],
 		"sandboxPolicy":  permissionParams["sandboxPolicy"],
 	}
+	if req.Model != "" {
+		params["model"] = req.Model
+	}
+	if req.Effort != "" {
+		params["effort"] = req.Effort
+	}
 	messageID := clientMessageID
 	if messageID == "" {
 		messageID = randomID("message")
@@ -809,7 +1226,10 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 	cancelTurnStart()
 	if err != nil {
 		s.discardCodexSession(session)
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		if s.debugWriter != nil {
+			_, _ = fmt.Fprintf(s.debugWriter, "Codex turn/start failed: %v\n", err)
+		}
+		http.Error(w, "Codex turn failed to start", http.StatusBadGateway)
 		return
 	}
 	if !session.activateTurn(turn) {
@@ -817,7 +1237,29 @@ func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Codex turn/start returned an invalid turn id", http.StatusBadGateway)
 		return
 	}
-	session.publishState()
+	if req.Model != "" {
+		preferences := codexPreferences{Version: 1, Model: req.Model, Effort: req.Effort}
+		preferenceContext, cancelPreference := context.WithTimeout(context.Background(), codexPreferenceWriteTimeout)
+		session.preferenceMu.Lock()
+		var preferenceErr error
+		preferenceSaved := false
+		if session.preferenceRevision == preferenceRevision {
+			preferenceErr = s.persistCodexPreferencesLocked(preferenceContext, scope, session, preferences)
+			preferenceSaved = preferenceErr == nil
+		}
+		session.preferenceMu.Unlock()
+		cancelPreference()
+		if preferenceErr != nil {
+			if s.debugWriter != nil {
+				_, _ = fmt.Fprintf(s.debugWriter, "Codex preference persistence failed: %v\n", preferenceErr)
+			}
+		}
+		if !preferenceSaved {
+			session.publishState()
+		}
+	} else {
+		session.publishState()
+	}
 	writeJSON(w, map[string]any{"ok": true})
 }
 

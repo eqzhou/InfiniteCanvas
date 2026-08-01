@@ -81,6 +81,21 @@ export type CodexSession = {
   reused?: boolean;
   running?: boolean;
   runtimeClientId?: string;
+  model?: string;
+  effort?: string;
+};
+export type CodexReasoningEffort = {
+  reasoningEffort: string;
+  description: string;
+};
+export type CodexModel = {
+  id: string;
+  model: string;
+  displayName: string;
+  description: string;
+  defaultReasoningEffort: string;
+  supportedReasoningEfforts: CodexReasoningEffort[];
+  isDefault: boolean;
 };
 export type CodexAttachment = {
   id: string;
@@ -102,6 +117,8 @@ export type SendCodexMessageOptions = {
   clientId?: string;
   clientMessageId?: string;
   permissionMode?: CodexPermissionMode;
+  model?: string;
+  effort?: string;
 };
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -271,6 +288,107 @@ export async function getCodexSession(
   return value as CodexSession;
 }
 
+function validateCodexPickerValue(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value || value.length > 128 || value.trim() !== value ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+    throw new Error(`Agent returned an invalid Codex ${label}`);
+  }
+  return value;
+}
+
+export async function listCodexModels(
+  connection: AgentConnection,
+  sessionId: string,
+  fetcher: Fetcher = fetch,
+): Promise<CodexModel[]> {
+  if (!CODEX_ID_PATTERN.test(sessionId)) throw new Error("Codex session is invalid");
+  const response = await agentFetch(
+    connection,
+    `api/codex/models?sessionId=${encodeURIComponent(sessionId)}`,
+    { method: "GET" },
+    fetcher,
+  );
+  if (!response.ok) throw new Error(`Codex model list failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 512 * 1024);
+  const data = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as { data?: unknown }).data
+    : undefined;
+  if (!Array.isArray(data) || data.length > 200) {
+    throw new Error("Agent returned an invalid Codex model list");
+  }
+  const seenIds = new Set<string>();
+  const seenModels = new Set<string>();
+  return data.map((raw): CodexModel => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error("Agent returned an invalid Codex model");
+    }
+    const item = raw as Partial<CodexModel>;
+    const id = validateCodexPickerValue(item.id, "model id");
+    const model = validateCodexPickerValue(item.model, "model name");
+    if (seenIds.has(id) || seenModels.has(model)) {
+      throw new Error("Agent returned duplicate Codex models");
+    }
+    seenIds.add(id);
+    seenModels.add(model);
+    if (typeof item.displayName !== "string" || !item.displayName.trim() || item.displayName.length > 160 ||
+        typeof item.description !== "string" || item.description.length > 2_000 ||
+        typeof item.isDefault !== "boolean" || !Array.isArray(item.supportedReasoningEfforts) ||
+        item.supportedReasoningEfforts.length > 32) {
+      throw new Error("Agent returned an invalid Codex model");
+    }
+    const seenEfforts = new Set<string>();
+    const efforts = item.supportedReasoningEfforts.map((option) => {
+      if (!option || typeof option !== "object" || Array.isArray(option) ||
+          typeof option.description !== "string" || option.description.length > 500) {
+        throw new Error("Agent returned an invalid Codex reasoning effort");
+      }
+      const reasoningEffort = validateCodexPickerValue(option.reasoningEffort, "reasoning effort");
+      if (seenEfforts.has(reasoningEffort)) {
+        throw new Error("Agent returned duplicate Codex reasoning efforts");
+      }
+      seenEfforts.add(reasoningEffort);
+      return {
+        reasoningEffort,
+        description: option.description,
+      };
+    });
+    const defaultReasoningEffort = validateCodexPickerValue(
+      item.defaultReasoningEffort,
+      "default reasoning effort",
+    );
+    if (efforts.length && !efforts.some((option) => option.reasoningEffort === defaultReasoningEffort)) {
+      throw new Error("Agent returned an unavailable default Codex reasoning effort");
+    }
+    return {
+      id,
+      model,
+      displayName: item.displayName.trim(),
+      description: item.description,
+      defaultReasoningEffort,
+      supportedReasoningEfforts: efforts,
+      isDefault: item.isDefault,
+    };
+  });
+}
+
+export async function updateCodexPreferences(
+  connection: AgentConnection,
+  sessionId: string,
+  model: string,
+  effort: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  if (!CODEX_ID_PATTERN.test(sessionId)) throw new Error("Codex session is invalid");
+  validateCodexPickerValue(model, "model selection");
+  if (effort) validateCodexPickerValue(effort, "reasoning effort");
+  const response = await agentFetch(connection, "api/codex/preferences", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, model, effort }),
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex preference save failed: HTTP ${response.status}`);
+}
+
 export async function listCodexHistory(
   connection: AgentConnection,
   profile = "default",
@@ -391,7 +509,11 @@ export async function sendCodexMessage(
     clientId = "",
     clientMessageId = "",
     permissionMode = "workspace-auto",
+    model = "",
+    effort = "",
   } = options;
+  if (model) validateCodexPickerValue(model, "model selection");
+  if (effort) validateCodexPickerValue(effort, "reasoning effort");
   const response = await agentFetch(connection, "api/codex/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -402,6 +524,8 @@ export async function sendCodexMessage(
       ...(clientId ? { clientId } : {}),
       ...(clientMessageId ? { clientMessageId } : {}),
       permissionMode,
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
     }),
   }, fetcher);
   if (!response.ok) throw new Error(`Codex message failed: HTTP ${response.status}`);

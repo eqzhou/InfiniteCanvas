@@ -111,7 +111,8 @@ canvas.
 - Canvas prompt library cross-source search and title-preserving insert
 
 The current evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md),
-and the latest Tiger review is [`docs/TIGER_GAP_PLAN_4.md`](docs/TIGER_GAP_PLAN_4.md).
+the latest dual-upstream review is [`docs/UPSTREAM_GAP_PLAN_5.md`](docs/UPSTREAM_GAP_PLAN_5.md),
+and the latest Tiger-specific review is [`docs/TIGER_GAP_PLAN_4.md`](docs/TIGER_GAP_PLAN_4.md).
 `TIGER_GAP_PLAN.md`, `_2`, and `_3` are retained only as historical audit records.
 
 ## Verification

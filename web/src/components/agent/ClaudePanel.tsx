@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Plus, Send, Square, Unplug } from "lucide-react";
+import { Plus, Send, Square, Unplug } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -14,6 +14,8 @@ import {
   type ClaudeSession,
 } from "@/services/local-agent";
 import { getRuntimeClientId } from "@/services/runtime-identity";
+import { AgentDiagnosticLog } from "@/components/agent/AgentDiagnosticLog";
+import { AgentJumpToLatest } from "@/components/agent/AgentJumpToLatest";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = "idle" | "running" | "completed" | "failed";
@@ -329,27 +331,10 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               )}
             </div>
             {showJumpBottom ? (
-              <button
-                type="button"
-                title="回到底部"
-                className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full border border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-1 text-[10px] shadow-[var(--ob-elev-1)]"
-                onClick={() => scrollTranscriptToBottom("smooth")}
-              >
-                <ArrowDown size={12} />
-                回到底部
-              </button>
+              <AgentJumpToLatest onClick={() => scrollTranscriptToBottom("smooth")} />
             ) : null}
           </div>
-          {logs.length ? (
-            <details className="mb-2 rounded-lg border border-[var(--ob-line)] px-2.5 py-1.5">
-              <summary className="cursor-pointer text-[11px] font-medium">运行日志 · {logs.length}</summary>
-              <ol className="mt-1 max-h-24 list-decimal overflow-auto pl-4 text-[10px] text-[var(--ob-muted)]">
-                {logs.map((log, index) => (
-                  <li key={`${index}-${log}`}>{log}</li>
-                ))}
-              </ol>
-            </details>
-          ) : null}
+          <AgentDiagnosticLog logs={logs} title="运行日志" />
           {error ? (
             <p className="mb-2 rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-1.5 text-[11px] text-[var(--ob-danger)]">
               {error}

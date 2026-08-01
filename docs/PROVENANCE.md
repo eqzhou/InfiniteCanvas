@@ -26,6 +26,7 @@ working-tree action was clean-room compliant.
 | Director visual cast catalog | Original SVG projection of this repository's independently authored procedural character and pose definitions | Distinct/bounded preview-model tests plus keyboard selection, persistence, and reload E2E |
 | Director screenshot synchronization | Original tenant resource contract built on this repository's protected blob and CAS-state boundaries, informed only by Tiger's public director/cloud-sync behavior names | PNG validation, isolation, quota compensation and prune API tests plus independent-browser formal E2E |
 | Codex panel and OpenBoard Codex plugin | Original local integration over public app-server/MCP concepts | Fake app-server tests, Markdown/attachment/interrupt/approval E2E, owner-only connection-file tests |
+| Codex model controls and Agent diagnostics | Original bounded adapter and shared React components based on the official Codex App Server protocol plus public Basket release/CHANGELOG behavior names | Fake app-server catalog/turn tests, Bun normalization/diagnostic tests, typecheck, and Agent E2E assertions |
 
 ## Reference behavior
 

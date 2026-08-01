@@ -13,6 +13,7 @@ import {
   resolveAgentBaseUrl,
   respondCodexApproval,
   listCodexHistory,
+  listCodexModels,
   deleteCodexHistory,
   bulkDeleteCodexHistory,
   restoreCodexHistory,
@@ -20,6 +21,7 @@ import {
   sendCodexMessage,
   subscribeCodexEvents,
   uploadCodexAttachments,
+  updateCodexPreferences,
 } from "./local-agent";
 import { clearSessionToken, setSessionToken } from "./auth-session";
 
@@ -193,6 +195,22 @@ describe("local agent connection", () => {
           attachments: [{ id: "image-1", name: "pixel.png", mimeType: "image/png", bytes: 5 }],
         }), { headers: { "content-type": "application/json" } });
       }
+      if (String(input).endsWith("/api/codex/models?sessionId=session-1")) {
+        return new Response(JSON.stringify({
+          data: [{
+            id: "gpt-5.6-terra",
+            model: "gpt-5.6-terra",
+            displayName: "GPT-5.6-Terra",
+            description: "Fast coding model",
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "Fast" },
+              { reasoningEffort: "medium", description: "Balanced" },
+            ],
+            isDefault: true,
+          }],
+        }), { headers: { "content-type": "application/json" } });
+      }
       return new Response(JSON.stringify({ ok: true }), {
         headers: { "content-type": "application/json" },
       });
@@ -200,6 +218,7 @@ describe("local agent connection", () => {
 	const connection = { baseUrl: "http://localhost:5173", token: "secret" };
     const session = await createCodexSession(connection, "/tmp/board", fetcher);
     const active = await getCodexSession(connection, "default", fetcher);
+    const models = await listCodexModels(connection, session.id, fetcher);
     const attachments = await uploadCodexAttachments(connection, session.id, [
       new File(["pixel"], "pixel.png", { type: "image/png" }),
     ], fetcher);
@@ -213,6 +232,8 @@ describe("local agent connection", () => {
         attachmentIds: attachments.map((item) => item.id),
         clientMessageId: "message-one",
         permissionMode: "read-only",
+        model: "gpt-5.6-terra",
+        effort: "medium",
       },
     );
     await interruptCodexTurn(connection, session.id, fetcher);
@@ -221,6 +242,7 @@ describe("local agent connection", () => {
     expect(requests.map((request) => request.url)).toEqual([
 	  "http://localhost:5173/api/codex/session",
 	  "http://localhost:5173/api/codex/session?profile=default",
+	  "http://localhost:5173/api/codex/models?sessionId=session-1",
 	  "http://localhost:5173/api/codex/attachments",
 	  "http://localhost:5173/api/codex/attachments/image-1?sessionId=session-1",
 	  "http://localhost:5173/api/codex/message",
@@ -229,16 +251,21 @@ describe("local agent connection", () => {
 	  "http://localhost:5173/api/codex/session/session-1",
     ]);
     expect(active?.threadId).toBe("thread-1");
+    expect(models[0]?.supportedReasoningEfforts.map((item) => item.reasoningEffort))
+      .toEqual(["low", "medium"]);
     expect(JSON.parse(String(requests[0].init?.body))).toEqual({ cwd: "/tmp/board" });
-    expect(JSON.parse(String(requests[4].init?.body))).toEqual({
+    expect(JSON.parse(String(requests[5].init?.body))).toEqual({
       sessionId: "session-1",
       text: "hello",
       attachmentIds: ["image-1"],
       clientMessageId: "message-one",
       permissionMode: "read-only",
+      model: "gpt-5.6-terra",
+      effort: "medium",
     });
-    expect(JSON.parse(String(requests[6].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
-	  expect(new Headers(requests[4].init?.headers).get("Authorization")).toBeNull();
+
+    expect(JSON.parse(String(requests[7].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
+	  expect(new Headers(requests[5].init?.headers).get("Authorization")).toBeNull();
 	  expect(requests.every((request) => new Headers(request.init?.headers).get("X-OpenBoard-Session") === "user-session-1")).toBe(true);
 	  let remoteHeaders = new Headers();
 	  const remoteConnectionCredential = ["remote", "agent", "credential"].join("-");
@@ -257,6 +284,69 @@ describe("local agent connection", () => {
 	  if (priorLocation) Object.defineProperty(globalThis, "location", priorLocation);
 	  else delete (globalThis as { location?: Location }).location;
 	}
+  });
+
+  test("rejects an unbounded or internally inconsistent Codex model catalog", async () => {
+    const connection = { baseUrl: "http://localhost:5173" };
+    const duplicate = {
+      id: "gpt-5.6-terra",
+      model: "gpt-5.6-terra",
+      displayName: "GPT-5.6-Terra",
+      description: "Balanced",
+      defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
+      isDefault: true,
+    };
+    await expect(listCodexModels(connection, "session-one", async () => new Response(JSON.stringify({
+      data: [duplicate, duplicate],
+    }), { headers: { "content-type": "application/json" } }))).rejects.toThrow("duplicate");
+    await expect(listCodexModels(connection, "session-one", async () => new Response(JSON.stringify({
+      data: [{ ...duplicate, defaultReasoningEffort: "xhigh" }],
+    }), { headers: { "content-type": "application/json" } }))).rejects.toThrow("unavailable default");
+    await expect(listCodexModels(connection, "session-one", async () => new Response(JSON.stringify({
+      data: [duplicate, { ...duplicate, id: "gpt-5.6-terra-alias" }],
+    }), { headers: { "content-type": "application/json" } }))).rejects.toThrow("duplicate");
+    await expect(listCodexModels(connection, "session-one", async () => new Response(JSON.stringify({
+      data: [{
+        ...duplicate,
+        supportedReasoningEfforts: [
+          { reasoningEffort: "medium", description: "Balanced" },
+          { reasoningEffort: "medium", description: "Duplicate" },
+        ],
+      }],
+    }), { headers: { "content-type": "application/json" } }))).rejects.toThrow("duplicate");
+    const custom = await listCodexModels(connection, "session-one", async () => new Response(JSON.stringify({
+      data: [{ ...duplicate, id: "provider/model+preview", model: "provider/model+preview" }],
+    }), { headers: { "content-type": "application/json" } }));
+    expect(custom[0]?.model).toBe("provider/model+preview");
+  });
+
+  test("persists a bounded Codex selection through the agent scope", async () => {
+    let payload: unknown;
+    await updateCodexPreferences(
+      { baseUrl: "http://localhost:5173" },
+      "session-one",
+      "provider/model+preview",
+      "xhigh",
+      async (_input, init) => {
+        payload = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+    expect(payload).toEqual({
+      sessionId: "session-one",
+      model: "provider/model+preview",
+      effort: "xhigh",
+    });
+    await expect(updateCodexPreferences(
+      { baseUrl: "http://localhost:5173" },
+      "session-one",
+      "bad\nmodel",
+      "xhigh",
+      async () => new Response(),
+    )).rejects.toThrow("model selection");
   });
 
   test("reconnects sequenced Codex streams and suppresses replay duplicates", async () => {
