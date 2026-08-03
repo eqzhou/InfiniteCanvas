@@ -179,6 +179,7 @@ type imageGenerationRequest struct {
 	// ReferenceStorageKeys is kept separately from References so audit logs can
 	// identify the source images without ever persisting their binary contents.
 	ReferenceStorageKeys []string
+	Source               *imageGenerationSource
 	Template             *imageProviderTemplate
 	ProviderTimeout      time.Duration
 }
@@ -213,12 +214,21 @@ type createImageJobRequest struct {
 }
 
 type createImageJobParameters struct {
-	Size                  string   `json:"size"`
-	Quality               string   `json:"quality,omitempty"`
-	Count                 int      `json:"count"`
-	Category              string   `json:"category,omitempty"`
-	TransparentBackground bool     `json:"transparentBackground,omitempty"`
-	ReferenceStorageKeys  []string `json:"referenceStorageKeys,omitempty"`
+	Size                  string                 `json:"size"`
+	Quality               string                 `json:"quality,omitempty"`
+	Count                 int                    `json:"count"`
+	Category              string                 `json:"category,omitempty"`
+	TransparentBackground bool                   `json:"transparentBackground,omitempty"`
+	ReferenceStorageKeys  []string               `json:"referenceStorageKeys,omitempty"`
+	Source                *imageGenerationSource `json:"source,omitempty"`
+}
+
+type imageGenerationSource struct {
+	Kind           string `json:"kind"`
+	DirectorNodeID string `json:"directorNodeId"`
+	CaptureID      string `json:"captureId"`
+	CameraID       string `json:"cameraId"`
+	ConfigNodeID   string `json:"configNodeId"`
 }
 
 type persistedImageJobParameters struct {
@@ -230,6 +240,7 @@ type persistedImageJobParameters struct {
 	Category              string                     `json:"category,omitempty"`
 	TransparentBackground bool                       `json:"transparentBackground,omitempty"`
 	ReferenceStorageKeys  []string                   `json:"referenceStorageKeys,omitempty"`
+	Source                *imageGenerationSource     `json:"source,omitempty"`
 	WorkflowRunID         string                     `json:"workflowRunId,omitempty"`
 	WorkflowStepID        string                     `json:"workflowStepId,omitempty"`
 	SharedChannel         *generationChannelSnapshot `json:"sharedChannel,omitempty"`
@@ -306,6 +317,10 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid image generation job", http.StatusBadRequest)
 		return
 	}
+	if input.Parameters.Source != nil && !s.validDirectorImageSource(r, input) {
+		http.Error(w, "invalid director image source", http.StatusBadRequest)
+		return
+	}
 	// The tenant model allow list is a governance rule, so it must hold here
 	// and not only in the picker the client renders.
 	if !s.requireAllowedModel(w, r, input.Model) {
@@ -351,6 +366,7 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		Category:              input.Parameters.Category,
 		TransparentBackground: input.Parameters.TransparentBackground,
 		ReferenceStorageKeys:  append([]string(nil), input.Parameters.ReferenceStorageKeys...),
+		Source:                input.Parameters.Source,
 		SharedChannel:         sharedSnapshot,
 	})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -405,6 +421,125 @@ func validCreateImageJob(input createImageJobRequest) bool {
 	}
 	for _, key := range input.Parameters.ReferenceStorageKeys {
 		if _, ok := blobFilename(key); !ok {
+			return false
+		}
+	}
+	if input.Parameters.Source != nil {
+		source := input.Parameters.Source
+		if input.ProjectID == "" || source.Kind != "director" || !boardIDPattern.MatchString(source.DirectorNodeID) ||
+			!projectIDPattern.MatchString(source.CaptureID) || !boardIDPattern.MatchString(source.CameraID) ||
+			!boardIDPattern.MatchString(source.ConfigNodeID) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) validDirectorImageSource(r *http.Request, input createImageJobRequest) bool {
+	source := input.Parameters.Source
+	if source == nil {
+		return true
+	}
+	_, captures, err := s.readDirectorCaptureDocument(r)
+	if err != nil {
+		return false
+	}
+	for _, capture := range captures.Items {
+		if capture.ID != source.CaptureID {
+			continue
+		}
+		if capture.ProjectID != input.ProjectID || capture.DirectorNodeID != source.DirectorNodeID ||
+			capture.CameraID != source.CameraID || len(capture.Shot) == 0 {
+			return false
+		}
+		break
+	}
+	rawProject, err := s.store.GetProject(r.Context(), tenantIDFrom(r), input.ProjectID)
+	if err != nil {
+		return false
+	}
+	var project struct {
+		Nodes []struct {
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Metadata struct {
+				StorageKey           string   `json:"storageKey"`
+				ReferenceStorageKeys []string `json:"referenceStorageKeys"`
+				DirectorShot         *struct {
+					Role           string               `json:"role"`
+					DirectorNodeID string               `json:"directorNodeId"`
+					CaptureID      string               `json:"captureId"`
+					Snapshot       directorShotSnapshot `json:"snapshot"`
+				} `json:"directorShot"`
+			} `json:"metadata"`
+		} `json:"nodes"`
+		Edges []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"edges"`
+	}
+	if json.Unmarshal(rawProject, &project) != nil {
+		return false
+	}
+	foundDirector, foundConfig, foundDurableCapture := false, false, false
+	durableCaptureNodeID := ""
+	for _, node := range project.Nodes {
+		if node.ID == source.DirectorNodeID && node.Type == "director" {
+			foundDirector = true
+		}
+		if node.ID == source.ConfigNodeID && node.Type == "config" && node.Metadata.DirectorShot != nil {
+			shot := node.Metadata.DirectorShot
+			foundConfig = shot.Role == "config" && shot.DirectorNodeID == source.DirectorNodeID &&
+				shot.CaptureID == source.CaptureID && shot.Snapshot.DirectorNodeID == source.DirectorNodeID &&
+				shot.Snapshot.Camera.ID == source.CameraID && len(node.Metadata.ReferenceStorageKeys) > 0 &&
+				sameStringSlice(node.Metadata.ReferenceStorageKeys, input.Parameters.ReferenceStorageKeys)
+		}
+		if node.Type == "image" && node.Metadata.DirectorShot != nil {
+			shot := node.Metadata.DirectorShot
+			if shot.Role == "capture" && shot.DirectorNodeID == source.DirectorNodeID && shot.CaptureID == source.CaptureID &&
+				shot.Snapshot.DirectorNodeID == source.DirectorNodeID && shot.Snapshot.Camera.ID == source.CameraID &&
+				stringSliceContains(input.Parameters.ReferenceStorageKeys, node.Metadata.StorageKey) {
+				foundDurableCapture = true
+				durableCaptureNodeID = node.ID
+			}
+		}
+	}
+	if !foundDirector || !foundConfig {
+		return false
+	}
+	if !foundDurableCapture {
+		// The editable config and tenant-owned reference remain valid if the
+		// user deliberately removed the visual capture node from the canvas.
+		return true
+	}
+	foundDirectorEdge, foundConfigEdge := false, false
+	for _, edge := range project.Edges {
+		foundDirectorEdge = foundDirectorEdge || edge.From == source.DirectorNodeID && edge.To == durableCaptureNodeID
+		foundConfigEdge = foundConfigEdge || edge.From == durableCaptureNodeID && edge.To == source.ConfigNodeID
+	}
+	// A tray record may be deleted after the durable copy has been committed.
+	// In that case the persisted project chain remains the provenance authority.
+	return foundDirectorEdge && foundConfigEdge
+}
+
+func stringSliceContains(values []string, target string) bool {
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sameStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
 			return false
 		}
 	}
@@ -831,6 +966,7 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 		Size:      parameters.Size, Quality: parameters.Quality, Count: parameters.Count,
 		TransparentBackground: parameters.TransparentBackground, References: references,
 		ReferenceStorageKeys: append([]string(nil), parameters.ReferenceStorageKeys...), Template: provider.Template,
+		Source:          parameters.Source,
 		ProviderTimeout: providerTimeout,
 	}, nil
 }

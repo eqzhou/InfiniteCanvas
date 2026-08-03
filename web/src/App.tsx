@@ -1,4 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import { Navigate, Route, Routes } from "react-router";
 import { useBoardStore } from "@/stores/use-board-store";
 import { TopNav } from "@/components/layout/TopNav";
@@ -8,24 +17,36 @@ import { LocalAgentPanel } from "@/components/agent/LocalAgentPanel";
 import { BrowserRuntime } from "@/components/agent/BrowserRuntime";
 import { PromptSourceScheduler } from "@/components/prompts/PromptSourceScheduler";
 import { HomePage } from "@/pages/HomePage";
-import { AssetsPage } from "@/pages/AssetsPage";
-import { ServerLibraryPage } from "@/pages/ServerLibraryPage";
-import { AICallLogsPage } from "@/pages/AICallLogsPage";
-import { PromptsPage } from "@/pages/PromptsPage";
-import { PluginsPage } from "@/pages/PluginsPage";
-import { ImageWorkbenchPage } from "@/pages/ImageWorkbenchPage";
-import { VideoWorkbenchPage } from "@/pages/VideoWorkbenchPage";
-import { AdminPage } from "@/pages/AdminPage";
-import { HelpPage } from "@/pages/HelpPage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
 import { initAnalytics } from "@/lib/analytics";
 import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
 import { AuthGate } from "@/components/auth/AuthGate";
 
-const WorkflowWorkbenchPage = lazy(async () => {
-  const module = await import("@/pages/WorkflowWorkbenchPage");
-  return { default: module.WorkflowWorkbenchPage };
-});
+// Landing route (HomePage) stays eager so the most common entry avoids a
+// Suspense flash. Every other route is code-split out of the initial bundle.
+function lazyNamed<M extends Record<string, unknown>, K extends keyof M>(
+  loader: () => Promise<M>,
+  name: K,
+) {
+  return lazy(async () => {
+    const module = await loader();
+    return { default: module[name] as ComponentType };
+  });
+}
+
+const AssetsPage = lazyNamed(() => import("@/pages/AssetsPage"), "AssetsPage");
+const ServerLibraryPage = lazyNamed(() => import("@/pages/ServerLibraryPage"), "ServerLibraryPage");
+const AICallLogsPage = lazyNamed(() => import("@/pages/AICallLogsPage"), "AICallLogsPage");
+const PromptsPage = lazyNamed(() => import("@/pages/PromptsPage"), "PromptsPage");
+const PluginsPage = lazyNamed(() => import("@/pages/PluginsPage"), "PluginsPage");
+const ImageWorkbenchPage = lazyNamed(() => import("@/pages/ImageWorkbenchPage"), "ImageWorkbenchPage");
+const VideoWorkbenchPage = lazyNamed(() => import("@/pages/VideoWorkbenchPage"), "VideoWorkbenchPage");
+const AdminPage = lazyNamed(() => import("@/pages/AdminPage"), "AdminPage");
+const HelpPage = lazyNamed(() => import("@/pages/HelpPage"), "HelpPage");
+const WorkflowWorkbenchPage = lazyNamed(
+  () => import("@/pages/WorkflowWorkbenchPage"),
+  "WorkflowWorkbenchPage",
+);
 
 export function App() {
   const hydrate = useBoardStore((s) => s.hydrate);
@@ -157,24 +178,22 @@ export function App() {
         ) : null}
         <div className="flex min-h-0 flex-1">
           <main className="min-h-0 min-w-0 flex-1">
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/assets" element={<AssetsPage />} />
-              <Route path="/library" element={<ServerLibraryPage />} />
-              <Route path="/ai-logs" element={<AICallLogsPage />} />
-              <Route path="/prompts" element={<PromptsPage />} />
-              <Route path="/plugins" element={<PluginsPage />} />
-              <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
-              <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
-              <Route path="/admin" element={<AdminPage />} />
-              <Route path="/help" element={<HelpPage />} />
-              <Route path="/workbench/workflows" element={(
-                <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载工作流…</div>}>
-                  <WorkflowWorkbenchPage />
-                </Suspense>
-              )} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载…</div>}>
+              <Routes>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/assets" element={<AssetsPage />} />
+                <Route path="/library" element={<ServerLibraryPage />} />
+                <Route path="/ai-logs" element={<AICallLogsPage />} />
+                <Route path="/prompts" element={<PromptsPage />} />
+                <Route path="/plugins" element={<PluginsPage />} />
+                <Route path="/workbench/image" element={<ImageWorkbenchPage />} />
+                <Route path="/workbench/video" element={<VideoWorkbenchPage />} />
+                <Route path="/admin" element={<AdminPage />} />
+                <Route path="/help" element={<HelpPage />} />
+                <Route path="/workbench/workflows" element={<WorkflowWorkbenchPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
           </main>
           <LocalAgentPanel />
         </div>

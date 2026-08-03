@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { CheckSquare, Eye, ImagePlus, Trash2, X } from "lucide-react";
+import { CheckSquare, Eye, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
 
 import type { DirectorCaptureRecord } from "@/services/director-capture-store";
 
@@ -19,6 +19,7 @@ export function DirectorCaptureTray({
   onDeleteSelected,
   onClear,
   onSendSelected,
+  onGenerateSelected,
   onPreview,
 }: {
   captures: DirectorCaptureView[];
@@ -31,10 +32,14 @@ export function DirectorCaptureTray({
   onDeleteSelected: () => void;
   onClear: () => void;
   onSendSelected: () => void;
+  onGenerateSelected: () => void;
   onPreview: (id: string | null) => void;
 }) {
   const synchronized = true;
   const preview = captures.find((capture) => capture.record.id === previewId);
+  const selectedCapture = selectedIds.size === 1
+    ? captures.find((capture) => selectedIds.has(capture.record.id))
+    : undefined;
   const previewCloseRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!preview) return;
@@ -68,6 +73,17 @@ export function DirectorCaptureTray({
         <span className="mr-auto text-[11px] text-slate-400">{synchronized ? "同步截图" : "本机截图"} · {captures.length}</span>
         <button type="button" className="rounded bg-white/10 px-2 py-1.5 text-[11px] disabled:opacity-40" disabled={!captures.length || busy} onClick={onSelectAll}><CheckSquare size={12} className="mr-1 inline" />{selectedIds.size === captures.length ? "取消全选" : "全选"}</button>
         <button type="button" className="rounded bg-white/10 px-2 py-1.5 text-[11px] disabled:opacity-40" disabled={!selectedIds.size || busy} onClick={onSendSelected}><ImagePlus size={12} className="mr-1 inline" />发送到画布</button>
+        <button
+          type="button"
+          className="rounded bg-[#f0f269] px-2 py-1.5 text-[11px] font-semibold text-black disabled:opacity-40"
+          disabled={selectedIds.size !== 1 || !selectedCapture?.record.shot || busy}
+          title={selectedIds.size > 1
+            ? "正式生成会调用模型，请只选择一张截图"
+            : selectedCapture && !selectedCapture.record.shot
+              ? "旧截图缺少拍摄时机位信息，请重新拍摄"
+              : "创建可编辑配置并调用统一图片生成任务"}
+          onClick={onGenerateSelected}
+        ><Sparkles size={12} className="mr-1 inline" />生成正式镜头（会调用模型）</button>
         <button type="button" className="rounded bg-white/10 px-2 py-1.5 text-[11px] disabled:opacity-40" disabled={!selectedIds.size || busy} onClick={onDeleteSelected}><Trash2 size={12} className="mr-1 inline" />删除选中</button>
         <button type="button" className="rounded bg-white/10 px-2 py-1.5 text-[11px] disabled:opacity-40" disabled={!captures.length || busy} onClick={onClear}>清空全部</button>
       </div>

@@ -48,6 +48,17 @@ describe("Playwright agent server command", () => {
     expect(command).toContain("OPENBOARD_AUTH_MODE=off");
     expect(command).toContain("OPENBOARD_E2E_TENANT_TOKEN=e2e-tenant-token");
   });
+
+  test("loads local database credentials when the repository has a .env file", () => {
+    const command = createAgentServerCommand({
+      mode: "development",
+      agentPort: 8891,
+      origin: "http://127.0.0.1:5173",
+      dataDir: "/tmp/openboard-e2e-test",
+    });
+
+    expect(command).toContain("if [ -f ../.env ]; then set -a; . ../.env; set +a; fi;");
+  });
 });
 
 describe("Playwright web server command", () => {

@@ -12,6 +12,7 @@ import type {
 } from "@/types/board";
 import { validateJsonObject } from "@/lib/bounded-json";
 import { getDirectorPopulation, parseDirectorScene } from "@/lib/director-scene";
+import { parseDirectorShotSnapshot } from "@/lib/director-shot";
 import {
   validatePanoramaDimensions,
   validateProjectPanoramaBudget,
@@ -213,6 +214,27 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   const directorScene = input.directorScene === undefined
     ? undefined
     : parseDirectorScene(input.directorScene, `${path}.directorScene`);
+  let directorShot: NodeMetadata["directorShot"];
+  if (input.directorShot !== undefined) {
+    const shot = record(input.directorShot, `${path}.directorShot`);
+    if (shot.version !== 1 || (shot.role !== "capture" && shot.role !== "config")) {
+      throw new Error(`${path}.directorShot is invalid`);
+    }
+    const directorNodeId = id(shot.directorNodeId, `${path}.directorShot.directorNodeId`);
+    const captureId = id(shot.captureId, `${path}.directorShot.captureId`);
+    const capturedAt = string(shot.capturedAt, `${path}.directorShot.capturedAt`, 100);
+    if (!Number.isFinite(Date.parse(capturedAt))) throw new Error(`${path}.directorShot.capturedAt is invalid`);
+    const snapshot = parseDirectorShotSnapshot(shot.snapshot);
+    if (snapshot.directorNodeId !== directorNodeId) throw new Error(`${path}.directorShot snapshot is mismatched`);
+    directorShot = {
+      version: 1,
+      role: shot.role,
+      directorNodeId,
+      captureId,
+      capturedAt: new Date(capturedAt).toISOString(),
+      snapshot,
+    };
+  }
   const cameraPrompt = input.cameraPrompt === undefined
     ? undefined
     : normalizeCameraPrompt(input.cameraPrompt);
@@ -238,7 +260,7 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
         input.generationResultIndex < 0 || input.generationResultIndex > 7)) {
     throw new Error(`${path}.generationResultIndex is invalid`);
   }
-  return { ...input, directorScene, cameraPrompt } as NodeMetadata;
+  return { ...input, directorScene, directorShot, cameraPrompt } as NodeMetadata;
 }
 
 function parseNode(value: unknown, index: number): BoardNode {
@@ -258,6 +280,12 @@ function parseNode(value: unknown, index: number): BoardNode {
   }
   if (type === "director" && !metadata.directorScene) {
     throw new Error(`${path}.metadata.directorScene is required`);
+  }
+  if (metadata.directorShot?.role === "capture" && type !== "image") {
+    throw new Error(`${path}.metadata.directorShot capture must belong to an image node`);
+  }
+  if (metadata.directorShot?.role === "config" && type !== "config") {
+    throw new Error(`${path}.metadata.directorShot config must belong to a config node`);
   }
   if (type === "panorama" && (metadata.content || metadata.storageKey)) {
     validatePanoramaDimensions(metadata.naturalWidth ?? 0, metadata.naturalHeight ?? 0);
@@ -429,6 +457,68 @@ export function parseBoardProject(value: unknown): BoardProject {
   if (edgeIDs.size !== edges.length) throw new Error("duplicate edge id");
   const edgeEndpoints = new Set(edges.map((edge) => `${edge.from}\u0000${edge.to}`));
   if (edgeEndpoints.size !== edges.length) throw new Error("duplicate edge endpoints");
+  const hasEdge = (from: string, to: string) => edgeEndpoints.has(`${from}\u0000${to}`);
+  const directorCaptureByID = new Map<string, BoardNode>();
+  const directorCaptureKeyByID = new Map<string, string>();
+  for (const node of nodes) {
+    const shot = node.metadata.directorShot;
+    if (!shot) continue;
+    const director = nodeByID.get(shot.directorNodeId);
+    if (director?.type !== "director") throw new Error(`director shot ${node.id} references an invalid director`);
+    const key = `${shot.directorNodeId}\u0000${shot.captureId}`;
+    if (shot.role === "capture") {
+      if (!hasEdge(director.id, node.id)) {
+        throw new Error(`director capture ${node.id} has invalid lineage`);
+      }
+      directorCaptureByID.set(node.id, node);
+      directorCaptureKeyByID.set(node.id, key);
+    }
+  }
+  // Resolve capture -> config edges once. When malformed documents contain
+  // multiple capture inputs, retain the first capture in serialized node
+  // order, matching the old flatten().find behavior without rescanning all
+  // captures for every config node.
+  const nodeOrder = new Map(nodes.map((node, index) => [node.id, index]));
+  const connectedCaptureByConfigID = new Map<string, BoardNode>();
+  for (const edge of edges) {
+    const capture = directorCaptureByID.get(edge.from);
+    const config = nodeByID.get(edge.to);
+    if (!capture || config?.metadata.directorShot?.role !== "config") continue;
+    const current = connectedCaptureByConfigID.get(config.id);
+    if (!current || (nodeOrder.get(capture.id) ?? Number.MAX_SAFE_INTEGER) <
+        (nodeOrder.get(current.id) ?? Number.MAX_SAFE_INTEGER)) {
+      connectedCaptureByConfigID.set(config.id, capture);
+    }
+  }
+  const resultsByConfigID = new Map<string, BoardNode[]>();
+  for (const candidate of nodes) {
+    if (candidate.type !== "image" || !candidate.metadata.generationConfigId) continue;
+    const results = resultsByConfigID.get(candidate.metadata.generationConfigId) ?? [];
+    results.push(candidate);
+    resultsByConfigID.set(candidate.metadata.generationConfigId, results);
+  }
+  for (const node of nodes) {
+    const shot = node.metadata.directorShot;
+    if (shot?.role !== "config") continue;
+    const key = `${shot.directorNodeId}\u0000${shot.captureId}`;
+    const connectedCapture = connectedCaptureByConfigID.get(node.id);
+    const capture = connectedCapture && directorCaptureKeyByID.get(connectedCapture.id) === key
+      ? connectedCapture
+      : undefined;
+    const results = resultsByConfigID.get(node.id) ?? [];
+    if (results.some((result) => !hasEdge(node.id, result.id))) {
+      throw new Error(`director config ${node.id} has invalid lineage`);
+    }
+    // Users may deliberately delete the durable capture node and keep the
+    // editable config. If a capture edge remains, its provenance must match.
+    if (!connectedCapture) continue;
+    if (!capture ||
+        capture.metadata.storageKey === undefined ||
+        !node.metadata.referenceStorageKeys?.includes(capture.metadata.storageKey) ||
+        JSON.stringify(capture.metadata.directorShot?.snapshot) !== JSON.stringify(shot.snapshot)) {
+      throw new Error(`director config ${node.id} has invalid lineage`);
+    }
+  }
   const panoramaReferences = new Map<string, number>();
   for (const edge of edges) {
     if (nodeByID.get(edge.to)?.type !== "panorama" || nodeByID.get(edge.from)?.type !== "image") continue;

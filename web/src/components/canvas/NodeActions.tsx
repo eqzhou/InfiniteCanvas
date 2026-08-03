@@ -52,6 +52,7 @@ import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-promp
 import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
 import { resolveConfigPrompt } from "@/lib/config-generation";
 import { placeImageGenerationRun } from "@/lib/image-generation-run";
+import { directorShotGenerationContext } from "@/lib/director-shot-generation";
 import { audioJobParameters, audioSpeechOptions } from "@/lib/audio-generation";
 import {
   audioProtocolRequiresKey,
@@ -134,10 +135,11 @@ export function NodeActions({
   const cameraAnchorRef = useRef<HTMLSpanElement>(null);
 	const sharedChannels = useSharedChannels();
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
-  const channel =
-		(config.activeSharedChannelId ? channelChoices.find((c) => c.id === config.activeSharedChannelId) : undefined) ??
-    config.channels.find((c) => c.id === config.activeChannelId) ??
-    config.channels[0];
+  const channel = node.metadata.generationChannelId
+    ? channelChoices.find((candidate) => candidate.id === node.metadata.generationChannelId)
+    : (config.activeSharedChannelId ? channelChoices.find((candidate) => candidate.id === config.activeSharedChannelId) : undefined) ??
+      config.channels.find((candidate) => candidate.id === config.activeChannelId) ??
+      config.channels[0];
   const cameraAvailable = node.type === "image" || node.type === "video" ||
     (node.type === "config" && (node.metadata.generationMode ?? "image") !== "text");
   const promptForGeneration = (prompt: string) => applyCameraPrompt(prompt, node.metadata.cameraPrompt);
@@ -170,6 +172,7 @@ export function NodeActions({
 		}
 		const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
 		const jobId = uid("job");
+		const source = directorShotGenerationContext(project, rootId)?.source;
 		let placeholdersApplied = false;
 		try {
 			updateActive((current) => applyServerImagePlaceholders(current, rootId, jobId, normalizedGeneration, options));
@@ -187,6 +190,7 @@ export function NodeActions({
 					count: normalizedGeneration.count,
 					transparentBackground: normalizedGeneration.transparentBackground,
 					referenceStorageKeys,
+					source,
 				},
 			});
 		} catch (error) {
@@ -316,6 +320,10 @@ export function NodeActions({
 
   const runConfigGenerate = async () => {
     if (configGenerating || node.metadata.status === "loading") return;
+    if (node.metadata.generationChannelId && !channel) {
+      alert("原生成渠道已不可用，请恢复该渠道后再重试");
+      return;
+    }
     const mode = node.metadata.generationMode ?? "image";
     const providerKind = mode === "text" ? "text" : mode === "video" ? "video" : "image";
     if (!isGenerationChannelReady(channel, providerKind)) {
@@ -323,10 +331,18 @@ export function NodeActions({
       return;
     }
     const inputs = upstream();
+    const directorContext = directorShotGenerationContext(project, node.id);
     const usesUpstreamInputs = !(node.metadata.prompt ?? node.metadata.content ?? "").trim();
     const texts = usesUpstreamInputs ? inputs.texts : [];
-    const imageKeys = inputs.imageKeys;
+    const usesStoredDirectorReferences = inputs.imageKeys.length === 0 && Boolean(directorContext);
+    const imageKeys = usesStoredDirectorReferences
+      ? directorContext!.referenceStorageKeys
+      : inputs.imageKeys;
     const images = inputs.images;
+    if (usesStoredDirectorReferences && imageKeys.length === 0) {
+      alert("导演台拍摄参考已丢失，无法按原镜头重新生成");
+      return;
+    }
     const prompt = resolveConfigPrompt({
       prompt: node.metadata.prompt ?? node.metadata.content,
       upstreamTexts: texts,
@@ -384,7 +400,8 @@ export function NodeActions({
         const normalizedGeneration = normalizeImageGenerationForProvider(generation, imageProvider.protocol);
         const requestPrompt = promptForGeneration(normalizedGeneration.prompt);
         const materializedImages = images.filter((image) => image.storageKey || image.content);
-        if (serverProviderSupported("image") && imageKeys.length === materializedImages.length) {
+        if (serverProviderSupported("image") &&
+            (usesStoredDirectorReferences || imageKeys.length === materializedImages.length)) {
           await startServerImageGeneration(node.id, normalizedGeneration, requestPrompt, imageKeys);
           return;
         }

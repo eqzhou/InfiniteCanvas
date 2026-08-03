@@ -121,6 +121,7 @@ implementation input.
 | 2026-08-01 | Basket structured Agent diagnostics | Read public CHANGELOG and commit titles without inspecting implementation source | Codex and Claude expose fixed diagnostic filters above an independently scrollable log, expandable details, and consecutive duplicate collapse | high |
 | 2026-08-01 | Basket Agent follow behavior | Read public CHANGELOG and commit titles without inspecting implementation source | Conversation and diagnostic logs follow new output while at the bottom, pause when the reader scrolls upward, and expose the same centered jump-to-bottom control | high |
 | 2026-08-01 | Tiger current-main recheck | Read public release/CHANGELOG metadata and commit titles without inspecting implementation source | The sole post-v0.4.5 user-visible delta is the already-covered single canvas Agent consolidation; no additional local gap was found | high |
+| 2026-08-02 | Director formal shot | Capture one director camera, select exactly one synchronized capture, and choose the explicit model-backed action | The capture keeps an immutable bounded camera/scene snapshot; one atomic capture → editable config → result chain is committed; the copied reference survives tray deletion; the existing server image channel, timeout, audit and recovery path executes the job; retry remains bound to the saved channel and editable prompt | high |
 
 ## Evidence
 

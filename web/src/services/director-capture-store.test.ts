@@ -4,6 +4,8 @@ import {
   createDirectorCaptureStore,
   type DirectorCaptureAdapter,
 } from "./director-capture-store";
+import { createDefaultDirectorScene } from "@/lib/director-scene";
+import { createDirectorShotSnapshot } from "@/lib/director-shot";
 
 function memoryAdapter(): DirectorCaptureAdapter {
   const records = new Map<string, unknown>();
@@ -18,6 +20,31 @@ const png = (bytes = 32) => new Blob([new Uint8Array(bytes)], { type: "image/png
 const ownerScope = "user_tenant_a_user_a";
 
 describe("director capture storage adapter", () => {
+  test("persists an immutable compact shot snapshot captured with the PNG", async () => {
+    const store = createDirectorCaptureStore(memoryAdapter());
+    const scene = createDefaultDirectorScene();
+    const shot = createDirectorShotSnapshot(scene, "director_a");
+    const saved = await store.add({
+      ownerScope,
+      projectId: "project_a",
+      directorNodeId: "director_a",
+      cameraId: shot.camera.id,
+      cameraName: shot.camera.name,
+      createdAt: "2026-08-02T10:00:00.000Z",
+      width: 1600,
+      height: 900,
+      blob: png(),
+      shot,
+    });
+    scene.cameras[0]!.focalLength = 200;
+    shot.camera.focalLength = 10;
+
+    const [reloaded] = await store.list(ownerScope, "project_a", "director_a");
+    expect(saved.shot).toBeDefined();
+    expect(saved.shot?.camera.focalLength).not.toBe(10);
+    expect(reloaded?.shot).toEqual(saved.shot);
+    expect(reloaded?.shot?.camera.focalLength).not.toBe(200);
+  });
   test("isolates captures by project and director while sorting newest first", async () => {
     const store = createDirectorCaptureStore(memoryAdapter());
     const first = await store.add({

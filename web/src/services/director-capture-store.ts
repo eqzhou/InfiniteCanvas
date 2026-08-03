@@ -1,5 +1,7 @@
 import { uid } from "@/lib/id";
 import { authFetch } from "@/services/auth-session";
+import { parseDirectorShotSnapshot } from "@/lib/director-shot";
+import type { DirectorShotSnapshot } from "@/types/board";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 
@@ -18,6 +20,8 @@ export type DirectorCaptureRecord = {
   blob?: Blob;
   url?: string;
   orphanedAt?: string;
+  /** Present for new captures; legacy captures require re-shooting before formal generation. */
+  shot?: DirectorShotSnapshot;
 };
 
 export type DirectorCapture = DirectorCaptureRecord & { blob: Blob };
@@ -77,6 +81,8 @@ function normalizeRecord(value: unknown): DirectorCapture | null {
         ? new Date(input.orphanedAt).toISOString()
         : null;
     if (orphanedAt === null) return null;
+    const shot = input.shot === undefined ? undefined : parseDirectorShotSnapshot(input.shot);
+    if (shot && (shot.directorNodeId !== directorNodeId || shot.camera.id !== cameraId || shot.camera.name !== input.cameraName.trim())) return null;
     return {
       id,
       ownerScope,
@@ -91,6 +97,7 @@ function normalizeRecord(value: unknown): DirectorCapture | null {
       mimeType: "image/png",
       blob: input.blob,
       orphanedAt,
+      shot,
     };
   } catch {
     return null;
@@ -102,7 +109,11 @@ function keyFor(record: Pick<DirectorCapture, "ownerScope" | "projectId" | "dire
 }
 
 function copyRecord(record: DirectorCapture): DirectorCapture {
-  return { ...record, blob: record.blob.slice(0, record.blob.size, record.blob.type) };
+  return {
+    ...record,
+    blob: record.blob.slice(0, record.blob.size, record.blob.type),
+    shot: record.shot ? structuredClone(record.shot) : undefined,
+  };
 }
 
 export function createDirectorCaptureStore(
@@ -163,6 +174,10 @@ export function createDirectorCaptureStore(
         throw new Error("Capture dimensions are invalid");
       }
       if (!Number.isFinite(Date.parse(input.createdAt))) throw new Error("createdAt is invalid");
+      const shot = input.shot === undefined ? undefined : parseDirectorShotSnapshot(input.shot);
+      if (shot && (shot.directorNodeId !== directorNodeId || shot.camera.id !== cameraId || shot.camera.name !== input.cameraName.trim())) {
+        throw new Error("Capture shot metadata is mismatched");
+      }
       const commit = async (
         stored: Array<{ key: string; record: DirectorCapture }>,
         write: (record: DirectorCapture) => Promise<void>,
@@ -196,6 +211,7 @@ export function createDirectorCaptureStore(
           bytes: input.blob.size,
           mimeType: "image/png",
           blob: input.blob,
+          shot: shot ? structuredClone(shot) : undefined,
         };
         await write(record);
         return copyRecord(record);
@@ -298,6 +314,10 @@ function parseServerCapture(value: unknown, ownerScope: string): DirectorCapture
     throw new Error("Director capture response is invalid");
   }
   if (storageKey !== `director-capture:${id}`) throw new Error("Director capture response is invalid");
+  const shot = input.shot === undefined ? undefined : parseDirectorShotSnapshot(input.shot);
+  if (shot && (shot.directorNodeId !== directorNodeId || shot.camera.id !== cameraId || shot.camera.name !== input.cameraName.trim())) {
+    throw new Error("Director capture response is invalid");
+  }
   return {
     id,
     ownerScope: boundedId(ownerScope, "ownerScope"),
@@ -311,6 +331,7 @@ function parseServerCapture(value: unknown, ownerScope: string): DirectorCapture
     bytes: input.bytes!,
     mimeType: "image/png",
     url: input.url,
+    shot,
   };
 }
 
@@ -359,10 +380,12 @@ const serverDirectorCaptureStore = {
       width: String(input.width),
       height: String(input.height),
     });
+    const form = new FormData();
+    form.append("capture", input.blob, "capture.png");
+    if (input.shot) form.append("shot", JSON.stringify(input.shot));
     const value = await serverJSON<unknown>(`director-captures?${params}`, {
       method: "POST",
-      headers: { "Content-Type": "image/png" },
-      body: input.blob,
+      body: form,
     });
     return parseServerCapture(value, input.ownerScope);
   },

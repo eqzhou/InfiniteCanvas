@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { TenantConfigAdminRequiredError } from "@/services/server-storage";
-import { applyGenerationDefaultsToNode, saveWorkspaceReplacementConfig, useBoardStore } from "./use-board-store";
+import { applyGenerationDefaultsToNode, removeDirectorShotPlan, saveWorkspaceReplacementConfig, useBoardStore } from "./use-board-store";
 import { DEFAULT_GENERATION_DEFAULTS } from "@/lib/generation-defaults";
 import { createNode, createProject } from "@/lib/defaults";
 
@@ -58,6 +58,34 @@ describe("generation defaults inheritance", () => {
 		const before = JSON.stringify(video);
 		applyGenerationDefaultsToNode(video, defaults);
 		expect(JSON.stringify(video)).toBe(before);
+	});
+});
+
+describe("director formal shot rollback", () => {
+	test("removes only the planned chain and preserves concurrent canvas edits", () => {
+		const project = createProject("director rollback");
+		const director = createNode("director", { x: 0, y: 0 });
+		const capture = createNode("image", { x: 100, y: 0 });
+		const config = createNode("config", { x: 200, y: 0 });
+		const result = createNode("image", { x: 300, y: 0 });
+		const concurrent = createNode("text", { x: 0, y: 200 });
+		project.nodes = [director, capture, config, result, concurrent];
+		project.edges = [
+			{ id: "edge-shot-1", from: director.id, to: capture.id },
+			{ id: "edge-shot-2", from: capture.id, to: config.id },
+			{ id: "edge-shot-3", from: config.id, to: result.id },
+			{ id: "edge-concurrent", from: director.id, to: concurrent.id },
+		];
+
+		const rolledBack = removeDirectorShotPlan(
+			project,
+			new Set([capture.id, config.id, result.id]),
+			new Set(["edge-shot-1", "edge-shot-2", "edge-shot-3"]),
+		);
+
+		expect(rolledBack.nodes.map((node) => node.id)).toEqual([director.id, concurrent.id]);
+		expect(rolledBack.edges).toEqual([{ id: "edge-concurrent", from: director.id, to: concurrent.id }]);
+		expect(project.nodes).toHaveLength(5);
 	});
 });
 

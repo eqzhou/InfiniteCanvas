@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, FolderOpen, History, ImagePlus, Plus, Send, Square, Trash2, Unplug, X } from "lucide-react";
+import { Check, History, ImagePlus, Plus, Send, Square, Trash2, Unplug, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -43,6 +43,7 @@ import {
   reduceCodexProgress,
   type CodexProgressItem,
 } from "@/services/codex-progress";
+import { groupCodexProgress } from "@/services/codex-progress-groups";
 import {
   createCodexSessionSync,
   shouldResetCodexTranscript,
@@ -54,6 +55,7 @@ import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import { attachUploadedImage, useBoardStore } from "@/stores/use-board-store";
 import { AgentDiagnosticLog } from "@/components/agent/AgentDiagnosticLog";
+import { CodexProgressList } from "@/components/agent/CodexProgressList";
 import { AgentJumpToLatest } from "@/components/agent/AgentJumpToLatest";
 import { CodexModelControls, resolveCodexReasoningEffort } from "@/components/agent/CodexModelControls";
 
@@ -207,7 +209,14 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const previews = useMemo(() => files.map((file) => ({ file, url: URL.createObjectURL(file) })), [files]);
+  const progressGroups = useMemo(() => groupCodexProgress(progress), [progress]);
   const sessionId = session?.id;
+
+  useEffect(() => {
+    return () => {
+      for (const preview of previews) URL.revokeObjectURL(preview.url);
+    };
+  }, [previews]);
 
   useEffect(() => {
     turnStatusRef.current = turnStatus;
@@ -865,44 +874,14 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               <AgentJumpToLatest onClick={() => scrollTranscriptToBottom("smooth")} />
             ) : null}
           </div>
-          {progress.length ? (
-            <details
-              className="mb-2 rounded-lg bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] px-2.5 py-1.5"
-              open={progressOpen}
-              onToggle={(event) => setProgressOpen(event.currentTarget.open)}
-            >
-              <summary className="cursor-pointer text-[11px] font-medium">
-                任务进度 · {progress.filter((item) => item.status === "completed").length}/{progress.length}
-              </summary>
-              <ol className="mt-1 max-h-32 space-y-1 overflow-auto text-[10px]">
-                {progress.map((item) => (
-                  <li key={item.id} className="flex min-w-0 items-start gap-1.5">
-                    <span
-                      className="ob-status-dot mt-1"
-                      data-status={item.status === "completed" ? "succeeded" : item.status}
-                      aria-hidden
-                    />
-                    <span className="min-w-0">
-                      <span className="font-medium text-[var(--ob-ink)]">{item.label}</span>
-                      {item.detail ? <span className="ml-1 break-all text-[var(--ob-muted)]">{item.detail}</span> : null}
-                      {item.error ? <span className="block text-[var(--ob-danger)]">{item.error}</span> : null}
-                    </span>
-                    {item.path ? (
-                      <button
-                        type="button"
-                        className="ob-icon-btn ml-auto h-6 w-6 shrink-0"
-                        title="在文件管理器中定位"
-                        aria-label={`在文件管理器中定位 ${item.path}`}
-                        onClick={() => void revealFile(item.path ?? "")}
-                      >
-                        <FolderOpen size={12} />
-                      </button>
-                    ) : null}
-                  </li>
-                ))}
-              </ol>
-            </details>
-          ) : null}
+          <CodexProgressList
+            groups={progressGroups}
+            completedCount={progress.filter((item) => item.status === "completed").length}
+            totalCount={progress.length}
+            open={progressOpen}
+            onToggle={setProgressOpen}
+            onRevealFile={(path) => void revealFile(path)}
+          />
           <AgentDiagnosticLog logs={logs} />
           {previews.length ? (
             <div className="mb-2 flex gap-1.5 overflow-x-auto">

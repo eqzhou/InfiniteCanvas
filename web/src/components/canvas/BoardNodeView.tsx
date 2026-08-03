@@ -28,10 +28,15 @@ import {
   normalizeImageQualityForProvider,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
+import { resolveImageSizeForAspect } from "@/lib/workbench-preferences";
 import { getProvider } from "@/lib/ai-config";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
 import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
 import { showsFloatingNodeActions } from "@/lib/node-action-visibility";
+import { buildDirectorShotPrompt, planDirectorShotGeneration } from "@/lib/director-shot-generation";
+import { createImageGenerationMetadata, normalizeImageGenerationForProvider } from "@/lib/image-generation";
+import { createServerImageGenerationJob, cancelServerGenerationJob } from "@/services/generation-jobs";
+import { uid } from "@/lib/id";
 
 const DirectorDialog = lazy(() => import("@/components/director/DirectorDialog").then((module) => ({
   default: module.DirectorDialog,
@@ -1010,6 +1015,109 @@ export function BoardNodeView({
                 if (!(error instanceof ProjectCommitRollbackError)) {
                   await Promise.all(uploaded.map((item) => deleteBlob("image", item.storageKey).catch(() => undefined)));
                 }
+                throw error;
+              }
+              directorEditStartedRef.current = false;
+            }}
+            onGenerateCapture={async (capture: DirectorCapture) => {
+              if (!capture.shot) throw new Error("这张旧截图没有拍摄时机位信息，请重新拍摄后生成正式镜头");
+              if (!imageChannel || !imageProvider?.model) throw new Error("请先配置可用的图片生成渠道和模型");
+              const serverProtocolSupported = imageProvider.protocol === "openai" || imageProvider.protocol === "gemini" ||
+                (imageProvider.protocol === "template" && Boolean(imageProvider.template)) ||
+                imageProvider.protocol === "apimart" || imageProvider.protocol === "kie";
+              if (!serverProtocolSupported) {
+                throw new Error(`当前图片协议（${imageProvider.protocol}）不支持服务端正式镜头生成`);
+              }
+              const uploaded = await uploadMedia(capture.blob, "image", { requirePersistent: true });
+              const store = useBoardStore.getState();
+              const active = store.getActive();
+              const current = active?.nodes.find((item) => item.id === node.id);
+              if (!active || active.id !== directorProjectId || !current || current.type !== "director") {
+                await deleteBlob("image", uploaded.storageKey).catch(() => undefined);
+                throw new Error("导演台节点已不存在，无法生成正式镜头");
+              }
+              let prepared: ReturnType<typeof planDirectorShotGeneration> extends infer Planned
+                ? { planned: Planned; generation: ReturnType<typeof createImageGenerationMetadata>; jobId: string; configNode: BoardNode }
+                : never;
+              try {
+                const preferredSize = resolveImageSizeForAspect(
+                  capture.shot.camera.aspect,
+                  imageProvider.protocol,
+                  imageProvider.model,
+                );
+                const size = imageSizeOptions.some((option) => option.value === preferredSize)
+                  ? preferredSize
+                  : config.imageSize;
+                const generation = normalizeImageGenerationForProvider(createImageGenerationMetadata({
+                  prompt: buildDirectorShotPrompt(capture.shot),
+                  model: imageProvider.model,
+                  size,
+                  quality: config.imageQuality,
+                  count: 1,
+                  transparentBackground: false,
+                  referenceStorageKeys: [uploaded.storageKey],
+                  generationChannelId: imageChannel.id,
+                }), imageProvider.protocol);
+                const jobId = uid("job");
+                const planned = planDirectorShotGeneration(active, {
+                  directorId: current.id,
+                  capture,
+                  media: uploaded,
+                  generation,
+                  jobId,
+                });
+                const configNode = planned.nodes.find((item) =>
+                  item.type === "config" && item.metadata.directorShot?.captureId === capture.id);
+                if (!configNode) throw new Error("正式镜头配置创建失败");
+                prepared = { planned, generation, jobId, configNode };
+              } catch (error) {
+                await deleteBlob("image", uploaded.storageKey).catch(() => undefined);
+                throw error;
+              }
+              const { planned, generation, jobId, configNode } = prepared;
+              try {
+                await store.commitDirectorShotRun(active.id, current.id, active.updatedAt, planned);
+              } catch (error) {
+                if (!(error instanceof ProjectCommitRollbackError)) {
+                  await deleteBlob("image", uploaded.storageKey).catch(() => undefined);
+                }
+                throw error;
+              }
+              try {
+                await createServerImageGenerationJob({
+                  id: jobId,
+                  projectId: active.id,
+                  prompt: generation.prompt,
+                  providerId: imageChannel.id,
+                  model: generation.model,
+                  parameters: {
+                    size: generation.size,
+                    quality: generation.quality,
+                    count: 1,
+                    transparentBackground: false,
+                    referenceStorageKeys: [uploaded.storageKey],
+                    source: {
+                      kind: "director",
+                      directorNodeId: current.id,
+                      captureId: capture.id,
+                      cameraId: capture.shot.camera.id,
+                      configNodeId: configNode.id,
+                    },
+                  },
+                });
+              } catch (error) {
+                const details = error instanceof Error ? error.message : String(error);
+                useBoardStore.setState((latest) => ({
+                  projects: latest.projects.map((project) => project.id === active.id ? {
+                    ...project,
+                    nodes: project.nodes.map((item) => item.metadata.generationJobId === jobId ? {
+                      ...item,
+                      metadata: { ...item.metadata, status: "error", errorDetails: details },
+                    } : item),
+                  } : project),
+                }));
+                await store.persistNow().catch(() => undefined);
+                await cancelServerGenerationJob(jobId).catch(() => undefined);
                 throw error;
               }
               directorEditStartedRef.current = false;

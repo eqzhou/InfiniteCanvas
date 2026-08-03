@@ -400,6 +400,9 @@ func imageRequestAuditPayload(request imageGenerationRequest) map[string]any {
 	if references := auditReferenceImages(request.ReferenceStorageKeys, request.References); len(references) > 0 {
 		payload["referenceImages"] = references
 	}
+	if request.Source != nil {
+		payload["source"] = request.Source
+	}
 	return payload
 }
 

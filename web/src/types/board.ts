@@ -96,6 +96,26 @@ export type DirectorScene = {
   };
   objects: DirectorObject[];
 };
+export type DirectorShotObjectSnapshot = Pick<DirectorObject,
+  "id" | "kind" | "name" | "transform" | "character" | "crowd" | "primitive" | "modelAsset">;
+export type DirectorShotSnapshot = {
+  version: 1;
+  directorNodeId: string;
+  camera: DirectorCamera;
+  background: string;
+  environment: DirectorScene["environment"];
+  objects: DirectorShotObjectSnapshot[];
+  omittedObjectCount: number;
+};
+export type DirectorShotMetadata = {
+  version: 1;
+  role: "capture" | "config";
+  directorNodeId: string;
+  captureId: string;
+  capturedAt: string;
+  /** Compact immutable state captured with the PNG, not the later live scene. */
+  snapshot: DirectorShotSnapshot;
+};
 export type PluginPermission =
   | "node:read"
   | "node:write"
@@ -188,6 +208,8 @@ export type NodeMetadata = {
   pluginId?: string;
   pluginState?: Record<string, unknown>;
   directorScene?: DirectorScene;
+  /** Lineage from a director capture into a formal image-generation run. */
+  directorShot?: DirectorShotMetadata;
   panoramaProjection?: "equirectangular";
   cameraPrompt?: CameraPromptConfig;
   workflowRunId?: string;

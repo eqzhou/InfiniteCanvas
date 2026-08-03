@@ -40,6 +40,7 @@ import { directorModelStore, type DirectorModelRecord } from "@/services/directo
 import { uid } from "@/lib/id";
 import type { TransformControlsMode } from "three/examples/jsm/controls/TransformControls.js";
 import { DIRECTOR_CHARACTER_PRESETS, DIRECTOR_POSE_PRESETS, DIRECTOR_PRIMITIVES } from "@/lib/director-cast";
+import { createDirectorShotSnapshot } from "@/lib/director-shot";
 
 const KIND_LABEL: Record<DirectorObjectKind, string> = {
   character: "角色",
@@ -61,6 +62,7 @@ export function DirectorDialog({
   onModelCommit,
   onClose,
   onSendCaptures,
+  onGenerateCapture,
   panoramaOptions,
   activePanoramaId,
   onPanoramaChange,
@@ -76,6 +78,7 @@ export function DirectorDialog({
   onModelCommit: (scene: DirectorScene) => void;
   onClose: () => void;
   onSendCaptures: (captures: DirectorCapture[]) => Promise<void>;
+  onGenerateCapture: (capture: DirectorCapture) => Promise<void>;
   panoramaOptions: Array<{ id: string; label: string; url: string; spherical?: boolean }>;
   activePanoramaId: string | null;
   onPanoramaChange: (panoramaId: string | null) => void;
@@ -149,8 +152,10 @@ export function DirectorDialog({
       setCaptureError(null);
       setCapturing(true);
       try {
+        const capturedScene = structuredClone(sceneRef.current);
+        const camera = getActiveDirectorCamera(capturedScene);
+        const shot = createDirectorShotSnapshot(capturedScene, directorNodeId, camera.id);
         const rendered = await capture();
-        const camera = getActiveDirectorCamera(sceneRef.current);
         const record = await directorCaptureStore.add({
           ownerScope,
           projectId,
@@ -161,6 +166,7 @@ export function DirectorDialog({
           width: rendered.width,
           height: rendered.height,
           blob: rendered.blob,
+          shot,
         });
         await refreshCaptures();
         setSelectedCaptureIds(new Set([record.id]));
@@ -545,6 +551,21 @@ export function DirectorDialog({
                 await onSendCaptures(await Promise.all(selectedRecords.map((record) => directorCaptureStore.resolve(record))));
               } catch (error) {
                 setCaptureError(error instanceof Error ? error.message : "截图发送画布失败");
+              } finally {
+                setCapturing(false);
+              }
+            })();
+          }}
+          onGenerateSelected={() => {
+            void (async () => {
+              const selectedRecord = captureRecords.find((record) => selectedCaptureIds.has(record.id));
+              if (!selectedRecord || selectedCaptureIds.size !== 1) return;
+              setCaptureError(null);
+              setCapturing(true);
+              try {
+                await onGenerateCapture(await directorCaptureStore.resolve(selectedRecord));
+              } catch (error) {
+                setCaptureError(error instanceof Error ? error.message : "正式镜头生成失败");
               } finally {
                 setCapturing(false);
               }

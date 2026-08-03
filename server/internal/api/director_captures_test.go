@@ -6,10 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -99,6 +103,111 @@ func TestDirectorCaptureLifecycleUsesProtectedTenantBlob(t *testing.T) {
 	}
 }
 
+func TestDirectorCapturePersistsBoundedShotSnapshot(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot := json.RawMessage(`{"version":1,"directorNodeId":"director-a","camera":{"id":"camera-main","name":"主摄像机","position":{"x":1,"y":2,"z":3},"target":{"x":0,"y":1,"z":0},"focalLength":50,"aperture":2.8,"aspect":"16:9"},"background":"#111111","environment":{"rotationY":0,"intensity":1,"sourceId":null},"objects":[],"omittedObjectCount":0}`)
+	handler := tenantCaptureHandler(t, newMemoryStore())
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	imagePart, err := writer.CreateFormFile("capture", "capture.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := imagePart.Write(png); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("shot", string(shot)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		captureCreatePath("project-a", "director-a", "camera-main", "主摄像机", 1, 1), &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Test-Tenant", "tenant-a")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, req)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	var record directorCaptureResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if !jsonEqual(record.Shot, shot) {
+		t.Fatalf("shot mismatch: %s", record.Shot)
+	}
+
+	listed := directorCaptureRequest(t, handler, http.MethodGet,
+		"/api/director-captures?projectId=project-a&directorNodeId=director-a", nil, "tenant-a")
+	var records []directorCaptureResponse
+	if err := json.Unmarshal(listed.Body.Bytes(), &records); err != nil || len(records) != 1 || !jsonEqual(records[0].Shot, shot) {
+		t.Fatalf("shot did not survive list: %s", listed.Body.String())
+	}
+}
+
+func TestDirectorCaptureRejectsShotThatFrontendCannotParse(t *testing.T) {
+	base := `{"version":1,"directorNodeId":"director-a","camera":{"id":"camera-main","name":"主摄像机","position":{"x":1,"y":2,"z":3},"target":{"x":0,"y":1,"z":0},"focalLength":50,"aperture":2.8,"aspect":"16:9"},"background":"#111111","environment":{"rotationY":0,"intensity":1,"sourceId":null},"objects":%s,"omittedObjectCount":0}`
+	cases := []string{
+		`[{"id":"model-a","kind":"model","name":"bad model","transform":{"position":{"x":0,"y":0,"z":0},"rotation":{"x":0,"y":0,"z":0},"scale":{"x":1,"y":1,"z":1}},"modelAsset":{"bogus":1}}]`,
+		`[{"id":"prop-a","kind":"prop","name":"bad scale","transform":{"position":{"x":0,"y":0,"z":0},"rotation":{"x":0,"y":0,"z":0},"scale":{"x":0,"y":1,"z":1}},"primitive":"box"}]`,
+		`[{"id":"light-a","kind":"light","name":"one","transform":{"position":{"x":0,"y":0,"z":0},"rotation":{"x":0,"y":0,"z":0},"scale":{"x":1,"y":1,"z":1}}},{"id":"light-a","kind":"light","name":"two","transform":{"position":{"x":0,"y":0,"z":0},"rotation":{"x":0,"y":0,"z":0},"scale":{"x":1,"y":1,"z":1}}}]`,
+	}
+	for index, objects := range cases {
+		raw := json.RawMessage([]byte(fmt.Sprintf(base, objects)))
+		if validDirectorShotSnapshot(raw, "director-a", "camera-main", "主摄像机") {
+			t.Fatalf("case %d unexpectedly accepted", index)
+		}
+	}
+}
+
+func TestDirectorCaptureAcceptsFrontendBoardIdentifiers(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := tenantCaptureHandler(t, newMemoryStore())
+	created := directorCaptureRequest(t, handler, http.MethodPost,
+		captureCreatePath("project-a", "director:main", "camera:main", "主摄像机", 1, 1), png, "tenant-a")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	listed := directorCaptureRequest(t, handler, http.MethodGet,
+		"/api/director-captures?projectId=project-a&directorNodeId=director%3Amain", nil, "tenant-a")
+	var records []directorCaptureResponse
+	if listed.Code != http.StatusOK || json.Unmarshal(listed.Body.Bytes(), &records) != nil || len(records) != 1 || records[0].DirectorNodeID != "director:main" {
+		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+}
+
+func TestDirectorCaptureRejectsMissingOrNullRequiredShotFields(t *testing.T) {
+	valid := `{"version":1,"directorNodeId":"director-a","camera":{"id":"camera-main","name":"主摄像机","position":{"x":1,"y":2,"z":3},"target":{"x":0,"y":1,"z":0},"focalLength":50,"aperture":2.8,"aspect":"16:9"},"background":"#111111","environment":{"rotationY":0,"intensity":1,"sourceId":null},"objects":[],"omittedObjectCount":0}`
+	cases := map[string]string{
+		"missing objects":           strings.Replace(valid, `,"objects":[]`, "", 1),
+		"missing omitted count":     strings.Replace(valid, `,"omittedObjectCount":0`, "", 1),
+		"null environment":          strings.Replace(valid, `"environment":{"rotationY":0,"intensity":1,"sourceId":null}`, `"environment":null`, 1),
+		"null camera position":      strings.Replace(valid, `"position":{"x":1,"y":2,"z":3}`, `"position":null`, 1),
+		"null object optional data": strings.Replace(valid, `"objects":[]`, `"objects":[{"id":"light-a","kind":"light","name":"light","transform":{"position":{"x":0,"y":0,"z":0},"rotation":{"x":0,"y":0,"z":0},"scale":{"x":1,"y":1,"z":1}},"character":null}]`, 1),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if validDirectorShotSnapshot(json.RawMessage(raw), "director-a", "camera-main", "主摄像机") {
+				t.Fatalf("invalid snapshot unexpectedly accepted: %s", raw)
+			}
+		})
+	}
+}
+
+func jsonEqual(left, right []byte) bool {
+	var leftValue, rightValue any
+	return json.Unmarshal(left, &leftValue) == nil && json.Unmarshal(right, &rightValue) == nil &&
+		reflect.DeepEqual(leftValue, rightValue)
+}
+
 func TestDirectorCapturesValidatePixelsAndIsolateTenants(t *testing.T) {
 	png, _ := base64.StdEncoding.DecodeString(onePixelPNGBase64())
 	handler := tenantCaptureHandler(t, newMemoryStore())
@@ -159,7 +268,6 @@ func TestDirectorCapturePruneDeletesRemovedProjectsAndMedia(t *testing.T) {
 		t.Fatalf("pruned blob status=%d", got.Code)
 	}
 }
-
 
 func TestDirectorCaptureDeleteKeepsBlobWhenMetadataCASFails(t *testing.T) {
 	png, _ := base64.StdEncoding.DecodeString(onePixelPNGBase64())

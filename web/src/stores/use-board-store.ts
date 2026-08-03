@@ -82,6 +82,13 @@ import {
   type PanoramaGenerationDescriptor,
 } from "@/lib/panorama-generation";
 import { migrateLegacyAudioRoles } from "@/lib/project-audio-roles";
+import { parseBoardProject } from "@/lib/board-document";
+import {
+  expandDirectorShotDeletion,
+  generationCleanupNodeIdsAfterDeletion,
+  orphanedGenerationJobIdsAfterDeletion,
+  repairDirectorShotDeletion,
+} from "@/lib/director-shot-generation";
 
 type Snapshot = {
   nodes: BoardNode[];
@@ -97,6 +104,20 @@ export class ProjectCommitRollbackError extends AggregateError {
     super([commitError, rollbackError], "项目提交失败，且回滚尚未持久化");
     this.name = "ProjectCommitRollbackError";
   }
+}
+
+export function removeDirectorShotPlan(
+  project: BoardProject,
+  addedNodeIds: ReadonlySet<string>,
+  addedEdgeIds: ReadonlySet<string>,
+): BoardProject {
+  return {
+    ...project,
+    nodes: project.nodes.filter((node) => !addedNodeIds.has(node.id)),
+    edges: project.edges.filter((edge) => !addedEdgeIds.has(edge.id) &&
+      !addedNodeIds.has(edge.from) && !addedNodeIds.has(edge.to)),
+    updatedAt: nowIso(),
+  };
 }
 
 type BoardState = {
@@ -133,6 +154,12 @@ type BoardState = {
     projectId: string,
     directorId: string,
     nodes: BoardNode[],
+  ) => Promise<void>;
+  commitDirectorShotRun: (
+    projectId: string,
+    directorId: string,
+    expectedUpdatedAt: string,
+    plannedProject: BoardProject,
   ) => Promise<void>;
   commitWorkflowResultNodes: (
     projectId: string,
@@ -654,6 +681,59 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set({ selectedIds: nodes.map((node) => node.id) });
   },
 
+  commitDirectorShotRun: async (projectId, directorId, expectedUpdatedAt, plannedProject) => {
+    const state = get();
+    const current = state.projects.find((item) => item.id === projectId);
+    const director = current?.nodes.find((item) => item.id === directorId);
+    if (!current || state.activeProjectId !== projectId || current.updatedAt !== expectedUpdatedAt || director?.type !== "director") {
+      throw new Error("导演台画布已变化，请重新选择截图生成");
+    }
+    if (plannedProject.id !== current.id || plannedProject.nodes.length !== current.nodes.length + 3 ||
+        plannedProject.edges.length !== current.edges.length + 3) {
+      throw new Error("正式镜头节点计划无效");
+    }
+    const currentNodeIds = new Set(current.nodes.map(({ id }) => id));
+    const addedNodes = plannedProject.nodes.filter((node) => !currentNodeIds.has(node.id));
+    const capture = addedNodes.find((node) => node.type === "image" && node.metadata.directorShot?.role === "capture");
+    const configNode = addedNodes.find((node) => node.type === "config" && node.metadata.directorShot?.role === "config");
+    const result = addedNodes.find((node) => node.type === "image" && node.metadata.generationConfigId === configNode?.id);
+    if (!capture || !configNode || !result || capture.metadata.directorShot?.directorNodeId !== directorId ||
+        configNode.metadata.directorShot?.captureId !== capture.metadata.directorShot.captureId ||
+        !plannedProject.edges.some((edge) => edge.from === directorId && edge.to === capture.id) ||
+        !plannedProject.edges.some((edge) => edge.from === capture.id && edge.to === configNode.id) ||
+        !plannedProject.edges.some((edge) => edge.from === configNode.id && edge.to === result.id)) {
+      throw new Error("正式镜头关系无效");
+    }
+    const unchangedNodes = plannedProject.nodes.filter((node) => currentNodeIds.has(node.id));
+    if (JSON.stringify(unchangedNodes) !== JSON.stringify(current.nodes) ||
+        JSON.stringify(plannedProject.edges.slice(0, current.edges.length)) !== JSON.stringify(current.edges)) {
+      throw new Error("正式镜头计划修改了已有画布内容");
+    }
+    const nextProject = parseBoardProject({ ...plannedProject, updatedAt: nowIso() });
+    const addedNodeIds = new Set(addedNodes.map((node) => node.id));
+    const addedEdgeIds = new Set(nextProject.edges.slice(current.edges.length).map((edge) => edge.id));
+    const nextProjects = state.projects.map((item) => item.id === projectId ? nextProject : item);
+    const before = snap(current);
+    set({ projects: nextProjects, selectedIds: [configNode.id, result.id] });
+    projectWrites.enqueue(structuredClone(nextProjects));
+    try {
+      await projectWrites.flush();
+    } catch (error) {
+      const rollback = get().projects.map((item) => item.id === projectId
+        ? removeDirectorShotPlan(item, addedNodeIds, addedEdgeIds)
+        : item);
+      set({ projects: rollback, selectedIds: [] });
+      projectWrites.enqueue(structuredClone(rollback));
+      try {
+        await projectWrites.flush();
+      } catch (rollbackError) {
+        throw new ProjectCommitRollbackError(error, rollbackError);
+      }
+      throw error;
+    }
+    historyFor(projectId).push(before);
+  },
+
   commitWorkflowResultNodes: (projectId, workflowRunId, nodes) => {
     const run = async () => {
       if (!workflowRunId || !nodes.length || nodes.length > 64 ||
@@ -801,7 +881,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const { selectedIds } = get();
     if (!selectedIds.length) return;
     const project = get().getActive();
-    const selected = new Set(selectedIds);
+    let selected = new Set(selectedIds);
     // cascade: deleting batch root removes children; deleting child updates root list
     if (project) {
       for (const id of [...selected]) {
@@ -811,16 +891,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           for (const cid of n.metadata.batchChildIds) selected.add(cid);
         }
       }
+      selected = expandDirectorShotDeletion(project, selected);
     }
-    const nodeJobIds = new Set(
-      (project?.nodes ?? [])
-        .filter((node) => selected.has(node.id))
-        .map((node) => node.metadata.generationJobId)
-        .filter((value): value is string => Boolean(value)),
-);
+    const nodeJobIds = project
+      ? orphanedGenerationJobIdsAfterDeletion(project, selected)
+      : new Set<string>();
+    const generationCleanupNodeIds = project
+      ? generationCleanupNodeIdsAfterDeletion(project, selected)
+      : selected;
 
     get().updateActive((p) => {
-      const remaining = pruneGroupMembership(p.nodes, selected)
+      const remaining = repairDirectorShotDeletion(pruneGroupMembership(p.nodes, selected)
         .map((n) => {
           if (!n.metadata.batchChildIds?.length) return n;
           const kids = n.metadata.batchChildIds.filter((id) => !selected.has(id));
@@ -837,7 +918,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
               isBatchRoot: kids.length > 0 ? n.metadata.isBatchRoot : false,
             },
           };
-        });
+        }), selected);
       return {
         ...p,
         nodes: remaining,
@@ -845,7 +926,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
     });
     set({ selectedIds: [] });
-    void deleteGenerationJobsForNodeIds(project?.id, selected, { nodeJobIds }).catch(() => 0);
+    void deleteGenerationJobsForNodeIds(project?.id, generationCleanupNodeIds, { nodeJobIds }).catch(() => 0);
   },
 
 

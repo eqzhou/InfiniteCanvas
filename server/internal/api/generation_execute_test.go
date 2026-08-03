@@ -144,6 +144,119 @@ func TestServerImageJobCategoryIsBounded(t *testing.T) {
 	}
 }
 
+func TestServerImageJobPersistsDirectorSourceLineage(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	server, backend, handler := imageExecutionHandler(t, executor)
+	shot := json.RawMessage(`{"version":1,"directorNodeId":"director-main","camera":{"id":"camera-main","name":"Main camera","position":{"x":1,"y":2,"z":3},"target":{"x":0,"y":1,"z":0},"focalLength":50,"aperture":2.8,"aspect":"16:9"},"background":"#111111","environment":{"rotationY":0,"intensity":1,"sourceId":null},"objects":[],"omittedObjectCount":0}`)
+	captureDocument, _ := json.Marshal(directorCaptureDocument{Version: 1, Items: []directorCaptureRecord{{
+		ID: "capture-main", ProjectID: "board-1", DirectorNodeID: "director-main", CameraID: "camera-main", CameraName: "Main camera",
+		CreatedAt: "2026-08-02T00:00:00Z", Width: 1, Height: 1, Bytes: 1, MIMEType: "image/png",
+		StorageKey: "director-capture:capture-main", Shot: shot,
+	}}})
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, directorCaptureStateKey, captureDocument); err != nil {
+		t.Fatal(err)
+	}
+	referencePNG, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	if err != nil || server.storeTenantBlob(context.Background(), store.DefaultTenantID, "", "image:director-shot-source", "image/png", referencePNG) != nil {
+		t.Fatal("seed durable director reference")
+	}
+	projectDocument, _ := json.Marshal(map[string]any{"nodes": []any{
+		map[string]any{"id": "director-main", "type": "director", "metadata": map[string]any{}},
+		map[string]any{"id": "capture-node", "type": "image", "metadata": map[string]any{
+			"storageKey": "image:director-shot-source", "directorShot": map[string]any{
+				"role": "capture", "directorNodeId": "director-main", "captureId": "capture-main", "snapshot": json.RawMessage(shot),
+			},
+		}},
+		map[string]any{"id": "config-main", "type": "config", "metadata": map[string]any{"directorShot": map[string]any{
+			"role": "config", "directorNodeId": "director-main", "captureId": "capture-main", "snapshot": json.RawMessage(shot),
+		}, "referenceStorageKeys": []string{"image:director-shot-source"}}},
+	}, "edges": []any{
+		map[string]any{"from": "director-main", "to": "capture-node"},
+		map[string]any{"from": "capture-node", "to": "config-main"},
+	}})
+	if err := backend.PutProject(context.Background(), store.DefaultTenantID, "board-1", projectDocument); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"id": "job-director-shot", "projectId": "board-1", "prompt": "formal shot",
+		"providerId": "image-main", "model": "gpt-image-1",
+		"parameters": map[string]any{
+			"size": "1024x1024", "quality": "high", "count": 1, "referenceStorageKeys": []string{"image:director-shot-source"},
+			"source": map[string]any{
+				"kind": "director", "directorNodeId": "director-main", "captureId": "capture-main",
+				"cameraId": "camera-main", "configNodeId": "config-main",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := request(t, handler, http.MethodPost, "/api/generation-jobs/image", body)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	job, err := backend.GetGenerationJob(context.Background(), store.DefaultTenantID, "job-director-shot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parameters persistedImageJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Source == nil ||
+		parameters.Source.CaptureID != "capture-main" || parameters.Source.ConfigNodeID != "config-main" {
+		t.Fatalf("director source was not persisted: %s", job.Parameters)
+	}
+	audit := imageRequestAuditPayload(imageGenerationRequest{Source: parameters.Source})
+	if _, ok := audit["source"]; !ok {
+		t.Fatal("director source missing from AI audit payload")
+	}
+	resolved := awaitExecutorStart(t, executor)
+	if resolved.Source == nil || resolved.Source.CaptureID != "capture-main" || resolved.Source.ConfigNodeID != "config-main" {
+		t.Fatalf("director source did not reach executor: %+v", resolved.Source)
+	}
+	emptyCaptures, _ := json.Marshal(directorCaptureDocument{Version: 1, Items: []directorCaptureRecord{}})
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, directorCaptureStateKey, emptyCaptures); err != nil {
+		t.Fatal(err)
+	}
+	projectWithoutCapture, _ := json.Marshal(map[string]any{"nodes": []any{
+		map[string]any{"id": "director-main", "type": "director", "metadata": map[string]any{}},
+		map[string]any{"id": "config-main", "type": "config", "metadata": map[string]any{
+			"referenceStorageKeys": []string{"image:director-shot-source"}, "directorShot": map[string]any{
+				"role": "config", "directorNodeId": "director-main", "captureId": "capture-main", "snapshot": json.RawMessage(shot),
+			},
+		}},
+	}, "edges": []any{}})
+	if err := backend.PutProject(context.Background(), store.DefaultTenantID, "board-1", projectWithoutCapture); err != nil {
+		t.Fatal(err)
+	}
+	var retry map[string]any
+	if json.Unmarshal(body, &retry) != nil {
+		t.Fatal("decode retry fixture")
+	}
+	retry["id"] = "job-director-shot-retry"
+	retryBody, _ := json.Marshal(retry)
+	if got := request(t, handler, http.MethodPost, "/api/generation-jobs/image", retryBody); got.Code != http.StatusAccepted {
+		t.Fatalf("durable director retry after tray deletion status=%d body=%s", got.Code, got.Body.String())
+	}
+
+	parameters.Source.CameraID = "../unsafe"
+	input := createImageJobRequest{ID: "job-invalid-source", ProjectID: "board-1", Prompt: "draw", ProviderID: "image-main", Model: "image", Parameters: createImageJobParameters{Size: "1024x1024", Count: 1, Source: parameters.Source}}
+	if validCreateImageJob(input) {
+		t.Fatal("unsafe director source should be rejected")
+	}
+
+	var mismatched map[string]any
+	if json.Unmarshal(body, &mismatched) != nil {
+		t.Fatal("decode request fixture")
+	}
+	mismatched["id"] = "job-mismatched-source"
+	parametersMap := mismatched["parameters"].(map[string]any)
+	sourceMap := parametersMap["source"].(map[string]any)
+	sourceMap["captureId"] = "capture-other"
+	mismatchedBody, _ := json.Marshal(mismatched)
+	if got := request(t, handler, http.MethodPost, "/api/generation-jobs/image", mismatchedBody); got.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched director source status=%d body=%s", got.Code, got.Body.String())
+	}
+}
+
 type responseSnapshot struct {
 	code int
 	body []byte

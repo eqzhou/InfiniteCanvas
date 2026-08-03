@@ -36,6 +36,13 @@ export type ServerImageGenerationInput = {
 		category?: string;
 		transparentBackground?: boolean;
 		referenceStorageKeys?: string[];
+		source?: {
+			kind: "director";
+			directorNodeId: string;
+			captureId: string;
+			cameraId: string;
+			configNodeId: string;
+		};
 	};
 };
 

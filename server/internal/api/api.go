@@ -32,6 +32,12 @@ const (
 
 var projectIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
+// Board-scoped identifiers use the same bounded, path-safe format as the
+// frontend director scene parser. Keep project IDs stricter because they are
+// also used as tenant/storage scope keys, while allowing imported scene IDs
+// to contain the colon separator accepted by the board document format.
+var boardIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$`)
+
 type Server struct {
 	dataDir                 string
 	mu                      sync.Mutex

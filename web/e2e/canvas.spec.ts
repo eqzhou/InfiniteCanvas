@@ -531,12 +531,19 @@ test("3D director edits persist and rendered captures return to the canvas", asy
   const imagesBefore = await imageNodes.count();
   const edgesBefore = await edgeGroups.count();
   const captureButton = dialog.getByRole("button", { name: "拍摄当前机位" });
+  const generateShotButton = dialog.getByRole("button", { name: "生成正式镜头（会调用模型）" });
   const captures = dialog.getByRole("list", { name: "同步截图列表" }).getByRole("listitem");
   await captureButton.click();
   await expect(captures).toHaveCount(1);
+  await expect(generateShotButton).toBeEnabled();
   await expect(captureButton).toBeEnabled();
   await captureButton.click();
   await expect(captures).toHaveCount(2);
+  await expect(generateShotButton).toBeEnabled();
+  await dialog.getByRole("button", { name: "全选" }).click();
+  await expect(generateShotButton).toBeDisabled();
+  await dialog.getByLabel("选择截图 主摄像机").first().uncheck();
+  await expect(generateShotButton).toBeEnabled();
   await expect(captureButton).toBeEnabled();
   await expect(dialog).toBeVisible();
   await expect(imageNodes).toHaveCount(imagesBefore);
@@ -585,6 +592,70 @@ test("3D director edits persist and rendered captures return to the canvas", asy
   await expect(dialog.getByText("拍摄后会保存到受保护存储")).toBeVisible();
   await expect(imageNodes).toHaveCount(imagesBefore + 2);
   await dialog.getByRole("button", { name: "关闭导演台" }).click();
+});
+
+test("director formal shot creates one durable editable generation chain", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "Chromium owns the WebGL capture and formal-shot integration flow.");
+  test.skip((page.viewportSize()?.width ?? 1440) < 900, "The director desktop layout is covered here.");
+  let submitted: Record<string, any> | undefined;
+  await page.route("**/api/generation-jobs/image", async (route) => {
+    submitted = route.request().postDataJSON() as Record<string, any>;
+    const timestamp = "2026-08-02T00:00:00.000Z";
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: submitted.id,
+        projectId: submitted.projectId,
+        kind: "image",
+        status: "queued",
+        prompt: submitted.prompt,
+        providerId: submitted.providerId,
+        model: submitted.model,
+        parameters: { ...submitted.parameters, executor: "server" },
+        result: {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }),
+    });
+  });
+  await openFreshBoard(page, { requireProjectPanel: false });
+  await clickCanvasTool(page, "导演台");
+  const directorNode = page.locator('[data-node-type="director"]');
+  await directorNode.getByRole("button", { name: "打开导演台" }).click();
+  const dialog = page.getByRole("dialog", { name: "3D 导演台" });
+  await dialog.getByRole("button", { name: "拍摄当前机位" }).click();
+  const generate = dialog.getByRole("button", { name: "生成正式镜头（会调用模型）" });
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect.poll(() => submitted).toBeTruthy();
+  expect(submitted?.parameters.referenceStorageKeys).toHaveLength(1);
+  expect(submitted?.parameters.source).toMatchObject({
+    kind: "director",
+    directorNodeId: expect.any(String),
+    captureId: expect.any(String),
+    cameraId: expect.any(String),
+    configNodeId: expect.any(String),
+  });
+  await dialog.getByRole("button", { name: "关闭导演台" }).click();
+
+  // The canvas virtualizes nodes outside the current viewport. The generated
+  // capture/config/result chain is appended to the right of the director, so
+  // fit it before asserting the durable graph is rendered.
+  await clickCanvasTool(page, "适应");
+
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
+  await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
+  await expect(page.getByTestId("canvas-surface").locator("svg").first().locator("g")).toHaveCount(3);
+  const prompt = page.locator('[data-node-type="config"] textarea').first();
+  await expect(prompt).not.toHaveValue("");
+  await prompt.fill("用户调整后的正式镜头提示词");
+  await expect(prompt).toHaveValue("用户调整后的正式镜头提示词");
+
+  await page.reload();
+  await expect(page.locator('[data-node-type="director"]')).toHaveCount(1);
+  await expect(page.locator('[data-node-type="image"]')).toHaveCount(2);
+  await expect(page.locator('[data-node-type="config"]')).toHaveCount(1);
+  await expect(page.locator('[data-node-type="config"] textarea').first()).toHaveValue("用户调整后的正式镜头提示词");
 });
 
 test("director manages multiple cameras and independent composition guides", async ({ page, browserName }) => {
@@ -3240,6 +3311,16 @@ test("local video and audio nodes persist, render media players, and download", 
     mimeType: "audio/mpeg",
     buffer: Buffer.from("openboard-audio-fixture"),
   });
+
+  // Uploads persist asynchronously. Wait for both durable nodes before
+  // fitting the viewport; otherwise the second node can be added outside the
+  // current spatial-index window and remain virtualized during assertions.
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    return projects.flatMap((project) => project.nodes ?? [])
+      .filter((node: { type?: string }) => node.type === "video" || node.type === "audio")
+      .length;
+  }, { timeout: 15_000 }).toBe(2);
   await page.getByTitle("适应").click();
 
   const videoNode = page.locator('[data-node-type="video"]');
@@ -3968,6 +4049,16 @@ test("node camera settings persist, stay screen-sized, and expand generation pro
   await expect.poll(() => videoPrompts.length).toBe(1);
   expect(videoPrompts[0]).toContain("config camera scene");
   expect(videoPrompts[0]!.match(/Camera: mirrorless camera/g)).toHaveLength(1);
+
+  // The request route observes the prompt before the async generation handler
+  // inserts and persists the result node. Wait for that durable write before
+  // inspecting the exported project.
+  await expect.poll(async () => {
+    const projects = await readServerProjects(page);
+    return projects.flatMap((project) => project.nodes ?? [])
+      .find((item: { id?: string; type?: string }) => item.type === "video" && item.id !== "camera-video-node")
+      ?.metadata?.prompt;
+  }, { timeout: 15_000 }).toBe("config camera scene");
   const configExportPromise = page.waitForEvent("download");
   await page.getByTitle("导出当前", { exact: true }).click();
   const configExport = await configExportPromise;

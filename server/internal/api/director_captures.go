@@ -2,12 +2,15 @@ package api
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,32 +33,34 @@ const (
 var errDirectorCaptureLimit = errors.New("director capture storage limit reached")
 
 type directorCaptureRecord struct {
-	ID             string `json:"id"`
-	ProjectID      string `json:"projectId"`
-	DirectorNodeID string `json:"directorNodeId"`
-	CameraID       string `json:"cameraId"`
-	CameraName     string `json:"cameraName"`
-	CreatedAt      string `json:"createdAt"`
-	Width          int    `json:"width"`
-	Height         int    `json:"height"`
-	Bytes          int    `json:"bytes"`
-	MIMEType       string `json:"mimeType"`
-	StorageKey     string `json:"storageKey"`
-	OrphanedAt     string `json:"orphanedAt,omitempty"`
+	ID             string          `json:"id"`
+	ProjectID      string          `json:"projectId"`
+	DirectorNodeID string          `json:"directorNodeId"`
+	CameraID       string          `json:"cameraId"`
+	CameraName     string          `json:"cameraName"`
+	CreatedAt      string          `json:"createdAt"`
+	Width          int             `json:"width"`
+	Height         int             `json:"height"`
+	Bytes          int             `json:"bytes"`
+	MIMEType       string          `json:"mimeType"`
+	StorageKey     string          `json:"storageKey"`
+	OrphanedAt     string          `json:"orphanedAt,omitempty"`
+	Shot           json.RawMessage `json:"shot,omitempty"`
 }
 
 type directorCaptureResponse struct {
-	ID             string `json:"id"`
-	ProjectID      string `json:"projectId"`
-	DirectorNodeID string `json:"directorNodeId"`
-	CameraID       string `json:"cameraId"`
-	CameraName     string `json:"cameraName"`
-	CreatedAt      string `json:"createdAt"`
-	Width          int    `json:"width"`
-	Height         int    `json:"height"`
-	Bytes          int    `json:"bytes"`
-	MIMEType       string `json:"mimeType"`
-	URL            string `json:"url"`
+	ID             string          `json:"id"`
+	ProjectID      string          `json:"projectId"`
+	DirectorNodeID string          `json:"directorNodeId"`
+	CameraID       string          `json:"cameraId"`
+	CameraName     string          `json:"cameraName"`
+	CreatedAt      string          `json:"createdAt"`
+	Width          int             `json:"width"`
+	Height         int             `json:"height"`
+	Bytes          int             `json:"bytes"`
+	MIMEType       string          `json:"mimeType"`
+	URL            string          `json:"url"`
+	Shot           json.RawMessage `json:"shot,omitempty"`
 }
 
 type directorCaptureDocument struct {
@@ -68,7 +73,8 @@ func captureResponse(value directorCaptureRecord) directorCaptureResponse {
 		ID: value.ID, ProjectID: value.ProjectID, DirectorNodeID: value.DirectorNodeID,
 		CameraID: value.CameraID, CameraName: value.CameraName, CreatedAt: value.CreatedAt,
 		Width: value.Width, Height: value.Height, Bytes: value.Bytes, MIMEType: value.MIMEType,
-		URL: "/api/blobs/" + url.PathEscape(value.StorageKey),
+		URL:  "/api/blobs/" + url.PathEscape(value.StorageKey),
+		Shot: append(json.RawMessage(nil), value.Shot...),
 	}
 }
 
@@ -103,11 +109,241 @@ func validDirectorCaptureRecord(value directorCaptureRecord) bool {
 		orphanValid = orphanErr == nil
 	}
 	return err == nil && orphanValid && !createdAt.IsZero() && projectIDPattern.MatchString(value.ID) &&
-		projectIDPattern.MatchString(value.ProjectID) && projectIDPattern.MatchString(value.DirectorNodeID) &&
-		projectIDPattern.MatchString(value.CameraID) && strings.TrimSpace(value.CameraName) == value.CameraName &&
+		projectIDPattern.MatchString(value.ProjectID) && boardIDPattern.MatchString(value.DirectorNodeID) &&
+		boardIDPattern.MatchString(value.CameraID) && strings.TrimSpace(value.CameraName) == value.CameraName &&
 		len(value.CameraName) >= 1 && len(value.CameraName) <= 100 && value.Width >= 1 && value.Width <= 4096 &&
 		value.Height >= 1 && value.Height <= 4096 && value.Bytes >= 1 && value.Bytes <= maxDirectorCaptureBytes &&
-		value.MIMEType == "image/png" && value.StorageKey == "director-capture:"+value.ID
+		value.MIMEType == "image/png" && value.StorageKey == "director-capture:"+value.ID &&
+		(len(value.Shot) == 0 || validDirectorShotSnapshot(value.Shot, value.DirectorNodeID, value.CameraID, value.CameraName))
+}
+
+type directorShotVector struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+type directorShotTransform struct {
+	Position directorShotVector `json:"position"`
+	Rotation directorShotVector `json:"rotation"`
+	Scale    directorShotVector `json:"scale"`
+}
+type directorShotCamera struct {
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Position    directorShotVector `json:"position"`
+	Target      directorShotVector `json:"target"`
+	FocalLength float64            `json:"focalLength"`
+	Aperture    float64            `json:"aperture"`
+	Aspect      string             `json:"aspect"`
+}
+type directorShotEnvironment struct {
+	RotationY float64 `json:"rotationY"`
+	Intensity float64 `json:"intensity"`
+	SourceID  *string `json:"sourceId,omitempty"`
+}
+type directorShotCharacter struct {
+	Preset string `json:"preset"`
+	Pose   string `json:"pose"`
+	Role   string `json:"role"`
+}
+type directorShotCrowd struct {
+	Preset    string  `json:"preset"`
+	Pose      string  `json:"pose"`
+	Rows      int     `json:"rows"`
+	Columns   int     `json:"columns"`
+	SpacingX  float64 `json:"spacingX"`
+	SpacingZ  float64 `json:"spacingZ"`
+	Variation bool    `json:"variation"`
+	Seed      int64   `json:"seed"`
+}
+type directorShotModelAsset struct {
+	AssetID  string `json:"assetId"`
+	FileName string `json:"fileName"`
+	Bytes    int64  `json:"bytes"`
+}
+type directorShotObject struct {
+	ID         string                  `json:"id"`
+	Kind       string                  `json:"kind"`
+	Name       string                  `json:"name"`
+	Transform  directorShotTransform   `json:"transform"`
+	Character  *directorShotCharacter  `json:"character,omitempty"`
+	Crowd      *directorShotCrowd      `json:"crowd,omitempty"`
+	Primitive  *string                 `json:"primitive,omitempty"`
+	ModelAsset *directorShotModelAsset `json:"modelAsset,omitempty"`
+}
+type directorShotSnapshot struct {
+	Version            int                     `json:"version"`
+	DirectorNodeID     string                  `json:"directorNodeId"`
+	Camera             directorShotCamera      `json:"camera"`
+	Background         string                  `json:"background"`
+	Environment        directorShotEnvironment `json:"environment"`
+	Objects            []directorShotObject    `json:"objects"`
+	OmittedObjectCount int                     `json:"omittedObjectCount"`
+}
+
+func finiteShotNumber(value float64, limit float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && math.Abs(value) <= limit
+}
+func validShotVector(value directorShotVector) bool {
+	return finiteShotNumber(value.X, 100_000) && finiteShotNumber(value.Y, 100_000) && finiteShotNumber(value.Z, 100_000)
+}
+
+var directorShotColorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+var directorShotModelFilePattern = regexp.MustCompile(`(?i)^[^/\\\x00-\x1f\x7f]{1,160}\.glb$`)
+
+func requiredRawFields(raw json.RawMessage, fields ...string) (map[string]json.RawMessage, bool) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil || object == nil {
+		return nil, false
+	}
+	for _, field := range fields {
+		value, exists := object[field]
+		if !exists || len(value) == 0 || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil, false
+		}
+	}
+	return object, true
+}
+
+func validDirectorShotPresence(raw json.RawMessage) bool {
+	top, ok := requiredRawFields(raw, "version", "directorNodeId", "camera", "background", "environment", "objects", "omittedObjectCount")
+	if !ok {
+		return false
+	}
+	camera, ok := requiredRawFields(top["camera"], "id", "name", "position", "target", "focalLength", "aperture", "aspect")
+	if !ok {
+		return false
+	}
+	if _, ok = requiredRawFields(camera["position"], "x", "y", "z"); !ok {
+		return false
+	}
+	if _, ok = requiredRawFields(camera["target"], "x", "y", "z"); !ok {
+		return false
+	}
+	if _, ok = requiredRawFields(top["environment"], "rotationY", "intensity"); !ok {
+		return false
+	}
+	var objects []json.RawMessage
+	if json.Unmarshal(top["objects"], &objects) != nil || objects == nil {
+		return false
+	}
+	for _, rawObject := range objects {
+		object, valid := requiredRawFields(rawObject, "id", "kind", "name", "transform")
+		if !valid {
+			return false
+		}
+		transform, valid := requiredRawFields(object["transform"], "position", "rotation", "scale")
+		if !valid {
+			return false
+		}
+		for _, field := range []string{"position", "rotation", "scale"} {
+			if _, valid = requiredRawFields(transform[field], "x", "y", "z"); !valid {
+				return false
+			}
+		}
+		for _, optional := range []string{"character", "crowd", "primitive", "modelAsset"} {
+			if value, exists := object[optional]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return false
+			}
+		}
+		if value, exists := object["character"]; exists {
+			if _, valid = requiredRawFields(value, "preset", "pose", "role"); !valid {
+				return false
+			}
+		}
+		if value, exists := object["crowd"]; exists {
+			if _, valid = requiredRawFields(value, "preset", "pose", "rows", "columns", "spacingX", "spacingZ", "variation", "seed"); !valid {
+				return false
+			}
+		}
+		if value, exists := object["modelAsset"]; exists {
+			if _, valid = requiredRawFields(value, "assetId", "fileName", "bytes"); !valid {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validDirectorShotSnapshot(raw json.RawMessage, directorID, cameraID, cameraName string) bool {
+	if len(raw) < 2 || len(raw) > 64<<10 || !validDirectorShotPresence(raw) {
+		return false
+	}
+	var shot directorShotSnapshot
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&shot) != nil || ensureJSONEOF(decoder) != nil || shot.Version != 1 ||
+		shot.DirectorNodeID != directorID || shot.Camera.ID != cameraID || shot.Camera.Name != cameraName || !boardIDPattern.MatchString(shot.DirectorNodeID) ||
+		!boardIDPattern.MatchString(shot.Camera.ID) || len(strings.TrimSpace(shot.Camera.Name)) < 1 || len(shot.Camera.Name) > 100 ||
+		!validShotVector(shot.Camera.Position) || !validShotVector(shot.Camera.Target) ||
+		shot.Camera.FocalLength < 1 || shot.Camera.FocalLength > 300 || shot.Camera.Aperture < 0.7 || shot.Camera.Aperture > 64 ||
+		!map[string]bool{"16:9": true, "4:3": true, "1:1": true, "3:4": true, "9:16": true}[shot.Camera.Aspect] ||
+		!directorShotColorPattern.MatchString(shot.Background) || !finiteShotNumber(shot.Environment.RotationY, 360) ||
+		!finiteShotNumber(shot.Environment.Intensity, 2) || shot.Environment.Intensity < 0 ||
+		len(shot.Objects) > 64 || shot.OmittedObjectCount < 0 || shot.OmittedObjectCount > 10_000 {
+		return false
+	}
+	if shot.Environment.SourceID != nil && *shot.Environment.SourceID != "" && !boardIDPattern.MatchString(*shot.Environment.SourceID) {
+		return false
+	}
+	allowedKinds := map[string]bool{"character": true, "crowd": true, "prop": true, "light": true, "model": true}
+	allowedPrimitives := map[string]bool{"box": true, "sphere": true, "cylinder": true, "cone": true, "torus": true, "plane": true}
+	allowedPresets := map[string]bool{"studio": true, "tall": true, "compact": true, "athletic": true, "broad": true, "casual": true, "formal": true, "future": true}
+	allowedPoses := map[string]bool{"neutral": true, "contrapposto": true, "arms-crossed": true, "hands-hips": true, "wave-left": true, "wave-right": true, "point-left": true, "point-right": true, "walk-left": true, "walk-right": true, "run": true, "sit": true, "crouch": true, "lean": true, "reach": true, "look-back": true, "guard": true, "celebrate": true, "talk": true, "camera-ready": true}
+	seen := make(map[string]struct{}, len(shot.Objects))
+	modelCount, crowdCount, population, renderBatches := 0, 0, 0, 0
+	for _, object := range shot.Objects {
+		_, duplicated := seen[object.ID]
+		if !boardIDPattern.MatchString(object.ID) || duplicated || !allowedKinds[object.Kind] || len(object.Name) < 1 || len(object.Name) > 100 ||
+			!validShotVector(object.Transform.Position) || !finiteShotNumber(object.Transform.Rotation.X, 360) ||
+			!finiteShotNumber(object.Transform.Rotation.Y, 360) || !finiteShotNumber(object.Transform.Rotation.Z, 360) ||
+			object.Transform.Scale.X < 0.01 || object.Transform.Scale.X > 1000 || object.Transform.Scale.Y < 0.01 || object.Transform.Scale.Y > 1000 ||
+			object.Transform.Scale.Z < 0.01 || object.Transform.Scale.Z > 1000 {
+			return false
+		}
+		seen[object.ID] = struct{}{}
+		switch object.Kind {
+		case "character":
+			if object.Character == nil || object.Crowd != nil || object.Primitive != nil || object.ModelAsset != nil ||
+				!allowedPresets[object.Character.Preset] || !allowedPoses[object.Character.Pose] ||
+				(object.Character.Role != "actor" && object.Character.Role != "extra") {
+				return false
+			}
+			population++
+		case "crowd":
+			crowdCount++
+			crowd := object.Crowd
+			if crowd == nil || object.Character != nil || object.Primitive != nil || object.ModelAsset != nil || crowdCount > 32 ||
+				!allowedPresets[crowd.Preset] || !allowedPoses[crowd.Pose] || crowd.Rows < 1 || crowd.Rows > 64 || crowd.Columns < 1 || crowd.Columns > 64 ||
+				crowd.Rows*crowd.Columns > 1024 || !finiteShotNumber(crowd.SpacingX, 100) || crowd.SpacingX < 0.1 ||
+				!finiteShotNumber(crowd.SpacingZ, 100) || crowd.SpacingZ < 0.1 || crowd.Seed < 0 || crowd.Seed > 0x7fffffff {
+				return false
+			}
+			population += crowd.Rows * crowd.Columns
+			if crowd.Variation {
+				renderBatches += min(crowd.Rows*crowd.Columns, 41)
+			} else {
+				renderBatches++
+			}
+		case "prop":
+			if object.Primitive == nil || !allowedPrimitives[*object.Primitive] || object.Character != nil || object.Crowd != nil || object.ModelAsset != nil {
+				return false
+			}
+		case "light":
+			if object.Character != nil || object.Crowd != nil || object.Primitive != nil || object.ModelAsset != nil {
+				return false
+			}
+		case "model":
+			modelCount++
+			asset := object.ModelAsset
+			if asset == nil || object.Character != nil || object.Crowd != nil || object.Primitive != nil || modelCount > 32 ||
+				!boardIDPattern.MatchString(asset.AssetID) || !directorShotModelFilePattern.MatchString(asset.FileName) || asset.FileName == ".glb" ||
+				asset.Bytes < 1 || asset.Bytes > 100<<20 {
+				return false
+			}
+		}
+	}
+	return population <= 4096 && renderBatches <= 128
 }
 
 func (s *Server) readDirectorCaptureDocument(r *http.Request) ([]byte, directorCaptureDocument, error) {
@@ -158,8 +394,15 @@ func parseCaptureQuery(r *http.Request) (directorCaptureRecord, error) {
 		CreatedAt: createdAt.UTC().Format(time.RFC3339Nano), Width: width, Height: height,
 		MIMEType: "image/png",
 	}
+	if encoded := strings.TrimSpace(r.Header.Get("X-OpenBoard-Director-Shot")); encoded != "" {
+		shot, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || !validDirectorShotSnapshot(shot, value.DirectorNodeID, value.CameraID, value.CameraName) {
+			return directorCaptureRecord{}, errors.New("invalid director shot metadata")
+		}
+		value.Shot = append(json.RawMessage(nil), shot...)
+	}
 	if widthErr != nil || heightErr != nil || timeErr != nil || !projectIDPattern.MatchString(value.ProjectID) ||
-		!projectIDPattern.MatchString(value.DirectorNodeID) || !projectIDPattern.MatchString(value.CameraID) ||
+		!boardIDPattern.MatchString(value.DirectorNodeID) || !boardIDPattern.MatchString(value.CameraID) ||
 		len(value.CameraName) < 1 || len(value.CameraName) > 100 || width < 1 || width > 4096 || height < 1 || height > 4096 {
 		return directorCaptureRecord{}, errors.New("invalid director capture metadata")
 	}
@@ -181,11 +424,66 @@ func validateDirectorCapturePNG(data []byte, expectedWidth, expectedHeight int) 
 	return nil
 }
 
+func readDirectorCapturePayload(w http.ResponseWriter, r *http.Request, value *directorCaptureRecord) ([]byte, error) {
+	mediaType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0])
+	if mediaType == "image/png" {
+		r.Body = http.MaxBytesReader(w, r.Body, maxDirectorCaptureBytes)
+		return io.ReadAll(r.Body)
+	}
+	if mediaType != "multipart/form-data" {
+		return nil, errors.New("capture must be image/png or multipart/form-data")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxDirectorCaptureBytes+(128<<10))
+	reader, err := r.MultipartReader()
+	if err != nil {
+		return nil, errors.New("invalid director capture multipart data")
+	}
+	var data []byte
+	for parts := 0; ; parts++ {
+		if parts > 3 {
+			return nil, errors.New("invalid director capture multipart data")
+		}
+		part, nextErr := reader.NextPart()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return nil, errors.New("invalid director capture multipart data")
+		}
+		name := part.FormName()
+		switch name {
+		case "capture":
+			if data != nil {
+				return nil, errors.New("duplicate director capture image")
+			}
+			data, err = io.ReadAll(io.LimitReader(part, maxDirectorCaptureBytes+1))
+			if err != nil || len(data) > maxDirectorCaptureBytes {
+				return nil, errors.New("invalid director capture image")
+			}
+		case "shot":
+			if len(value.Shot) != 0 {
+				return nil, errors.New("duplicate director shot metadata")
+			}
+			shot, readErr := io.ReadAll(io.LimitReader(part, (64<<10)+1))
+			if readErr != nil || !validDirectorShotSnapshot(shot, value.DirectorNodeID, value.CameraID, value.CameraName) {
+				return nil, errors.New("invalid director shot metadata")
+			}
+			value.Shot = append(json.RawMessage(nil), shot...)
+		default:
+			return nil, errors.New("invalid director capture multipart field")
+		}
+	}
+	if data == nil {
+		return nil, errors.New("director capture image is missing")
+	}
+	return data, nil
+}
+
 func (s *Server) listDirectorCaptures(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("projectId")
 	directorID := r.URL.Query().Get("directorNodeId")
 	if (projectID == "") != (directorID == "") ||
-		(projectID != "" && (!projectIDPattern.MatchString(projectID) || !projectIDPattern.MatchString(directorID))) {
+		(projectID != "" && (!projectIDPattern.MatchString(projectID) || !boardIDPattern.MatchString(directorID))) {
 		http.Error(w, "invalid capture scope", http.StatusBadRequest)
 		return
 	}
@@ -221,17 +519,12 @@ func (s *Server) createDirectorCapture(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many concurrent capture uploads", http.StatusTooManyRequests)
 		return
 	}
-	if mediaType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); mediaType != "image/png" {
-		http.Error(w, "capture must be image/png", http.StatusUnsupportedMediaType)
-		return
-	}
 	value, err := parseCaptureQuery(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxDirectorCaptureBytes)
-	data, err := io.ReadAll(r.Body)
+	data, err := readDirectorCapturePayload(w, r, &value)
 	if err != nil || validateDirectorCapturePNG(data, value.Width, value.Height) != nil {
 		http.Error(w, "invalid capture PNG", http.StatusBadRequest)
 		return
@@ -350,7 +643,7 @@ func (s *Server) pruneDirectorCaptures(w http.ResponseWriter, r *http.Request) {
 		}
 		directors := make(map[string]struct{}, len(directorIDs))
 		for _, directorID := range directorIDs {
-			if !projectIDPattern.MatchString(directorID) {
+			if !boardIDPattern.MatchString(directorID) {
 				http.Error(w, "invalid director capture directory", http.StatusBadRequest)
 				return
 			}
