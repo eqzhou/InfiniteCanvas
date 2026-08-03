@@ -30,7 +30,7 @@ import {
 } from "@/lib/image-generation-options";
 import { resolveImageSizeForAspect } from "@/lib/workbench-preferences";
 import { getProvider } from "@/lib/ai-config";
-import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type } from "lucide-react";
+import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type, Upload } from "lucide-react";
 import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
 import { showsFloatingNodeActions } from "@/lib/node-action-visibility";
 import { buildDirectorShotPrompt, planDirectorShotGeneration } from "@/lib/director-shot-generation";
@@ -149,6 +149,27 @@ export function BoardNodeView({
               : node.type === "plugin"
                 ? Puzzle
             : Settings2;
+  const importImageIntoNode = (file: File) => {
+    void (async () => {
+      const uploaded = await uploadMedia(file, "image");
+      const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
+      updateNode(node.id, {
+        metadata: {
+          content: uploaded.url,
+          storageKey: uploaded.storageKey,
+          naturalWidth: uploaded.width,
+          naturalHeight: uploaded.height,
+          bytes: uploaded.bytes,
+          mimeType: uploaded.mimeType,
+          status: "success",
+        },
+        width: display.width,
+        height: display.height,
+      });
+    })().catch((error: unknown) => {
+      window.alert(error instanceof Error ? error.message : "图片导入失败");
+    });
+  };
 
   return (
     <div
@@ -307,23 +328,74 @@ export function BoardNodeView({
 
         {node.type === "image" ? (
           node.metadata.content ? (
-            <img
-              src={node.metadata.content}
-              alt={node.title}
-              className="h-full w-full object-contain"
-              draggable={false}
-              onDoubleClick={(event) => {
-                event.stopPropagation();
-                setImagePreviewOpen(true);
-              }}
-            />
+            <div className="relative h-full w-full">
+              <img
+                src={node.metadata.content}
+                alt={node.title}
+                className="h-full w-full object-contain"
+                draggable={false}
+                onDoubleClick={(event) => {
+                  event.stopPropagation();
+                  setImagePreviewOpen(true);
+                }}
+              />
+              {node.metadata.status !== "loading" ? (
+                <label
+                  aria-label="替换图片"
+                  title="替换图片"
+                  className="absolute bottom-2 left-2 inline-flex cursor-pointer items-center gap-1.5 rounded border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_88%,transparent)] px-2 py-1 text-[11px] text-[var(--ob-ink)] shadow-sm backdrop-blur-sm"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                >
+                  <Upload size={13} />
+                  替换图片
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    aria-label="替换图片"
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0];
+                      if (file) importImageIntoNode(file);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              ) : null}
+            </div>
           ) : (
-            <div className="grid h-full place-items-center text-sm text-[var(--ob-muted)]">
-              {node.metadata.status === "loading"
-                ? "生成中…"
-                : node.metadata.status === "error"
-                  ? node.metadata.errorDetails || "生成失败"
-                  : "空图片节点"}
+            <div
+              className="flex h-full flex-col items-center justify-center gap-2 text-sm text-[var(--ob-muted)]"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {node.metadata.status === "loading" ? (
+                "生成中…"
+              ) : node.metadata.status === "error" ? (
+                <span className="max-w-[90%] break-words text-center">
+                  {node.metadata.errorDetails || "生成失败"}
+                </span>
+              ) : null}
+              {node.metadata.status !== "loading" ? (
+                <label
+                  aria-label="上传图片"
+                  className="ob-btn inline-flex cursor-pointer items-center gap-1.5 px-3 py-1.5 text-xs"
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  <Upload size={14} />
+                  上传图片
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    aria-label="上传图片"
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0];
+                      if (file) importImageIntoNode(file);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              ) : null}
             </div>
           )
         ) : null}
@@ -851,42 +923,6 @@ export function BoardNodeView({
       {(node.metadata.isBatchRoot || node.metadata.batchRootId) ? (
         <BatchGroupControls node={node} />
       ) : null}
-      {selected && node.type === "image" ? (
-        <label
-          className="absolute -bottom-8 left-0 cursor-pointer rounded border border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-0.5 text-[11px]"
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          替换图片
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              void (async () => {
-                const uploaded = await uploadMedia(file, "image");
-                const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
-                updateNode(node.id, {
-                  metadata: {
-                    content: uploaded.url,
-                    storageKey: uploaded.storageKey,
-                    naturalWidth: uploaded.width,
-                    naturalHeight: uploaded.height,
-                    bytes: uploaded.bytes,
-                    mimeType: uploaded.mimeType,
-                    status: "success",
-                  },
-                  width: display.width,
-                  height: display.height,
-                });
-              })();
-              e.currentTarget.value = "";
-            }}
-          />
-        </label>
-      ) : null}
-
       {node.type !== "group" ? (
         <>
           <button

@@ -178,6 +178,7 @@ export function PromptChipInput({
   const rootRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
+  const mentionQueryRef = useRef<string | null>(null);
   const [mention, setMention] = useState<MentionState | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const filtered = mention
@@ -207,13 +208,20 @@ export function PromptChipInput({
     const before = valueBeforeCaret(editor);
     const match = before?.match(/@([^\s@]*)$/u);
     if (!match) {
+      mentionQueryRef.current = null;
       setMention(null);
       return;
     }
     const selection = window.getSelection();
     const rect = selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
     const rootRect = root.getBoundingClientRect();
-    setActiveIndex(0);
+    // `onKeyUp` also calls this function. Keep the highlighted option when
+    // the query is unchanged; resetting here made ArrowUp/ArrowDown jump
+    // back to the first reference after every key press.
+    if (mentionQueryRef.current !== match[1]) {
+      mentionQueryRef.current = match[1];
+      setActiveIndex(0);
+    }
     setMention({
       query: match[1],
       x: Math.max(0, (rect?.left ?? rootRect.left) - rootRect.left),
@@ -239,6 +247,7 @@ export function PromptChipInput({
     text.parentNode?.insertBefore(chip, suffix);
     chip.parentNode?.insertBefore(spacer, suffix);
     placeCaretAfter(chip);
+    mentionQueryRef.current = null;
     setMention(null);
     sync();
     editor.focus();
@@ -259,6 +268,7 @@ export function PromptChipInput({
       }
       if (event.key === "Escape") {
         event.preventDefault();
+        mentionQueryRef.current = null;
         setMention(null);
         return;
       }
@@ -337,7 +347,10 @@ export function PromptChipInput({
           sync();
           updateMention();
         }}
-        onBlur={() => window.setTimeout(() => setMention(null), 100)}
+        onBlur={() => window.setTimeout(() => {
+          mentionQueryRef.current = null;
+          setMention(null);
+        }, 100)}
       />
       {mention && filtered.length ? (
         <div

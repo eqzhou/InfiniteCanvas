@@ -74,6 +74,7 @@ import {
   orderedVisiblePanoramaActions,
   type ImageToolbarAction,
 } from "@/lib/image-toolbar-preferences";
+import { hasImageSource, shouldShowImageGenerationAction } from "@/lib/node-action-visibility";
 import { CameraPromptPanel } from "@/components/canvas/CameraPromptPanel";
 import { TextEntryDialog } from "@/components/canvas/TextEntryDialog";
 import {
@@ -1155,13 +1156,16 @@ export function NodeActions({
   };
 
   const imageToolbarPreferences = normalizeImageToolbarPreferences(config.imageToolbar);
-  const imageToolbarActions = orderedVisibleImageActions(imageToolbarPreferences);
+  const imageHasSource = hasImageSource(node);
+  const imageToolbarActions = orderedVisibleImageActions(imageToolbarPreferences).filter(
+    (action) => action !== "generate" || shouldShowImageGenerationAction(node),
+  );
   const panoramaToolbarActions = orderedVisiblePanoramaActions(imageToolbarPreferences);
   const imageToolLabel = (label: string) => imageToolbarPreferences.showLabels ? label : undefined;
   const renderImageToolbarAction = (action: ImageToolbarAction) => {
     switch (action) {
       case "generate":
-        return <IconBtn key={action} label={imageToolLabel(node.metadata.content ? "续作" : "生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : node.metadata.content ? "基于此图继续创作" : "生成图片"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openImageGenerationDialog())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(imageHasSource ? "续作" : "生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : imageHasSource ? "基于此图继续创作" : "生成图片"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openImageGenerationDialog())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
       case "video":
         return <IconBtn key={action} label={imageToolLabel("视频")} title="生成视频" onClick={openVideoGenerationDialog}><span className="text-[10px] font-semibold">视频</span></IconBtn>;
       case "reverse":
