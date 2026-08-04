@@ -105,32 +105,62 @@ export function BoardNodeView({
   const directorProjectId = project?.id ?? node.id;
   const config = useBoardStore((s) => s.config);
   const prompts = useBoardStore((s) => s.prompts);
-  const installedPlugins = config.plugins ?? [];
-  const activeChannel = config.channels.find(
-    (channel) => channel.id === config.activeChannelId,
-  );
-  const configuredGenerationChannel = node.metadata.generationChannelId
-    ? generationChannels.find((channel) => channel.id === node.metadata.generationChannelId)
-    : undefined;
-  const activeGenerationChannel = config.activeSharedChannelId
-    ? generationChannels.find((channel) => channel.id === config.activeSharedChannelId)
-    : activeChannel;
-  const imageChannel = configuredGenerationChannel ?? activeGenerationChannel ?? activeChannel;
-  const imageProvider = imageChannel ? getProvider(imageChannel, "image") : undefined;
-  const imageModel = node.metadata.model || imageProvider?.model || "";
-  const imageQualityOptions = imageQualityOptionsFor(imageProvider?.protocol, imageModel);
-  const imageSizeOptions = imageSizeOptionsFor(imageProvider?.protocol, imageModel);
-  const imageOutputLimit = imageOutputLimitFor(imageProvider?.protocol, imageModel);
-  const imageQuality = normalizeImageQualityForProvider(
-    node.metadata.quality ?? config.imageQuality,
-    imageProvider?.protocol,
-    imageModel,
-  );
-  const pluginManifest = node.type === "plugin"
-    ? config.disabledPluginIds?.includes(node.metadata.pluginId ?? "")
-      ? undefined
-      : findPluginManifest(node.metadata.pluginId, installedPlugins)
-    : undefined;
+  // Provider/model/option derivation depends only on config, the merged
+  // generation channels, and a few node.metadata fields — never on
+  // node.position or the viewport. Pan/zoom/drag re-render every visible node
+  // each rAF frame; memoizing on the real inputs (primitive metadata fields,
+  // not the per-frame-replaced `node` object) keeps these option arrays from
+  // being rebuilt N times per frame.
+  const {
+    activeChannel,
+    imageChannel,
+    imageProvider,
+    imageQualityOptions,
+    imageSizeOptions,
+    imageOutputLimit,
+    imageQuality,
+    pluginManifest,
+  } = useMemo(() => {
+    const installedPlugins = config.plugins ?? [];
+    const activeChannel = config.channels.find(
+      (channel) => channel.id === config.activeChannelId,
+    );
+    const configuredGenerationChannel = node.metadata.generationChannelId
+      ? generationChannels.find((channel) => channel.id === node.metadata.generationChannelId)
+      : undefined;
+    const activeGenerationChannel = config.activeSharedChannelId
+      ? generationChannels.find((channel) => channel.id === config.activeSharedChannelId)
+      : activeChannel;
+    const imageChannel = configuredGenerationChannel ?? activeGenerationChannel ?? activeChannel;
+    const imageProvider = imageChannel ? getProvider(imageChannel, "image") : undefined;
+    const imageModel = node.metadata.model || imageProvider?.model || "";
+    return {
+      activeChannel,
+      imageChannel,
+      imageProvider,
+      imageQualityOptions: imageQualityOptionsFor(imageProvider?.protocol, imageModel),
+      imageSizeOptions: imageSizeOptionsFor(imageProvider?.protocol, imageModel),
+      imageOutputLimit: imageOutputLimitFor(imageProvider?.protocol, imageModel),
+      imageQuality: normalizeImageQualityForProvider(
+        node.metadata.quality ?? config.imageQuality,
+        imageProvider?.protocol,
+        imageModel,
+      ),
+      pluginManifest: node.type === "plugin"
+        ? config.disabledPluginIds?.includes(node.metadata.pluginId ?? "")
+          ? undefined
+          : findPluginManifest(node.metadata.pluginId, installedPlugins)
+        : undefined,
+    };
+  }, [
+    config,
+    generationChannels,
+    node.type,
+    node.metadata.generationChannelId,
+    node.metadata.model,
+    node.metadata.quality,
+    node.metadata.pluginId,
+  ]);
   const Icon =
     node.type === "text"
       ? Type
