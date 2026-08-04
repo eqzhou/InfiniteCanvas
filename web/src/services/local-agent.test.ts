@@ -6,10 +6,12 @@ import {
   deleteCodexAttachment,
   decideProjectSync,
   fetchAgentStatus,
+  getCodexHistory,
   getCodexSession,
   interruptCodexTurn,
   normalizeAgentBaseUrl,
   parseCodexSseRecords,
+  prewarmCodexSession,
   resolveAgentBaseUrl,
   respondCodexApproval,
   listCodexHistory,
@@ -100,9 +102,105 @@ describe("Codex history and file-manager APIs", () => {
     expect(JSON.parse(String(requests[2].init?.body))).toEqual({ ids: ["history-one", "history-two"] });
     expect(JSON.parse(String(requests[4].init?.body))).toEqual({ sessionId: "session-one", path: "web/src/App.tsx" });
   });
+
+  test("rejects malformed history events before transcript hydration", async () => {
+    const response = new Response(JSON.stringify({
+      id: "history-one", profile: "default", threadId: "thread-one", title: "检查画布",
+      createdAt: "2026-07-31T00:00:00Z", updatedAt: "2026-07-31T00:00:01Z",
+      messageCount: 0, status: "completed", messages: [], events: [null],
+    }), { headers: { "content-type": "application/json" } });
+
+    await expect(getCodexHistory(
+      { baseUrl: "http://localhost:5173", token: ["history", "fixture"].join("-") },
+      "history-one",
+      "default",
+      async () => response,
+    )).rejects.toThrow("invalid Codex history transcript");
+  });
 });
 
 describe("local agent connection", () => {
+  test("prewarms a reusable Codex session through the normal session boundary", async () => {
+    let requestUrl = "";
+    let requestBody: unknown;
+    const session = await prewarmCodexSession(
+      { baseUrl: "http://localhost:5173" },
+      "default",
+      async (input, init) => {
+        requestUrl = String(input);
+        requestBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ id: "session-warm", running: false }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+
+    expect(session.id).toBe("session-warm");
+    expect(requestUrl).toBe("http://localhost:5173/api/codex/session");
+    expect(requestBody).toEqual({ profile: "default", fresh: false });
+  });
+
+  test("deduplicates concurrent prewarm requests for the same connection", async () => {
+    let requestCount = 0;
+    const fetcher = async () => {
+      requestCount += 1;
+      return new Response(JSON.stringify({ id: "session-deduped", running: false }), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const connection = { baseUrl: "http://localhost:5174", token: ["dedupe", "fixture"].join("-") };
+    const sessions = await Promise.all([
+      prewarmCodexSession(connection, "default", fetcher),
+      prewarmCodexSession(connection, "default", fetcher),
+    ]);
+
+    expect(requestCount).toBe(1);
+    expect(sessions[0]).toEqual(sessions[1]);
+  });
+
+  test("scopes same-origin prewarm sessions to the active browser session", async () => {
+    const priorStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const priorLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key),
+      },
+    });
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: new URL("http://localhost:5188/"),
+    });
+    let requestCount = 0;
+    const requestSessionTokens: Array<string | null> = [];
+    const connection = { baseUrl: "http://localhost:5188" };
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestCount += 1;
+      requestSessionTokens.push(new Headers(init?.headers).get("X-OpenBoard-Session"));
+      if (requestCount === 1) setSessionToken("session-b");
+      return new Response(JSON.stringify({ id: `session-${requestCount}`, running: false }), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      setSessionToken("session-a");
+      await prewarmCodexSession(connection, "default", fetcher);
+      setSessionToken("session-b");
+      await prewarmCodexSession(connection, "default", fetcher);
+      expect(requestCount).toBe(2);
+      expect(requestSessionTokens).toEqual(["session-a", "session-b"]);
+    } finally {
+      clearSessionToken();
+      if (priorStorage) Object.defineProperty(globalThis, "localStorage", priorStorage);
+      else delete (globalThis as { localStorage?: Storage }).localStorage;
+      if (priorLocation) Object.defineProperty(globalThis, "location", priorLocation);
+      else delete (globalThis as { location?: Location }).location;
+    }
+  });
+
   test("uses the same-origin proxy for the default URL when no browser token exists", () => {
     expect(resolveAgentBaseUrl("http://127.0.0.1:8790", "", "http://localhost:5173"))
       .toBe("http://localhost:5173");
@@ -123,6 +221,11 @@ describe("local agent connection", () => {
     expect(first.remainder).toBe('data: {"type":"approval"}');
     const flushed = parseCodexSseRecords(first.remainder, true);
     expect(flushed.events).toEqual([{ type: "approval" }]);
+  });
+
+  test("rejects oversized Codex SSE frames before parsing their payload", () => {
+    const oversized = JSON.stringify({ type: "notification", data: "x".repeat(300_000) });
+    expect(() => parseCodexSseRecords(`data: ${oversized}\n\n`)).toThrow("size limit");
   });
 
   test("allows loopback HTTP and HTTPS while normalizing trailing slashes", () => {

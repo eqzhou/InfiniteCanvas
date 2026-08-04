@@ -902,6 +902,7 @@ export function BoardCanvas() {
               node={node}
               generationChannels={generationChannels}
               selected={selectedIds.includes(node.id)}
+              resizing={drag?.kind === "resize" && drag.id === node.id}
               related={related.has(node.id)}
               groupHighlighted={groupHoverId === node.id}
               onSelect={(additive) => toggleSelect(node.id, additive)}

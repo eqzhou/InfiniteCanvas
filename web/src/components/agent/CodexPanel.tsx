@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, History, ImagePlus, Plus, Send, Square, Trash2, Unplug, X } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   closeCodexSession,
   bulkDeleteCodexHistory,
   createCodexSession,
   deleteCodexAttachment,
   deleteCodexHistory,
+  getCodexHistory,
+  getCodexConnectionScope,
   getCodexSession,
   listCodexHistory,
   listCodexModels,
   interruptCodexTurn,
+  prewarmCodexSession,
   revealCodexFile,
   respondCodexApproval,
   restoreCodexHistory,
@@ -40,6 +41,8 @@ import {
 } from "@/services/codex-events";
 import {
   formatCodexElapsed,
+  mergeCodexLogs,
+  mergeCodexProgress,
   reduceCodexProgress,
   type CodexProgressItem,
 } from "@/services/codex-progress";
@@ -58,26 +61,18 @@ import { AgentDiagnosticLog } from "@/components/agent/AgentDiagnosticLog";
 import { CodexProgressList } from "@/components/agent/CodexProgressList";
 import { AgentJumpToLatest } from "@/components/agent/AgentJumpToLatest";
 import { CodexModelControls, resolveCodexReasoningEffort } from "@/components/agent/CodexModelControls";
+import { AgentMarkdownMessage } from "@/components/agent/agent-markdown";
+import {
+  addCodexUserMessage,
+  applyCodexTranscriptEvent,
+  hydrateCodexTranscript,
+  mergeCodexTranscript,
+  type CodexTranscriptState,
+} from "@/services/codex-transcript";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = SharedTurnStatus;
 const CODEX_PROFILE = "default";
-
-function MarkdownMessage({ text }: { text: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      skipHtml
-      components={{
-        a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="underline">{children}</a>,
-        img: () => <span>[图片]</span>,
-        pre: ({ children }) => <pre className="max-w-full overflow-auto whitespace-pre-wrap rounded bg-[var(--ob-accent-soft)] p-1">{children}</pre>,
-      }}
-    >
-      {text}
-    </ReactMarkdown>
-  );
-}
 
 function historyTurnStatus(status: string, running: boolean): TurnStatus {
   if (running || status === "running") return "running";
@@ -206,11 +201,40 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const preferenceWriteRef = useRef<Promise<void>>(Promise.resolve());
   const preferenceRevisionRef = useRef(0);
   const sessionIdRef = useRef<string | undefined>(undefined);
+  const sessionInitializationRef = useRef<{
+    key: string;
+    promise: Promise<CodexSession | null>;
+  } | null>(null);
+  const transcriptStateRef = useRef<CodexTranscriptState>(hydrateCodexTranscript([], []));
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const previews = useMemo(() => files.map((file) => ({ file, url: URL.createObjectURL(file) })), [files]);
   const progressGroups = useMemo(() => groupCodexProgress(progress), [progress]);
   const sessionId = session?.id;
+
+  const resetTranscript = () => {
+    transcriptStateRef.current = hydrateCodexTranscript([], []);
+    setMessages([]);
+  };
+
+  const hydrateTranscript = (record: CodexHistoryRecord) => {
+    const next = hydrateCodexTranscript(record.messages, record.events);
+    transcriptStateRef.current = next;
+    setMessages(next.messages);
+  };
+
+  const mergeTranscript = (record: CodexHistoryRecord) => {
+    const next = mergeCodexTranscript(transcriptStateRef.current, record.messages, record.events);
+    transcriptStateRef.current = next;
+    setMessages(next.messages);
+  };
+
+  const applyTranscriptEvent = (event: CodexEvent) => {
+    const previous = transcriptStateRef.current;
+    const next = applyCodexTranscriptEvent(previous, event);
+    transcriptStateRef.current = next;
+    if (next.messages !== previous.messages) setMessages(next.messages);
+  };
 
   useEffect(() => {
     return () => {
@@ -337,16 +361,34 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
 
   useEffect(() => {
     let active = true;
+    let sync: ReturnType<typeof createCodexSessionSync> | null = null;
+    let initialization: Promise<CodexSession | null> | undefined;
+    const initializationKey = `${connection.baseUrl}\u0000${connection.token ?? ""}\u0000${connection.sessionToken ?? ""}`;
+    const hydrateSharedHistory = (current: CodexSession | null) => {
+      if (!current?.historyId) return;
+      const expectedSessionId = current.id;
+      void getCodexHistory(connection, current.historyId, CODEX_PROFILE)
+        .then((record) => {
+          if (!active || sessionIdRef.current !== expectedSessionId) return;
+          mergeTranscript(record);
+          const replay = replayHistoryProgress(record);
+          setLogs((current) => mergeCodexLogs(replay.logs, current));
+          setProgress((current) => mergeCodexProgress(replay.progress, current));
+          setProgressOpen(replay.progress.length > 0);
+        })
+        .catch(() => undefined);
+    };
     const applyShared = (shared: { session: CodexSession | null; turnStatus: TurnStatus }) => {
       if (!active) return;
       sharedRevisionRef.current += 1;
       const nextSessionId = shared.session?.id;
       if (shouldResetCodexTranscript(sessionIdRef.current, nextSessionId)) {
-        setMessages([]);
+        resetTranscript();
         setLogs([]);
         setProgress([]);
         setFiles([]);
         setApprovals([]);
+        hydrateSharedHistory(shared.session);
       }
       sessionIdRef.current = nextSessionId;
       setSession(shared.session);
@@ -356,32 +398,52 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
         setApprovals([]);
       }
     };
-    const sync = createCodexSessionSync(CODEX_PROFILE, applyShared);
-    syncRef.current = sync;
-    const requestRevision = sharedRevisionRef.current;
-    void getCodexSession(connection, CODEX_PROFILE)
-      .then((current) => {
-        if (!active || sharedRevisionRef.current !== requestRevision) return;
-        const status: TurnStatus = current?.running ? "running" : "idle";
-        if (shouldResetCodexTranscript(sessionIdRef.current, current?.id)) {
-          setMessages([]);
-          setLogs([]);
-          setProgress([]);
-          setFiles([]);
-          setApprovals([]);
-        }
-        sessionIdRef.current = current?.id;
-        setSession(current);
-        setTurnStatus(status);
-        turnStatusRef.current = status;
-        sync.publish(current, status);
-      })
+    setBusy(true);
+    const initialize = async () => {
+      const scopeKey = await getCodexConnectionScope(connection);
+      if (!active) return;
+      sync = createCodexSessionSync(CODEX_PROFILE, applyShared, scopeKey);
+      syncRef.current = sync;
+      const requestRevision = sharedRevisionRef.current;
+      initialization = sessionInitializationRef.current?.key === initializationKey
+        ? sessionInitializationRef.current.promise
+        : getCodexSession(connection, CODEX_PROFILE)
+          .then((existing) => {
+            if (sessionInitializationRef.current?.key !== initializationKey) return null;
+            return existing ?? prewarmCodexSession(connection, CODEX_PROFILE);
+          });
+      sessionInitializationRef.current = { key: initializationKey, promise: initialization };
+      const current = await initialization;
+      if (!active || sharedRevisionRef.current !== requestRevision) return;
+      const status: TurnStatus = current?.running ? "running" : "idle";
+      if (shouldResetCodexTranscript(sessionIdRef.current, current?.id)) {
+        resetTranscript();
+        setLogs([]);
+        setProgress([]);
+        setFiles([]);
+        setApprovals([]);
+      }
+      sessionIdRef.current = current?.id;
+      setSession(current);
+      setTurnStatus(status);
+      turnStatusRef.current = status;
+      sync?.publish(current, status);
+      hydrateSharedHistory(current);
+    };
+    void initialize()
       .catch((cause) => {
+        if (sessionInitializationRef.current?.key === initializationKey &&
+            sessionInitializationRef.current.promise === initialization) {
+          sessionInitializationRef.current = null;
+        }
         if (active) setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (active) setBusy(false);
       });
     return () => {
       active = false;
-      sync.close();
+      sync?.close();
       if (syncRef.current === sync) syncRef.current = null;
     };
   }, [connection]);
@@ -410,12 +472,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       if (event.method === "openboard/user_message") {
         const data = event.data as { id?: unknown; text?: unknown } | undefined;
         if (typeof data?.id !== "string" || typeof data.text !== "string") return;
-        const id = data.id;
-        const messageText = data.text;
-        const message: Message = { id, role: "user", text: messageText };
-        setMessages((current) => current.some((message) => message.id === id)
-          ? current
-          : [...current, message].slice(-120));
+        applyTranscriptEvent(event);
         return;
       }
       const eventThreadId = codexEventThreadId(event);
@@ -427,11 +484,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           : [...current, effect.event].slice(-32));
       }
       if (effect.kind === "assistant-delta") {
-        setMessages((current) => {
-          const last = current[current.length - 1];
-          if (last?.role === "assistant") return [...current.slice(0, -1), { ...last, text: last.text + effect.text }];
-          return [...current, { role: "assistant", text: effect.text }];
-        });
+        applyTranscriptEvent(event);
       }
       if (effect.kind === "item") {
         setLogs((current) => [...current.slice(-99), [effect.text, effect.status, effect.detail].filter(Boolean).join(" · ")]);
@@ -506,11 +559,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       const replay = replayHistoryProgress(restored.history);
       sessionIdRef.current = restored.session.id;
       setSession(restored.session);
-      setMessages(restored.history.messages.map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-      })).slice(-120));
+      hydrateTranscript(restored.history);
       setLogs(replay.logs);
       setProgress(replay.progress);
       setProgressOpen(replay.progress.length > 0);
@@ -578,7 +627,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     setError(null);
     setReconnecting(false);
     if (fresh) {
-      setMessages([]);
+      resetTranscript();
       setLogs([]);
       setProgress([]);
       setFiles([]);
@@ -596,7 +645,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       syncRef.current?.publish(next, status);
       setApprovals([]);
       if (fresh || shouldResetCodexTranscript(previousSessionId, next.id)) {
-        setMessages([]);
+        resetTranscript();
         setLogs([]);
         setProgress([]);
         setFiles([]);
@@ -619,8 +668,12 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     setReconnecting(false);
     setText("");
     setFiles([]);
-    const optimisticMessage: Message = { id: clientMessageId, role: "user", text: prompt };
-    setMessages((current) => [...current, optimisticMessage].slice(-120));
+    const optimisticState = addCodexUserMessage(transcriptStateRef.current, {
+      id: clientMessageId,
+      text: prompt,
+    });
+    transcriptStateRef.current = optimisticState;
+    setMessages(optimisticState.messages);
     setProgress([]);
     setProgressOpen(true);
     setTurnStartedAt(Date.now());
@@ -739,7 +792,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               className="ob-icon-btn h-7 w-7"
               title="关闭 Codex 会话"
               aria-label="关闭 Codex 会话"
-              disabled={turnStatus === "running"}
+              disabled={busy || turnStatus === "running"}
               onClick={() => {
                 sharedRevisionRef.current += 1;
                 void closeCodexSession(connection, session.id).then(() => {
@@ -857,7 +910,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                       {message.role === "user" ? "你" : "Codex"}
                     </div>
                     {message.role === "assistant" ? (
-                      <MarkdownMessage text={message.text} />
+                      <AgentMarkdownMessage text={message.text} />
                     ) : (
                       <div className="whitespace-pre-wrap text-[var(--ob-ink)]">{message.text}</div>
                     )}
@@ -917,7 +970,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               effort={selectedEffort}
               error={modelCatalogError}
               loading={modelCatalogLoading}
-              disabled={turnStatus === "running"}
+              disabled={busy || turnStatus === "running"}
               onModelChange={(model) => {
                 const selected = models.find((item) => item.model === model);
                 if (!selected) return;
@@ -939,7 +992,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               <label htmlFor="codex-permission-mode" className="text-[10px] text-[var(--ob-muted)]">权限</label>
               <select
                 id="codex-permission-mode"
-                disabled={turnStatus === "running"}
+                disabled={busy || turnStatus === "running"}
                 value={permissionMode}
                 onChange={(event) => {
                   const next = event.target.value as CodexPermissionMode;
@@ -960,7 +1013,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
             </div>
             <div className="flex items-end gap-1.5">
               <textarea
-                disabled={turnStatus === "running"}
+                disabled={busy || turnStatus === "running"}
                 value={text}
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
@@ -975,7 +1028,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               <label className="ob-icon-btn h-8 w-8 shrink-0 cursor-pointer" title="添加图片" aria-label="添加图片">
                 <ImagePlus size={14} />
                 <input
-                  disabled={turnStatus === "running"}
+                  disabled={busy || turnStatus === "running"}
                   type="file"
                   accept="image/png,image/jpeg,image/gif,image/webp"
                   multiple

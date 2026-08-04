@@ -15,10 +15,13 @@ behaviors at commits `d4130bbb79`, `bdca6b0a5c`, `062e4569aa`, and
 `5e1fd7a825` were adopted on 2026-07-19. A public recheck on 2026-07-23
 confirmed the latest public release is still `v0.9.0` and the public TODO only
 lists a Claude Agent SDK adapter follow-up (not yet adopted as a parity target).
-The public deltas through Basket `v0.12.1`, Basket current
-`main@ee5804e586a95a3cc127caa37f2b87e6ade5c28f`, and Tiger current
-`main@2fad4630d7478b630169e85ca35cc678ec57c7c1` were independently rechecked
-and adopted through 2026-08-01.
+The public deltas through Basket `v0.13.0` (with the Basket current-main
+snapshot `main@ee5804e586a95a3cc127caa37f2b87e6ade5c28f` recorded on
+2026-08-01) and Tiger current `main@2fad4630d7478b630169e85ca35cc678ec57c7c1`
+were independently rechecked and adopted through 2026-08-04. The v0.13.0
+release behavior names are
+recorded from public release metadata and CHANGELOG only; no implementation
+source was used.
 Unlisted later upstream changes remain out of scope. The implementation team
 did not use upstream source, CSS, plugins, fixtures, screenshots, or assets as
 implementation input.
@@ -122,13 +125,14 @@ implementation input.
 | 2026-08-01 | Basket Agent follow behavior | Read public CHANGELOG and commit titles without inspecting implementation source | Conversation and diagnostic logs follow new output while at the bottom, pause when the reader scrolls upward, and expose the same centered jump-to-bottom control | high |
 | 2026-08-01 | Tiger current-main recheck | Read public release/CHANGELOG metadata and commit titles without inspecting implementation source | The sole post-v0.4.5 user-visible delta is the already-covered single canvas Agent consolidation; no additional local gap was found | high |
 | 2026-08-02 | Director formal shot | Capture one director camera, select exactly one synchronized capture, and choose the explicit model-backed action | The capture keeps an immutable bounded camera/scene snapshot; one atomic capture → editable config → result chain is committed; the copied reference survives tray deletion; the existing server image channel, timeout, audit and recovery path executes the job; retry remains bound to the saved channel and editable prompt | high |
+| 2026-08-04 | Basket v0.13.0 Agent initialization and transcript stability | Enter a blank Agent conversation, start a new conversation, send while Codex/MCP initializes, render a multi-line fenced code block, refresh/open another window during a turn, and resize a selected node | Codex/MCP prewarming is deduplicated and runs before the first turn; Agent controls and Enter remain disabled during initialization; fenced Markdown preserves line breaks; live SSE events and durable history use one stable transcript identity without replay duplicates and delayed hydration does not discard newer output; the floating node toolbar is paused during resize and returns afterward | high |
 
 ## Evidence
 
 - Automated evidence is in `web/src/**/*.test.ts`, `web/e2e/canvas.spec.ts`,
   `server/**/**_test.go`, and CI workflow definitions.
 - The feature-to-evidence matrix is maintained in `docs/FEATURE_PARITY.md` and
-  covers the v0.8.2 core, the explicitly listed deltas through v0.12.1, and the
+  covers the v0.8.2 core, the explicitly listed deltas through v0.13.0, and the
   current Tiger v0.4.5 convergence.
 - Public protocol evidence includes OpenAI-compatible HTTP conventions, MCP
   transport conventions, JSON-RPC, and browser pointer events.
@@ -151,11 +155,13 @@ implementation input.
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.11.0 | 2026-07-31 | Public release metadata and user-visible change names for the v0.11 additive interface delta; no implementation source, styles, screenshots, plugins, or assets were used |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.12.0 | 2026-07-31 | Public release metadata and user-visible Agent behavior names; no implementation source, styles, screenshots, plugins, or assets were used |
 | https://github.com/basketikun/infinite-canvas/releases/tag/v0.12.1 | 2026-08-01 | Public Codex current-account model and reasoning-selection behavior names; tag commit `6f1b6633b76e485312382f4d916d49af8a23afaa` |
+| https://github.com/basketikun/infinite-canvas/releases/tag/v0.13.0 | 2026-08-04 | Public Agent prewarm, initialization gating, transcript ownership, Markdown rendering, and resize-stability behavior names; no implementation source, styles, screenshots, plugins, or assets were used |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/overview/features.mdx | 2026-07-23 | Public feature inventory recheck (docs only; no source trees) |
 | https://github.com/basketikun/infinite-canvas/blob/main/docs/content/docs/progress/todo.mdx | 2026-07-23 | Public remaining-work recheck; Claude Agent SDK adapter noted as not-targeted |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-24 | Public Unreleased behavior names for prompt sources, generation status, tab ownership, and Codex synchronization |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-07-31 | Public v0.12.1 release and current Unreleased behavior names for Agent/model/version/log/stream updates |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-08-01 | Public current-main behavior names for structured diagnostic filters, duplicate collapse, expandable details, and centered follow controls; main commit `ee5804e586a95a3cc127caa37f2b87e6ade5c28f` |
+| https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-08-04 | Public v0.13.0 behavior names for Agent prewarming, initialization gating, transcript/history ownership, multi-line code rendering, and resize stability; no implementation source was used |
 | https://raw.githubusercontent.com/basketikun/infinite-canvas/main/docs/content/docs/progress/pending-test.mdx | 2026-07-19 | Public black-box acceptance descriptions and exact `generation_get_status` interoperability name |
 | https://raw.githubusercontent.com/tigerowo/infinite-canvas/main/CHANGELOG.md | 2026-07-25 | Public Tiger behavior names for persistent generation, workflows, S3/R2 configuration, panorama, camera controls, 3D director, grouping and pointer/layout refinements; SHA-256 `38111d82f76b2d46fe4f425a9112c307692970bbc462b5068fe9ef205662bc4b`; no implementation source inspected |
 | https://raw.githubusercontent.com/tigerowo/infinite-canvas/main/CHANGELOG.md | 2026-07-31 | Public Tiger Unreleased Agent-consolidation behavior name; no implementation source inspected |

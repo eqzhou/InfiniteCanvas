@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { BoardNode, NodeType } from "@/types/board";
-import { shouldShowImageGenerationAction, showsFloatingNodeActions } from "./node-action-visibility";
+import {
+  shouldRenderFloatingNodeActions,
+  shouldRenderNodePromptBar,
+  shouldShowImageGenerationAction,
+  showsFloatingNodeActions,
+} from "./node-action-visibility";
 
 function imageNode(metadata: Pick<BoardNode["metadata"], "content" | "storageKey">) {
   return { type: "image", metadata } as Pick<BoardNode, "type" | "metadata">;
@@ -28,5 +33,14 @@ describe("floating node action visibility", () => {
   test("keeps image generation for an image with uploaded content or storage", () => {
     expect(shouldShowImageGenerationAction(imageNode({ content: "data:image/png;base64,abc" }))).toBe(true);
     expect(shouldShowImageGenerationAction(imageNode({ storageKey: "image:stored" }))).toBe(true);
+  });
+
+  test("pauses the floating toolbar while a selected node is resizing", () => {
+    expect(shouldRenderFloatingNodeActions("image", true, false)).toBe(true);
+    expect(shouldRenderFloatingNodeActions("image", true, true)).toBe(false);
+    expect(shouldRenderFloatingNodeActions("image", false, true)).toBe(false);
+    expect(shouldRenderFloatingNodeActions("group", true, false)).toBe(false);
+    expect(shouldRenderNodePromptBar(true, false)).toBe(true);
+    expect(shouldRenderNodePromptBar(true, true)).toBe(false);
   });
 });

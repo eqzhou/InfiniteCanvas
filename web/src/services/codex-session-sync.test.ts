@@ -8,16 +8,17 @@ import {
 
 describe("Codex shared session state", () => {
   test("accepts bounded session and running state without mutating input", () => {
-    const input = { profile: "default", session: { id: "codex-one", threadId: "thread-one", running: true }, turnStatus: "running", updatedAt: 10, sourceId: "tab-one" };
+    const input = { scopeKey: "scope-one", profile: "default", session: { id: "codex-one", threadId: "thread-one", running: true }, turnStatus: "running", updatedAt: 10, sourceId: "tab-one" };
     const parsed = parseCodexSharedState(input);
     expect(parsed).toEqual(input);
     expect(parsed).not.toBe(input);
   });
 
   test("rejects malformed profiles, sessions, and statuses", () => {
-    expect(parseCodexSharedState({ profile: "../bad", session: null, turnStatus: "idle", updatedAt: 1, sourceId: "tab" })).toBeNull();
-    expect(parseCodexSharedState({ profile: "default", session: { id: "../bad" }, turnStatus: "idle", updatedAt: 1, sourceId: "tab" })).toBeNull();
-    expect(parseCodexSharedState({ profile: "default", session: null, turnStatus: "tool-completed", updatedAt: 1, sourceId: "tab" })).toBeNull();
+    expect(parseCodexSharedState({ scopeKey: "../bad", profile: "default", session: null, turnStatus: "idle", updatedAt: 1, sourceId: "tab" })).toBeNull();
+    expect(parseCodexSharedState({ scopeKey: "scope-one", profile: "../bad", session: null, turnStatus: "idle", updatedAt: 1, sourceId: "tab" })).toBeNull();
+    expect(parseCodexSharedState({ scopeKey: "scope-one", profile: "default", session: { id: "../bad" }, turnStatus: "idle", updatedAt: 1, sourceId: "tab" })).toBeNull();
+    expect(parseCodexSharedState({ scopeKey: "scope-one", profile: "default", session: null, turnStatus: "tool-completed", updatedAt: 1, sourceId: "tab" })).toBeNull();
   });
 
   test("resets transcript only when a shared session switches threads", () => {
@@ -65,19 +66,20 @@ describe("Codex shared session state", () => {
     });
     Object.defineProperty(globalThis, "BroadcastChannel", { configurable: true, value: FakeChannel });
     const initial = {
+      scopeKey: "default",
       profile: "default",
       session: { id: "session-initial", running: false },
       turnStatus: "idle",
       updatedAt: 10,
       sourceId: "tab-initial",
     };
-    values.set("openboard:codex-session:default", JSON.stringify(initial));
+    values.set("openboard:codex-session:default:default", JSON.stringify(initial));
     const received: unknown[] = [];
     try {
       const sync = createCodexSessionSync("default", (state) => received.push(state));
       expect(sync.initial).toEqual(initial);
       sync.publish({ id: "session-next", running: true }, "running");
-      const published = JSON.parse(values.get("openboard:codex-session:default") ?? "{}");
+      const published = JSON.parse(values.get("openboard:codex-session:default:default") ?? "{}");
       expect(published).toMatchObject({
         profile: "default",
         session: { id: "session-next", running: true },
@@ -87,6 +89,15 @@ describe("Codex shared session state", () => {
       expect(channels[0].posted).toHaveLength(1);
 
       channels[0].onmessage?.({ data: {
+        scopeKey: "other-scope",
+        profile: "default",
+        session: { id: "session-other", running: false },
+        turnStatus: "completed",
+        updatedAt: published.updatedAt + 1,
+        sourceId: "tab-other-scope",
+      } } as MessageEvent);
+      channels[0].onmessage?.({ data: {
+        scopeKey: "default",
         profile: "default",
         session: { id: "session-remote", running: false },
         turnStatus: "completed",
@@ -94,6 +105,7 @@ describe("Codex shared session state", () => {
         sourceId: "tab-remote",
       } } as MessageEvent);
       channels[0].onmessage?.({ data: {
+        scopeKey: "default",
         profile: "default",
         session: { id: "session-stale", running: false },
         turnStatus: "idle",

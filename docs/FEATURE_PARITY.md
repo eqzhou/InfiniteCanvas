@@ -2,8 +2,8 @@
 
 This inventory freezes the engineering core to the publicly documented and
 black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
-explicit public interface deltas through `v0.12.1` and the named public
-Unreleased behaviors rechecked on 2026-07-31. It does not
+explicit public interface deltas through `v0.13.0` and the named public
+Unreleased behaviors rechecked on 2026-08-04. It does not
 claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
 an independent implementation with its own architecture, data model, UI,
 plugins, SDK, fixtures, and assets.
@@ -47,10 +47,11 @@ are not implementation inputs.
 | APIMart current exact contracts | [verified] exact adapters remain fail-closed and validate only independently documented model identifiers and limits; undocumented marketing names, including Agnes, remain unsupported |
 | Single canvas Agent entry | [verified] the legacy assistant panel and duplicate navigation entry are removed; one dockable `画布 Agent` retains Codex/Claude sessions, approvals, attachments, stop and unified generation-task status |
 
-## Basket v0.11.0–v0.12.1 additive parity
+## Basket v0.11.0–v0.13.0 additive parity
 
-The public `basketikun/infinite-canvas v0.11.0`, `v0.12.0` and `v0.12.1` releases and current public
-CHANGELOG were rechecked on 2026-07-31 without reading implementation source,
+The public `basketikun/infinite-canvas v0.11.0`, `v0.12.0`, `v0.12.1` and
+`v0.13.0` releases and current public CHANGELOG were rechecked on 2026-08-04
+without reading implementation source,
 styles, fixtures, screenshots, or bundled assets:
 
 | Public behavior | Local status |
@@ -67,11 +68,12 @@ styles, fixtures, screenshots, or bundled assets:
 | Current-account Codex model and reasoning selection | [verified] the local bridge follows the official paginated `model/list` catalog, validates bounded model/effort pairs, exposes only advertised choices, sends optional `turn/start` overrides, retains valid choices in a tenant/user/profile-isolated database record, and falls back to Codex defaults when the catalog is unavailable, empty or stale |
 | Structured Agent diagnostics and shared follow behavior | [verified] Codex and Claude diagnostics use fixed error/warning/activity filters, an independently scrollable expandable list, consecutive duplicate collapse, upward-scroll pause, and the same centered jump-to-bottom control as conversation history |
 | Consecutive command progress collapse | [verified] runs of two or more consecutive command progress items in a turn fold into one count-collapsed `运行命令 · N` group with aggregated running/completed/failed state; verbose per-command previews stay hidden behind a per-group expander while lone commands and non-command items remain inline |
+| v0.13.0 Agent initialization and transcript stability | [verified] entering a blank Agent conversation or starting a new one prewarms a reusable Codex/MCP session with concurrent-request deduplication and auth-scoped cache/same-account tab synchronization; Agent controls and Enter are disabled while initialization is pending; fenced Markdown code preserves line breaks; live SSE events and durable history share stable message ownership with replay deduplication and delayed-history merging; the floating node toolbar is withheld during node resize and returns afterward |
 
 ## Public baseline traceability
 
 The frozen public inputs are the immutable v0.8.2 documents and hashes, plus
-the additive release metadata through v0.12.1, listed
+the additive release metadata through v0.13.0, listed
 in `docs/BEHAVIOR_SPEC.md`. This table maps their named behaviors to local
 implementation and verification surfaces; it does not use upstream source as
 implementation evidence.
@@ -98,6 +100,7 @@ implementation evidence.
 | Video first/last-frame reference mode for ordered image refs | `video-generation.ts`, Ark role mapping in `ai-client.ts` / server media executor, config/video/workbench UI, unit + Go + workbench E2E |
 | Unified canvas Agent, project context, approvals, attachments, stop, Codex/Claude continuity and generation status | Agent runtime/MCP/Codex/Claude integration tests and single-entry canvas E2E |
 | v0.12.0 dated Agent diagnostics, history and file-manager reveal | `server/internal/api/debug_log.go`, `codex_history.go`, `file_manager.go`, `server/internal/api/*_test.go`, `web/src/services/codex-history.test.ts`, `local-agent.test.ts`, and the Chromium Codex history-manager E2E; verified with Bun, Go (including `-race`/`vet`) and Playwright |
+| v0.13.0 Agent initialization and transcript stability | `web/src/services/codex-transcript.ts`, `codex-transcript.test.ts`, `local-agent.ts` prewarm boundary tests, `agent-markdown.test.tsx`, node-action visibility tests, and the focused Chromium Codex E2E |
 | Prompt search/source/tag filters, detail, cover/result gallery, copy, asset/canvas insert and declaratively mapped remote sources | prompt detail/library E2E, prompt-source manager E2E, formal storage E2E, and `prompt-sources.test.ts` |
 | Asset text/image create, metadata edit, search/type filter, pagination, copy/download and canvas insert | full asset-library E2E and formal-storage E2E |
 | WebDAV project and full-workspace backup/restore with workflow templates, nested workflow media, deduplication and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
@@ -151,7 +154,7 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 700 Bun unit/integration tests at the 2026-08-01 verification baseline; the same run reports 81.46% line and 83.50% function coverage. CI publishes this report but does not currently enforce a numeric threshold
+- [verified] 755 Bun unit/integration tests at the 2026-08-04 verification baseline; the same run reports 82.12% line and 83.89% function coverage. CI publishes this report but does not currently enforce a numeric threshold
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds; the v0.12.0 Agent follow-up also passes the focused API race suite
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)
@@ -197,6 +200,15 @@ Public progress TODO still only lists Claude Code CLI Adapter → Claude Agent S
   `2fad4630d7478b630169e85ca35cc678ec57c7c1`, whose only post-tag public
   user-visible delta is the already-covered replacement of the separate canvas
   assistant with one authoritative `画布 Agent` entry.
+
+### Public release recheck (2026-08-04)
+
+- Basket latest public release is `v0.13.0`. The public release notes add
+  background Codex/MCP prewarming for blank and new conversations, an
+  initialization send gate, multi-line fenced-code rendering, shared live/history
+  transcript ownership, and resize-safe floating node actions. These behaviors
+  are implemented and covered by the new Bun unit tests and focused Chromium
+  Agent E2E; the public behavior source is recorded in `docs/BEHAVIOR_SPEC.md`.
 
 ### Tiger public release recheck (2026-07-28)
 

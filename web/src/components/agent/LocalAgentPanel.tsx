@@ -16,6 +16,8 @@ import {
   getGenerationActivities,
   subscribeGenerationActivities,
 } from "@/services/generation-activity";
+import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { getSessionToken } from "@/services/auth-session";
 
 const CodexPanel = lazy(async () => {
   const module = await import("@/components/agent/CodexPanel");
@@ -36,6 +38,7 @@ export function LocalAgentPanel() {
   const setShow = useBoardStore((s) => s.setShowLocalAgent);
   const config = useBoardStore((s) => s.config);
   const setConfig = useBoardStore((s) => s.setConfig);
+  const auth = useOptionalAuth();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +51,11 @@ export function LocalAgentPanel() {
     window.location.origin,
   ));
   const [token, setToken] = useState(initialAgentToken);
-  const connection = useMemo(() => ({ baseUrl, token }), [baseUrl, token]);
+  const sessionToken = getSessionToken();
+  const connection = useMemo(
+    () => ({ baseUrl, token, sessionToken }),
+    [auth?.user?.id, auth?.user?.tenantId, baseUrl, sessionToken, token],
+  );
   useEscapeDismiss(show, () => setShow(false));
   const runningGenerationTasks = generationTasks.filter((task) => task.status === "running");
 

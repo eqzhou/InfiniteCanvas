@@ -4407,7 +4407,7 @@ test("local Agent connects to the real Go service with a session token", async (
   await expect(page.getByText("已连接", { exact: true })).toBeVisible();
   await page.getByLabel("本地地址").fill(agentUrl);
   await page.getByLabel("连接令牌").fill("e2e-token");
-  await page.getByRole("button", { name: "连接" }).click();
+  await page.getByRole("button", { name: "连接", exact: true }).click();
   await expect(page.getByText("已连接", { exact: true })).toBeVisible();
   await expect(page.getByText("board.list_nodes", { exact: true })).toBeVisible();
 });
@@ -4631,12 +4631,12 @@ test("Codex panel streams a message and handles explicit approval", async ({ pag
   await openLocalAgentPanel(page);
   await page.getByLabel("本地地址").fill(agentUrl);
   await page.getByLabel("连接令牌").fill("e2e-token");
-  await page.getByRole("button", { name: "连接" }).click();
+  await page.getByRole("button", { name: "连接", exact: true }).click();
   const codexTab = page.getByRole("tab", { name: "Codex" });
   if (await codexTab.count()) await codexTab.click();
-  await page.getByRole("button", { name: "启动 Codex 会话" }).click();
-  await expect.poll(() => sessionBodies).toHaveLength(1);
+  await expect(page.getByRole("button", { name: "连接中", exact: true })).toBeDisabled();
   releaseInitialSessionGet();
+  await expect.poll(() => sessionBodies).toHaveLength(1);
   await expect(page.getByText("Agent project read failed: HTTP 503", { exact: false })).toBeVisible();
   await expect(page.getByPlaceholder("发送消息")).toBeVisible();
   await expect(page.getByText("hello from Codex")).toBeVisible();
@@ -4787,8 +4787,8 @@ test("Codex history manager restores, batch deletes, and reveals file paths", as
   await openLocalAgentPanel(page);
   await page.getByLabel("本地地址").fill(agentUrl);
   await page.getByLabel("连接令牌").fill("e2e-token");
-  await page.getByRole("button", { name: "连接" }).click();
-  await page.getByRole("button", { name: "启动 Codex 会话" }).click();
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await expect(page.getByPlaceholder("发送消息")).toBeVisible();
   await page.getByRole("button", { name: "历史记录" }).click();
   const history = page.getByRole("region", { name: "Codex 会话历史" });
   await expect(history).toBeVisible();
@@ -4872,7 +4872,7 @@ test("Codex session and running state stay synchronized across browser tabs", as
     await openLocalAgentPanel(target);
     await target.getByLabel("本地地址").fill(agentUrl);
     await target.getByLabel("连接令牌").fill("e2e-token");
-    await target.getByRole("button", { name: "连接" }).click();
+    await target.getByRole("button", { name: "连接", exact: true }).click();
     await runtimeReady;
   };
 
@@ -4881,7 +4881,6 @@ test("Codex session and running state stay synchronized across browser tabs", as
   await connectPanel(page);
   const codexTab = page.getByRole("tab", { name: "Codex" });
   if (await codexTab.count()) await codexTab.click();
-  await page.getByRole("button", { name: "启动 Codex 会话" }).click();
   await expect(page.getByPlaceholder("发送消息")).toBeEnabled();
 
   const second = await context.newPage();

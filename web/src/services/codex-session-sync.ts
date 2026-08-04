@@ -2,6 +2,7 @@ import type { CodexSession } from "@/services/local-agent";
 
 export type SharedTurnStatus = "idle" | "running" | "completed" | "failed";
 export type CodexSharedState = {
+  scopeKey: string;
   profile: string;
   session: CodexSession | null;
   turnStatus: SharedTurnStatus;
@@ -11,6 +12,7 @@ export type CodexSharedState = {
 
 const CHANNEL = "openboard:codex-session";
 const STORAGE_PREFIX = "openboard:codex-session:";
+const SCOPE_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 export function shouldResetCodexTranscript(previousId: string | undefined, nextId: string | undefined): boolean {
   return Boolean(nextId && previousId !== nextId);
@@ -37,7 +39,8 @@ function validSession(value: unknown): value is CodexSession {
 export function parseCodexSharedState(value: unknown): CodexSharedState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const state = value as Record<string, unknown>;
-  if (typeof state.profile !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(state.profile) ||
+  if (typeof state.scopeKey !== "string" || !SCOPE_PATTERN.test(state.scopeKey) ||
+      typeof state.profile !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(state.profile) ||
       (state.session !== null && !validSession(state.session)) ||
       !["idle", "running", "completed", "failed"].includes(String(state.turnStatus)) ||
       typeof state.updatedAt !== "number" || !Number.isFinite(state.updatedAt) ||
@@ -59,13 +62,15 @@ function parseStored(raw: string | null): CodexSharedState | null {
 export function createCodexSessionSync(
   profile: string,
   onState: (state: CodexSharedState) => void,
+  scopeKey = "default",
 ): { initial: CodexSharedState | null; publish: (session: CodexSession | null, turnStatus: SharedTurnStatus) => void; close: () => void } {
+  if (!SCOPE_PATTERN.test(scopeKey)) throw new Error("Codex session scope is invalid");
   const sourceId = `tab-${crypto.randomUUID().replaceAll("-", "")}`;
-  const storageKey = `${STORAGE_PREFIX}${profile}`;
+  const storageKey = `${STORAGE_PREFIX}${scopeKey}:${profile}`;
   let newest = 0;
   const accept = (value: unknown) => {
     const state = parseCodexSharedState(value);
-    if (!state || state.profile !== profile || state.sourceId === sourceId || state.updatedAt < newest) return;
+    if (!state || state.scopeKey !== scopeKey || state.profile !== profile || state.sourceId === sourceId || state.updatedAt < newest) return;
     newest = state.updatedAt;
     onState(state);
   };
@@ -91,6 +96,7 @@ export function createCodexSessionSync(
     initial,
     publish(session, turnStatus) {
       const state: CodexSharedState = {
+        scopeKey,
         profile,
         session: session ? structuredClone(session) : null,
         turnStatus,

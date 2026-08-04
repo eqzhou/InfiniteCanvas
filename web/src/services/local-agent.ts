@@ -50,6 +50,8 @@ export function resolveAgentBaseUrl(configured: string | undefined, token: strin
 export type AgentConnection = {
   baseUrl: string;
   token?: string;
+  /** Captured same-origin session token used to keep one request/cache identity stable. */
+  sessionToken?: string | null;
 };
 
 export function agentAuthHeaders(connection: AgentConnection, initial?: HeadersInit): Headers {
@@ -58,7 +60,9 @@ export function agentAuthHeaders(connection: AgentConnection, initial?: HeadersI
   const pageOrigin = typeof location !== "undefined" ? location.origin : "";
   const sameOrigin = pageOrigin !== "" && agentUrl.origin === pageOrigin;
   if (connection.token && !sameOrigin) headers.set("Authorization", `Bearer ${connection.token}`);
-  const sessionToken = sameOrigin ? getSessionToken() : null;
+  const sessionToken = sameOrigin
+    ? connection.sessionToken !== undefined ? connection.sessionToken : getSessionToken()
+    : null;
   if (sessionToken) headers.set("X-OpenBoard-Session", sessionToken);
   return headers;
 }
@@ -105,12 +109,37 @@ export type CodexAttachment = {
 };
 export type CodexEvent = {
   sequence?: number;
-  type: "notification" | "approval" | "error";
+  type: string;
   method?: string;
   id?: unknown;
   params?: unknown;
   data?: unknown;
 };
+const MAX_CODEX_EVENT_JSON_CHARS = 256 * 1024;
+const MAX_CODEX_SSE_RECORD_CHARS = 256 * 1024;
+const MAX_CODEX_SSE_BUFFER_CHARS = 1 * 1024 * 1024;
+
+class CodexStreamLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexStreamLimitError";
+  }
+}
+
+function isBoundedCodexEvent(value: unknown): value is CodexEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const event = value as Partial<CodexEvent>;
+  if (typeof event.type !== "string" || !event.type || event.type.length > 64) return false;
+  if (event.method !== undefined && (typeof event.method !== "string" || event.method.length > 128)) return false;
+  if (event.sequence !== undefined &&
+      (typeof event.sequence !== "number" || !Number.isSafeInteger(event.sequence) || event.sequence < 0)) return false;
+  try {
+    return JSON.stringify(value).length <= MAX_CODEX_EVENT_JSON_CHARS;
+  } catch {
+    return false;
+  }
+}
+
 export type CodexPermissionMode = "read-only" | "workspace-auto" | "full-access";
 export type SendCodexMessageOptions = {
   attachmentIds?: string[];
@@ -122,16 +151,93 @@ export type SendCodexMessageOptions = {
 };
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+const CODEX_PREWARM_TTL_MS = 5 * 60 * 1_000;
+const CODEX_PREWARM_MAX_ENTRIES = 16;
+const codexPrewarmCache = new Map<string, {
+  promise: Promise<CodexSession>;
+  expiresAt: number;
+}>();
+
+type CodexConnectionSnapshot = {
+  baseUrl: string;
+  sameOrigin: boolean;
+  sessionToken: string | null;
+  identity: string;
+};
+
+function captureCodexConnection(connection: AgentConnection): CodexConnectionSnapshot {
+  const baseUrl = normalizeAgentBaseUrl(connection.baseUrl || DEFAULT_AGENT_BASE_URL);
+  const pageOrigin = typeof location !== "undefined" ? location.origin : "";
+  const sameOrigin = pageOrigin !== "" && baseUrl === pageOrigin;
+  const sessionToken = sameOrigin
+    ? connection.sessionToken !== undefined ? connection.sessionToken : getSessionToken()
+    : null;
+  return {
+    baseUrl,
+    sameOrigin,
+    sessionToken,
+    identity: sameOrigin ? (sessionToken ?? "") : (connection.token ?? ""),
+  };
+}
+
+async function codexConnectionScope(snapshot: CodexConnectionSnapshot): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${snapshot.baseUrl}\u0000${snapshot.identity}`),
+  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function getCodexConnectionScope(connection: AgentConnection): Promise<string> {
+  return codexConnectionScope(captureCodexConnection(connection));
+}
+
+function requestConnection(snapshot: CodexConnectionSnapshot, connection: AgentConnection): AgentConnection {
+  return {
+    ...connection,
+    baseUrl: snapshot.baseUrl,
+    ...(snapshot.sameOrigin ? { sessionToken: snapshot.sessionToken } : {}),
+  };
+}
+
+async function codexPrewarmKey(snapshot: CodexConnectionSnapshot, profile: string): Promise<string> {
+  return `${await codexConnectionScope(snapshot)}\u0000${profile}`;
+}
+
+function pruneCodexPrewarmCache(now = Date.now()): void {
+  for (const [key, entry] of codexPrewarmCache) {
+    if (entry.expiresAt <= now) codexPrewarmCache.delete(key);
+  }
+  while (codexPrewarmCache.size > CODEX_PREWARM_MAX_ENTRIES) {
+    const oldest = codexPrewarmCache.keys().next().value;
+    if (typeof oldest !== "string") break;
+    codexPrewarmCache.delete(oldest);
+  }
+}
+
+async function clearCodexPrewarm(
+  connection: AgentConnection,
+  profile: string,
+): Promise<void> {
+  pruneCodexPrewarmCache();
+  codexPrewarmCache.delete(await codexPrewarmKey(captureCodexConnection(connection), profile));
+}
 
 export function parseCodexSseRecords(
   input: string,
   flush = false,
 ): { events: CodexEvent[]; remainder: string } {
+  if (input.length > MAX_CODEX_SSE_BUFFER_CHARS) {
+    throw new CodexStreamLimitError("Codex event stream buffer exceeded its size limit");
+  }
   const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const parts = normalized.split("\n\n");
   const remainder = flush ? "" : (parts.pop() ?? "");
   const events: CodexEvent[] = [];
   for (const record of flush ? parts.concat(remainder ? [remainder] : []) : parts) {
+    if (record.length > MAX_CODEX_SSE_RECORD_CHARS) {
+      throw new CodexStreamLimitError("Codex event stream frame exceeded its size limit");
+    }
     const data = record
       .split("\n")
       .filter((line) => line.startsWith("data:"))
@@ -140,7 +246,7 @@ export function parseCodexSseRecords(
     if (!data) continue;
     try {
       const value = JSON.parse(data) as CodexEvent;
-      if (value && typeof value === "object") events.push(value);
+      if (isBoundedCodexEvent(value)) events.push(value);
     } catch {
       // Ignore malformed event payloads while keeping the stream alive.
     }
@@ -235,7 +341,8 @@ function validateCodexHistoryRecord(value: unknown): CodexHistoryRecord {
         ((message as CodexHistoryMessage).role === "user" || (message as CodexHistoryMessage).role === "assistant") &&
         typeof (message as CodexHistoryMessage).text === "string" && (message as CodexHistoryMessage).text.length <= 100_000 &&
         typeof (message as CodexHistoryMessage).createdAt === "string") ||
-      !Array.isArray(record.events) || record.events.length > 2_048) {
+      !Array.isArray(record.events) || record.events.length > 2_048 ||
+      !record.events.every(isBoundedCodexEvent)) {
     throw new Error("Agent returned an invalid Codex history transcript");
   }
   return {
@@ -256,6 +363,7 @@ export async function createCodexSession(
   fetcher: Fetcher = fetch,
 ): Promise<CodexSession> {
   const options = typeof cwdOrOptions === "string" ? { cwd: cwdOrOptions } : (cwdOrOptions ?? {});
+  if (options.fresh === true) await clearCodexPrewarm(connection, options.profile ?? "default");
   const response = await agentFetch(connection, "api/codex/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -267,6 +375,27 @@ export async function createCodexSession(
     throw new Error("Agent returned an invalid Codex session");
   }
   return value as CodexSession;
+}
+
+export async function prewarmCodexSession(
+  connection: AgentConnection,
+  profile = "default",
+  fetcher: Fetcher = fetch,
+): Promise<CodexSession> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(profile)) throw new Error("Codex profile is invalid");
+  pruneCodexPrewarmCache();
+  const snapshot = captureCodexConnection(connection);
+  const key = await codexPrewarmKey(snapshot, profile);
+  const cached = codexPrewarmCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  if (cached) codexPrewarmCache.delete(key);
+  const promise = createCodexSession(requestConnection(snapshot, connection), { profile, fresh: false }, fetcher);
+  const entry = { promise, expiresAt: Date.now() + CODEX_PREWARM_TTL_MS };
+  codexPrewarmCache.set(key, entry);
+  void promise.catch(() => {
+    if (codexPrewarmCache.get(key) === entry) codexPrewarmCache.delete(key);
+  });
+  return promise;
 }
 
 export async function getCodexSession(
@@ -686,6 +815,10 @@ export function subscribeCodexEvents(
         if (madeProgress || Date.now() - connectedAt >= 1_000) delay = 250;
       } catch (error) {
         if (controller.signal.aborted) return;
+        if (error instanceof CodexStreamLimitError) {
+          onError?.(error, false);
+          return;
+        }
         reconnect = true;
         onError?.(error instanceof Error ? error : new Error("codex stream error"), true);
       }
@@ -704,6 +837,7 @@ export async function closeCodexSession(
 ): Promise<void> {
   const response = await agentFetch(connection, `api/codex/session/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, fetcher);
   if (!response.ok && response.status !== 404) throw new Error(`Codex close failed: HTTP ${response.status}`);
+  await clearCodexPrewarm(connection, "default");
 }
 
 export async function fetchAgentStatus(

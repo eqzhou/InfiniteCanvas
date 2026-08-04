@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Send, Square, Unplug } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   closeClaudeSession,
   createClaudeSession,
@@ -16,34 +14,11 @@ import {
 import { getRuntimeClientId } from "@/services/runtime-identity";
 import { AgentDiagnosticLog } from "@/components/agent/AgentDiagnosticLog";
 import { AgentJumpToLatest } from "@/components/agent/AgentJumpToLatest";
+import { AgentMarkdownMessage } from "@/components/agent/agent-markdown";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = "idle" | "running" | "completed" | "failed";
 const CLAUDE_PROFILE = "claude-default";
-
-function MarkdownMessage({ text }: { text: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      skipHtml
-      components={{
-        a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noreferrer" className="underline">
-            {children}
-          </a>
-        ),
-        img: () => <span>[图片]</span>,
-        pre: ({ children }) => (
-          <pre className="max-w-full overflow-auto whitespace-pre-wrap rounded bg-[var(--ob-accent-soft)] p-1">
-            {children}
-          </pre>
-        ),
-      }}
-    >
-      {text}
-    </ReactMarkdown>
-  );
-}
 
 function eventText(event: ClaudeEvent): string | undefined {
   const params = event.params as { text?: string } | undefined;
@@ -211,7 +186,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
   }, [connection]);
 
   const send = async () => {
-    if (!session || !text.trim() || turnStatus === "running") return;
+    if (!session || !text.trim() || busy || turnStatus === "running") return;
     const prompt = text.trim();
     setText("");
     setBusy(true);
@@ -317,7 +292,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
                       {message.role === "user" ? "你" : "Claude"}
                     </div>
                     {message.role === "assistant" ? (
-                      <MarkdownMessage text={message.text} />
+                      <AgentMarkdownMessage text={message.text} />
                     ) : (
                       <div className="whitespace-pre-wrap text-[var(--ob-ink)]">{message.text}</div>
                     )}
@@ -342,7 +317,8 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
           ) : null}
           <div className="ob-composer flex items-end gap-1.5 p-1.5">
             <textarea
-              className="min-h-[56px] flex-1 resize-none border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)]"
+              disabled={busy || turnStatus === "running"}
+              className="min-h-[56px] flex-1 resize-none border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)] disabled:opacity-50"
               placeholder="向 Claude Code 提问…（可驱动画布 MCP）"
               value={text}
               onChange={(event) => setText(event.target.value)}

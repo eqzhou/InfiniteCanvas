@@ -32,7 +32,7 @@ import { resolveImageSizeForAspect } from "@/lib/workbench-preferences";
 import { getProvider } from "@/lib/ai-config";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type, Upload } from "lucide-react";
 import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
-import { showsFloatingNodeActions } from "@/lib/node-action-visibility";
+import { shouldRenderFloatingNodeActions, shouldRenderNodePromptBar } from "@/lib/node-action-visibility";
 import { buildDirectorShotPrompt, planDirectorShotGeneration } from "@/lib/director-shot-generation";
 import { createImageGenerationMetadata, normalizeImageGenerationForProvider } from "@/lib/image-generation";
 import { createServerImageGenerationJob, cancelServerGenerationJob } from "@/services/generation-jobs";
@@ -60,6 +60,7 @@ function moveInput(order: readonly string[], index: number, offset: -1 | 1): str
 type Props = {
   node: BoardNode;
   selected: boolean;
+  resizing?: boolean;
   related: boolean;
   groupHighlighted?: boolean;
   onSelect: (additive: boolean) => void;
@@ -79,6 +80,7 @@ type Props = {
 export function BoardNodeView({
   node,
   selected,
+  resizing = false,
   related,
   groupHighlighted = false,
   onSelect,
@@ -933,7 +935,7 @@ export function BoardNodeView({
         ) : null}
       </div>
 
-      {selected && showsFloatingNodeActions(node.type) ? (
+      {shouldRenderFloatingNodeActions(node.type, selected, resizing) ? (
         <NodeActions
           node={node}
           avoidTopToolbarOverlap={Boolean(project && (
@@ -947,7 +949,7 @@ export function BoardNodeView({
           } : undefined}
         />
       ) : null}
-      {selected && node.type !== "config" && node.type !== "group" && node.type !== "plugin" && node.type !== "director" && node.type !== "panorama" ? (
+      {shouldRenderNodePromptBar(selected, resizing) && node.type !== "config" && node.type !== "group" && node.type !== "plugin" && node.type !== "director" && node.type !== "panorama" ? (
         <NodePromptBar node={node} />
       ) : null}
       {(node.metadata.isBatchRoot || node.metadata.batchRootId) ? (
