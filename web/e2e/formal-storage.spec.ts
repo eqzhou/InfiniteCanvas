@@ -395,10 +395,10 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
   const rootId = await root.getAttribute("data-node-id");
   expect(rootId).toBeTruthy();
   await root.locator("[data-node-header]").click();
-  await root.getByTitle("生成图片").click();
-  const generationDialog = page.getByRole("dialog", { name: "生成图片" });
-  await generationDialog.getByLabel("生图提示词").fill("durable Gemini canvas batch");
-  await generationDialog.getByRole("button", { name: "生成图片", exact: true }).click();
+  const promptInput = root.getByRole("textbox", { name: "节点生成提示词" });
+  await expect(promptInput).toBeVisible();
+  await promptInput.fill("durable Gemini canvas batch");
+  await root.getByRole("button", { name: "发送提示词", exact: true }).click();
   try {
     await Promise.race([
       started,
@@ -796,7 +796,9 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
     .click();
 	await page.getByLabel("本地地址").fill("http://127.0.0.1:8793");
 	await page.getByLabel("连接令牌").fill("e2e-token");
-  await page.getByRole("button", { name: "连接" }).click();
+  const connectButton = page.getByRole("button", { name: "连接", exact: true });
+  await expect(connectButton).toBeEnabled();
+  await connectButton.click();
   await expect(page.getByText("已连接", { exact: true })).toBeVisible();
   await expect(page.getByText("board.list_nodes", { exact: true })).toBeVisible();
 
