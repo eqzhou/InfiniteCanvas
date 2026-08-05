@@ -1,4 +1,5 @@
 import {
+  Bot,
   Boxes,
   Clapperboard,
   KeyRound,
@@ -94,7 +95,9 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     title: "图像、视频与工作流工作台",
     summary: "工作台提供更聚焦的生成界面：图像用于单图创作与编辑，视频用于镜头生成，工作流用于串联多步任务。",
     steps: [
-      "选择输入素材和模型，填写提示词，再核对尺寸、比例、时长等参数。",
+      "选择输入素材和模型，填写提示词，再核对尺寸、比例、清晰度和时长等参数。",
+      "视频的自动尺寸由比例和清晰度推导；已知模型会按能力表显示可用选项。",
+      "视频配置节点中的手动尺寸会保留；清空自定义尺寸后，比例和清晰度会恢复自动联动。",
       "生成期间保留当前任务；失败时先查看页面错误和 AI 日志，再调整渠道或输入。",
       "将满意结果下载或带回画布，复杂的重复流程可保存为工作流模板。",
     ],
@@ -105,6 +108,20 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
       { href: "/workbench/workflows", label: "工作流工作台" },
     ],
     icon: WandSparkles,
+  },
+  {
+    id: "agent-skills",
+    title: "Codex Agent Skills",
+    summary: "Agent Skills 是可复用的 Markdown 工作流说明，可从当前画布生成草稿，也可以手动编辑、启停和显式调用。",
+    steps: [
+      "打开画布 Agent，连接本地 Go Agent 服务，在 Codex 面板展开 Agent Skills。",
+      "输入草稿目标后点击“草稿”，检查 Skill id 和正文，再点击“保存”。",
+      "启用 Skill 后，启动 Codex 会话并点击播放按钮“显式调用”；调用不会提升当前会话权限。",
+      "手动管理时使用 $HOME/.codex/skills/<skill-id>/SKILL.md；修改环境变量后重启 Go 服务并刷新列表。",
+    ],
+    note: "主机级 Skills 只对本机/guest Agent 开放，账号会话不能访问；不要把密钥、Cookie 或生产数据写入 Skill。",
+    links: [{ href: "/", label: "打开画布 Agent" }],
+    icon: Bot,
   },
   {
     id: "director",

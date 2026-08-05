@@ -115,6 +115,9 @@ The current evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md
 the latest dual-upstream review is [`docs/UPSTREAM_GAP_PLAN_7.md`](docs/UPSTREAM_GAP_PLAN_7.md),
 and the latest Tiger-specific review is [`docs/TIGER_GAP_PLAN_4.md`](docs/TIGER_GAP_PLAN_4.md).
 `TIGER_GAP_PLAN.md`, `_2`, and `_3` are retained only as historical audit records.
+For day-to-day use, see the [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) guide for
+Agent Skills setup, manual `SKILL.md` examples, local Agent connection, and video
+ratio/resolution/size behavior.
 
 ## Verification
 
@@ -299,6 +302,7 @@ Keep current product documentation tied to these code-owned sources of truth:
 | SPA routes and navigation | `web/src/App.tsx`, `web/src/components/layout/TopNav.tsx` | this README and the in-product `/help` page |
 | Node/config/provider types | `web/src/types/board.ts`, frontend/server provider capability tables | this README and `docs/FEATURE_PARITY.md` |
 | HTTP routes and authentication | `server/internal/api/api.go`, `server/internal/api/auth.go` | `server/README.md`, `.env.example`, `docs/MULTI_TENANT.md` |
+| Agent Skills and video generation usage | `server/internal/api/codex_skills.go`, `web/src/components/agent/CodexSkillsPanel.tsx`, `web/src/lib/video-generation-options.ts` | `docs/USER_GUIDE.md` and the in-product `/help` page |
 | Test/build/deploy commands | root/web `package.json`, `ecosystem.config.cjs` | this README and `docs/RELEASE_AUDIT.md` |
 | Current Tiger comparison | verified public release metadata plus local tests | `docs/TIGER_GAP_PLAN_4.md`; rounds 1–3 are historical only |
 

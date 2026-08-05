@@ -13,6 +13,7 @@ export const DEPLOYMENT_ENV_EXEMPTIONS = Object.freeze({
   OPENBOARD_DATA: "set by compose.yaml to the container data volume",
   OPENBOARD_ADDR: "set by compose.yaml to the in-container listen address",
   OPENBOARD_CODEX_BIN: "local developer agent bridge, not a deployment setting",
+  OPENBOARD_CODEX_SKILLS_ROOT: "local developer agent bridge, not a deployment setting",
   OPENBOARD_CLAUDE_BIN: "local developer agent bridge, not a deployment setting",
   OPENBOARD_CLAUDE_PERMISSION_MODE: "local developer agent bridge, not a deployment setting",
   OPENBOARD_CONNECTION_FILE: "local developer agent bridge, not a deployment setting",

@@ -12,6 +12,7 @@ describe("HelpPage", () => {
       "prompts",
       "assets",
       "workbench",
+      "agent-skills",
       "director",
       "auth-modes",
     ]);

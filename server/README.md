@@ -38,6 +38,9 @@ limits, upload concurrency and disk quotas, and cross-process write locking.
 - `POST /api/runtime/command` — execute an identified command in the bound tab
 - `GET /api/codex/session?profile=...` — inspect the shared session and running state
 - `POST /api/codex/session` — start a local `codex app-server --stdio` session
+- `GET|POST /api/codex/skills` — list or create host-local Codex Skills
+- `GET|PUT|DELETE /api/codex/skills/{id}` — read, update, or delete one Skill
+- `POST /api/codex/skills/{id}/toggle` / `POST /api/codex/skills/{id}/invoke` — enable/disable or explicitly invoke a Skill
 - `GET /api/codex/history?profile=...` — list the scoped, durable Codex session history
 - `GET /api/codex/history/{id}` — read one archived transcript
 - `POST /api/codex/history/{id}/restore` — restore an archived transcript into a live thread
@@ -124,6 +127,11 @@ canonicalized, symlink escapes are rejected, and child processes receive only a
 small OS environment allowlist rather than database, master-key, OAuth, S3, or
 process-token values. Claude defaults to permission mode `default`, never allows
 `bypassPermissions`, and accepts `acceptEdits` only when auth is off.
+Host-local Codex Skills use `OPENBOARD_CODEX_SKILLS_ROOT` when set, otherwise
+`$HOME/.codex/skills`. Skills are intentionally unavailable to authenticated
+account sessions; the UI manages them through the local/guest Agent boundary.
+See [`../docs/USER_GUIDE.md`](../docs/USER_GUIDE.md) for setup, file format, and
+video generation examples.
 
 ## Agent tools
 
