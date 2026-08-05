@@ -128,10 +128,11 @@ export function ContextMenu({
 
   return (
     <>
-      <div className="fixed inset-0 z-[70]" onPointerDown={onClose} />
+      <div className="fixed inset-0 z-[70]" data-canvas-control onPointerDown={onClose} />
       <div
         role="menu"
         aria-label={state.nodeId ? "节点菜单" : "画布菜单"}
+        data-canvas-control
         className="ob-menu fixed z-[80] w-44 overflow-y-auto"
         style={{
           left,

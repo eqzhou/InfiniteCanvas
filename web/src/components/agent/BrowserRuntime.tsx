@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { getProvider } from "@/lib/ai-config";
+import { renderCanvasSnapshot } from "@/lib/canvas-export";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import { useBoardStore } from "@/stores/use-board-store";
@@ -84,12 +85,7 @@ async function executeRuntimeCommand(
     case "board.export_snapshot": {
       const surface = document.querySelector<HTMLElement>('[data-testid="canvas-surface"]');
       if (!surface || !project) throw new Error("active board canvas is unavailable");
-      const { toPng } = await import("html-to-image");
-      const dataUrl = await toPng(surface, {
-        cacheBust: true,
-        pixelRatio: Math.min(window.devicePixelRatio, 2),
-        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue("--ob-bg").trim() || "#ffffff",
-      });
+      const dataUrl = await renderCanvasSnapshot(surface);
       return {
         projectId: project.id,
         url: await uploadRuntimeSnapshot(connection, dataUrl, fetch, window.location.origin),

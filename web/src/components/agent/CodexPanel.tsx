@@ -61,6 +61,7 @@ import { AgentDiagnosticLog } from "@/components/agent/AgentDiagnosticLog";
 import { CodexProgressList } from "@/components/agent/CodexProgressList";
 import { AgentJumpToLatest } from "@/components/agent/AgentJumpToLatest";
 import { CodexModelControls, resolveCodexReasoningEffort } from "@/components/agent/CodexModelControls";
+import { CodexSkillsPanel } from "@/components/agent/CodexSkillsPanel";
 import { AgentMarkdownMessage } from "@/components/agent/agent-markdown";
 import {
   addCodexUserMessage,
@@ -657,10 +658,10 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     }
   };
 
-  const send = async () => {
-    if (!session || !text.trim() || busy || turnStatusRef.current === "running") return;
-    const prompt = text.trim();
-    const pendingFiles = files.slice();
+  const send = async (requestedText?: string) => {
+    const prompt = (requestedText ?? text).trim();
+    if (!session || !prompt || busy || turnStatusRef.current === "running") return;
+    const pendingFiles = requestedText === undefined ? files.slice() : [];
     const clientMessageId = uid("message");
     sharedRevisionRef.current += 1;
     setBusy(true);
@@ -879,6 +880,11 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           </div>
         </section>
       ) : null}
+      <CodexSkillsPanel
+        connection={connection}
+        canInvoke={Boolean(session) && !busy && turnStatus !== "running"}
+        onInvoke={(prompt) => send(prompt)}
+      />
       {!session ? (
         <button
           type="button"

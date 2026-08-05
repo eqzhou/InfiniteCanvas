@@ -15,6 +15,7 @@ const rows = [
   ["Ctrl/Cmd + Shift + G", "取消组合"],
   ["Ctrl/Cmd + Z", "撤销"],
   ["Ctrl/Cmd + Shift + Z / Y", "重做"],
+  ["Ctrl/Cmd + Shift + E", "导出当前画布为 PNG"],
   ["Delete / Backspace", "删除"],
   ["Esc", "取消选择，并关闭当前浮层"],
   ["拖入图片文件", "上传到画布"],

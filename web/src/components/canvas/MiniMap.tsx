@@ -55,6 +55,7 @@ export function MiniMap({
     <button
       type="button"
       aria-label="画布小地图"
+      data-canvas-control
       className={className ?? "ob-chrome absolute bottom-3 right-3 overflow-hidden sm:bottom-4 sm:right-4"}
       style={{ width: mw, height: mh }}
       onClick={(e) => {

@@ -28,6 +28,15 @@ import {
   normalizeImageQualityForProvider,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
+import {
+  normalizeVideoRatioForProvider,
+  normalizeVideoResolutionForProvider,
+  optionsWithCurrentVideoValue,
+  videoRatioOptionsFor,
+  videoResolutionOptionsFor,
+  videoSizeAfterSelectionChange,
+  videoSizeForProvider,
+} from "@/lib/video-generation-options";
 import { resolveImageSizeForAspect } from "@/lib/workbench-preferences";
 import { getProvider } from "@/lib/ai-config";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type, Upload } from "lucide-react";
@@ -121,6 +130,12 @@ export function BoardNodeView({
     imageSizeOptions,
     imageOutputLimit,
     imageQuality,
+    videoProvider,
+    videoRatioOptions,
+    videoResolutionOptions,
+    videoRatio,
+    videoResolution,
+    videoSize,
     pluginManifest,
   } = useMemo(() => {
     const installedPlugins = config.plugins ?? [];
@@ -136,6 +151,18 @@ export function BoardNodeView({
     const imageChannel = configuredGenerationChannel ?? activeGenerationChannel ?? activeChannel;
     const imageProvider = imageChannel ? getProvider(imageChannel, "image") : undefined;
     const imageModel = node.metadata.model || imageProvider?.model || "";
+    const videoProvider = imageChannel ? getProvider(imageChannel, "video") : undefined;
+    const videoModel = node.metadata.model || videoProvider?.model || "";
+    const videoRatio = normalizeVideoRatioForProvider(
+      node.metadata.videoRatio ?? "16:9",
+      videoProvider?.protocol,
+      videoModel,
+    );
+    const videoResolution = normalizeVideoResolutionForProvider(
+      node.metadata.resolution ?? "720p",
+      videoProvider?.protocol,
+      videoModel,
+    );
     return {
       activeChannel,
       imageChannel,
@@ -148,6 +175,12 @@ export function BoardNodeView({
         imageProvider?.protocol,
         imageModel,
       ),
+      videoProvider,
+      videoRatioOptions: videoRatioOptionsFor(videoProvider?.protocol, videoModel),
+      videoResolutionOptions: videoResolutionOptionsFor(videoProvider?.protocol, videoModel),
+      videoRatio,
+      videoResolution,
+      videoSize: videoSizeForProvider(videoProvider?.protocol, videoRatio, videoResolution),
       pluginManifest: node.type === "plugin"
         ? config.disabledPluginIds?.includes(node.metadata.pluginId ?? "")
           ? undefined
@@ -161,6 +194,8 @@ export function BoardNodeView({
     node.metadata.generationChannelId,
     node.metadata.model,
     node.metadata.quality,
+    node.metadata.videoRatio,
+    node.metadata.resolution,
     node.metadata.pluginId,
   ]);
   const Icon =
@@ -262,6 +297,7 @@ export function BoardNodeView({
         {editingTitle ? (
           <input
             autoFocus
+            data-canvas-control
             aria-label="节点标题"
             className="w-full min-w-32 rounded border border-[var(--ob-select)] bg-[var(--ob-panel)] px-1.5 py-0.5 outline-none"
             maxLength={500}
@@ -675,12 +711,12 @@ export function BoardNodeView({
             {(node.metadata.generationMode ?? "image") === "video" ? (
               <>
                 <label className="flex flex-col gap-1">
-                  视频尺寸
+                  自动尺寸
                   <input
                     aria-label="配置节点视频尺寸"
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
-                    value={node.metadata.size ?? ""}
-                    placeholder="按服务支持填写，例如 1280x720"
+                    value={node.metadata.size || videoSize}
+                    placeholder="由比例和清晰度推导，可手动覆盖"
                     onChange={(event) => updateNode(node.id, {
                       metadata: { size: event.target.value },
                     })}
@@ -690,13 +726,25 @@ export function BoardNodeView({
                   视频比例
                   <select
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
-                    value={node.metadata.videoRatio ?? "16:9"}
+                    value={videoRatio}
                     onChange={(e) =>
-                      updateNode(node.id, { metadata: { videoRatio: e.target.value } })
+                      updateNode(node.id, {
+                        metadata: {
+                          videoRatio: e.target.value,
+                          size: videoSizeAfterSelectionChange(
+                            videoProvider?.protocol,
+                            node.metadata.size,
+                            videoRatio,
+                            videoResolution,
+                            e.target.value,
+                            videoResolution,
+                          ),
+                        },
+                      })
                     }
                   >
-                    {["16:9","4:3","1:1","3:4","9:16","21:9","adaptive"].map((r) => (
-                      <option key={r} value={r}>{r}</option>
+                    {optionsWithCurrentVideoValue(videoRatioOptions, videoRatio).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
                 </label>
@@ -704,13 +752,25 @@ export function BoardNodeView({
                   清晰度
                   <select
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
-                    value={node.metadata.resolution ?? "720p"}
+                    value={videoResolution}
                     onChange={(e) =>
-                      updateNode(node.id, { metadata: { resolution: e.target.value } })
+                      updateNode(node.id, {
+                        metadata: {
+                          resolution: e.target.value,
+                          size: videoSizeAfterSelectionChange(
+                            videoProvider?.protocol,
+                            node.metadata.size,
+                            videoRatio,
+                            videoResolution,
+                            videoRatio,
+                            e.target.value,
+                          ),
+                        },
+                      })
                     }
                   >
-                    {["480p","720p","1080p"].map((r) => (
-                      <option key={r} value={r}>{r}</option>
+                    {optionsWithCurrentVideoValue(videoResolutionOptions, videoResolution).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
                 </label>
@@ -960,6 +1020,7 @@ export function BoardNodeView({
           <button
             type="button"
             className="ob-port absolute top-1/2 -left-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)] shadow-sm"
+            data-canvas-control
             title="输入端口"
             onPointerDown={(e) => {
               e.stopPropagation();
@@ -970,6 +1031,7 @@ export function BoardNodeView({
           <button
             type="button"
             className="ob-port absolute top-1/2 -right-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)] shadow-sm"
+            data-canvas-control
             title="输出端口 / 拖出连线"
             onPointerDown={(e) => {
               e.stopPropagation();

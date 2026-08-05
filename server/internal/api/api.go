@@ -43,6 +43,9 @@ type Server struct {
 	mu                      sync.Mutex
 	uploads                 chan struct{}
 	codex                   *codexManager
+	codexSkillsMu           sync.Mutex
+	codexSkillsRootPath     string
+	codexSkillsRootErr      error
 	codexHistory            *codexHistoryStore
 	claude                  *claudeManager
 	runtime                 *runtimeHub
@@ -101,6 +104,13 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
 		r.Get("/codex/session", s.getCodexSession)
+		r.Get("/codex/skills", s.listCodexSkills)
+		r.Post("/codex/skills", s.createCodexSkill)
+		r.Get("/codex/skills/{id}", s.getCodexSkill)
+		r.Put("/codex/skills/{id}", s.updateCodexSkill)
+		r.Post("/codex/skills/{id}/toggle", s.toggleCodexSkill)
+		r.Post("/codex/skills/{id}/invoke", s.invokeCodexSkill)
+		r.Delete("/codex/skills/{id}", s.deleteCodexSkill)
 		r.Get("/codex/models", s.listCodexModels)
 		r.Post("/codex/preferences", s.updateCodexPreferences)
 		r.Get("/codex/history", s.listCodexHistory)
@@ -216,15 +226,18 @@ func Mount(r chi.Router, dataDir string) {
 
 func NewServer(dataDir string) *Server {
 	purgeCodexAttachmentRoot(dataDir)
+	codexSkillsRootPath, codexSkillsRootErr := resolveCodexSkillsRoot()
 	generationRoot, stopGeneration := context.WithCancel(context.Background())
 	promptSchedulerRoot, stopPromptScheduler := context.WithCancel(context.Background())
 	return &Server{
-		dataDir:      dataDir,
-		uploads:      make(chan struct{}, 2),
-		codex:        newCodexManager(),
-		codexHistory: newCodexHistoryStore(dataDir),
-		claude:       newClaudeManager(),
-		runtime:      newRuntimeHub(),
+		dataDir:             dataDir,
+		uploads:             make(chan struct{}, 2),
+		codex:               newCodexManager(),
+		codexSkillsRootPath: codexSkillsRootPath,
+		codexSkillsRootErr:  codexSkillsRootErr,
+		codexHistory:        newCodexHistoryStore(dataDir),
+		claude:              newClaudeManager(),
+		runtime:             newRuntimeHub(),
 		runtimeOrigins: map[string]struct{}{
 			"http://localhost:5173": {},
 			"http://127.0.0.1:5173": {},
@@ -356,6 +369,13 @@ func MountServer(r chi.Router, s *Server) {
 		r.Post("/runtime/command", s.runtimeCommand)
 		r.Post("/codex/session", s.createCodexSession)
 		r.Get("/codex/session", s.getCodexSession)
+		r.Get("/codex/skills", s.listCodexSkills)
+		r.Post("/codex/skills", s.createCodexSkill)
+		r.Get("/codex/skills/{id}", s.getCodexSkill)
+		r.Put("/codex/skills/{id}", s.updateCodexSkill)
+		r.Post("/codex/skills/{id}/toggle", s.toggleCodexSkill)
+		r.Post("/codex/skills/{id}/invoke", s.invokeCodexSkill)
+		r.Delete("/codex/skills/{id}", s.deleteCodexSkill)
 		r.Get("/codex/models", s.listCodexModels)
 		r.Post("/codex/preferences", s.updateCodexPreferences)
 		r.Get("/codex/history", s.listCodexHistory)

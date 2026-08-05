@@ -88,6 +88,21 @@ export type CodexSession = {
   model?: string;
   effort?: string;
 };
+export type CodexSkill = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  updatedAt: string;
+  bytes: number;
+  version: string;
+  content?: string;
+};
+export type CodexSkillInvocation = {
+  id: string;
+  name: string;
+  content: string;
+};
 export type CodexReasoningEffort = {
   reasoningEffort: string;
   description: string;
@@ -302,6 +317,48 @@ async function boundedJSON(response: Response, maxBytes: number): Promise<unknow
 }
 
 const CODEX_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const CODEX_SKILL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const MAX_CODEX_SKILL_CONTENT_CHARS = 160 * 1024;
+
+function validateCodexSkillId(id: string): string {
+  if (!CODEX_SKILL_ID_PATTERN.test(id)) throw new Error("Codex Skill id is invalid");
+  return id;
+}
+
+function validateCodexSkill(value: unknown, includeContent = false): CodexSkill {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Agent returned an invalid Codex Skill");
+  }
+  const skill = value as Partial<CodexSkill>;
+  if (!CODEX_SKILL_ID_PATTERN.test(skill.id ?? "") ||
+      typeof skill.name !== "string" || !skill.name || skill.name.length > 128 ||
+      typeof skill.description !== "string" || skill.description.length > 512 ||
+      typeof skill.enabled !== "boolean" || typeof skill.updatedAt !== "string" ||
+      typeof skill.bytes !== "number" || !Number.isSafeInteger(skill.bytes) || skill.bytes <= 0 || skill.bytes > MAX_CODEX_SKILL_CONTENT_CHARS ||
+      typeof skill.version !== "string" || !/^[a-f0-9]{64}$/.test(skill.version)) {
+    throw new Error("Agent returned an invalid Codex Skill");
+  }
+  if (includeContent && (typeof skill.content !== "string" || !skill.content || skill.content.length > MAX_CODEX_SKILL_CONTENT_CHARS)) {
+    throw new Error("Agent returned invalid Codex Skill content");
+  }
+  const id = skill.id as string;
+  const name = skill.name as string;
+  const description = skill.description as string;
+  const enabled = skill.enabled as boolean;
+  const updatedAt = skill.updatedAt as string;
+  const bytes = skill.bytes as number;
+  const version = skill.version as string;
+  return {
+    id,
+    name,
+    description,
+    enabled,
+    updatedAt,
+    bytes,
+    version,
+    ...(includeContent ? { content: skill.content } : {}),
+  };
+}
 
 function validateCodexHistorySummary(value: unknown): CodexHistorySummary {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -415,6 +472,123 @@ export async function getCodexSession(
     throw new Error("Agent returned an invalid Codex session status");
   }
   return value as CodexSession;
+}
+
+export async function listCodexSkills(
+  connection: AgentConnection,
+  fetcher: Fetcher = fetch,
+): Promise<CodexSkill[]> {
+  const response = await agentFetch(connection, "api/codex/skills", { method: "GET" }, fetcher);
+  if (!response.ok) throw new Error(`Codex Skill list failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 512 * 1024);
+  const skills = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as { skills?: unknown }).skills
+    : undefined;
+  if (!Array.isArray(skills) || skills.length > 256) throw new Error("Agent returned an invalid Codex Skill list");
+  return skills.map((item) => validateCodexSkill(item));
+}
+
+export async function getCodexSkill(
+  connection: AgentConnection,
+  id: string,
+  fetcher: Fetcher = fetch,
+): Promise<CodexSkill> {
+  validateCodexSkillId(id);
+  const response = await agentFetch(connection, `api/codex/skills/${encodeURIComponent(id)}`, { method: "GET" }, fetcher);
+  if (response.status === 404) throw new Error("Codex Skill not found");
+  if (!response.ok) throw new Error(`Codex Skill detail failed: HTTP ${response.status}`);
+  return validateCodexSkill(await boundedJSON(response, 192 * 1024), true);
+}
+
+export async function createCodexSkill(
+  connection: AgentConnection,
+  input: { id: string; content: string },
+  fetcher: Fetcher = fetch,
+): Promise<CodexSkill> {
+  validateCodexSkillId(input.id);
+  if (!input.content.trim() || input.content.length > MAX_CODEX_SKILL_CONTENT_CHARS) {
+    throw new Error("Codex Skill content is invalid");
+  }
+  const response = await agentFetch(connection, "api/codex/skills", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex Skill create failed: HTTP ${response.status}`);
+  return validateCodexSkill(await boundedJSON(response, 192 * 1024), true);
+}
+
+export async function updateCodexSkill(
+  connection: AgentConnection,
+  id: string,
+  content: string,
+  version: string,
+  fetcher: Fetcher = fetch,
+): Promise<CodexSkill> {
+  validateCodexSkillId(id);
+  if (!/^[a-f0-9]{64}$/.test(version)) throw new Error("Codex Skill version is invalid");
+  if (!content.trim() || content.length > MAX_CODEX_SKILL_CONTENT_CHARS) throw new Error("Codex Skill content is invalid");
+  const response = await agentFetch(connection, `api/codex/skills/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "If-Match": version },
+    body: JSON.stringify({ content }),
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex Skill update failed: HTTP ${response.status}`);
+  return validateCodexSkill(await boundedJSON(response, 192 * 1024), true);
+}
+
+export async function toggleCodexSkill(
+  connection: AgentConnection,
+  id: string,
+  enabled: boolean,
+  version: string,
+  fetcher: Fetcher = fetch,
+): Promise<CodexSkill> {
+  validateCodexSkillId(id);
+  if (!/^[a-f0-9]{64}$/.test(version)) throw new Error("Codex Skill version is invalid");
+  const response = await agentFetch(connection, `api/codex/skills/${encodeURIComponent(id)}/toggle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "If-Match": version },
+    body: JSON.stringify({ enabled }),
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex Skill toggle failed: HTTP ${response.status}`);
+  return validateCodexSkill(await boundedJSON(response, 192 * 1024), true);
+}
+
+export async function invokeCodexSkill(
+  connection: AgentConnection,
+  id: string,
+  fetcher: Fetcher = fetch,
+): Promise<CodexSkillInvocation> {
+  validateCodexSkillId(id);
+  const response = await agentFetch(connection, `api/codex/skills/${encodeURIComponent(id)}/invoke`, {
+    method: "POST",
+  }, fetcher);
+  if (!response.ok) throw new Error(`Codex Skill invocation failed: HTTP ${response.status}`);
+  const value = await boundedJSON(response, 192 * 1024);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Agent returned an invalid Codex Skill invocation");
+  const invocation = value as Partial<CodexSkillInvocation>;
+  if (!CODEX_SKILL_ID_PATTERN.test(invocation.id ?? "") || typeof invocation.name !== "string" ||
+      !invocation.name || typeof invocation.content !== "string" || !invocation.content ||
+      invocation.content.length > MAX_CODEX_SKILL_CONTENT_CHARS) {
+    throw new Error("Agent returned an invalid Codex Skill invocation");
+  }
+  return { id: invocation.id as string, name: invocation.name, content: invocation.content };
+}
+
+export async function deleteCodexSkill(
+  connection: AgentConnection,
+  id: string,
+  version: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  validateCodexSkillId(id);
+  if (!/^[a-f0-9]{64}$/.test(version)) throw new Error("Codex Skill version is invalid");
+  const response = await agentFetch(connection, `api/codex/skills/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "If-Match": version },
+  }, fetcher);
+  if (!response.ok && response.status !== 404) throw new Error(`Codex Skill delete failed: HTTP ${response.status}`);
 }
 
 function validateCodexPickerValue(value: unknown, label: string): string {

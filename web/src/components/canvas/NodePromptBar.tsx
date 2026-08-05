@@ -543,6 +543,7 @@ ${body}` : body;
 
   return (
     <div
+      data-canvas-control
       className="ob-composer node-prompt absolute left-0 top-full z-20 mt-2 flex w-[min(420px,calc(100vw-1.5rem))] max-w-full flex-col gap-2 p-2"
       onPointerDown={(e) => e.stopPropagation()}
       role="group"

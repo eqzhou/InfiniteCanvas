@@ -41,6 +41,11 @@ import { useCanvasGenerationRecovery } from "@/components/canvas/useCanvasGenera
 import { OPENBOARD_ASSET_DRAG_MIME, readOpenBoardAssetDrag } from "@/lib/asset-drag";
 import { resizeFromCorner, type NodeRect, type NodeResizeCorner } from "@/lib/node-resize";
 import { mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
+import {
+  canvasExportFilename,
+  downloadCanvasSnapshot,
+  renderCanvasSnapshot,
+} from "@/lib/canvas-export";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -121,6 +126,7 @@ export function BoardCanvas() {
   const [menu, setMenu] = useState<ContextMenuState>(null);
   const [groupHoverId, setGroupHoverId] = useState<string | null>(null);
   const [assetPicker, setAssetPicker] = useState<{ open: boolean; at: Point | null }>({ open: false, at: null });
+  const [exportingSnapshot, setExportingSnapshot] = useState(false);
 
   const enqueueMediaImport = (operation: () => Promise<void>): Promise<void> => {
     const pending = mediaImportQueueRef.current.then(operation, operation);
@@ -276,6 +282,20 @@ export function BoardCanvas() {
     commitScheduledViewport();
   }, [commitScheduledViewport, releaseCanvasPointer]);
 
+  const exportSnapshot = useCallback(async () => {
+    const surface = rootRef.current;
+    if (!surface || !project || exportingSnapshot) return;
+    setExportingSnapshot(true);
+    try {
+      const dataUrl = await renderCanvasSnapshot(surface);
+      downloadCanvasSnapshot(dataUrl, canvasExportFilename(project.title));
+    } catch (error) {
+      window.alert(error instanceof Error ? `画布导出失败：${error.message}` : "画布导出失败");
+    } finally {
+      setExportingSnapshot(false);
+    }
+  }, [exportingSnapshot, project]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
@@ -316,6 +336,9 @@ export function BoardCanvas() {
       } else if (meta && e.key.toLowerCase() === "y") {
         e.preventDefault();
         redo();
+      } else if (meta && e.shiftKey && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        void exportSnapshot();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         const edgeId = selectedEdgeId;
@@ -347,6 +370,7 @@ export function BoardCanvas() {
     deleteSelected,
     duplicateSelected,
     endDragInteraction,
+    exportSnapshot,
     pasteClipboard,
     redo,
     selectAll,
@@ -795,6 +819,8 @@ export function BoardCanvas() {
           // gesture whose frames merge together.
           commitViewportRun();
         }}
+        onExportSnapshot={exportSnapshot}
+        exportingSnapshot={exportingSnapshot}
       />
       <div
         ref={rootRef}

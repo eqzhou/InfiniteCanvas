@@ -72,6 +72,7 @@ canvas.
 - Transparent images, reverse prompting, adjustable split guides, and lineage
 - Reproducible image retries with reference protection and expandable result batches
 - Direct text/image-to-video creation with smart duration and provider preflight validation
+- Local Codex Agent Skills management: editable drafts from the current canvas, enable/disable/delete, bounded local/guest-only storage, and explicit invocation through the existing session permission and approval boundary
 - Persistent image/video/audio generation jobs, history, retry, cancel, soft-delete tombstones, and canvas insertion; stale restore/update paths cannot resurrect deleted jobs. The image workbench adds side/bottom layouts, concurrent runs, persistent categories and filtering, reference/result previews with byte sizes, reusable assets, a draggable workflow entrance, common aspect-ratio presets, and per-channel/per-kind model preferences. Formal OpenAI/Gemini/APIMart/KIE/restricted-Template image, OpenAI/Ark/APIMart/KIE/restricted-Template video, OpenAI audio, and multi-step image workflows execute in the Go service and continue across browser reloads, including indexed canvas image batches
 - Public/personal image workflow templates with typed variables, DAG references, AI-assisted draft creation, durable step checkpoints, image-history children, and atomic canvas insertion
 - WebDAV project and full-workspace backup/restore for projects, assets, prompts, workflow templates, history, and deduplicated media
@@ -111,7 +112,7 @@ canvas.
 - Canvas prompt library cross-source search and title-preserving insert
 
 The current evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md),
-the latest dual-upstream review is [`docs/UPSTREAM_GAP_PLAN_5.md`](docs/UPSTREAM_GAP_PLAN_5.md),
+the latest dual-upstream review is [`docs/UPSTREAM_GAP_PLAN_7.md`](docs/UPSTREAM_GAP_PLAN_7.md),
 and the latest Tiger-specific review is [`docs/TIGER_GAP_PLAN_4.md`](docs/TIGER_GAP_PLAN_4.md).
 `TIGER_GAP_PLAN.md`, `_2`, and `_3` are retained only as historical audit records.
 

@@ -3,6 +3,7 @@ import { useBoardStore } from "@/stores/use-board-store";
 import {
   Bookmark,
   Clapperboard,
+  Download,
   Film,
   Focus,
   Grid3X3,
@@ -25,6 +26,8 @@ export function CanvasToolbar({
   onImportAudios,
   onOpenAssets,
   onFitView,
+  onExportSnapshot,
+  exportingSnapshot = false,
   reservePanelToggle = false,
 }: {
   onAdd: (type: NodeType) => void;
@@ -33,6 +36,8 @@ export function CanvasToolbar({
   onImportAudios?: (files: File[]) => void | Promise<void>;
   onOpenAssets?: () => void;
   onFitView?: () => void;
+  onExportSnapshot?: () => void | Promise<void>;
+  exportingSnapshot?: boolean;
   reservePanelToggle?: boolean;
 }) {
   const undo = useBoardStore((s) => s.undo);
@@ -158,6 +163,16 @@ export function CanvasToolbar({
           <Focus size={16} />
         </Tool>
       ) : null}
+      {onExportSnapshot ? (
+        <Tool
+          label={exportingSnapshot ? "导出中" : "导出画布"}
+          onClick={() => void onExportSnapshot()}
+          compact
+          disabled={exportingSnapshot}
+        >
+          <Download size={16} />
+        </Tool>
+      ) : null}
     </div>
   );
 }
@@ -168,12 +183,14 @@ function Tool({
   children,
   active,
   compact = false,
+  disabled = false,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
   active?: boolean;
   compact?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -181,6 +198,7 @@ function Tool({
       title={label}
       aria-label={label}
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={active}
       className={cn(
         "ob-btn h-9 shrink-0 gap-1 px-2.5",

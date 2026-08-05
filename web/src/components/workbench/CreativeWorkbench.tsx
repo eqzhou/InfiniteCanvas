@@ -4,6 +4,7 @@ import { ImagePlus, PanelBottom, PanelLeft, RefreshCw, Square, Trash2, Video } f
 import type { GenerationJob } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { getProvider } from "@/lib/ai-config";
+import { resolveProviderCapability } from "@/lib/provider-capabilities";
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import { assertResolvedImageReferences } from "@/lib/image-generation";
 import { generateImages, generateVideo, resolveMediaRefs } from "@/services/ai-client";
@@ -74,6 +75,15 @@ import {
   imageSizeOptionsFor,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
+import {
+  normalizeVideoRatioForProvider,
+  normalizeVideoResolutionForProvider,
+  optionsWithCurrentVideoValue,
+  videoRatioOptionsFor,
+  videoResolutionOptionsFor,
+  videoSizeForProvider,
+  videoSizePresetFor,
+} from "@/lib/video-generation-options";
 import {
   acceptsWorkbenchReference,
   MAX_REFERENCE_FILES,
@@ -148,6 +158,16 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     () => imageAspectOptionsFor(provider?.protocol, model),
     [model, provider?.protocol],
   );
+  const videoRatioOptions = useMemo(
+    () => videoRatioOptionsFor(provider?.protocol, model),
+    [model, provider?.protocol],
+  );
+  const videoResolutionOptions = useMemo(
+    () => videoResolutionOptionsFor(provider?.protocol, model),
+    [model, provider?.protocol],
+  );
+  const videoCapability = resolveProviderCapability(provider?.protocol ?? "", "video", model)?.video;
+  const videoSizePreset = videoSizePresetFor(ratio, resolution);
   const imageOutputLimit = imageOutputLimitFor(provider?.protocol, model, 8);
   const allowsEmptyKlingPrompt = kind === "video" && provider?.protocol === "apimart" && model === "kling-v3" &&
     klingOptions.multiShot && klingOptions.shotType === "customize" && klingOptions.shots.length > 0;
@@ -206,6 +226,14 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setCount((current) => Math.min(Math.max(1, current), imageOutputLimit));
   }, [imageOutputLimit, kind]);
 
+  useEffect(() => {
+    if (kind !== "video") return;
+    const nextRatio = normalizeVideoRatioForProvider(ratio, provider?.protocol, model);
+    const nextResolution = normalizeVideoResolutionForProvider(resolution, provider?.protocol, model);
+    if (nextRatio !== ratio) setRatio(nextRatio);
+    if (nextResolution !== resolution) setResolution(nextResolution);
+  }, [kind, model, provider?.protocol, ratio, resolution]);
+
   // Refresh the pre-flight cost whenever the model or unit count changes so the
   // primary button can show "预计 N 算力" without an extra click.
   useEffect(() => {
@@ -250,6 +278,16 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setCount(restored.count);
     setTransparent(restored.transparentBackground);
     setCategory(restored.category === WORKBENCH_UNCATEGORIZED ? "" : restored.category);
+    if (kind === "video") {
+      const restoredParameters = job.parameters ?? {};
+      setRatio(String(restoredParameters.ratio ?? ratio));
+      setResolution(String(restoredParameters.resolution ?? resolution));
+      setSeconds(Number(restoredParameters.seconds ?? seconds) || seconds);
+      setSmartDuration(Boolean(restoredParameters.smartDuration));
+      setGenerateAudio(Boolean(restoredParameters.generateAudio));
+      setWatermark(Boolean(restoredParameters.watermark));
+      setFrameMode(normalizeVideoFrameMode(restoredParameters.frameMode));
+    }
     const restoredChannel = channelChoices.find((item) => item.id === restored.providerId);
     if (restoredChannel) {
       const restoredProvider = getProvider(restoredChannel, kind);
@@ -284,7 +322,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setError(unresolved
       ? `已回填设置，但有 ${unresolved} 张参考图来自本地上传，需要重新选择`
       : "");
-  }, [category, channelChoices, channelId, count, kind, model, prompt, quality, reusableAssets, setConfig, size, transparent]);
+  }, [category, channelChoices, channelId, count, frameMode, generateAudio, kind, model, prompt, quality, ratio, reusableAssets, resolution, seconds, setConfig, size, smartDuration, transparent, watermark]);
 
   const refresh = useCallback(async () => {
     const page = await listGenerationJobs({ projectId: project?.id, kind, page: 1, pageSize: 50 });
@@ -397,7 +435,16 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       setError(cause instanceof Error ? cause.message : String(cause));
       return;
     }
-    const runProvider = runChannel ? getProvider(runChannel, kind) : undefined;
+		const runProvider = runChannel ? getProvider(runChannel, kind) : undefined;
+		const effectiveVideoRatio = kind === "video"
+			? normalizeVideoRatioForProvider(String(source?.parameters.ratio ?? ratio), runProvider?.protocol, runModel)
+			: "";
+		const effectiveVideoResolution = kind === "video"
+			? normalizeVideoResolutionForProvider(String(source?.parameters.resolution ?? resolution), runProvider?.protocol, runModel)
+			: "";
+		const effectiveVideoSize = kind === "video"
+			? videoSizeForProvider(runProvider?.protocol, effectiveVideoRatio, effectiveVideoResolution)
+			: "";
 		const allowEmptyPrompt = (kind === "video" && runProvider?.protocol === "apimart" && runModel === "kling-v3" &&
 			Boolean(source ? source.parameters.multiShot && source.parameters.shotType === "customize" : klingOptions.multiShot && klingOptions.shotType === "customize" && klingOptions.shots.length)) ||
 			(kind === "video" && runProvider?.protocol === "apimart" &&
@@ -481,7 +528,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       }
 		runOnServer = runOnServer && serverReferencesSupported;
 		const ownerClientId = runOnServer ? "" : getRuntimeOwnerId();
-        const rawParameters: Record<string, unknown> = {
+		const rawParameters: Record<string, unknown> = {
         ...(source?.parameters ?? (kind === "image"
         ? {
             size, quality, count, transparentBackground: transparent,
@@ -504,7 +551,12 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               elements: klingOptions.elements,
             } : {}),
             referenceStorageKeys,
-          })),
+		})),
+		...(kind === "video" ? {
+			ratio: effectiveVideoRatio,
+			resolution: effectiveVideoResolution,
+			size: String(source?.parameters.size ?? "") || effectiveVideoSize,
+		} : {}),
         ...(ownerClientId ? { ownerClientId } : {}),
       };
       const parameters: Record<string, unknown> = kind === "image"
@@ -524,7 +576,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               ),
             };
           })()
-        : rawParameters;
+		: rawParameters;
 		if (runOnServer) {
 			if (kind === "video" && runProvider.protocol === "apimart" && (runModel === "kling-v2-6" || runModel === "kling-v3")) {
 				validateKlingVideoParameters({
@@ -569,7 +621,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				providerId: runChannel.id,
 				model: runModel,
 				parameters: {
-					size: String(parameters.size ?? ""),
+					size: String(parameters.size ?? effectiveVideoSize),
 					seconds: resolveVideoDuration(Boolean(parameters.smartDuration), Number(parameters.seconds ?? seconds)),
 					ratio: String(parameters.ratio ?? ratio),
 					resolution: String(parameters.resolution ?? resolution),
@@ -642,6 +694,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
           ),
           ratio: String(parameters.ratio ?? ratio),
           resolution: String(parameters.resolution ?? resolution),
+          size: String(parameters.size ?? effectiveVideoSize),
           generateAudio: Boolean(parameters.generateAudio),
           watermark: Boolean(parameters.watermark),
           frameMode: normalizeVideoFrameMode(parameters.frameMode),
@@ -967,12 +1020,66 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 </label>
                 <label className="block">
                   <span className="ob-label">比例</span>
-                  <input className="ob-field" value={ratio} onChange={(event) => setRatio(event.target.value)} />
+                  {videoCapability?.aspectRatios.length ? (
+                    <select
+                      aria-label="视频比例"
+                      className="ob-field cursor-pointer"
+                      value={ratio}
+                      onChange={(event) => setRatio(event.target.value)}
+                    >
+                      {optionsWithCurrentVideoValue(videoRatioOptions, ratio).map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      aria-label="视频比例"
+                      className="ob-field"
+                      list="video-ratio-options"
+                      value={ratio}
+                      onChange={(event) => setRatio(event.target.value)}
+                    />
+                  )}
+                  {!videoCapability?.aspectRatios.length ? (
+                    <datalist id="video-ratio-options">
+                      {videoRatioOptions.map((option) => <option key={option.value} value={option.value} />)}
+                    </datalist>
+                  ) : null}
                 </label>
                 <label className="block">
                   <span className="ob-label">清晰度</span>
-                  <input className="ob-field" value={resolution} onChange={(event) => setResolution(event.target.value)} />
+                  {videoCapability?.resolutions?.length ? (
+                    <select
+                      aria-label="视频清晰度"
+                      className="ob-field cursor-pointer"
+                      value={resolution}
+                      onChange={(event) => setResolution(event.target.value)}
+                    >
+                      {optionsWithCurrentVideoValue(videoResolutionOptions, resolution).map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      aria-label="视频清晰度"
+                      className="ob-field"
+                      list="video-resolution-options"
+                      value={resolution}
+                      onChange={(event) => setResolution(event.target.value)}
+                    />
+                  )}
+                  {!videoCapability?.resolutions?.length ? (
+                    <datalist id="video-resolution-options">
+                      {videoResolutionOptions.map((option) => <option key={option.value} value={option.value} />)}
+                    </datalist>
+                  ) : null}
                 </label>
+                <div className="col-span-2 flex items-center justify-between rounded-lg bg-[color-mix(in_srgb,var(--ob-accent-soft)_45%,transparent)] px-2.5 py-2 text-xs">
+                  <span className="text-[var(--ob-muted)]">自动尺寸</span>
+                  <output aria-label="视频自动尺寸" className="font-medium text-[var(--ob-ink)]">
+                    {videoSizePreset === "auto" ? "由模型决定" : videoSizePreset}
+                  </output>
+                </div>
                 <div className="flex items-center gap-2 self-end pb-2.5 text-[var(--ob-muted)]">
                   <button
                     type="button"

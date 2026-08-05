@@ -78,6 +78,7 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
 
   return (
     <div
+      data-canvas-control
       className="absolute -bottom-9 right-0 flex items-center gap-1 rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 text-[11px] shadow-[var(--ob-shadow)]"
       onPointerDown={(e) => e.stopPropagation()}
     >

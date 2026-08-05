@@ -2,8 +2,9 @@
 
 This inventory freezes the engineering core to the publicly documented and
 black-box-observed behavior of `basketikun/infinite-canvas v0.8.2`, plus the
-explicit public interface deltas through `v0.13.0` and the named public
-Unreleased behaviors rechecked on 2026-08-04. It does not
+explicit public interface deltas through `v0.13.0`, the named public
+Unreleased behaviors rechecked on 2026-08-05, and Tiger deltas through
+`v0.5.1`. It does not
 claim source, visual-expression, trademark, or legal equivalence. OpenBoard is
 an independent implementation with its own architecture, data model, UI,
 plugins, SDK, fixtures, and assets.
@@ -12,11 +13,12 @@ Status: `verified` means the behavior is implemented and has repeatable unit,
 integration, E2E, or formal-storage evidence in this repository. Provider
 smoke tests that require real paid credentials remain opt-in.
 
-## Tiger v0.4.5 convergence
+## Tiger v0.4.5 convergence baseline
 
 The broader product goal additionally tracks the publicly documented behavior
-of `tigerowo/infinite-canvas v0.4.5@9435f1c`. The previous v0.4.4 review is a
-historical baseline only. This is an independent implementation;
+of `tigerowo/infinite-canvas v0.5.1`. The detailed v0.4.5 table below is a
+historical convergence baseline; current v0.5.0–v0.5.1 deltas are listed in
+the additive review section. This is an independent implementation;
 Tiger source, bundled director assets, visual expression, and product identity
 are not implementation inputs.
 
@@ -46,11 +48,26 @@ are not implementation inputs.
 | Admin shared-channel model reconciliation | [verified] fetched models are previewed as selectable added/existing/removed differences before an administrator confirms the bounded replacement |
 | APIMart current exact contracts | [verified] exact adapters remain fail-closed and validate only independently documented model identifiers and limits; undocumented marketing names, including Agnes, remain unsupported |
 | Single canvas Agent entry | [verified] the legacy assistant panel and duplicate navigation entry are removed; one dockable `画布 Agent` retains Codex/Claude sessions, approvals, attachments, stop and unified generation-task status |
+| Agent Skills management, draft confirmation and explicit invocation | [verified] the local Codex panel lists, creates, edits, enables/disables, deletes and explicitly invokes bounded `SKILL.md` entries; drafts use current canvas node context plus optional user supplement and remain editable until saved. Host-global Skills are intentionally restricted to local/guest execution, with real-directory/file checks, bounded UTF-8 metadata/content, versioned `If-Match` writes and the normal Codex permission/approval path for invocation |
+
+## Tiger v0.5.0–v0.5.1 additive review
+
+The public Tiger `v0.5.0` and `v0.5.1` deltas were rechecked on 2026-08-05
+without reading implementation source, styles, fixtures, screenshots, or
+bundled assets:
+
+| Public behavior | Local status |
+|---|---|
+| Agent consolidation and homepage Agent entry | [verified existing] the local canvas already has one dockable `画布 Agent` entry and the Agent is integrated with the current project/canvas runtime |
+| Panorama cross-origin loading fix | [verified existing] panorama content is resolved through managed same-origin media rather than upstream raw URLs |
+| Aspect-ratio rounding fix | [verified existing] image geometry derives from a single scale factor and frozen aspect presets |
+| Video size presets linked to ratio and resolution | [verified] the video workbench and video config nodes derive bounded ratio/resolution options from exact provider capability tables, preserve custom values for unknown providers, avoid assuming 16:9 for unrecognized ratios, preserve explicit node size overrides, and persist a linked pixel/native size preset through browser and durable generation paths |
+| WebDAV cloud media storage | [not implemented] WebDAV remains a project/workspace backup transport; protected media uses the filesystem or S3/R2 backends |
 
 ## Basket v0.11.0–v0.13.0 additive parity
 
 The public `basketikun/infinite-canvas v0.11.0`, `v0.12.0`, `v0.12.1` and
-`v0.13.0` releases and current public CHANGELOG were rechecked on 2026-08-04
+`v0.13.0` releases and current public CHANGELOG were rechecked on 2026-08-05
 without reading implementation source,
 styles, fixtures, screenshots, or bundled assets:
 
@@ -106,7 +123,7 @@ implementation evidence.
 | WebDAV project and full-workspace backup/restore with workflow templates, nested workflow media, deduplication and no exported credentials | `SettingsModal.tsx`, `project-bundle.test.ts`, `workspace-bundle.test.ts` |
 | Loopback New API query auto-configuration and remote-safe fragment configuration | `url-credentials.test.ts` and loopback-link E2E |
 | Plugin install/enable/update/rollback/uninstall, sandbox, permissions, SDK and five examples | plugin unit tests plus registry/SVG/panorama E2E |
-| Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, workbench helper tests, side/bottom layout and concurrent-category E2E, draggable workflow-entry E2E, reusable-asset/reference-thumbnail E2E, generation-job tests, cancellation/retry E2E, and formal E2E |
+| Image/video workbenches and persistent generation history | `CreativeWorkbench.tsx`, `video-generation-options.ts`, workbench helper tests, side/bottom layout and concurrent-category E2E, draggable workflow-entry E2E, reusable-asset/reference-thumbnail E2E, generation-job tests, cancellation/retry E2E, and formal E2E |
 | Multi-tab browser runtime, MCP tools, snapshots, Codex continuity, attachments, stop and approvals | Go runtime/MCP/Codex tests plus browser/Codex E2E |
 | Public Unreleased unified generation status query across canvas/image/video workbench | `generation_get_status` MCP schema, unified activity tests, workbench/Agent E2E, and formal reload/orphan-recovery E2E |
 | Public Unreleased client-scoped operations and focused-tab fallback | runtime pin/ownership Go tests and two-tab generation ownership E2E |
@@ -154,7 +171,7 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 755 Bun unit/integration tests at the 2026-08-04 verification baseline; the same run reports 82.12% line and 83.89% function coverage. CI publishes this report but does not currently enforce a numeric threshold
+- [verified] 768 Bun unit/integration tests at the 2026-08-05 verification baseline; the same run reports 81.71% line and 83.17% function coverage. CI publishes this report but does not currently enforce a numeric threshold
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds; the v0.12.0 Agent follow-up also passes the focused API race suite
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)

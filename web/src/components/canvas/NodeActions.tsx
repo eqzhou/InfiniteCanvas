@@ -1206,6 +1206,7 @@ export function NodeActions({
       <button
         type="button"
         className="ob-btn-primary mt-1 inline-flex w-full items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs"
+        data-canvas-control
         aria-label={cancellable ? "停止配置节点生成" : "配置节点生成"}
         aria-busy={loading}
         disabled={loading && !cancellable}
@@ -1219,9 +1220,10 @@ export function NodeActions({
     );
   }
 
-return (
+  return (
     <>
       <div
+        data-canvas-control
         className={`ob-chrome absolute left-0 z-30 flex w-[min(360px,calc(100vw-1.5rem))] flex-wrap items-center gap-0.5 overflow-hidden p-1 ${
           avoidTopToolbarOverlap ? "top-12" : "bottom-full mb-8"
         }`}

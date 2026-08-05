@@ -1373,6 +1373,19 @@ test("projects support create, rename, JSON export/import, and batch delete", as
   await expect(page.locator('input[value="外部项目 (导入)"]')).toBeVisible();
 });
 
+test("visible canvas exports a PNG from the toolbar", async ({ page }) => {
+  await openFreshBoard(page);
+
+  const downloadPromise = page.waitForEvent("download");
+  await clickCanvasTool(page, "导出画布");
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/\.png$/);
+  const exportPath = await download.path();
+  expect(exportPath).not.toBeNull();
+  const exported = await readFile(exportPath!);
+  expect(exported.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))).toBe(true);
+});
+
 test("desktop project panel resizes, collapses, and persists its width", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 1440) < 768, "Desktop resize behavior is covered here.");
   await openFreshBoard(page);
@@ -2872,6 +2885,13 @@ test("video workbench persists Ark audio and watermark settings across retry", a
   await closeSettings(page);
 
   await page.goto("/workbench/video");
+  await expect(page.getByLabel("视频比例")).toHaveValue("16:9");
+  await expect(page.getByLabel("视频清晰度")).toHaveValue("720p");
+  await expect(page.getByLabel("视频自动尺寸")).toHaveText("1280x720");
+  await page.getByLabel("视频比例").fill("9:16");
+  await expect(page.getByLabel("视频自动尺寸")).toHaveText("720x1280");
+  await page.getByLabel("视频清晰度").fill("1080p");
+  await expect(page.getByLabel("视频自动尺寸")).toHaveText("1080x1920");
   await page.getByLabel("提示词").fill("orbiting product shot");
   await page.getByLabel("生成声音").check();
   await page.getByLabel("水印").check();
@@ -4398,6 +4418,47 @@ test("canvas Agent is the single assistant entry", async ({ page }) => {
   await expect(agent).toBeVisible();
   await expect(agent.getByRole("tab", { name: "Codex" })).toBeVisible();
   await expect(agent.getByRole("tab", { name: "Claude" })).toBeVisible();
+});
+
+test("Codex Agent Skills generate reviewable drafts and save through the local API", async ({ page }) => {
+  const version = "a".repeat(64);
+  let savedSkill: Record<string, unknown> | null = null;
+  await page.route("**/api/codex/skills**", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ skills: savedSkill ? [savedSkill] : [] }) });
+      return;
+    }
+    if (request.method() === "POST") {
+      const body = JSON.parse(request.postData() ?? "{}") as { id?: string; content?: string };
+      savedSkill = {
+        id: body.id,
+        name: "Canvas Review",
+        description: "draft",
+        enabled: true,
+        updatedAt: "2026-08-05T00:00:00Z",
+        bytes: body.content?.length ?? 1,
+        version,
+        content: body.content,
+      };
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(savedSkill) });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "text/plain", body: "not found" });
+  });
+
+  await openFreshBoard(page);
+  await openLocalAgentPanel(page);
+  const agent = page.getByRole("complementary", { name: "画布 Agent" });
+  const skills = agent.getByRole("region", { name: "Codex Agent Skills" });
+  await skills.getByRole("button", { name: /Agent Skills/ }).click();
+  await skills.getByLabel("草稿目标或对话补充").fill("检查当前画布中的欢迎文案");
+  await skills.getByRole("button", { name: /草稿/ }).click();
+  await expect(skills.getByLabel("Skill 内容")).toHaveValue(/检查当前画布中的欢迎文案/);
+  await expect(skills.getByText("草稿已生成，请检查内容后保存")).toBeVisible();
+  await skills.getByLabel("Skill id").fill("canvas-review");
+  await skills.getByRole("button", { name: "保存" }).click();
+  await expect(skills.getByText(/canvas-review · 已启用/)).toBeVisible();
 });
 
 test("local Agent connects to the real Go service with a session token", async ({ page }) => {
