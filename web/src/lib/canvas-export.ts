@@ -1,8 +1,11 @@
 import { filenameForMimeType } from "@/lib/download-filename";
 
-export function shouldIncludeCanvasExportNode(node: Element): boolean {
-  return !node.hasAttribute("data-canvas-control") &&
-    !node.hasAttribute("data-canvas-export-ignore");
+export function shouldIncludeCanvasExportNode(node: Node): boolean {
+  // html-to-image applies this filter to text and other non-element nodes too.
+  const element = node as Node & Partial<Pick<Element, "hasAttribute">>;
+  if (typeof element.hasAttribute !== "function") return true;
+  return !element.hasAttribute("data-canvas-control") &&
+    !element.hasAttribute("data-canvas-export-ignore");
 }
 
 export function canvasExportFilename(title: string, now = new Date()): string {

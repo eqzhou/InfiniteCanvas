@@ -18,4 +18,10 @@ describe("canvas export helpers", () => {
     expect(shouldIncludeCanvasExportNode(control)).toBe(false);
     expect(shouldIncludeCanvasExportNode(node)).toBe(true);
   });
+
+  test("keeps non-element nodes in the exported image", () => {
+    const textNode = { nodeType: 3 } as unknown as Node;
+
+    expect(shouldIncludeCanvasExportNode(textNode)).toBe(true);
+  });
 });
