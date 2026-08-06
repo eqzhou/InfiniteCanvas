@@ -97,6 +97,20 @@ async function openHydratedSurface(page: Page, path: string, channelId: string) 
   await settings.getByRole("button", { name: "关闭设置" }).click();
 }
 
+async function restoreProjectAfterPageClose(
+  page: Page,
+  request: APIRequestContext,
+  projectId: string,
+  baseline: unknown,
+) {
+  // The app autosaves asynchronously. Close the page before restoring the
+  // baseline through the API so a queued browser write cannot put generated
+  // placeholders back after this request and leak state into the next test.
+  await page.close();
+  const response = await request.put(`/api/projects/${encodeURIComponent(projectId)}`, { data: baseline });
+  expect(response.status()).toBe(204);
+}
+
 test.beforeAll(async () => {
   imageUpstream = createServer(async (incoming, response) => {
 	if (incoming.method === "GET" && incoming.url === "/v1/videos/formal-video/content") {
@@ -474,7 +488,7 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
       .map((item) => item.metadata!.storageKey!) ?? [])].sort();
   }).toEqual(resultStorageKeys);
 
-  expect((await request.put(`/api/projects/${encodeURIComponent(projectId)}`, { data: baseline })).status()).toBe(204);
+  await restoreProjectAfterPageClose(page, request, projectId, baseline);
   for (const item of job?.result.items ?? []) expect((await request.delete(`/api/blobs/${encodeURIComponent(item.storageKey)}`)).status()).toBe(204);
   if (job) expect((await request.delete(`/api/generation-jobs/${encodeURIComponent(job.id)}`)).status()).toBe(204);
   notifyGeminiStarted = undefined;
@@ -551,7 +565,7 @@ test("formal director captures synchronize through protected storage", async ({ 
   }).toBe(0);
   expect((await request.get(captures[0]!.url)).status()).toBe(404);
 
-  expect((await request.put(`/api/projects/${encodeURIComponent(projectId)}`, { data: baseline })).status()).toBe(204);
+  await restoreProjectAfterPageClose(page, request, projectId, baseline);
 });
 
 test("formal video and canvas audio jobs survive the browser executor boundary", async ({ page, request }) => {
@@ -637,8 +651,7 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 
 	// Restore the exact project and remove this test's terminal jobs/media so
 	// later formal scenarios remain order-independent.
-	await page.goto("/workbench/video");
-	expect((await request.put(`/api/projects/${encodeURIComponent(baselineProjectId)}`, { data: baselineProject })).status()).toBe(204);
+  await restoreProjectAfterPageClose(page, request, baselineProjectId, baselineProject);
 	for (const key of [videoKey, audioKey]) {
 		if (key) expect((await request.delete(`/api/blobs/${encodeURIComponent(key)}`)).status()).toBe(204);
 	}
