@@ -30,6 +30,18 @@ const MAX_ACTIVITIES = 100;
 const listeners = new Set<() => void>();
 let activities: GenerationActivity[] = [];
 
+/**
+ * Provider duration for `deferSuccess` runs whose provider call already
+ * succeeded but whose audit row is still owed, keyed by activity id.
+ *
+ * The deferral postpones activity completion until media persistence finishes,
+ * so the audit row has to be uploaded by `completeGenerationActivity` instead.
+ * Entries are consumed on completion; failures reported inline by
+ * `runTrackedGeneration` never enter the map, which is what keeps the caller's
+ * follow-up `completeGenerationActivity("failed")` from double-reporting.
+ */
+const deferredReportDurations = new Map<string, number>();
+
 function currentSurface(): GenerationActivitySurface {
   if (typeof window === "undefined") return "canvas";
   if (window.location.pathname === "/workbench/image") return "image-workbench";
@@ -62,6 +74,7 @@ export function subscribeGenerationActivities(listener: () => void): () => void 
 
 export function clearGenerationActivities(): void {
   activities = [];
+  deferredReportDurations.clear();
   notify();
 }
 
@@ -72,12 +85,17 @@ export function completeGenerationActivity(
 ): void {
   const activity = activities.find((item) => item.id === id);
   if (!activity) return;
+  const trimmedError = error?.slice(0, 2_000);
   publish({
     ...activity,
     status,
     updatedAt: nowIso(),
-    error: error?.slice(0, 2_000),
+    error: trimmedError,
   });
+  const durationMs = deferredReportDurations.get(id);
+  if (durationMs === undefined) return;
+  deferredReportDurations.delete(id);
+  maybeReportClientAICall(activity, status, durationMs, trimmedError);
 }
 
 let clientReportEnabledCache: { enabled: boolean; expiresAt: number } | null = null;
@@ -108,10 +126,9 @@ export function invalidateAICallLogClientReportCache(): void {
 function maybeReportClientAICall(
   activity: GenerationActivity,
   status: "succeeded" | "failed" | "cancelled",
-  startedMs: number,
+  durationMs: number,
   error?: string,
 ): void {
-  const durationMs = Math.max(0, Date.now() - startedMs);
   void (async () => {
     if (!(await clientReportEnabled())) return;
     await reportAICallLog({
@@ -156,10 +173,21 @@ export async function runTrackedGeneration<T>(
   publish(activity);
   try {
     const result = await operation();
-    if (!input.deferSuccess) {
+    const providerDurationMs = Math.max(0, Date.now() - startedMs);
+    if (input.deferSuccess) {
+      // The provider call is already billed. Hand the audit row to
+      // completeGenerationActivity so media persistence time is excluded.
+      if (input.reportClient !== false) {
+        if (deferredReportDurations.size >= MAX_ACTIVITIES) {
+          const oldest = deferredReportDurations.keys().next();
+          if (!oldest.done) deferredReportDurations.delete(oldest.value);
+        }
+        deferredReportDurations.set(activity.id, providerDurationMs);
+      }
+    } else {
       publish({ ...activity, status: "succeeded", updatedAt: nowIso() });
       if (input.reportClient !== false) {
-        maybeReportClientAICall(activity, "succeeded", startedMs);
+        maybeReportClientAICall(activity, "succeeded", providerDurationMs);
       }
     }
     return result;
@@ -173,8 +201,9 @@ export async function runTrackedGeneration<T>(
       updatedAt: nowIso(),
       error,
     });
+    deferredReportDurations.delete(activity.id);
     if (input.reportClient !== false) {
-      maybeReportClientAICall(activity, status, startedMs, error);
+      maybeReportClientAICall(activity, status, Math.max(0, Date.now() - startedMs), error);
     }
     throw cause;
   }

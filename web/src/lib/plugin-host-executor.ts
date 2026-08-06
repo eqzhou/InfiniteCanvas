@@ -1,4 +1,4 @@
-import type { PluginHostRequest } from "@/lib/plugin-host";
+import { PLUGIN_HOST_MEDIA_PARAMS_MAX_BYTES, type PluginHostRequest } from "@/lib/plugin-host";
 
 type NodeState = { title?: string; state?: Record<string, unknown> };
 type AssetInput = {
@@ -77,7 +77,12 @@ export async function executePluginHostRequest(
       return context.createAsset({
         kind,
         title: stringParam(params, "title", 500, true)!,
-        content: stringParam(params, "content", kind === "image" ? 16 * 1024 * 1024 : 512_000, true)!,
+        content: stringParam(
+          params,
+          "content",
+          kind === "image" ? PLUGIN_HOST_MEDIA_PARAMS_MAX_BYTES : 512_000,
+          true,
+        )!,
         tags,
       });
     }
@@ -85,7 +90,7 @@ export async function executePluginHostRequest(
       const images = params.images === undefined
         ? undefined
         : Array.isArray(params.images) && params.images.length <= 8 && params.images.every((image) =>
-          typeof image === "string" && image.length <= 16 * 1024 * 1024)
+          typeof image === "string" && image.length <= PLUGIN_HOST_MEDIA_PARAMS_MAX_BYTES)
           ? [...params.images] as string[]
           : (() => { throw new Error("plugin images are invalid"); })();
       return context.generateText({ ...promptOptions(params), images });
@@ -115,5 +120,12 @@ export async function executePluginHostRequest(
     case "panel.setOpen":
       if (typeof params.open !== "boolean") throw new Error("plugin panel open is invalid");
       return context.setPanelOpen(params.open);
+    default: {
+      // Never resolve an unimplemented method as a successful no-op: the host
+      // replies ok:true with the returned value. Typed never keeps the switch
+      // exhaustive when the protocol grows.
+      const unsupported: never = request.method;
+      throw new Error(`plugin host method ${String(unsupported)} is unsupported`);
+    }
   }
 }

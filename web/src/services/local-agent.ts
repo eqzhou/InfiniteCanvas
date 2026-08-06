@@ -1,6 +1,7 @@
 import type { BoardProject } from "@/types/board";
 import { parseBoardProject } from "@/lib/board-document";
 import { readBoundedResponse } from "@/services/remote-content";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 import { getSessionToken } from "@/services/auth-session";
 import type {
   CodexHistoryEvent,
@@ -276,7 +277,7 @@ export function normalizeAgentBaseUrl(raw: string): string {
   } catch {
     throw new Error("Agent URL is invalid");
   }
-  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+  const loopback = isLoopbackHostname(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new Error("Agent URL must use HTTPS unless it is loopback");
   }

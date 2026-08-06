@@ -1,6 +1,7 @@
 import type { AiChannel, TextReasoningEffort } from "@/types/board";
 import { arkImageReferenceRoles, normalizeVideoFrameMode, validateArkVideoRequest } from "@/lib/video-generation";
 import { getProvider } from "@/lib/ai-config";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 import type { AiProviderKind } from "@/types/board";
 import { compileProviderTemplate, readTemplatePath, resolveTemplateEndpoint } from "@/lib/provider-template";
 import {
@@ -114,8 +115,7 @@ export async function listModels(channel: AiChannel, kind: AiProviderKind = "tex
 
 function isLoopbackProviderUrl(baseUrl: string): boolean {
   try {
-    const hostname = new URL(baseUrl).hostname;
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return isLoopbackHostname(new URL(baseUrl).hostname);
   } catch {
     return false;
   }

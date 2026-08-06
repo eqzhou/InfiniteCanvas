@@ -37,6 +37,13 @@ describe("plugin host executor", () => {
     expect(JSON.stringify(result)).not.toContain("apiKey");
   });
 
+  test("rejects an unimplemented method instead of resolving a silent no-op", async () => {
+    // The host replies ok:true with whatever this resolves to, so an
+    // unhandled method must throw rather than return undefined.
+    const unsupported = { requestId: "request-1", method: "shell.exec", params: {} } as unknown as PluginHostRequest;
+    await expect(executePluginHostRequest(unsupported, context())).rejects.toThrow("unsupported");
+  });
+
   test("rejects malformed method parameters before invoking the context", async () => {
     await expect(executePluginHostRequest(request("ai.text", { prompt: "" }), context()))
       .rejects.toThrow("prompt");

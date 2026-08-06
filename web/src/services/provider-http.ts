@@ -1,5 +1,6 @@
 import type { AiEndpointConfig } from "@/types/board";
 import { readBoundedProviderText } from "@/services/bounded-provider-json";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 
 const DEFAULT_ERROR_BYTES = 64 * 1024;
 
@@ -25,7 +26,7 @@ function validateProviderBaseUrl(baseUrl: string): URL {
   if (parsed.username || parsed.password || parsed.hash || parsed.search) {
     throw new Error("AI provider URL contains forbidden credentials, query, or fragment");
   }
-  const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  const loopback = isLoopbackHostname(parsed.hostname);
   if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
     throw new Error("AI provider URL must use HTTPS (HTTP is allowed only on loopback)");
   }
@@ -42,7 +43,7 @@ function validateProviderRequestUrl(url: string): string {
   if (parsed.username || parsed.password || parsed.hash) {
     throw new Error("AI provider URL contains forbidden credentials or fragment");
   }
-  const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  const loopback = isLoopbackHostname(parsed.hostname);
   if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
     throw new Error("AI provider URL must use HTTPS (HTTP is allowed only on loopback)");
   }

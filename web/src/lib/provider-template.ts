@@ -1,5 +1,6 @@
 import type { AiTemplateConfig } from "@/types/board";
 import { validateJsonObject } from "@/lib/bounded-json";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 
 const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){0,15}$/;
 const PLACEHOLDER = /^\{\{([A-Za-z][A-Za-z0-9_]*)\}\}$/;
@@ -92,8 +93,7 @@ export function readTemplatePath(value: unknown, path: string): unknown {
 export function resolveTemplateEndpoint(baseUrl: string, template: AiTemplateConfig): string {
   validateProviderTemplate(template);
   const url = new URL(baseUrl);
-  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname))) {
     throw new Error("template base URL must use HTTPS (loopback HTTP is allowed)");
   }
   if (url.username || url.password) throw new Error("template base URL must not contain credentials");

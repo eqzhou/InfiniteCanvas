@@ -1,4 +1,5 @@
 import { AuthHttpError, authFetch } from "@/services/auth-session";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 
 export type AdminUser = {
   id: string;
@@ -118,7 +119,7 @@ function normalizeAdminChannel(channel: AdminChannel): Omit<AdminChannel, "secre
   }
   let parsed: URL;
   try { parsed = new URL(value.baseUrl); } catch { throw new Error("共享渠道地址无效"); }
-  const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  const loopback = isLoopbackHostname(parsed.hostname);
   if ((parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) || parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new Error("共享渠道地址必须使用 HTTPS，且不能包含凭据、查询或片段");
   }
@@ -283,7 +284,7 @@ function normalizeStorageProvider(item: AdminStoragePoolProviderInput): AdminSto
   const value = { ...item, id: item.id.trim(), endpoint: item.endpoint.trim().replace(/\/+$/, ""), bucket: item.bucket.trim().toLowerCase(), region: item.region.trim() || "auto", prefix: item.prefix.trim().replace(/^\/+|\/+$/g, "") || "openboard" };
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value.id) || !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(value.bucket) || !Number.isSafeInteger(value.weight) || value.weight < 0 || value.weight > 10_000) throw new Error("存储提供商配置无效");
   let parsed: URL; try { parsed = new URL(value.endpoint); } catch { throw new Error("存储端点无效"); }
-  const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+  const loopback = isLoopbackHostname(parsed.hostname);
   if (parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback && value.allowInsecureLoopback))) throw new Error("存储端点必须使用 HTTPS（仅显式允许本机 HTTP）");
   return value;
 }

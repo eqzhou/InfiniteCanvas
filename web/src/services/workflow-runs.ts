@@ -253,6 +253,7 @@ async function runBrowserStep(
       return { parent: nextParent, result: nextResult };
     }
     const failure = signal?.aborted ? "已取消" : browserWorkflowFailure(error, stage);
+    if (child) completeGenerationActivity(child.id, signal?.aborted ? "cancelled" : "failed", failure);
     if (!childSucceededPersisted && stagedKeys.length) await Promise.allSettled(stagedKeys.map(deleteStorageKey));
     if (child && !childSucceededPersisted) await updateGenerationJob(child.id, {
       status: signal?.aborted ? "cancelled" : "failed",
@@ -325,6 +326,11 @@ export async function executeBrowserWorkflowRun(
         const advanced = await runBrowserStep(parent, result, stepId, config, options.signal, options.onUpdate);
         parent = advanced.parent;
         result = advanced.result;
+        // runBrowserStep swallows step failures so the parent keeps its checkpoint.
+        // Stop the batch the way the server worker does: the run is already headed
+        // for a terminal failure, and the remaining siblings would each bill another
+        // provider call while flipping the parent back to "running".
+        if (result.steps[stepId]?.status !== "succeeded") break;
       }
     }
   } catch (error) {

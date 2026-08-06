@@ -1,5 +1,6 @@
 import type { AiChannel, AiEndpointConfig, AppConfig, AssetItem, BoardProject, PromptItem } from "@/types/board";
 import { stripObjectStorageSecrets } from "@/lib/object-storage";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 
 export type BackupConfig = Omit<
   AppConfig,
@@ -29,8 +30,7 @@ function webdavBase(config: AppConfig): string {
   const raw = (config.webdavUrl ?? "").replace(/\/+$/, "");
   if (!raw) throw new Error("未配置 WebDAV URL");
   const url = new URL(raw);
-  const localHTTP =
-    url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1");
+  const localHTTP = url.protocol === "http:" && isLoopbackHostname(url.hostname);
   if (url.protocol !== "https:" && !localHTTP) {
     throw new Error("WebDAV 必须使用 HTTPS（localhost 除外）");
   }

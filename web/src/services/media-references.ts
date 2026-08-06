@@ -1,3 +1,4 @@
+import { isLoopbackHostname } from "@/lib/loopback-host";
 import { authFetch } from "@/services/auth-session";
 import { storageKeyToDataUrl } from "@/services/storage";
 
@@ -34,8 +35,7 @@ export function canMintPublicMediaReferences(origin = typeof window !== "undefin
   try {
     const parsed = new URL(origin);
     if (parsed.protocol !== "https:") return false;
-    const host = parsed.hostname.toLowerCase();
-    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return false;
+    if (isLoopbackHostname(parsed.hostname)) return false;
     return true;
   } catch {
     return false;

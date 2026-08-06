@@ -1,5 +1,6 @@
 import { validateJsonObject } from "@/lib/bounded-json";
 import { parseBoardProject } from "@/lib/board-document";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 import type { BoardEdge, BoardNode, BoardProject, Viewport } from "@/types/board";
 import { agentAuthHeaders, normalizeAgentBaseUrl, type AgentConnection } from "@/services/local-agent";
 
@@ -37,11 +38,6 @@ const RUNTIME_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const NODE_PATCH_FIELDS = new Set([
   "title", "position", "width", "height", "metadata", "body", "tags", "source", "coverUrl",
 ]);
-
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" ||
-    hostname === "::1" || hostname === "[::1]";
-}
 
 export function resolveRuntimeFileUrl(path: string, baseUrl: string, publicOrigin?: string): string {
   const internal = new URL(path, normalizeAgentBaseUrl(baseUrl));

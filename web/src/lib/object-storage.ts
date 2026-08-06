@@ -1,4 +1,5 @@
 import type { ObjectStorageConfig } from "@/types/board";
+import { isLoopbackHostname } from "@/lib/loopback-host";
 
 const MAX_FIELD = 8 * 1024;
 const BUCKET_PATTERN = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
@@ -71,8 +72,7 @@ export function validateObjectStorageConfig(config: ObjectStorageConfig): string
     if (url.username || url.password || url.search || url.hash) {
       return "对象存储 Endpoint 不能包含凭据、查询参数或片段";
     }
-    const host = url.hostname;
-    const isLoopback = host === "localhost" || host === "127.0.0.1" || host === "::1";
+    const isLoopback = isLoopbackHostname(url.hostname);
     if (url.protocol === "http:") {
       if (!config.allowInsecureLoopback || !isLoopback) {
         return "对象存储必须使用 HTTPS（仅允许 loopback HTTP）";

@@ -1,3 +1,6 @@
+import type { AiChannel } from "@/types/board";
+import { isLoopbackHostname } from "@/lib/loopback-host";
+
 export interface UrlCredentials {
   apiKey?: string;
   baseUrl?: string;
@@ -15,10 +18,7 @@ export function consumeUrlCredentials(input: string): ConsumedUrlCredentials {
   const url = new URL(input);
   const hadLegacyQuery = url.searchParams.has("apiKey") || url.searchParams.has("baseUrl");
   const credentials: UrlCredentials = {};
-  const loopback = url.hostname === "localhost" ||
-    url.hostname === "127.0.0.1" ||
-    url.hostname === "::1" ||
-    url.hostname === "[::1]";
+  const loopback = isLoopbackHostname(url.hostname);
   const fragmentParams = url.hash.startsWith("#connect?")
     ? new URLSearchParams(url.hash.slice("#connect?".length))
     : null;
@@ -76,7 +76,7 @@ function normalizeProviderBaseUrl(raw: string): string {
   } catch {
     throw new Error("Provider Base URL is invalid");
   }
-  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+  const loopback = isLoopbackHostname(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new Error("Provider Base URL must use HTTPS unless it is loopback");
   }
@@ -92,4 +92,3 @@ function providerOrigin(raw: string): string {
     return "invalid";
   }
 }
-import type { AiChannel } from "@/types/board";

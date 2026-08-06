@@ -10,7 +10,7 @@ import {
 } from "react";
 import { buildPluginDocument, isPluginReadyMessage, parsePluginPatchMessage } from "@/lib/plugin-runtime";
 import { executePluginHostRequest, type PluginHostContext } from "@/lib/plugin-host-executor";
-import { parsePluginHostRequest } from "@/lib/plugin-host";
+import { PLUGIN_HOST_MESSAGE_MAX_BYTES, parsePluginHostRequest } from "@/lib/plugin-host";
 import { consumePluginQuota, createPluginQuota } from "@/lib/plugin-quota";
 import { getProvider } from "@/lib/ai-config";
 import { useBoardStore } from "@/stores/use-board-store";
@@ -108,7 +108,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
       }
       const consumed = consumePluginQuota(quotaRef.current, performance.now(), bytes, {
         maxMessages: 30,
-        maxBytes: 512 * 1024,
+        maxBytes: PLUGIN_HOST_MESSAGE_MAX_BYTES,
         windowMs: 1_000,
       });
       quotaRef.current = consumed.quota;

@@ -13,6 +13,35 @@ describe("plugin host protocol", () => {
     expect(permissionForPluginMethod("panel.setOpen")).toBe("panel:control");
   });
 
+  test("admits media-bearing payloads that the executor and uploader accept", () => {
+    // asset.create/ai.text carry data URLs; the host already ships 8MB data URLs
+    // to plugins, so the inbound envelope has to match that budget.
+    const dataUrl = `data:image/png;base64,${"A".repeat(512 * 1024)}`;
+    const create = {
+      type: "openboard:request",
+      nonce: "nonce-123",
+      pluginId: "example.gallery",
+      requestId: "request-2",
+      method: "asset.create",
+      params: { kind: "image", title: "Render", content: dataUrl },
+    };
+    expect(parsePluginHostRequest(create, "nonce-123", "example.gallery", ["asset:write"]))
+      .toMatchObject({ method: "asset.create" });
+  });
+
+  test("keeps the control-plane envelope small", () => {
+    const bloated = {
+      type: "openboard:request",
+      nonce: "nonce-123",
+      pluginId: "example.timer",
+      requestId: "request-3",
+      method: "node.patch",
+      params: { state: { blob: "x".repeat(128 * 1024) } },
+    };
+    expect(() => parsePluginHostRequest(bloated, "nonce-123", "example.timer", ["node:write"]))
+      .toThrow("plugin host params");
+  });
+
   test("accepts only nonce-bound, permission-approved, bounded requests", () => {
     const request = {
       type: "openboard:request",
