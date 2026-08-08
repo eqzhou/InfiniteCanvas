@@ -225,6 +225,11 @@ export type NodeMetadata = {
   generationRunId?: string;
   /** Latest output root of a configuration node, used for durable job recovery. */
   generationOutputRootId?: string;
+  /** Stable first-party film projection identity. User-created nodes omit it. */
+  filmProjectionKey?: string;
+  /** Entity revision represented by this managed projection. */
+  filmProjectionRevision?: number;
+  filmProjectionArchived?: boolean;
 };
 
 
@@ -278,7 +283,8 @@ export type AssistantSession = {
 };
 
 export type BoardProject = {
-  schemaVersion: 2;
+  schemaVersion: 3;
+  projectKind: "canvas" | "film";
   id: string;
   title: string;
   createdAt: string;

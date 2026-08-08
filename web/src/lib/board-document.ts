@@ -420,7 +420,7 @@ function parseAudioRoles(value: unknown): AudioRolePreset[] | undefined {
 export function parseBoardProject(value: unknown): BoardProject {
   const input = record(value, "project");
   const schemaVersion = input.schemaVersion ?? 1;
-  if (schemaVersion !== 1 && schemaVersion !== 2) {
+  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3) {
     throw new Error("schemaVersion is unsupported");
   }
   const nodes = array(input.nodes, "nodes", MAX_NODES).map(parseNode);
@@ -652,7 +652,12 @@ export function parseBoardProject(value: unknown): BoardProject {
   const audioRoles = parseAudioRoles(input.audioRoles);
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    projectKind: input.projectKind === undefined && schemaVersion < 3
+      ? "canvas"
+      : input.projectKind === "canvas" || input.projectKind === "film"
+        ? input.projectKind
+        : (() => { throw new Error("projectKind is unsupported"); })(),
     id: id(input.id, "id"),
     title: string(input.title, "title", 500),
     createdAt: isoDate(input.createdAt, "createdAt"),

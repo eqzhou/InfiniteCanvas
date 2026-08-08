@@ -194,6 +194,39 @@ var boardTools = []toolDefinition{
 		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty()}, "projectId"),
 		Annotations: map[string]any{"readOnlyHint": true},
 	},
+	{
+		Name:        "film.status",
+		Title:       "Get film production status",
+		Description: "Return a tenant-scoped film production, stages, tasks, and capability status.",
+		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty()}, "projectId"),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name:        "film.list",
+		Title:       "List film production entities",
+		Description: "List episodes, shots, assets, stages, tasks, or deliverables in a film production.",
+		InputSchema: objectSchema(map[string]any{
+			"projectId": projectIDProperty(),
+			"resource":  map[string]any{"type": "string", "enum": []string{"episodes", "scenes", "shots", "assets", "stages", "tasks", "deliverables"}},
+		}, "projectId", "resource"),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name:        "film.validate",
+		Title:       "Validate film production",
+		Description: "Run quality validation and persist non-destructive repair proposals.",
+		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty()}, "projectId"),
+	},
+	{
+		Name:        "film.run_stage",
+		Title:       "Run film stage",
+		Description: "Run a dependency-checked film stage at its exact optimistic revision.",
+		InputSchema: objectSchema(map[string]any{
+			"projectId": projectIDProperty(),
+			"stage":     map[string]any{"type": "string", "enum": []string{"decompose", "script", "storyboard", "audio", "video", "compose", "delivery"}},
+			"revision":  map[string]any{"type": "integer", "minimum": 1},
+		}, "projectId", "stage", "revision"),
+	},
 }
 
 func knownTool(name string) bool {

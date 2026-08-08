@@ -280,6 +280,24 @@ type StateMutation struct {
 	Value    []byte
 }
 
+// FilmRecord stores the authoritative, revisioned film workbench document for
+// one tenant-owned board project. Entity revisions live inside Document; this
+// row revision protects atomic multi-entity updates.
+type FilmRecord struct {
+	ProjectID string          `json:"projectId"`
+	Revision  int             `json:"revision"`
+	Document  json.RawMessage `json:"document"`
+	UpdatedAt string          `json:"updatedAt"`
+}
+
+// FilmStore is an optional capability implemented by PostgreSQL-backed stores.
+// Keeping it separate preserves the lightweight filesystem-only companion.
+type FilmStore interface {
+	GetFilmProject(ctx context.Context, tenantID, projectID string) (FilmRecord, error)
+	CreateFilmProject(ctx context.Context, tenantID, projectID string, document []byte) (FilmRecord, error)
+	CompareAndSwapFilmProject(ctx context.Context, tenantID, projectID string, expectedRevision int, document []byte) (FilmRecord, error)
+}
+
 type Store interface {
 	Close()
 	Ping(context.Context) error

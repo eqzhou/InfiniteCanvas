@@ -137,10 +137,11 @@ type BoardState = {
   prepareWorkspaceScopeChange: () => Promise<void>;
   resetWorkspaceScopeRuntime: () => void;
   setActiveProject: (id: string | null) => void;
-  createProject: (title?: string) => string;
+  createProject: (title?: string, projectKind?: BoardProject["projectKind"]) => string;
   renameProject: (id: string, title: string) => void;
   deleteProjects: (ids: string[]) => void;
-  importProject: (project: BoardProject) => void;
+  deleteProjectsDurably: (ids: string[]) => Promise<void>;
+  importProject: (project: BoardProject) => string;
   replaceProjectFromAgent: (project: BoardProject) => void;
   exportActiveProject: () => BoardProject | null;
   updateActive: (mutator: (project: BoardProject) => BoardProject, opts?: { history?: boolean }) => void;
@@ -490,8 +491,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
   setActiveProject: (id) => set({ activeProjectId: id, selectedIds: [] }),
 
-  createProject: (title) => {
-    const project = createProject(title);
+  createProject: (title, projectKind = "canvas") => {
+    const project = createProject(title, projectKind);
     set((s) => ({
       projects: [project, ...s.projects],
       activeProjectId: project.id,
@@ -510,9 +511,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     void get().persist();
   },
 
-  deleteProjects: (ids) => {
+  deleteProjectsDurably: async (ids) => {
     const unique = [...new Set(ids.filter(Boolean))];
     if (!unique.length) return;
+    await deleteProjectsById(unique);
     set((s) => {
       const projects = s.projects.filter((p) => !unique.includes(p.id));
       const activeProjectId = unique.includes(s.activeProjectId ?? "")
@@ -521,15 +523,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       for (const id of unique) histories.delete(id);
       return { projects, activeProjectId, selectedIds: [] };
     });
-    void (async () => {
-      try {
-        await deleteProjectsById(unique);
-      } catch (error) {
-        console.error("Failed to delete projects", error);
-      }
-      await get().persistNow();
-      await Promise.all(unique.map((id) => deleteGenerationJobsForProject(id).catch(() => 0)));
-    })();
+    await get().persistNow();
+    await Promise.all(unique.map((id) => deleteGenerationJobsForProject(id).catch(() => 0)));
+  },
+
+  deleteProjects: (ids) => {
+    void get().deleteProjectsDurably(ids).catch((error) => {
+      console.error("Failed to delete projects", error);
+    });
   },
 
   importProject: (project) => {
@@ -545,6 +546,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       activeProjectId: imported.id,
     }));
     void get().persist();
+    return imported.id;
   },
 
   replaceProjectFromAgent: (project) => {

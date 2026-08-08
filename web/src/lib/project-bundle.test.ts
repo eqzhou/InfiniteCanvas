@@ -3,12 +3,14 @@ import { describe, expect, test } from "bun:test";
 import {
   exportProjectBundle,
   importProjectBundle,
+  importProjectBundlePayload,
   type ProjectBundleStorage,
 } from "./project-bundle";
 import { createZipStore, readZipStore } from "./zip-store";
 import type { BoardProject } from "@/types/board";
 import { createNode, createProject } from "./defaults";
 import { addDirectorModel, createDefaultDirectorScene } from "./director-scene";
+import { createFilmDocument } from "./film-document";
 
 const pngHeader = (() => {
   const bytes = new Uint8Array(24);
@@ -19,6 +21,8 @@ const pngHeader = (() => {
 })();
 
 const project = (): BoardProject => ({
+  schemaVersion: 3,
+  projectKind: "canvas",
   id: "project_1",
   title: "Bundle test",
   createdAt: "2026-07-15T00:00:00.000Z",
@@ -118,6 +122,105 @@ function memoryStorage(blobs: Map<string, Blob>) {
 }
 
 describe("project media bundle", () => {
+  test("continues to read legacy v1 canvas bundles", async () => {
+    const legacy = createProject("Legacy canvas");
+    const archive = await createZipStore([
+      { name: "manifest.json", data: JSON.stringify({
+        format: "openboard.project-bundle", version: 1,
+        exportedAt: "2026-08-08T00:00:00.000Z", media: [],
+      }) },
+      { name: "project.json", data: JSON.stringify(legacy) },
+    ]);
+
+    const restored = await importProjectBundlePayload(archive, memoryStorage(new Map()).storage);
+
+    expect(restored.project.id).toBe(legacy.id);
+    expect(restored.project.projectKind).toBe("canvas");
+    expect(restored.film).toBeUndefined();
+  });
+
+  test("writes v2 film payloads and reads them atomically", async () => {
+    const filmProject = createProject("Film bundle", "film");
+    const film = createFilmDocument(filmProject.id, "2026-08-08T00:00:00.000Z");
+    const filmWithMedia = {
+      ...film,
+      episodes: [{
+        id: "episode-1", revision: 1, order: 0, title: "Episode", synopsis: "", status: "draft" as const,
+      }],
+      scenes: [{
+        id: "scene-1", revision: 1, episodeId: "episode-1", order: 0,
+        heading: "INT. STAGE - DAY", synopsis: "", status: "draft" as const,
+      }],
+      shots: [{
+        id: "shot-1", revision: 1, sceneId: "scene-1", order: 0, title: "Shot",
+        description: "Action", status: "draft" as const, durationSeconds: 4,
+        aspectRatio: "16:9", identityVersionIds: [], imageStorageKey: "image:film-shot",
+        videoStorageKey: "media:film-video", audioStorageKey: "media:film-audio",
+      }],
+      assets: [{
+        id: "asset-1", revision: 1, kind: "style" as const, title: "Look",
+        status: "draft" as const, description: "", mediaStorageKey: "image:film-asset",
+      }],
+    };
+    const blobs = new Map<string, Blob>([
+      ["image:film-shot", new Blob(["shot"], { type: "image/png" })],
+      ["media:film-video", new Blob(["video"], { type: "video/mp4" })],
+      ["media:film-audio", new Blob(["audio"], { type: "audio/mpeg" })],
+      ["image:film-asset", new Blob(["asset"], { type: "image/png" })],
+    ]);
+    const storage = memoryStorage(blobs).storage;
+
+    const archive = await exportProjectBundle(filmProject, storage, filmWithMedia);
+    const entries = await readZipStore(archive);
+    const manifest = JSON.parse(new TextDecoder().decode(entries.get("manifest.json")));
+    const restored = await importProjectBundlePayload(archive, storage);
+
+    expect(manifest.version).toBe(2);
+    expect(manifest.film).toEqual({ version: 2, entry: "film.json" });
+    expect(restored.project.projectKind).toBe("film");
+    expect(restored.film?.shots[0]?.imageStorageKey).toBe("image:imported-1");
+    expect(restored.film?.shots[0]?.videoStorageKey).toBe("media:imported-2");
+    expect(restored.film?.shots[0]?.audioStorageKey).toBe("media:imported-3");
+    expect(restored.film?.assets[0]?.mediaStorageKey).toBe("image:imported-4");
+  });
+
+  test("rejects corrupt film payload topology, duplicate ids, and broken relations", async () => {
+    const filmProject = createProject("Corrupt film", "film");
+    const original = createFilmDocument(filmProject.id, "2026-08-08T00:00:00.000Z");
+    const archive = await exportProjectBundle(filmProject, memoryStorage(new Map()).storage, original);
+    const baseEntries = await readZipStore(archive);
+    const cases: Array<[string, (film: typeof original) => void]> = [
+      ["empty stages", (film) => { film.stages = []; }],
+      ["missing stage", (film) => { film.stages = film.stages.slice(0, -1); }],
+      ["duplicate ids", (film) => {
+        film.episodes = [
+          { id: "episode_duplicate", revision: 1, order: 0, title: "One", synopsis: "", status: "draft" },
+          { id: "episode_duplicate", revision: 1, order: 1, title: "Two", synopsis: "", status: "draft" },
+        ];
+      }],
+      ["broken relation", (film) => {
+        film.scenes = [{
+          id: "scene_orphan", revision: 1, episodeId: "episode_missing", order: 0,
+          heading: "INT. VOID - DAY", synopsis: "", status: "draft",
+        }];
+      }],
+    ];
+
+    for (const [name, mutate] of cases) {
+      const film = structuredClone(original);
+      mutate(film);
+      const entries = [...baseEntries].map(([entryName, data]) => ({
+        name: entryName,
+        data: entryName === "film.json" ? JSON.stringify(film) : data,
+      }));
+      await expect(importProjectBundlePayload(
+        await createZipStore(entries),
+        memoryStorage(new Map()).storage,
+      )).rejects.toThrow();
+      expect(name.length).toBeGreaterThan(0);
+    }
+  });
+
   test("round trips and deduplicates media while remapping every reference", async () => {
     const blobs = new Map<string, Blob>([
       ["image:original", new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" })],

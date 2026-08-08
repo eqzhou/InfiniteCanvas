@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { useBoardStore } from "@/stores/use-board-store";
 import { BoardCanvas } from "@/components/canvas/BoardCanvas";
 import {
   Archive,
+  Clapperboard,
   Download,
   FolderPlus,
   ListChecks,
@@ -16,7 +18,8 @@ import {
 } from "lucide-react";
 import { parseBoardProject } from "@/lib/board-document";
 import { assertPlainProjectImportSafe } from "@/lib/plain-project-import";
-import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
+import { exportCompleteProjectBundle, importCompleteProjectBundle } from "@/services/film-bundle";
+import { loadFilmCapabilities } from "@/services/film-client";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { exportNodeSelection } from "@/lib/node-export";
 import type { BoardNode } from "@/types/board";
@@ -43,6 +46,7 @@ const NODE_TYPE_LABELS: Record<BoardNode["type"], string> = {
 };
 
 export function HomePage() {
+  const navigate = useNavigate();
   const auth = useOptionalAuth();
   const ready = useBoardStore((s) => s.ready);
   const projects = useBoardStore((s) => s.projects);
@@ -67,7 +71,9 @@ export function HomePage() {
   const [checked, setChecked] = useState<string[]>([]);
   const [checkedNodes, setCheckedNodes] = useState<string[]>([]);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [audioRolesOpen, setAudioRolesOpen] = useState(false);
+  const [filmCapability, setFilmCapability] = useState<{ available: boolean; reason: string } | null>(null);
   const [panelWidth, setPanelWidth] = useState(config.canvasPanelWidth ?? 256);
   const panelCollapsed = config.canvasPanelCollapsed === true;
   const panelTab = config.canvasPanelTab ?? "projects";
@@ -91,12 +97,31 @@ export function HomePage() {
   ])), [projects]);
   const modelDirectorySignature = JSON.stringify(modelDirectory);
   useEscapeDismiss(projectsOpen, () => setProjectsOpen(false));
+  useEscapeDismiss(createOpen, () => setCreateOpen(false));
+
+  const createNewProject = async (projectKind: "canvas" | "film") => {
+    if (projectKind === "film" && !filmCapability?.available) return;
+    const count = projects.filter((project) => project.projectKind === projectKind).length + 1;
+    const id = createProject(projectKind === "film" ? `影片 ${count}` : `画布 ${count}`, projectKind);
+    await useBoardStore.getState().persistNow();
+    setCreateOpen(false);
+    if (projectKind === "film") navigate(`/film/${id}`);
+  };
 
   useEffect(() => {
     if (!ready) return;
     void directorCaptureStore.prune(captureOwnerScope, captureDirectory).catch(() => undefined);
     void directorModelStore.prune(captureOwnerScope, modelDirectory).catch(() => undefined);
   }, [captureDirectorySignature, captureOwnerScope, modelDirectorySignature, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    let active = true;
+    void loadFilmCapabilities()
+      .then((capability) => { if (active) setFilmCapability(capability); })
+      .catch(() => { if (active) setFilmCapability({ available: false, reason: "影片制作服务不可用" }); });
+    return () => { active = false; };
+  }, [ready]);
 
   useEffect(() => {
     const width = config.canvasPanelWidth ?? 256;
@@ -250,7 +275,7 @@ export function HomePage() {
                 type="button"
                 className="ob-icon-btn h-8 w-8 shrink-0"
                 title="新建"
-                onClick={() => createProject(`画布 ${projects.length + 1}`)}
+                onClick={() => setCreateOpen(true)}
               >
                 <FolderPlus size={16} />
               </button>
@@ -299,7 +324,7 @@ export function HomePage() {
                     const project = exportActiveProject();
                     if (!project) return;
                     try {
-                      const blob = await exportProjectBundle(project);
+                      const blob = await exportCompleteProjectBundle(project);
                       const url = URL.createObjectURL(blob);
                       const anchor = document.createElement("a");
                       anchor.href = url;
@@ -374,10 +399,13 @@ export function HomePage() {
                 if (file.size > (isJson ? 32 : 128) * 1024 * 1024) {
                   throw new Error("file too large");
                 }
-                const data = isJson
-                  ? assertPlainProjectImportSafe(parseBoardProject(JSON.parse(await file.text())))
-                  : await importProjectBundle(file);
-                importProject(data);
+                if (isJson) {
+                  const data = assertPlainProjectImportSafe(parseBoardProject(JSON.parse(await file.text())));
+                  if (data.projectKind === "film") throw new Error("影片项目必须使用包含制作数据的 .openboard 完整包");
+                  importProject(data);
+                } else {
+                  await importCompleteProjectBundle(file);
+                }
               } catch (error) {
                 alert(`导入失败：${error instanceof Error ? error.message : "文件格式不正确"}`);
               } finally {
@@ -448,6 +476,7 @@ export function HomePage() {
                   onClick={() => {
                     setActiveProject(p.id);
                     setProjectsOpen(false);
+                    if (p.projectKind === "film") navigate(`/film/${p.id}`);
                   }}
                 >
                   <input
@@ -457,7 +486,7 @@ export function HomePage() {
                     onClick={(e) => e.stopPropagation()}
                   />
                   <div className="mt-1 text-[11px] text-[var(--ob-muted)]">
-                    {p.nodes.length} 节点 · {new Date(p.updatedAt).toLocaleString()}
+                    {p.projectKind === "film" ? "影片制作" : `${p.nodes.length} 节点`} · {new Date(p.updatedAt).toLocaleString()}
                   </div>
                 </button>
               </div>
@@ -572,8 +601,47 @@ export function HomePage() {
       </aside>
 
       <div className="min-w-0 flex-1">
-        <BoardCanvas />
+        {activeProject?.projectKind === "film" ? (
+          <div className="grid h-full place-items-center bg-[var(--ob-canvas)] p-6">
+            <div className="ob-card max-w-md p-8 text-center">
+              <Clapperboard className="mx-auto mb-4 text-[var(--ob-accent)]" size={36} aria-hidden />
+              <h1 className="text-xl font-semibold">{activeProject.title}</h1>
+              <p className="mt-2 text-sm text-[var(--ob-muted)]">在影片工作台中管理剧本、镜头、制作阶段与交付。</p>
+              {filmCapability?.available ? <button type="button" className="ob-btn ob-btn-primary mt-5" onClick={() => navigate(`/film/${activeProject.id}`)}>
+                打开影片工作台
+              </button> : <p className="mt-4 text-sm text-[var(--ob-danger)]">{filmCapability?.reason || "正在检查影片制作服务…"}</p>}
+            </div>
+          </div>
+        ) : <BoardCanvas />}
       </div>
+      {createOpen ? (
+        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4" onMouseDown={() => setCreateOpen(false)}>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-project-title"
+            className="ob-card w-full max-w-lg p-5"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 id="create-project-title" className="text-lg font-semibold">创建项目</h2>
+              <button type="button" className="ob-icon-btn" aria-label="关闭" onClick={() => setCreateOpen(false)}><X size={16} /></button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button type="button" className="rounded-xl border border-[var(--ob-line)] p-5 text-left hover:border-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)]" onClick={() => void createNewProject("canvas")}>
+                <FolderPlus className="mb-3 text-[var(--ob-accent)]" aria-hidden />
+                <strong className="block">无限画布</strong>
+                <span className="mt-1 block text-sm text-[var(--ob-muted)]">自由编排节点、生成与导演工具。</span>
+              </button>
+              {filmCapability?.available ? <button type="button" className="rounded-xl border border-[var(--ob-line)] p-5 text-left hover:border-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)]" onClick={() => void createNewProject("film")}>
+                <Clapperboard className="mb-3 text-[var(--ob-accent)]" aria-hidden />
+                <strong className="block">影片制作</strong>
+                <span className="mt-1 block text-sm text-[var(--ob-muted)]">从剧本到镜头、时间线与交付。</span>
+              </button> : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
       {audioRolesOpen ? (
         <ProjectAudioRolesDialog open onClose={() => setAudioRolesOpen(false)} />
       ) : null}

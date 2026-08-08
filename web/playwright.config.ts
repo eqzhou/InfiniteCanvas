@@ -55,7 +55,7 @@ export function createWebServerCommand({
 export default defineConfig({
 	timeout: formal ? 120_000 : 60_000,
   testDir: "./e2e",
-  testMatch: canvasSuite ? "canvas.spec.ts" : formal ? "formal-storage.spec.ts" : "canvas.spec.ts",
+  testMatch: canvasSuite ? "canvas.spec.ts" : formal ? "formal-storage.spec.ts" : ["canvas.spec.ts", "film.spec.ts"],
   outputDir: "./node_modules/.cache/playwright-test-results",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),

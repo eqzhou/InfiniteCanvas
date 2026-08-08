@@ -11,7 +11,7 @@ import {
 import { createDefaultChannel } from "@/lib/defaults";
 import { listModels } from "@/services/ai-client";
 import { webdavGetBlob, webdavPutBlob } from "@/services/webdav";
-import { exportProjectBundle, importProjectBundle } from "@/lib/project-bundle";
+import { exportCompleteProjectBundle, importCompleteProjectBundle } from "@/services/film-bundle";
 import { exportWorkspaceBundle, importWorkspaceBundle } from "@/lib/workspace-bundle";
 import { getProvider, normalizeChannel } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
@@ -711,7 +711,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         const state = useBoardStore.getState();
                         const project = state.getActive();
                         if (!project) throw new Error("当前没有可备份的画布");
-                        const bundle = await exportProjectBundle(project);
+                        const bundle = await exportCompleteProjectBundle(project);
                         await webdavPutBlob(state.config, "openboard-current.openboard", bundle);
                         alert("已上传当前画布完整备份");
                       } catch (e) {
@@ -758,7 +758,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                           state.config,
                           "openboard-current.openboard",
                         );
-                        state.importProject(await importProjectBundle(blob));
+                        await importCompleteProjectBundle(blob);
                         alert("已从 WebDAV 导入完整画布备份");
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e));

@@ -90,11 +90,15 @@ export function createEmptySession(title = "新会话"): AssistantSession {
   };
 }
 
-export function createProject(title = "未命名画布"): BoardProject {
+export function createProject(
+  title = "未命名画布",
+  projectKind: BoardProject["projectKind"] = "canvas",
+): BoardProject {
   const t = nowIso();
   const session = createEmptySession();
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    projectKind,
     id: uid("proj"),
     title,
     createdAt: t,

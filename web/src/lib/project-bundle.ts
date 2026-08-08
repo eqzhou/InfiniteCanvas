@@ -1,4 +1,5 @@
 import type { BoardProject } from "@/types/board";
+import type { FilmDocument } from "@/types/film";
 import { parseBoardProject } from "@/lib/board-document";
 import { createZipStore, readZipStore, type ZipStoreInput } from "@/lib/zip-store";
 import { deleteBlob, getBlob, uploadMedia } from "@/services/storage";
@@ -23,9 +24,16 @@ type BundleMedia = {
 
 type ProjectBundleManifest = {
   format: "openboard.project-bundle";
-  version: 1;
+  version: 1 | 2;
   exportedAt: string;
   media: BundleMedia[];
+  film?: { version: 2; entry: "film.json" } | null;
+};
+
+export type ImportedProjectBundle = {
+  project: BoardProject;
+  film?: FilmDocument;
+  cleanup: () => Promise<void>;
 };
 
 export type ProjectBundleStorage = {
@@ -64,7 +72,7 @@ function kindForStorageKey(storageKey: string): MediaKind {
   return storageKey.startsWith("media:") ? "media" : "image";
 }
 
-function collectProjectKeys(project: BoardProject): string[] {
+function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[] {
   const keys = new Set<string>();
   for (const node of project.nodes) {
     if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
@@ -79,6 +87,15 @@ function collectProjectKeys(project: BoardProject): string[] {
         if (reference.storageKey) keys.add(reference.storageKey);
       }
     }
+  }
+
+  for (const shot of film?.shots ?? []) {
+    if (shot.imageStorageKey) keys.add(shot.imageStorageKey);
+    if (shot.videoStorageKey) keys.add(shot.videoStorageKey);
+    if (shot.audioStorageKey) keys.add(shot.audioStorageKey);
+  }
+  for (const asset of film?.assets ?? []) {
+    if (asset.mediaStorageKey) keys.add(asset.mediaStorageKey);
   }
   return [...keys];
 }
@@ -107,10 +124,17 @@ function canonicalProject(project: BoardProject, mediaByKey: Map<string, BundleM
 export async function exportProjectBundle(
   project: BoardProject,
   storage: ProjectBundleStorage = defaultStorage,
+  film?: FilmDocument,
 ): Promise<Blob> {
+  if (project.projectKind === "film" && !film) {
+    throw new Error("Film project bundle requires its production payload");
+  }
+  if (film && film.projectId !== project.id) {
+    throw new Error("Film production does not belong to this project");
+  }
   const media: BundleMedia[] = [];
   const entries: ZipStoreInput[] = [];
-  for (const [index, storageKey] of collectProjectKeys(project).entries()) {
+  for (const [index, storageKey] of collectProjectKeys(project, film).entries()) {
     const kind = kindForStorageKey(storageKey);
     const blob = await storage.load(kind, storageKey);
     if (!blob) throw new Error(`Referenced media is missing: ${storageKey}`);
@@ -130,13 +154,15 @@ export async function exportProjectBundle(
   const mediaByKey = new Map(media.map((item) => [item.storageKey, item]));
   const manifest: ProjectBundleManifest = {
     format: "openboard.project-bundle",
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     media,
+    film: film ? { version: 2, entry: "film.json" } : null,
   };
   return createZipStore([
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
     { name: "project.json", data: JSON.stringify(canonicalProject(project, mediaByKey), null, 2) },
+    ...(film ? [{ name: "film.json", data: JSON.stringify(film, null, 2) }] : []),
     ...entries,
   ]);
 }
@@ -154,7 +180,7 @@ function parseManifest(value: unknown): ProjectBundleManifest {
     throw new Error("Invalid bundle manifest");
   }
   const input = value as Record<string, unknown>;
-  if (input.format !== "openboard.project-bundle" || input.version !== 1) {
+  if (input.format !== "openboard.project-bundle" || (input.version !== 1 && input.version !== 2)) {
     throw new Error("Unsupported bundle format or version");
   }
   if (typeof input.exportedAt !== "string" || !Array.isArray(input.media)) {
@@ -193,12 +219,191 @@ function parseManifest(value: unknown): ProjectBundleManifest {
     return { id, entry, storageKey, kind, mimeType, bytes };
   });
   if (media.length > 10_000) throw new Error("Bundle contains too many media items");
+  let film: ProjectBundleManifest["film"];
+  if (input.version === 2) {
+    if (input.film !== null && (
+      !input.film || typeof input.film !== "object" || Array.isArray(input.film) ||
+      (input.film as Record<string, unknown>).version !== 2 ||
+      (input.film as Record<string, unknown>).entry !== "film.json"
+    )) {
+      throw new Error("Invalid film bundle declaration");
+    }
+    film = input.film as ProjectBundleManifest["film"];
+  }
   return {
     format: "openboard.project-bundle",
-    version: 1,
+    version: input.version,
     exportedAt: input.exportedAt,
     media,
+    film,
   };
+}
+
+function parseBundleFilm(value: unknown, projectId: string): FilmDocument {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid film bundle payload");
+  }
+  const input = value as Record<string, unknown>;
+  const boundedCollections = [
+    input.episodes, input.scenes, input.shots, input.assets, input.stages,
+    input.tasks, input.qualityReports, input.deliverables,
+  ];
+  if (
+    input.schemaVersion !== 1 || input.projectId !== projectId ||
+    typeof input.revision !== "number" || !Number.isSafeInteger(input.revision) || input.revision < 1 ||
+    !Array.isArray(input.episodes) || !Array.isArray(input.scenes) || !Array.isArray(input.shots) ||
+    !Array.isArray(input.assets) || !Array.isArray(input.stages) || !Array.isArray(input.tasks) ||
+    !Array.isArray(input.qualityReports) || !Array.isArray(input.deliverables) ||
+    !input.timeline || typeof input.timeline !== "object" ||
+    boundedCollections.some((collection) => !Array.isArray(collection) || collection.length > 10_000)
+  ) {
+    throw new Error("Invalid film bundle payload");
+  }
+  const idPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+  const statuses = new Set(["draft", "running", "needs_review", "approved", "failed", "canceled"]);
+  const stageIds = ["decompose", "script", "storyboard", "audio", "video", "compose", "delivery"];
+  const validEntity = (entity: unknown, idField = "id"): entity is Record<string, unknown> => {
+    if (!entity || typeof entity !== "object" || Array.isArray(entity)) return false;
+    const item = entity as Record<string, unknown>;
+    return typeof item[idField] === "string" && idPattern.test(item[idField]) &&
+      Number.isSafeInteger(item.revision) && Number(item.revision) >= 1;
+  };
+  const uniqueRecords = (values: unknown[], kind: string) => {
+    const ids = new Set<string>();
+    for (const value of values) {
+      if (!validEntity(value)) throw new Error(`Invalid film ${kind}`);
+      const id = value.id as string;
+      if (ids.has(id)) throw new Error(`Duplicate film ${kind} id`);
+      ids.add(id);
+    }
+    return ids;
+  };
+  const stages = input.stages as unknown[];
+  if (stages.length !== stageIds.length || stages.some((stage, index) => {
+    if (!validEntity(stage)) return true;
+    return stage.id !== stageIds[index] || typeof stage.status !== "string" || !statuses.has(stage.status) ||
+      typeof stage.updatedAt !== "string" || !Number.isFinite(Date.parse(stage.updatedAt));
+  })) {
+    throw new Error("Invalid film stage topology");
+  }
+  uniqueRecords(stages, "stage");
+
+  const episodes = input.episodes as unknown[];
+  const scenes = input.scenes as unknown[];
+  const shots = input.shots as unknown[];
+  const assets = input.assets as unknown[];
+  if (episodes.length + scenes.length + shots.length + assets.length > 10_000) {
+    throw new Error("Film bundle contains too many entities");
+  }
+  const episodeIds = uniqueRecords(episodes, "episode");
+  const sceneIds = uniqueRecords(scenes, "scene");
+  uniqueRecords(shots, "shot");
+  const assetIds = uniqueRecords(assets, "asset");
+  const validStatus = (record: Record<string, unknown>) =>
+    typeof record.status === "string" && statuses.has(record.status);
+  for (const value of episodes) {
+    const episode = value as Record<string, unknown>;
+    if (!validStatus(episode) || typeof episode.title !== "string" || !episode.title.trim() || episode.title.length > 500 ||
+      typeof episode.synopsis !== "string" || episode.synopsis.length > 20_000 || !Number.isSafeInteger(episode.order) || Number(episode.order) < 0) {
+      throw new Error("Invalid film episode");
+    }
+  }
+  for (const value of scenes) {
+    const scene = value as Record<string, unknown>;
+    if (!validStatus(scene) || typeof scene.episodeId !== "string" || !episodeIds.has(scene.episodeId) ||
+      typeof scene.heading !== "string" || !scene.heading.trim() || scene.heading.length > 500 ||
+      typeof scene.synopsis !== "string" || scene.synopsis.length > 20_000 || !Number.isSafeInteger(scene.order) || Number(scene.order) < 0) {
+      throw new Error("Invalid film scene relation");
+    }
+  }
+  const assetKinds = new Set(["character", "identity", "location", "prop", "style", "voice"]);
+  const assetsById = new Map<string, Record<string, unknown>>();
+  for (const value of assets) {
+    const asset = value as Record<string, unknown>;
+    assetsById.set(asset.id as string, asset);
+    if (!validStatus(asset) || typeof asset.kind !== "string" || !assetKinds.has(asset.kind) || typeof asset.title !== "string" || !asset.title.trim() ||
+      typeof asset.description !== "string" || (asset.parentAssetId !== undefined &&
+        (typeof asset.parentAssetId !== "string" || !assetIds.has(asset.parentAssetId) || asset.parentAssetId === asset.id))) {
+      throw new Error("Invalid film asset");
+    }
+  }
+  for (const value of shots) {
+    const shot = value as Record<string, unknown>;
+    if (!validStatus(shot) || typeof shot.sceneId !== "string" || !sceneIds.has(shot.sceneId) ||
+      typeof shot.title !== "string" || !shot.title.trim() || typeof shot.description !== "string" || !shot.description.trim() ||
+      typeof shot.durationSeconds !== "number" || !Number.isFinite(shot.durationSeconds) || shot.durationSeconds <= 0 || shot.durationSeconds > 900 ||
+      !Array.isArray(shot.identityVersionIds) || shot.identityVersionIds.length > 100 ||
+      shot.identityVersionIds.some((id) => typeof id !== "string" || assetsById.get(id)?.kind !== "identity") ||
+      (shot.styleAssetId !== undefined && (typeof shot.styleAssetId !== "string" || assetsById.get(shot.styleAssetId)?.kind !== "style"))) {
+      throw new Error("Invalid film shot relation");
+    }
+  }
+
+  const tasks = input.tasks as unknown[];
+  if (tasks.length > 1_000) throw new Error("Film bundle contains too many tasks");
+  uniqueRecords(tasks, "task");
+  for (const value of tasks) {
+    const task = value as Record<string, unknown>;
+    if (!stageIds.includes(String(task.stage)) || !validStatus(task) || typeof task.progress !== "number" ||
+      !Number.isFinite(task.progress) || task.progress < 0 || task.progress > 1) {
+      throw new Error("Invalid film task");
+    }
+  }
+
+  const reports = input.qualityReports as unknown[];
+  if (reports.length > 20) throw new Error("Film bundle contains too many quality reports");
+  uniqueRecords(reports, "quality report");
+  let issueCount = 0;
+  let repairCount = 0;
+  for (const value of reports) {
+    const report = value as Record<string, unknown>;
+    if (!Array.isArray(report.issues) || !Array.isArray(report.repairs)) throw new Error("Invalid film quality report");
+    issueCount += report.issues.length;
+    repairCount += report.repairs.length;
+    if (issueCount > 10_000 || repairCount > 5_000) throw new Error("Film bundle quality data exceeds limits");
+    uniqueRecords(report.issues.map((issue) => ({ ...(issue as object), revision: 1 })), "quality issue");
+    uniqueRecords(report.repairs.map((repair) => ({ ...(repair as object), revision: 1 })), "repair proposal");
+  }
+
+  const timeline = input.timeline as Record<string, unknown>;
+  if (!Number.isSafeInteger(timeline.revision) || Number(timeline.revision) < 1 ||
+    !Array.isArray(timeline.tracks) || timeline.tracks.length !== 5) {
+    throw new Error("Invalid film timeline");
+  }
+  uniqueRecords(timeline.tracks, "timeline track");
+  const trackKinds = new Set<string>();
+  let clipCount = 0;
+  for (const value of timeline.tracks) {
+    const track = value as Record<string, unknown>;
+    if (!["video", "dialogue", "music", "sfx", "subtitle"].includes(String(track.kind)) || trackKinds.has(String(track.kind)) || !Array.isArray(track.clips)) {
+      throw new Error("Invalid film timeline track");
+    }
+    trackKinds.add(String(track.kind));
+    clipCount += track.clips.length;
+    if (clipCount > 10_000) throw new Error("Film bundle timeline exceeds limits");
+    uniqueRecords(track.clips, "timeline clip");
+  }
+
+  const deliverables = input.deliverables as unknown[];
+  if (deliverables.length > 100) throw new Error("Film bundle contains too many deliverables");
+  uniqueRecords(deliverables, "deliverable");
+  for (const value of deliverables) {
+    const deliverable = value as Record<string, unknown>;
+    if ((deliverable.kind !== "manifest" && deliverable.kind !== "srt") || !validStatus(deliverable) ||
+      typeof deliverable.content !== "string" || !Number.isSafeInteger(deliverable.bytes) || deliverable.bytes !== new TextEncoder().encode(deliverable.content).byteLength) {
+      throw new Error("Invalid film deliverable");
+    }
+  }
+
+  if (!input.source || typeof input.source !== "object" || Array.isArray(input.source) ||
+    typeof (input.source as Record<string, unknown>).text !== "string" ||
+    ((input.source as Record<string, unknown>).text as string).length > 1024 * 1024 ||
+    !Number.isSafeInteger(input.projectionRevision) || Number(input.projectionRevision) < 0 ||
+    typeof input.createdAt !== "string" || !Number.isFinite(Date.parse(input.createdAt)) ||
+    typeof input.updatedAt !== "string" || !Number.isFinite(Date.parse(input.updatedAt))) {
+    throw new Error("Invalid film bundle metadata");
+  }
+  return structuredClone(value) as FilmDocument;
 }
 
 function remapProject(
@@ -248,10 +453,42 @@ function remapProject(
   return copy;
 }
 
+function remapFilm(
+  film: FilmDocument,
+  replacements: Map<string, StoredBundleMedia>,
+): FilmDocument {
+  const replace = (storageKey: string | undefined) => {
+    if (!storageKey) return undefined;
+    const result = replacements.get(storageKey);
+    if (!result) throw new Error(`Bundle media declaration is missing: ${storageKey}`);
+    return result.storageKey;
+  };
+  return {
+    ...film,
+    shots: film.shots.map((shot) => ({
+      ...shot,
+      imageStorageKey: replace(shot.imageStorageKey),
+      videoStorageKey: replace(shot.videoStorageKey),
+      audioStorageKey: replace(shot.audioStorageKey),
+    })),
+    assets: film.assets.map((asset) => ({
+      ...asset,
+      mediaStorageKey: replace(asset.mediaStorageKey),
+    })),
+  };
+}
+
 export async function importProjectBundle(
   source: Blob | ArrayBuffer | Uint8Array,
   storage: ProjectBundleStorage = defaultStorage,
 ): Promise<BoardProject> {
+  return (await importProjectBundlePayload(source, storage)).project;
+}
+
+export async function importProjectBundlePayload(
+  source: Blob | ArrayBuffer | Uint8Array,
+  storage: ProjectBundleStorage = defaultStorage,
+): Promise<ImportedProjectBundle> {
   const entries = await readZipStore(source);
   const manifestBytes = entries.get("manifest.json");
   const projectBytes = entries.get("project.json");
@@ -260,10 +497,17 @@ export async function importProjectBundle(
   const project = assertBundlePanoramaMediaManaged(
     parseBoardProject(decodeJSON(projectBytes, "project document")),
   );
+  const filmBytes = manifest.film ? entries.get(manifest.film.entry) : undefined;
+  if (manifest.film && !filmBytes) throw new Error("Bundle film payload is missing");
+  if (filmBytes && filmBytes.byteLength > 32 * 1024 * 1024) throw new Error("Bundle film payload is too large");
+  const film = filmBytes ? parseBundleFilm(decodeJSON(filmBytes, "film document"), project.id) : undefined;
+  if (project.projectKind === "film" && !film) throw new Error("Film project bundle is missing its production payload");
+  if (project.projectKind === "canvas" && film) throw new Error("Canvas project bundle cannot contain a film payload");
 
   const declaredEntries = new Set([
     "manifest.json",
     "project.json",
+    ...(manifest.film ? [manifest.film.entry] : []),
     ...manifest.media.map((item) => item.entry),
   ]);
   for (const name of entries.keys()) {
@@ -271,7 +515,7 @@ export async function importProjectBundle(
   }
   if (entries.size !== declaredEntries.size) throw new Error("Bundle is missing a declared entry");
 
-  const projectKeys = new Set(collectProjectKeys(project));
+  const projectKeys = new Set(collectProjectKeys(project, film));
   const manifestKeys = new Set(manifest.media.map((item) => item.storageKey));
   if (
     projectKeys.size !== manifestKeys.size ||
@@ -316,7 +560,13 @@ export async function importProjectBundle(
     }
     const restored = remapProject(project, replacements);
     validateProjectPanoramaBudget(restored.nodes);
-    return restored;
+    return {
+      project: restored,
+      ...(film ? { film: remapFilm(film, replacements) } : {}),
+      cleanup: async () => {
+        await Promise.all(stored.map((item) => storage.remove(item.kind, item.storageKey)));
+      },
+    };
   } catch (error) {
     await Promise.allSettled(
       stored.map((item) => storage.remove(item.kind, item.storageKey)),

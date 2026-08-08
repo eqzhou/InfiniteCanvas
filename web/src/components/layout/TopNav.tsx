@@ -22,7 +22,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { exportProjectBundle } from "@/lib/project-bundle";
+import { exportCompleteProjectBundle } from "@/services/film-bundle";
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
 import { isGuestIdentity, useOptionalAuth } from "@/components/auth/AuthGate";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
@@ -57,7 +57,7 @@ export function TopNav({
 
   const downloadActiveProject = () => {
     if (!activeProject) return;
-    void exportProjectBundle(activeProject)
+    void exportCompleteProjectBundle(activeProject)
       .then((blob) => {
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");

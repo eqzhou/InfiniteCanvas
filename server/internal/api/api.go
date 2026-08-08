@@ -138,6 +138,7 @@ func Mount(r chi.Router, dataDir string) {
 		r.Put("/projects/{id}", s.putProject)
 		r.Get("/projects/{id}", s.getProject)
 		r.Delete("/projects/{id}", s.deleteProject)
+		mountFilmRoutes(r, s)
 		r.Get("/state/{key}", s.getState)
 		r.Put("/state/{key}", s.putState)
 		r.Put("/blobs/{key}", s.putBlob)
@@ -403,6 +404,7 @@ func MountServer(r chi.Router, s *Server) {
 		r.Put("/projects/{id}", s.putProject)
 		r.Get("/projects/{id}", s.getProject)
 		r.Delete("/projects/{id}", s.deleteProject)
+		mountFilmRoutes(r, s)
 		r.Get("/state/{key}", s.getState)
 		r.Put("/state/{key}", s.putState)
 		r.Put("/blobs/{key}", s.putBlob)
@@ -580,6 +582,10 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 			"board.delete_nodes",
 			"board.connect",
 			"board.export_json",
+			"film.status",
+			"film.list",
+			"film.validate",
+			"film.run_stage",
 		},
 	})
 }
@@ -861,6 +867,10 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.store != nil {
 		tenantID := tenantIDFrom(r)
+		if !projectIDPattern.MatchString(tenantID) {
+			http.Error(w, "invalid tenant id", http.StatusBadRequest)
+			return
+		}
 		if err := s.store.DeleteProject(r.Context(), tenantID, id); err != nil {
 			http.Error(w, "failed to delete project", http.StatusInternalServerError)
 			return
@@ -868,6 +878,15 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.store.DeleteGenerationJobsForProject(r.Context(), tenantID, id); err != nil {
 			http.Error(w, "failed to delete project generation jobs", http.StatusInternalServerError)
 			return
+		}
+		for _, directory := range []string{
+			filepath.Join(s.dataDir, "film-exports", tenantID, id),
+			filepath.Join(s.dataDir, "film-media", tenantID, id),
+		} {
+			if err := os.RemoveAll(directory); err != nil {
+				http.Error(w, "failed to delete project film files", http.StatusInternalServerError)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return

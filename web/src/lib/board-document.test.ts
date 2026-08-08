@@ -31,16 +31,15 @@ describe("parseBoardProject", () => {
   test("accepts a complete valid document without mutating it", () => {
     const input = validProject();
     const parsed = parseBoardProject(input);
-    expect(parsed).toEqual({ ...input, schemaVersion: 2 });
+    expect(parsed).toEqual({ ...input, schemaVersion: 3, projectKind: "canvas" });
     expect("schemaVersion" in input).toBe(false);
   });
 
-  test("accepts schema v2 and rejects unknown future schemas", () => {
+  test("migrates schema v2 to canvas and accepts schema v3 project kinds", () => {
     const current = { ...validProject(), schemaVersion: 2 };
-    expect(parseBoardProject(current)).toEqual(current);
-    expect(() => parseBoardProject({ ...current, schemaVersion: 3 })).toThrow(
-      "schemaVersion",
-    );
+    expect(parseBoardProject(current)).toEqual({ ...current, schemaVersion: 3, projectKind: "canvas" });
+    expect(parseBoardProject({ ...current, schemaVersion: 3, projectKind: "film" }).projectKind).toBe("film");
+    expect(() => parseBoardProject({ ...current, schemaVersion: 3, projectKind: "invalid" })).toThrow("projectKind");
   });
 
   test("persists bounded project-level audio roles", () => {

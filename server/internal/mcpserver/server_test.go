@@ -35,6 +35,16 @@ func TestInitializeAndListTools(t *testing.T) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
 		}
 	}
+	for _, name := range []string{"film.status", "film.list", "film.validate", "film.run_stage"} {
+		if !strings.Contains(lines[1], `"`+name+`"`) {
+			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
+		}
+	}
+	for _, name := range []string{"film.approve_stage", "film.export"} {
+		if strings.Contains(lines[1], `"`+name+`"`) {
+			t.Fatalf("privileged film tool %s remains exposed: %s", name, lines[1])
+		}
+	}
 }
 
 func TestCallToolUsesBoardStore(t *testing.T) {

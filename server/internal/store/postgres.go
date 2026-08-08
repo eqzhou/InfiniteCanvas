@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 13
+const currentSchemaVersion = 14
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -218,7 +218,29 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 14 {
+		if err := migrateV14(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV14(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 14, `
+CREATE TABLE IF NOT EXISTS openboard_film_projects (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+  document jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (tenant_id, project_id),
+  FOREIGN KEY (tenant_id, project_id)
+    REFERENCES openboard_projects (tenant_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS openboard_film_projects_tenant_updated_idx
+  ON openboard_film_projects (tenant_id, updated_at DESC, project_id);
+`)
 }
 
 func migrateV13(ctx context.Context, connection *pgxpool.Conn) error {
@@ -905,13 +927,100 @@ func (s *PostgresStore) DeleteProject(ctx context.Context, tenantID, id string) 
 	tenantID = normalizeTenantID(tenantID)
 	// Soft-delete and drop the document body: the tombstone only has to block
 	// stale writes, it does not need to keep the canvas contents around.
-	_, err := s.pool.Exec(ctx, `UPDATE openboard_projects
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `DELETE FROM openboard_film_projects WHERE tenant_id=$1 AND project_id=$2`, tenantID, id); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE openboard_projects
 		SET deleted_at=COALESCE(deleted_at, clock_timestamp()), document='{}'::jsonb
 		WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL`, tenantID, id)
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
 	if err == nil && s.redis != nil {
 		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()
 	}
 	return err
+}
+
+func (s *PostgresStore) GetFilmProject(ctx context.Context, tenantID, projectID string) (FilmRecord, error) {
+	tenantID = normalizeTenantID(tenantID)
+	var record FilmRecord
+	var updated time.Time
+	err := s.pool.QueryRow(ctx, `SELECT project_id, revision, document, updated_at
+		FROM openboard_film_projects WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID).
+		Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FilmRecord{}, ErrNotFound
+	}
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+	return record, nil
+}
+
+func (s *PostgresStore) CreateFilmProject(ctx context.Context, tenantID, projectID string, document []byte) (FilmRecord, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if !json.Valid(document) {
+		return FilmRecord{}, ErrInvalidInput
+	}
+	var record FilmRecord
+	var updated time.Time
+	err := s.pool.QueryRow(ctx, `INSERT INTO openboard_film_projects
+		(tenant_id, project_id, revision, document) VALUES ($1,$2,1,$3)
+		ON CONFLICT (tenant_id, project_id) DO NOTHING
+		RETURNING project_id, revision, document, updated_at`, tenantID, projectID, document).
+		Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FilmRecord{}, ErrConflict
+	}
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+	return record, nil
+}
+
+func (s *PostgresStore) CompareAndSwapFilmProject(
+	ctx context.Context,
+	tenantID string,
+	projectID string,
+	expectedRevision int,
+	document []byte,
+) (FilmRecord, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if expectedRevision < 1 || !json.Valid(document) {
+		return FilmRecord{}, ErrInvalidInput
+	}
+	var record FilmRecord
+	var updated time.Time
+	err := s.pool.QueryRow(ctx, `UPDATE openboard_film_projects
+		SET revision=revision+1, document=$4, updated_at=clock_timestamp()
+		WHERE tenant_id=$1 AND project_id=$2 AND revision=$3
+		RETURNING project_id, revision, document, updated_at`, tenantID, projectID, expectedRevision, document).
+		Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		lookupErr := s.pool.QueryRow(ctx, `SELECT true FROM openboard_film_projects
+			WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID).Scan(&exists)
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			return FilmRecord{}, ErrNotFound
+		}
+		if lookupErr != nil {
+			return FilmRecord{}, lookupErr
+		}
+		return FilmRecord{}, ErrConflict
+	}
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+	return record, nil
 }
 
 func (s *PostgresStore) GetState(ctx context.Context, tenantID, key string) ([]byte, error) {

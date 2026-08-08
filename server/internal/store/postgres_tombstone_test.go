@@ -90,6 +90,25 @@ func TestDeletedProjectResistsStaleAutosave(t *testing.T) {
 	}
 }
 
+func TestDeletedProjectRemovesFilmAggregate(t *testing.T) {
+	backend := openTombstoneTestStore(t)
+	tenantID := seedTombstoneTenant(t, backend)
+	ctx := t.Context()
+	const projectID = "proj-film-delete"
+	if err := backend.PutProject(ctx, tenantID, projectID, tombstoneProjectDocument(t, "Film", time.Now().UTC())); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := backend.CreateFilmProject(ctx, tenantID, projectID, []byte(`{"schemaVersion":1}`)); err != nil {
+		t.Fatalf("seed film: %v", err)
+	}
+	if err := backend.DeleteProject(ctx, tenantID, projectID); err != nil {
+		t.Fatalf("delete project: %v", err)
+	}
+	if _, err := backend.GetFilmProject(ctx, tenantID, projectID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted film aggregate remains readable: %v", err)
+	}
+}
+
 // The compare-and-swap path also creates rows when expected is nil, so it needs
 // the same tombstone guard as the plain upsert.
 func TestDeletedProjectResistsCompareAndSwapRecreate(t *testing.T) {

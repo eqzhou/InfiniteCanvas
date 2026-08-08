@@ -135,6 +135,8 @@ func isBrowserRuntimeTool(tool string) bool {
 
 func (s *Server) runAgentTool(ctx context.Context, tenantID string, tool string, raw json.RawMessage) (any, error) {
 	switch tool {
+	case "film.status", "film.list", "film.validate", "film.run_stage":
+		return s.runFilmAgentTool(ctx, tenantID, tool, raw)
 	case "board.list_nodes":
 		var args projectArguments
 		if err := decodeToolArguments(raw, &args); err != nil {
@@ -337,6 +339,21 @@ func validateProjectDocument(project map[string]any) error {
 	if !idOK || !validProjectID(id) || !titleOK || len(title) > 500 || !createdOK || !updatedOK ||
 		!nodesOK || !edgesOK || !chatsOK || len(chatSessions) > 1_000 || !backgroundOK || !viewportOK {
 		return errors.New("invalid project document shape")
+	}
+	if schemaValue, exists := project["schemaVersion"]; exists {
+		schemaVersion, ok := finiteJSONNumber(schemaValue)
+		if !ok || schemaVersion < 1 || schemaVersion > 3 || schemaVersion != math.Trunc(schemaVersion) {
+			return errors.New("unsupported project schemaVersion")
+		}
+		kind, hasKind := project["projectKind"].(string)
+		if schemaVersion == 3 && (!hasKind || (kind != "canvas" && kind != "film")) {
+			return errors.New("schema v3 requires projectKind canvas or film")
+		}
+		if schemaVersion < 3 && hasKind && kind != "canvas" {
+			return errors.New("legacy projects must be canvas projects")
+		}
+	} else if kind, hasKind := project["projectKind"].(string); hasKind && kind != "canvas" {
+		return errors.New("legacy projects must be canvas projects")
 	}
 	if _, err := time.Parse(time.RFC3339, createdAt); err != nil {
 		return errors.New("invalid project createdAt")
