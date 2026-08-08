@@ -138,6 +138,34 @@ describe("image clipboard", () => {
     }
   });
 
+  test("does not leak a source rejection when ClipboardItem construction fails", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (event: PromiseRejectionEvent) => {
+      event.preventDefault();
+      rejections.push(event.reason);
+    };
+    globalThis.addEventListener("unhandledrejection", onRejection as EventListener);
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => new Response("missing", { status: 404 }));
+    try {
+      await expect(copyImageSourceToClipboard("https://example.invalid/missing.png", {
+        clipboard: { write: mock(async () => undefined) },
+        ClipboardItemCtor: class {
+          constructor() {
+            throw new Error("ClipboardItem rejected the payload");
+          }
+        },
+        convertToPng: mock(async (blob: Blob) => blob),
+      })).rejects.toThrow("ClipboardItem rejected the payload");
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(rejections).toEqual([]);
+    } finally {
+      globalThis.fetch = priorFetch;
+      globalThis.removeEventListener("unhandledrejection", onRejection as EventListener);
+    }
+  });
+
   test("reports missing and unreadable image sources", async () => {
     const dependencies = {
       clipboard: { write: async (items: unknown[]) => {

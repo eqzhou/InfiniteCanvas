@@ -77,6 +77,11 @@ export async function writeImageBlobToClipboard(
     }
     return blob.type === "image/png" ? blob : dependencies.convertToPng(blob);
   });
+  // ClipboardItem construction or clipboard.write may fail before the browser
+  // starts consuming the promised representation. Keep a rejection observer
+  // attached so the still-running source read cannot become an unhandled
+  // rejection; consumers of `png` still receive the original failure.
+  void png.catch(() => undefined);
   const item = new ClipboardItemCtor({ "image/png": png });
   return clipboard.write([item]);
 }
