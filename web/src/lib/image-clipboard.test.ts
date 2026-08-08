@@ -110,6 +110,34 @@ describe("image clipboard", () => {
     })).rejects.toThrow("不是可复制的图片");
   });
 
+  test("fails fast without fetching when the clipboard is unavailable", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (event: PromiseRejectionEvent) => {
+      event.preventDefault();
+      rejections.push(event.reason);
+    };
+    globalThis.addEventListener("unhandledrejection", onRejection as EventListener);
+    const priorFetch = globalThis.fetch;
+    const fetcher = mock(async () => new Response("boom", { status: 500 }));
+    globalThis.fetch = fetcher as unknown as typeof fetch;
+    try {
+      await expect(copyImageSourceToClipboard("https://example.invalid/image.png", {
+        clipboard: undefined,
+        ClipboardItemCtor: undefined,
+        convertToPng: mock(async (blob: Blob) => blob),
+      })).rejects.toThrow("当前浏览器不支持复制图片");
+      // The unsupported-browser guard must run before the network read, so no
+      // orphaned blob promise is left to reject without a consumer.
+      expect(fetcher).not.toHaveBeenCalled();
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(rejections).toEqual([]);
+    } finally {
+      globalThis.fetch = priorFetch;
+      globalThis.removeEventListener("unhandledrejection", onRejection as EventListener);
+    }
+  });
+
   test("reports missing and unreadable image sources", async () => {
     const dependencies = {
       clipboard: { write: async (items: unknown[]) => {

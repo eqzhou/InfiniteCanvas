@@ -671,7 +671,6 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 	apiKey := ""
 	systemPrompt := config.SystemPrompt
 	providerTimeout := time.Duration(0)
-	personalChannel := channel != nil
 	if parameters.SharedChannel != nil {
 		snapshot := parameters.SharedChannel
 		if snapshot.ProviderID != job.ProviderID {
@@ -712,8 +711,10 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 			return resolvedMediaRequest{}, errors.New("invalid secrets")
 		}
 		apiKey = secrets.APIKeys[job.ProviderID][job.Kind]
-	}
-	if personalChannel {
+		// Read the timeout here, while channel still points at the personal
+		// entry. A snapshot job replaces channel with a synthesized value that
+		// carries no TimeoutSeconds, so deferring this would resolve the
+		// pinned shared timeout back to the personal default.
 		providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
 		if err != nil {
 			return resolvedMediaRequest{}, err

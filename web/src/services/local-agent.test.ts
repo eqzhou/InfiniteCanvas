@@ -550,6 +550,53 @@ describe("local agent connection", () => {
     expect(errors).toContain(true);
   });
 
+  test("releases each backoff abort listener when its timer expires normally", async () => {
+    const originalAdd = AbortSignal.prototype.addEventListener;
+    const originalRemove = AbortSignal.prototype.removeEventListener;
+    let added = 0;
+    let removed = 0;
+    AbortSignal.prototype.addEventListener = function patchedAdd(this: AbortSignal, ...args: Parameters<typeof originalAdd>) {
+      if (args[0] === "abort") added += 1;
+      return originalAdd.apply(this, args);
+    } as typeof originalAdd;
+    AbortSignal.prototype.removeEventListener = function patchedRemove(this: AbortSignal, ...args: Parameters<typeof originalRemove>) {
+      if (args[0] === "abort") removed += 1;
+      return originalRemove.apply(this, args);
+    } as typeof originalRemove;
+    try {
+      let calls = 0;
+      let subscription!: ReturnType<typeof subscribeCodexEvents>;
+      const completed = new Promise<void>((resolve) => {
+        subscription = subscribeCodexEvents(
+          { baseUrl: "http://127.0.0.1:8790", token: "secret" },
+          "session-1",
+          () => {
+            subscription.close();
+            resolve();
+          },
+          undefined,
+          async () => {
+            calls += 1;
+            // Two empty streams force two backoff waits before the event lands.
+            if (calls <= 2) return new Response("");
+            return new Response(`event: notification\ndata: ${JSON.stringify({ sequence: 1, type: "notification", method: "turn/completed" })}\n\n`);
+          },
+        );
+      });
+      await Promise.race([
+        completed,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("stream did not deliver")), 2_000)),
+      ]);
+      expect(calls).toBe(3);
+      // Both expired backoff timers must have detached their abort listeners, so
+      // the stream cannot accumulate one listener per reconnect.
+      expect(added - removed).toBeLessThanOrEqual(1);
+    } finally {
+      AbortSignal.prototype.addEventListener = originalAdd;
+      AbortSignal.prototype.removeEventListener = originalRemove;
+    }
+  });
+
   test("replays an event when its consumer throws before committing the checkpoint", async () => {
     const urls: string[] = [];
     let attempts = 0;

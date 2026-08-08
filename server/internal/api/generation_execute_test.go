@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
@@ -544,6 +545,26 @@ func TestImageGenerationFailureLogDetailIdentifiesNetworkCauseWithoutURL(t *test
 	}
 	if strings.Contains(detail, "provider.example") || strings.Contains(detail, "sk-private") {
 		t.Fatalf("network detail leaked provider URL: %q", detail)
+	}
+}
+
+// The sanitized detail is appended to the audit log's error text column.
+// Postgres rejects invalid UTF-8 there, so a cut that splits a multibyte rune
+// fails the whole INSERT and loses the audit row for the failure.
+func TestSanitizedNetworkErrorTruncatesOnRuneBoundary(t *testing.T) {
+	err := &url.Error{
+		Op:  "Post",
+		URL: "https://provider.example/v1/images/edits",
+		// A proxy or resolver can echo non-ASCII text; "网" is 3 bytes, so a
+		// 256-byte cut cannot land on a rune boundary.
+		Err: errors.New(strings.Repeat("网", 200)),
+	}
+	detail := sanitizedNetworkError(err.Err)
+	if !utf8.ValidString(detail) {
+		t.Fatalf("sanitized detail is not valid UTF-8: %q", detail)
+	}
+	if !strings.HasSuffix(detail, "…") {
+		t.Fatalf("sanitized detail lost its truncation marker: %q", detail)
 	}
 }
 

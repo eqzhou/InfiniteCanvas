@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -424,11 +423,11 @@ func applyCodexHistoryEvent(record *codexHistoryRecord, event codexEvent) {
 
 func appendCodexAssistantHistory(record *codexHistoryRecord, text, createdAt string) {
 	if len(text) > maxCodexHistoryText {
-		text = truncateHistoryUTF8Bytes(text, maxCodexHistoryText)
+		text = truncateUTF8Bytes(text, maxCodexHistoryText)
 	}
 	messages := record.Messages
 	if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" {
-		messages[len(messages)-1].Text = truncateHistorySuffixUTF8Bytes(messages[len(messages)-1].Text+text, maxCodexHistoryText)
+		messages[len(messages)-1].Text = truncateSuffixUTF8Bytes(messages[len(messages)-1].Text+text, maxCodexHistoryText)
 		record.Messages = messages
 		return
 	}
@@ -476,36 +475,6 @@ func truncateHistorySuffix(value string, maxRunes int) string {
 		return value
 	}
 	return string(runes[len(runes)-maxRunes:])
-}
-
-func truncateHistoryUTF8Bytes(value string, maxBytes int) string {
-	if len(value) <= maxBytes {
-		return value
-	}
-	end := maxBytes
-	for end > 0 {
-		runeValue, size := utf8.DecodeLastRuneInString(value[:end])
-		if runeValue != utf8.RuneError || size != 1 {
-			break
-		}
-		end--
-	}
-	return value[:end]
-}
-
-func truncateHistorySuffixUTF8Bytes(value string, maxBytes int) string {
-	if len(value) <= maxBytes {
-		return value
-	}
-	start := len(value) - maxBytes
-	for start < len(value) {
-		runeValue, size := utf8.DecodeRuneInString(value[start:])
-		if runeValue != utf8.RuneError || size != 1 {
-			break
-		}
-		start++
-	}
-	return value[start:]
 }
 
 func (s *Server) codexHistoryProfile(r *http.Request) (string, bool) {

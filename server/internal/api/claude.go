@@ -604,7 +604,9 @@ func (session *claudeSession) runTurn(prompt string) {
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-	var assistantBuilder strings.Builder
+	// Only whether any assistant text was emitted matters, so tracking a flag
+	// avoids retaining the whole streamed response for the length of the turn.
+	sawAssistantText := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -619,7 +621,7 @@ func (session *claudeSession) runTurn(prompt string) {
 			})
 			continue
 		}
-		session.handleStreamObject(raw, &assistantBuilder)
+		session.handleStreamObject(raw, &sawAssistantText)
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		session.publish(claudeEvent{Type: "error", Data: map[string]any{"message": err.Error()}})
@@ -628,7 +630,7 @@ func (session *claudeSession) runTurn(prompt string) {
 	cancel()
 }
 
-func (session *claudeSession) handleStreamObject(raw map[string]any, assistantBuilder *strings.Builder) {
+func (session *claudeSession) handleStreamObject(raw map[string]any, sawAssistantText *bool) {
 	typ, _ := raw["type"].(string)
 	switch typ {
 	case "system":
@@ -648,7 +650,7 @@ func (session *claudeSession) handleStreamObject(raw map[string]any, assistantBu
 	case "assistant":
 		text := extractClaudeText(raw)
 		if text != "" {
-			assistantBuilder.WriteString(text)
+			*sawAssistantText = true
 			session.publish(claudeEvent{
 				Type:   "notification",
 				Method: "agent/message",
@@ -660,7 +662,7 @@ func (session *claudeSession) handleStreamObject(raw map[string]any, assistantBu
 	case "stream_event", "content_block_delta":
 		delta := extractClaudeDelta(raw)
 		if delta != "" {
-			assistantBuilder.WriteString(delta)
+			*sawAssistantText = true
 			session.publish(claudeEvent{
 				Type:   "notification",
 				Method: "agent/message_delta",
@@ -674,7 +676,7 @@ func (session *claudeSession) handleStreamObject(raw map[string]any, assistantBu
 			session.claudeSessionID = sid
 			session.mu.Unlock()
 		}
-		if result, ok := raw["result"].(string); ok && result != "" && assistantBuilder.Len() == 0 {
+		if result, ok := raw["result"].(string); ok && result != "" && !*sawAssistantText {
 			session.publish(claudeEvent{
 				Type:   "notification",
 				Method: "agent/message",

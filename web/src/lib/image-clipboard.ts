@@ -50,13 +50,24 @@ function browserDependencies(): ImageClipboardDependencies {
   };
 }
 
+type SupportedImageClipboard = {
+  clipboard: ClipboardWriter;
+  ClipboardItemCtor: ClipboardItemConstructor;
+};
+
+function requireImageClipboard(dependencies: ImageClipboardDependencies): SupportedImageClipboard {
+  const { clipboard, ClipboardItemCtor } = dependencies;
+  if (!clipboard?.write || !ClipboardItemCtor) {
+    throw new Error("当前浏览器不支持复制图片");
+  }
+  return { clipboard, ClipboardItemCtor };
+}
+
 export async function writeImageBlobToClipboard(
   source: Blob | Promise<Blob>,
   dependencies: ImageClipboardDependencies = browserDependencies(),
 ): Promise<void> {
-  if (!dependencies.clipboard?.write || !dependencies.ClipboardItemCtor) {
-    throw new Error("当前浏览器不支持复制图片");
-  }
+  const { clipboard, ClipboardItemCtor } = requireImageClipboard(dependencies);
   const png = Promise.resolve(source).then(async (blob) => {
     if (!blob.type.startsWith("image/")) {
       throw new Error("当前节点不是可复制的图片");
@@ -66,14 +77,21 @@ export async function writeImageBlobToClipboard(
     }
     return blob.type === "image/png" ? blob : dependencies.convertToPng(blob);
   });
-  const item = new dependencies.ClipboardItemCtor({ "image/png": png });
-  return dependencies.clipboard.write([item]);
+  const item = new ClipboardItemCtor({ "image/png": png });
+  return clipboard.write([item]);
 }
 
-export function copyImageSourceToClipboard(
+// Async so the unsupported-browser guard surfaces as a rejection rather than a
+// synchronous throw. The body still runs to the write synchronously, which is
+// what Safari's user-activation requirement needs.
+export async function copyImageSourceToClipboard(
   source: string | Promise<string | null>,
   dependencies: ImageClipboardDependencies = browserDependencies(),
 ): Promise<void> {
+  // Check support before starting the read. writeImageBlobToClipboard would
+  // reject on its own, but by then this blob promise has no consumer, so a
+  // failed fetch would surface as an unhandled rejection.
+  requireImageClipboard(dependencies);
   const blob = Promise.resolve(source).then(async (resolved) => {
     if (!resolved) throw new Error("没有可复制的图片");
     const response = await fetch(resolved);

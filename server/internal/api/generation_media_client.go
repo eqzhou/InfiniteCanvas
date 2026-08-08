@@ -105,6 +105,7 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 		return generatedMedia{}, errors.New("invalid video poll interval")
 	}
 	kieConsecutiveRetries := 0
+	apimartConsecutiveRetries := 0
 	for {
 		if err := waitContext(ctx, interval); err != nil {
 			return generatedMedia{}, err
@@ -112,7 +113,8 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 		payload, err := e.poll(ctx, request, *checkpoint)
 		if err != nil {
 			if request.Protocol == "apimart" {
-				if delay, retry := retryAPIMartPoll(err, interval); retry {
+				if delay, retry := retryAPIMartPoll(err, interval); retry && apimartConsecutiveRetries < apimartMaxConsecutivePollRetries {
+					apimartConsecutiveRetries++
 					if waitErr := waitContext(ctx, delay); waitErr != nil {
 						return generatedMedia{}, waitErr
 					}
@@ -131,6 +133,7 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 			return generatedMedia{}, err
 		}
 		kieConsecutiveRetries = 0
+		apimartConsecutiveRetries = 0
 		if media, done, err := e.completed(ctx, request, *checkpoint, payload); done || err != nil {
 			return media, err
 		}

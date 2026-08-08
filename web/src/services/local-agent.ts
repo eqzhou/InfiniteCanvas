@@ -939,11 +939,18 @@ export function subscribeCodexEvents(
     return typeof sequence !== "number" || sequence > previousSequence;
   };
   const wait = (milliseconds: number) => new Promise<void>((resolve) => {
-    const timer = globalThis.setTimeout(resolve, milliseconds);
-    controller.signal.addEventListener("abort", () => {
+    // `once: true` only detaches on abort, so a timer that expires normally would
+    // leave its listener on the shared signal — one per reconnect, for the life of
+    // the stream. Detach explicitly on whichever path settles first.
+    const onAbort = () => {
       globalThis.clearTimeout(timer);
       resolve();
-    }, { once: true });
+    };
+    const timer = globalThis.setTimeout(() => {
+      controller.signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    controller.signal.addEventListener("abort", onAbort, { once: true });
   });
   void (async () => {
     let delay = 250;

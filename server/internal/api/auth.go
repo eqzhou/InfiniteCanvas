@@ -462,10 +462,47 @@ func (s *Server) estimateCredits(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// The OAuth start endpoint is unauthenticated by necessity, so pending states
+// must be capped: an unbounded map would grow with request volume for the full
+// ten-minute expiry window.
+const maxPendingOAuthStates = 4096
+
 var (
 	oauthStateMu sync.Mutex
 	oauthStates  = map[string]time.Time{}
 )
+
+// rememberOAuthState records a pending state, keeping the table bounded. The
+// sweep runs only when the table is full, so the common path stays O(1) instead
+// of re-scanning every entry under the lock on each request.
+func rememberOAuthState(state string, expiresAt time.Time, now time.Time) {
+	oauthStateMu.Lock()
+	defer oauthStateMu.Unlock()
+	if len(oauthStates) >= maxPendingOAuthStates {
+		for key, exp := range oauthStates {
+			if now.After(exp) {
+				delete(oauthStates, key)
+			}
+		}
+	}
+	// Still full means the table is under active abuse. Evict the entry closest
+	// to expiring rather than rejecting the request, so a flood cannot lock
+	// legitimate users out of logging in.
+	for len(oauthStates) >= maxPendingOAuthStates {
+		oldestKey := ""
+		oldestExp := time.Time{}
+		for key, exp := range oauthStates {
+			if oldestKey == "" || exp.Before(oldestExp) {
+				oldestKey, oldestExp = key, exp
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(oauthStates, oldestKey)
+	}
+	oauthStates[state] = expiresAt
+}
 
 func linuxDoOAuthConfigured() bool {
 	return strings.TrimSpace(os.Getenv("OPENBOARD_LINUXDO_CLIENT_ID")) != "" &&
@@ -507,15 +544,8 @@ func (s *Server) linuxDoOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := hex.EncodeToString(raw)
-	oauthStateMu.Lock()
 	now := time.Now()
-	for key, exp := range oauthStates {
-		if now.After(exp) {
-			delete(oauthStates, key)
-		}
-	}
-	oauthStates[state] = now.Add(10 * time.Minute)
-	oauthStateMu.Unlock()
+	rememberOAuthState(state, now.Add(10*time.Minute), now)
 	q := url.Values{}
 	q.Set("client_id", os.Getenv("OPENBOARD_LINUXDO_CLIENT_ID"))
 	q.Set("response_type", "code")

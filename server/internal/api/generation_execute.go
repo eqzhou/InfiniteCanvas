@@ -149,7 +149,9 @@ func sanitizedNetworkError(err error) string {
 	message = networkSecretPattern.ReplaceAllString(message, "<redacted>")
 	message = strings.Join(strings.Fields(message), " ")
 	if len(message) > 256 {
-		message = message[:256] + "…"
+		// This detail is appended to the audit log's error text column, so the
+		// cut has to land on a rune boundary or the INSERT fails.
+		message = truncateUTF8Bytes(message, 256) + "…"
 	}
 	if message == "" {
 		return "unknown transport error"
@@ -865,7 +867,6 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	apiKey := ""
 	systemPrompt := config.SystemPrompt
 	providerTimeout := time.Duration(0)
-	personalChannel := channel != nil
 	if parameters.SharedChannel != nil {
 		snapshot := parameters.SharedChannel
 		if snapshot.ProviderID != job.ProviderID {
@@ -905,8 +906,8 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 			return imageGenerationRequest{}, errors.New("invalid secrets")
 		}
 		apiKey = secrets.APIKeys[job.ProviderID]["image"]
-	}
-	if personalChannel {
+		// See resolveMediaGenerationRequest: this must be read before a
+		// snapshot job can replace channel with a timeout-less synthetic value.
 		providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
 		if err != nil {
 			return imageGenerationRequest{}, err

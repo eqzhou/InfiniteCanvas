@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
@@ -354,6 +356,67 @@ func TestClientAICallLogReportRequiresAdminEnablement(t *testing.T) {
 	listed := request(t, r, http.MethodGet, "/api/ai-call-logs?kind=image", nil)
 	if listed.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+}
+
+// Every user-visible error in this project is Chinese, so a long provider
+// failure is a run of 3-byte runes. Cutting it at a raw byte offset splits the
+// last rune, and Postgres rejects invalid UTF-8 in a text column — the whole
+// INSERT fails and the audit row for the failure is silently lost.
+func TestClientAICallLogReportTruncatesChineseFieldsOnRuneBoundaries(t *testing.T) {
+	storeMem := newMemoryStore()
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	srv := NewServerWithStore(t.TempDir(), storeMem)
+	srv.SetProcessToken("test-token")
+	defer srv.Close()
+	r := chi.NewRouter()
+	MountServer(r, srv)
+	if res := request(t, r, http.MethodPut, "/api/ai-call-logs/client-report", []byte(`{"enabled":true}`)); res.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	// "图" is 3 bytes, so no cap below lands on a rune boundary.
+	payload, err := json.Marshal(map[string]any{
+		"kind":        "image",
+		"status":      "failed",
+		"durationMs":  1,
+		"error":       strings.Repeat("图", 1200), // 3600 bytes, cap 2000
+		"model":       strings.Repeat("模", 400),  // 1200 bytes, cap 500
+		"channelId":   strings.Repeat("道", 100),  // 300 bytes, cap 128
+		"channelName": strings.Repeat("名", 100),  // 300 bytes, cap 200
+		"protocol":    strings.Repeat("协", 50),   // 150 bytes, cap 64
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	created := request(t, r, http.MethodPost, "/api/ai-call-logs/report", payload)
+	if created.Code != http.StatusOK {
+		t.Fatalf("report status=%d body=%s", created.Code, created.Body.String())
+	}
+	// Read the stored struct, not the HTTP body: writeJSON marshals through
+	// encoding/json, which substitutes U+FFFD for invalid UTF-8 and would hide
+	// the split rune that Postgres actually rejects.
+	page, err := storeMem.ListAICallLogs(context.Background(), store.DefaultTenantID, store.AICallLogQuery{})
+	if err != nil {
+		t.Fatalf("list stored logs: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("stored rows = %d, want 1", len(page.Items))
+	}
+	entry := page.Items[0]
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"error", entry.Error},
+		{"model", entry.Model},
+		{"channelId", entry.ChannelID},
+		{"channelName", entry.ChannelName},
+		{"protocol", entry.Protocol},
+	} {
+		if !utf8.ValidString(field.value) {
+			t.Errorf("%s is not valid UTF-8 after truncation: %q", field.name, field.value)
+		}
 	}
 }
 

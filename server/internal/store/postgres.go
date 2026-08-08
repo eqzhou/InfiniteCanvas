@@ -470,6 +470,13 @@ func migrateV6(ctx context.Context, connection *pgxpool.Conn) error {
 		constraints = append(constraints, name)
 	}
 	rows.Close()
+	// Without this check a mid-iteration failure would truncate the list, leaving a
+	// stale kind constraint in place while migration 6 is still recorded as applied.
+	// CHECK constraints are ANDed, so a surviving v5 constraint would reject every
+	// audio insert permanently.
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list generation kind constraints: %w", err)
+	}
 	for _, name := range constraints {
 		if !safeIdent(name) {
 			return errors.New("unsafe generation kind constraint")
@@ -517,6 +524,11 @@ func migrateV5(ctx context.Context, connection *pgxpool.Conn) error {
 		constraints = append(constraints, name)
 	}
 	rows.Close()
+	// A truncated list here would leave a stale kind constraint behind while the
+	// migration is still recorded as applied. See migrateV6 for the same guard.
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list generation kind constraints: %w", err)
+	}
 	for _, name := range constraints {
 		if !safeIdent(name) {
 			return errors.New("unsafe generation kind constraint")
@@ -1892,9 +1904,7 @@ func normalizeLibraryAssetWrite(asset LibraryAsset, now time.Time, create bool) 
 	} else if asset.Content == "" && asset.CoverURL == "" {
 		return LibraryAsset{}, fmt.Errorf("content or coverUrl is required")
 	}
-	if len(asset.Title) > 200 {
-		asset.Title = asset.Title[:200]
-	}
+	asset.Title = truncateTextUTF8Bytes(asset.Title, 200)
 	if len(asset.Content) > 20_000 {
 		return LibraryAsset{}, fmt.Errorf("content too long")
 	}
@@ -1908,9 +1918,7 @@ func normalizeLibraryAssetWrite(asset LibraryAsset, now time.Time, create bool) 
 		if tag == "" {
 			continue
 		}
-		if len(tag) > 64 {
-			tag = tag[:64]
-		}
+		tag = truncateTextUTF8Bytes(tag, 64)
 		key := strings.ToLower(tag)
 		if _, ok := seen[key]; ok {
 			continue
@@ -2234,9 +2242,7 @@ func (s *PostgresStore) RegisterUser(ctx context.Context, input RegisterInput) (
 	if displayName == "" {
 		displayName = strings.Split(email, "@")[0]
 	}
-	if len(displayName) > 200 {
-		displayName = displayName[:200]
-	}
+	displayName = truncateTextUTF8Bytes(displayName, 200)
 	passwordHash, err := HashPassword(input.Password)
 	if err != nil {
 		return AuthUser{}, "", err
@@ -2730,11 +2736,7 @@ FROM openboard_users WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, userID)
 		}
 	}
 	if patch.DisplayName != nil {
-		name := strings.TrimSpace(*patch.DisplayName)
-		if len(name) > 200 {
-			name = name[:200]
-		}
-		user.DisplayName = name
+		user.DisplayName = truncateTextUTF8Bytes(strings.TrimSpace(*patch.DisplayName), 200)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE openboard_users SET role=$3, status=$4, display_name=$5 WHERE tenant_id=$1 AND id=$2`,
 		tenantID, userID, user.Role, user.Status, user.DisplayName); err != nil {
@@ -3175,9 +3177,7 @@ func (s *PostgresStore) UpsertLinuxDoUser(ctx context.Context, input LinuxDoUser
 	if displayName == "" {
 		displayName = "Linux.do User"
 	}
-	if len(displayName) > 200 {
-		displayName = displayName[:200]
-	}
+	displayName = truncateTextUTF8Bytes(displayName, 200)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return AuthUser{}, "", err

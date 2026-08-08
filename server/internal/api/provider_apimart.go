@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+// Matches kieMaxConsecutivePollRetries: an upstream that keeps returning a
+// retryable status must fail fast rather than being polled for the whole
+// maxDuration window.
+const apimartMaxConsecutivePollRetries = 3
+
 var apimartElementNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 
 type apimartHTTPError struct {
@@ -620,6 +625,7 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 	if interval < 0 {
 		return nil, errors.New("invalid APIMart poll interval")
 	}
+	consecutiveRetries := 0
 	for {
 		if err := waitContext(ctx, interval); err != nil {
 			return nil, err
@@ -627,7 +633,8 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 		payload, err := apimartJSONRequest(ctx, e.client, request.BaseURL, request.APIKey, http.MethodGet,
 			"/tasks/"+url.PathEscape(taskID), nil)
 		if err != nil {
-			if delay, retry := retryAPIMartPoll(err, interval); retry {
+			if delay, retry := retryAPIMartPoll(err, interval); retry && consecutiveRetries < apimartMaxConsecutivePollRetries {
+				consecutiveRetries++
 				if waitErr := waitContext(ctx, delay); waitErr != nil {
 					return nil, waitErr
 				}
@@ -635,6 +642,7 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 			}
 			return nil, err
 		}
+		consecutiveRetries = 0
 		status := strings.ToLower(mediaNestedString(payload, []string{"status"}, []string{"data", "status"}))
 		if mediaFailedStatus(status) {
 			return nil, errors.New("APIMart image provider reported terminal failure")

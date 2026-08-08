@@ -221,23 +221,12 @@ func parseCodexSkillMetadata(id, content string) (string, string) {
 			}
 			trimmed = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
 			if trimmed != "" {
-				description = truncateCodexSkillText(trimmed, codexSkillMaxDescription)
+				description = truncateUTF8Bytes(trimmed, codexSkillMaxDescription)
 				break
 			}
 		}
 	}
 	return name, description
-}
-
-func truncateCodexSkillText(value string, maxBytes int) string {
-	if len(value) <= maxBytes {
-		return value
-	}
-	end := maxBytes
-	for end > 0 && !utf8.ValidString(value[:end]) {
-		end--
-	}
-	return value[:end]
 }
 
 func readCodexSkill(root, id string, includeContent bool) (codexSkillFile, error) {

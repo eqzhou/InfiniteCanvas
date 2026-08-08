@@ -611,21 +611,14 @@ func (s *Server) reportClientAICallLog(w http.ResponseWriter, r *http.Request) {
 	if entry.ChannelName == "" {
 		entry.ChannelName = entry.ChannelID
 	}
-	if len(entry.Error) > 2000 {
-		entry.Error = entry.Error[:2000]
-	}
-	if len(entry.Model) > 500 {
-		entry.Model = entry.Model[:500]
-	}
-	if len(entry.ChannelID) > 128 {
-		entry.ChannelID = entry.ChannelID[:128]
-	}
-	if len(entry.ChannelName) > 200 {
-		entry.ChannelName = entry.ChannelName[:200]
-	}
-	if len(entry.Protocol) > 64 {
-		entry.Protocol = entry.Protocol[:64]
-	}
+	// These all land in Postgres text columns, which reject invalid UTF-8. A raw
+	// byte slice splits the trailing rune of Chinese text and fails the INSERT,
+	// losing the audit row entirely.
+	entry.Error = truncateUTF8Bytes(entry.Error, 2000)
+	entry.Model = truncateUTF8Bytes(entry.Model, 500)
+	entry.ChannelID = truncateUTF8Bytes(entry.ChannelID, 128)
+	entry.ChannelName = truncateUTF8Bytes(entry.ChannelName, 200)
+	entry.Protocol = truncateUTF8Bytes(entry.Protocol, 64)
 
 	created, err := s.store.CreateAICallLog(r.Context(), tenantIDFrom(r), entry)
 	if err != nil {

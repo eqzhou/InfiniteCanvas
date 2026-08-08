@@ -446,3 +446,44 @@ func TestResolveMediaRequestKeepsDocumentedPromptlessFirstFrameJob(t *testing.T)
 		t.Fatalf("resolved first-frame request = %#v", resolved.Video)
 	}
 }
+
+// Shared-auto routing never checks for a personal channel of the same ID, so a
+// queued snapshot can collide with one at execution time. The snapshot pins the
+// destination, so its timeout has to win; otherwise a 300s video channel gets
+// silently truncated to the 60s personal default and long jobs fail mid-flight.
+func TestResolveMediaRequestKeepsSnapshotTimeoutWhenPersonalChannelSharesID(t *testing.T) {
+	backend := newMemoryStore()
+	server, _ := mediaExecutionServer(t, backend, newScriptedVideoExecutor(nil), newScriptedAudioExecutor())
+	t.Cleanup(server.Close)
+	const jobID = "job-snapshot-timeout"
+	// media-main is also the personal channel ID installed by the fixture.
+	sealed, err := server.sealGenerationChannelSecret(store.DefaultTenantID, jobID, "video", adminChannelPublic{
+		ID: "media-main", BaseURL: "https://shared.example/v1", Protocol: "openai",
+	}, "sk-shared-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, err := json.Marshal(persistedMediaJobParameters{
+		Executor: serverExecutorMarker, Ratio: "16:9", Resolution: "720p",
+		SharedChannel: &generationChannelSnapshot{
+			ProviderID: "media-main", BaseURL: "https://shared.example/v1", Protocol: "openai",
+			Model: "shared-video-model", TimeoutSeconds: 300, Secret: sealed,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := server.resolveMediaGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+		ID: jobID, Kind: "video", Status: "queued", ProviderID: "media-main",
+		Model: "shared-video-model", Prompt: "move", Parameters: parameters, Result: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("resolve snapshot job: %v", err)
+	}
+	if resolved.ProviderTimeout != 300*time.Second {
+		t.Fatalf("resolved timeout = %s, want 300s from the pinned snapshot", resolved.ProviderTimeout)
+	}
+	if resolved.Video.APIKey != "sk-shared-video" || resolved.Video.BaseURL != "https://shared.example/v1" {
+		t.Fatalf("resolved request left the pinned shared channel: %#v", resolved.Video)
+	}
+}
