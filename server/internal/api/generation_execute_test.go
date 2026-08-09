@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -142,6 +144,23 @@ func TestServerImageJobCategoryIsBounded(t *testing.T) {
 	input.Parameters.Category = strings.Repeat("x", 101)
 	if validCreateImageJob(input) {
 		t.Fatal("expected oversized category to be rejected")
+	}
+}
+
+func TestReferenceImageAllowsOriginalCameraResolutionWithoutRelaxingGeneratedOutputs(t *testing.T) {
+	pngBytes, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.BigEndian.PutUint32(pngBytes[16:20], 5712)
+	binary.BigEndian.PutUint32(pngBytes[20:24], 4284)
+	binary.BigEndian.PutUint32(pngBytes[29:33], crc32.ChecksumIEEE(pngBytes[12:29]))
+	value := generatedImage{Data: pngBytes, MIMEType: "image/png"}
+	if _, _, _, err := validateReferenceImage(value); err != nil {
+		t.Fatalf("camera-resolution reference rejected: %v", err)
+	}
+	if _, _, _, err := validateGeneratedImage(value); err == nil {
+		t.Fatal("generated output unexpectedly accepted above its pixel limit")
 	}
 }
 

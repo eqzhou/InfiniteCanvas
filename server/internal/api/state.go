@@ -524,7 +524,7 @@ func (s *Server) readTenantImageBlobContext(ctx context.Context, tenantID, key s
 		return generatedImage{}, errors.New("invalid or oversized image blob")
 	}
 	imageValue := generatedImage{Data: value.Data, MIMEType: value.Metadata.ContentType}
-	if _, _, _, err := validateGeneratedImage(imageValue); err != nil {
+	if _, _, _, err := validateReferenceImage(imageValue); err != nil {
 		return generatedImage{}, err
 	}
 	return imageValue, nil

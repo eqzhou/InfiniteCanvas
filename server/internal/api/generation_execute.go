@@ -26,6 +26,7 @@ const (
 	maxGeneratedImageBytes  = 24 << 20
 	maxGeneratedTotalBytes  = 24 << 20
 	maxGeneratedPixels      = 12_000_000
+	maxReferenceImagePixels = 100_000_000
 	serverExecutorMarker    = "server"
 	generationLeaseDuration = 2 * time.Minute
 	generationLeaseRenewal  = 10 * time.Second
@@ -1044,6 +1045,28 @@ func validateGeneratedImage(value generatedImage) (string, int, int, error) {
 		return "", 0, 0, errors.New("invalid generated image dimensions")
 	}
 	return detected, width, height, nil
+}
+
+// Input references retain their original camera resolution. DecodeConfig
+// validates the supported image header and dimensions without allocating a
+// full uncompressed bitmap; providers perform their own final input decode.
+func validateReferenceImage(value generatedImage) (string, int, int, error) {
+	if len(value.Data) == 0 || len(value.Data) > maxGeneratedImageBytes {
+		return "", 0, 0, errors.New("reference image exceeds size limit")
+	}
+	detected := sniffGeneratedImageMIME(value.Data)
+	if detected == "" {
+		return "", 0, 0, errors.New("unsupported reference image type")
+	}
+	if value.MIMEType != "" && value.MIMEType != detected {
+		return "", 0, 0, errors.New("reference image content type mismatch")
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(value.Data))
+	if err != nil || config.Width < 1 || config.Height < 1 ||
+		int64(config.Width)*int64(config.Height) > maxReferenceImagePixels {
+		return "", 0, 0, errors.New("invalid reference image dimensions")
+	}
+	return detected, config.Width, config.Height, nil
 }
 
 func sniffGeneratedImageMIME(data []byte) string {
