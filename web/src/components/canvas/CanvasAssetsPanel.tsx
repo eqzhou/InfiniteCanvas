@@ -58,7 +58,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
         }
       }
       const uploaded = await uploadMedia(file, kind === "image" ? "image" : "media", {
-        optimizeImage: kind === "image",
+        validateLargeImage: kind === "image",
       });
       const t = nowIso();
       const item: AssetItem = {

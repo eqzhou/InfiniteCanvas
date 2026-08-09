@@ -59,7 +59,7 @@ export function AssetsPage() {
 
   const addMedia = async (file: File, assetKind: "image" | "video" | "audio") => {
     const uploaded = await uploadMedia(file, assetKind === "image" ? "image" : "media", {
-      optimizeImage: assetKind === "image",
+      validateLargeImage: assetKind === "image",
     });
     const t = nowIso();
     const item: AssetItem = {
@@ -105,7 +105,7 @@ export function AssetsPage() {
     }
     const replacement = values.replacement
       ? await uploadMedia(values.replacement, editing.kind === "image" ? "image" : "media", {
-          optimizeImage: editing.kind === "image",
+          validateLargeImage: editing.kind === "image",
         })
       : null;
     const latestAssets = useBoardStore.getState().assets;

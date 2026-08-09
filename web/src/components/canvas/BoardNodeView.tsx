@@ -218,7 +218,7 @@ export function BoardNodeView({
             : Settings2;
   const importImageIntoNode = (file: File) => {
     void (async () => {
-      const uploaded = await uploadMedia(file, "image", { optimizeImage: true });
+      const uploaded = await uploadMedia(file, "image", { validateLargeImage: true });
       const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
       updateNode(node.id, {
         metadata: {
