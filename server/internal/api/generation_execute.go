@@ -581,7 +581,8 @@ func isServerGenerationJob(job store.GenerationJob) bool {
 		return false
 	}
 	return ((job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && parameters.Executor == serverExecutorMarker) ||
-		(job.Kind == "workflow" && parameters.Executor == "workflow")
+		(job.Kind == "workflow" && parameters.Executor == "workflow") ||
+		(job.Kind == "export" && parameters.Executor == filmExportExecutorMarker)
 }
 
 func (s *Server) startGenerationWorkers(count int) {
@@ -814,6 +815,12 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 		for _, childID := range workflowChildJobIDs(job.Result) {
 			_, _ = s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC())
 			s.cancelLocalGeneration(tenantID, childID)
+		}
+	}
+	if job.Kind == "export" && job.Status == "cancelled" {
+		if parameters, _, decodeErr := decodeFilmExportJob(job); decodeErr == nil {
+			deliverableID := stableFilmID("deliverable", parameters.ProjectID, parameters.IdempotencyKey)
+			s.cancelFilmExportDeliverable(r.Context(), tenantID, parameters.ProjectID, deliverableID, job.ID)
 		}
 	}
 	writeJSON(w, publicGenerationJob(job))

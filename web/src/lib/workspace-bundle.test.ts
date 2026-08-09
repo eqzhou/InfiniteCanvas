@@ -114,9 +114,25 @@ describe("workspace media bundle", () => {
     const sourceSnapshot = snapshot();
     const project = createProject("Film workspace", "film");
     const film = createFilmDocument(project.id, "2026-08-08T00:00:00.000Z");
+    film.episodes = [{ id: "episode-film", revision: 1, order: 0, title: "Episode", synopsis: "", status: "draft" }];
+    film.scenes = [{ id: "scene-film", revision: 1, episodeId: "episode-film", order: 0, heading: "INT. ROOM - DAY", synopsis: "", status: "draft" }];
+    film.shots = [{ id: "shot-film", revision: 1, sceneId: "scene-film", order: 0, title: "Shot", description: "First frame", status: "draft", durationSeconds: 4, aspectRatio: "16:9", identityVersionIds: [], firstFrameStorageKey: "image:film-first-frame" }];
     film.assets = [{
       id: "asset_film_voice", revision: 1, kind: "voice", title: "Narrator", status: "draft",
       description: "Voice identity", mediaStorageKey: "media:film-voice",
+    }];
+    film.dialogues = [{
+      id: "dialogue-film", revision: 1, shotId: "shot-film", order: 0, kind: "narration",
+      text: "Narration", status: "draft", audioStorageKey: "media:film-voice",
+    }];
+    film.tasks = [{
+      id: "task-film", revision: 1, stage: "first_frame", shotId: "shot-film", title: "Frozen frame task",
+      status: "needs_review", progress: 1, createdAt: film.createdAt, updatedAt: film.updatedAt,
+      snapshot: {
+        shotRevision: 1, prompt: "First frame", providerId: "provider", model: "model", config: {},
+        identityVersions: [{ ...film.assets[0]! }], referenceStorageKeys: ["image:film-first-frame"],
+        estimatedGenerations: 1, createdAt: film.createdAt,
+      },
     }];
     film.deliverables = [{
       id: "deliverable_film_mp4", revision: 1, kind: "mp4", title: "Master", status: "approved",
@@ -129,6 +145,7 @@ describe("workspace media bundle", () => {
     const archive = await exportWorkspaceBundle(
       { ...sourceSnapshot, films: [film] },
       fakeStorage({
+        "image:film-first-frame": new Blob(["frame"], { type: "image/png" }),
         "media:film-voice": new Blob(["voice"], { type: "audio/mpeg" }),
         "film:deliverable:master": new Blob(["master"], { type: "video/mp4" }),
       }).storage,
@@ -139,9 +156,13 @@ describe("workspace media bundle", () => {
 
     expect(restored.films).toHaveLength(1);
     expect(restored.films?.[0]?.projectId).toBe(project.id);
-    expect(restored.films?.[0]?.assets[0]?.mediaStorageKey).toBe("media:restored-1");
-    expect(restored.films?.[0]?.deliverables[0]?.storageKey).toBe("media:restored-2");
-    expect(target.blobs.get("media:restored-1")?.type).toBe("audio/mpeg");
+    expect(restored.films?.[0]?.shots[0]?.firstFrameStorageKey).toBe("image:restored-1");
+    expect(restored.films?.[0]?.assets[0]?.mediaStorageKey).toBe("media:restored-2");
+    expect(restored.films?.[0]?.dialogues?.[0]?.audioStorageKey).toBe("media:restored-2");
+    expect(restored.films?.[0]?.tasks[0]?.snapshot?.identityVersions[0]?.mediaStorageKey).toBe("media:restored-2");
+    expect(restored.films?.[0]?.tasks[0]?.snapshot?.referenceStorageKeys).toEqual(["image:restored-1"]);
+    expect(restored.films?.[0]?.deliverables[0]?.storageKey).toBe("media:restored-3");
+    expect(target.blobs.get("image:restored-1")?.type).toBe("image/png");
   });
 
   test("provides strict media identities and removes only confirmed migrated uploads", async () => {

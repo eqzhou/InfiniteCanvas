@@ -98,6 +98,28 @@ describe("complete film bundle rollback", () => {
     expect(restore.document.assets[0]).toMatchObject({ mediaSha256: "a".repeat(64), mediaObjectVersion: "shared-v1" });
   });
 
+  test("preserves dialogue and frozen task snapshot media identities", () => {
+    const film = createFilmDocument("nested-film", "2026-08-08T00:00:00.000Z");
+    const asset = { id: "identity-1", revision: 1, kind: "identity" as const, title: "Identity", description: "", status: "approved" as const, mediaStorageKey: "image:nested" };
+    film.dialogues = [{ id: "dialogue-1", revision: 1, shotId: "shot-1", order: 0, kind: "narration", text: "Line", status: "approved", audioStorageKey: "media:dialogue" }];
+    film.tasks = [{ id: "task-1", revision: 1, stage: "storyboard", title: "Task", status: "needs_review", progress: 1, createdAt: film.createdAt, updatedAt: film.updatedAt, snapshot: { shotRevision: 1, prompt: "Prompt", providerId: "provider", model: "model", config: {}, identityVersions: [asset], styleVersion: { ...asset, id: "style-1", kind: "style" }, referenceStorageKeys: ["image:nested"], estimatedGenerations: 1, createdAt: film.createdAt } }];
+    const imported = [
+      { storageKey: "image:nested", mimeType: "image/png", bytes: 5, sha256: "a".repeat(64), objectVersion: "image-v1" },
+      { storageKey: "media:dialogue", mimeType: "audio/mpeg", bytes: 4, sha256: "b".repeat(64), objectVersion: "audio-v1" },
+    ];
+
+    const restore = prepareFilmRestore(film, imported);
+
+    expect(restore.media[0]?.provenance).toEqual([
+      { kind: "task", entityId: "task-1", field: "identity:identity-1" },
+      { kind: "task", entityId: "task-1", field: "style" },
+      { kind: "task", entityId: "task-1", field: "reference:0" },
+    ]);
+    expect(restore.media[1]?.provenance).toEqual([{ kind: "dialogue", entityId: "dialogue-1", field: "audioStorageKey" }]);
+    expect(restore.document.tasks[0]?.snapshot?.identityVersions[0]).toMatchObject({ mediaSha256: "a".repeat(64), mediaObjectVersion: "image-v1" });
+    expect(restore.document.dialogues?.[0]).toMatchObject({ audioSha256: "b".repeat(64), audioObjectVersion: "audio-v1" });
+  });
+
   test("keeps migrated Film sources that remain referenced outside Film", () => {
     const project = createProject("Shared", "film");
     project.nodes = [{ id: "node-1", type: "image", title: "Shared", position: { x: 0, y: 0 }, width: 320, height: 240, metadata: { storageKey: "image:shared" } }];

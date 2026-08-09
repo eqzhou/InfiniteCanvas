@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 17
+const currentSchemaVersion = 19
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -238,7 +238,84 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 18 {
+		if err := migrateV18(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
+	if version < 19 {
+		if err := migrateV19(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV19(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 19, `
+ALTER TABLE openboard_generation_jobs DROP CONSTRAINT IF EXISTS openboard_generation_jobs_kind_check_v6;
+ALTER TABLE openboard_generation_jobs
+  ADD CONSTRAINT openboard_generation_jobs_kind_check_v6 CHECK (kind IN ('image','video','audio','workflow','export'));
+CREATE INDEX IF NOT EXISTS openboard_generation_jobs_film_export_claim_idx
+  ON openboard_generation_jobs (status, lease_expires_at, created_at)
+  WHERE kind='export' AND parameters->>'executor'='film-export' AND status IN ('queued','running');
+`)
+}
+
+func migrateV18(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 18, `
+CREATE TABLE IF NOT EXISTS openboard_film_entities (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  entity_type text NOT NULL,
+  entity_id text NOT NULL,
+  revision integer NOT NULL CHECK (revision > 0),
+  document jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (tenant_id, project_id, entity_type, entity_id),
+  FOREIGN KEY (tenant_id, project_id) REFERENCES openboard_film_projects (tenant_id, project_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS openboard_film_entities_lookup_idx
+  ON openboard_film_entities (tenant_id, project_id, entity_type, updated_at DESC);
+INSERT INTO openboard_film_entities (tenant_id,project_id,entity_type,entity_id,revision,document)
+SELECT project.tenant_id, project.project_id,
+  CASE field.key WHEN 'episodes' THEN 'episode' WHEN 'scenes' THEN 'scene' WHEN 'shots' THEN 'shot'
+    WHEN 'dialogues' THEN 'dialogue' WHEN 'assets' THEN 'asset' WHEN 'stages' THEN 'stage'
+    WHEN 'tasks' THEN 'task' WHEN 'qualityReports' THEN 'quality_report' WHEN 'deliverables' THEN 'deliverable'
+    WHEN 'adoptions' THEN 'adoption' WHEN 'versions' THEN 'entity_version' END,
+  entity.value->>'id', GREATEST(1, COALESCE((entity.value->>'revision')::integer, 1)),
+  CASE WHEN field.key='shots'
+    AND jsonb_typeof(project.document->'stages')='array' AND jsonb_array_length(project.document->'stages')=7
+    AND EXISTS (SELECT 1 FROM jsonb_array_elements(project.document->'stages') stage WHERE stage->>'id'='storyboard' AND stage->>'status'='approved')
+    AND COALESCE(entity.value->>'firstFrameStorageKey','')=''
+  THEN entity.value || jsonb_strip_nulls(jsonb_build_object(
+    'firstFrameStorageKey',entity.value->'imageStorageKey','firstFrameSha256',entity.value->'imageSha256',
+    'firstFrameObjectVersion',entity.value->'imageObjectVersion','firstFrameGenerationJobId',entity.value->'imageGenerationJobId'))
+  ELSE entity.value END
+FROM openboard_film_projects project
+CROSS JOIN LATERAL jsonb_each(project.document) field
+CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(field.value)='array' THEN field.value ELSE '[]'::jsonb END) entity(value)
+WHERE field.key IN ('episodes','scenes','shots','dialogues','assets','stages','tasks','qualityReports','deliverables','adoptions','versions')
+  AND entity.value ? 'id' AND entity.value->>'id' <> ''
+ON CONFLICT (tenant_id,project_id,entity_type,entity_id) DO UPDATE
+SET revision=EXCLUDED.revision,document=EXCLUDED.document,updated_at=clock_timestamp();
+INSERT INTO openboard_film_entities (tenant_id,project_id,entity_type,entity_id,revision,document)
+SELECT project.tenant_id,project.project_id,'stage','first_frame',1,jsonb_build_object(
+  'id','first_frame','revision',1,
+  'status',CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(project.document->'stages') stage WHERE stage->>'id'='storyboard' AND stage->>'status'='approved') THEN 'approved' ELSE 'draft' END,
+  'updatedAt',project.document->>'updatedAt')
+FROM openboard_film_projects project
+WHERE jsonb_typeof(project.document->'stages')='array' AND jsonb_array_length(project.document->'stages')=7
+  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(project.document->'stages') stage WHERE stage->>'id'='first_frame')
+ON CONFLICT (tenant_id,project_id,entity_type,entity_id) DO UPDATE
+SET revision=EXCLUDED.revision,document=EXCLUDED.document,updated_at=clock_timestamp();
+INSERT INTO openboard_film_entities (tenant_id,project_id,entity_type,entity_id,revision,document)
+SELECT tenant_id,project_id,kind,kind,GREATEST(1,COALESCE((document->kind->>'revision')::integer,1)),document->kind
+FROM openboard_film_projects CROSS JOIN (VALUES ('source'),('timeline')) kinds(kind)
+WHERE jsonb_typeof(document->kind)='object'
+ON CONFLICT (tenant_id,project_id,entity_type,entity_id) DO UPDATE
+SET revision=EXCLUDED.revision,document=EXCLUDED.document,updated_at=clock_timestamp();
+`)
 }
 
 func migrateV17(ctx context.Context, connection *pgxpool.Conn) error {
@@ -1241,6 +1318,61 @@ func (s *PostgresStore) GetFilmProject(ctx context.Context, tenantID, projectID 
 	return record, nil
 }
 
+func syncFilmEntityProjection(ctx context.Context, tx pgx.Tx, tenantID, projectID string, document []byte) error {
+	var aggregate map[string]json.RawMessage
+	if json.Unmarshal(document, &aggregate) != nil {
+		return ErrInvalidInput
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_film_entities WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID); err != nil {
+		return err
+	}
+	collections := map[string]string{
+		"episodes": "episode", "scenes": "scene", "shots": "shot", "dialogues": "dialogue", "assets": "asset",
+		"stages": "stage", "tasks": "task", "qualityReports": "quality_report", "deliverables": "deliverable",
+		"adoptions": "adoption", "versions": "entity_version",
+	}
+	for field, entityType := range collections {
+		var values []json.RawMessage
+		if len(aggregate[field]) == 0 {
+			continue
+		}
+		if json.Unmarshal(aggregate[field], &values) != nil {
+			return ErrInvalidInput
+		}
+		for _, raw := range values {
+			var identity struct {
+				ID       string `json:"id"`
+				Revision int    `json:"revision"`
+			}
+			if json.Unmarshal(raw, &identity) != nil || identity.ID == "" || identity.Revision < 1 {
+				return ErrInvalidInput
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_entities (tenant_id,project_id,entity_type,entity_id,revision,document) VALUES ($1,$2,$3,$4,$5,$6)`, tenantID, projectID, entityType, identity.ID, identity.Revision, raw); err != nil {
+				return err
+			}
+		}
+	}
+	for field, entityType := range map[string]string{"source": "source", "timeline": "timeline"} {
+		raw := aggregate[field]
+		if len(raw) == 0 {
+			continue
+		}
+		var identity struct {
+			Revision int `json:"revision"`
+		}
+		if json.Unmarshal(raw, &identity) != nil || identity.Revision < 0 {
+			return ErrInvalidInput
+		}
+		if identity.Revision == 0 {
+			identity.Revision = 1
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_entities (tenant_id,project_id,entity_type,entity_id,revision,document) VALUES ($1,$2,$3,$3,$4,$5)`, tenantID, projectID, entityType, identity.Revision, raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *PostgresStore) CreateFilmProject(ctx context.Context, tenantID, projectID string, document []byte) (FilmRecord, error) {
 	tenantID = normalizeTenantID(tenantID)
 	if !json.Valid(document) {
@@ -1265,6 +1397,9 @@ func (s *PostgresStore) CreateFilmProject(ctx context.Context, tenantID, project
 		return FilmRecord{}, ErrConflict
 	}
 	if err != nil {
+		return FilmRecord{}, err
+	}
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
 		return FilmRecord{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1313,6 +1448,9 @@ func (s *PostgresStore) CompareAndSwapFilmProject(
 		return FilmRecord{}, ErrConflict
 	}
 	if err != nil {
+		return FilmRecord{}, err
+	}
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
 		return FilmRecord{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1373,6 +1511,9 @@ func (s *PostgresStore) RestoreFilmProject(
 			Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
 	}
 	if err != nil {
+		return FilmRecord{}, err
+	}
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
 		return FilmRecord{}, err
 	}
 	var prior any
@@ -1445,6 +1586,9 @@ func (s *PostgresStore) RollbackFilmProject(
 			return FilmRecord{}, false, ErrConflict
 		}
 		if err != nil {
+			return FilmRecord{}, false, err
+		}
+		if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, priorDocument); err != nil {
 			return FilmRecord{}, false, err
 		}
 		record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
@@ -1684,6 +1828,9 @@ func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, sna
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_projects
 			(tenant_id,project_id,revision,document) VALUES ($1,$2,$3,$4)`, tenantID, film.ProjectID, revision, film.Document); err != nil {
+			return err
+		}
+		if err := syncFilmEntityProjection(ctx, tx, tenantID, film.ProjectID, film.Document); err != nil {
 			return err
 		}
 	}
@@ -2304,7 +2451,8 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 
 func (s *PostgresStore) ClaimServerGenerationJob(ctx context.Context, claim GenerationClaim, owner string, now, leaseUntil time.Time) (TenantGenerationJob, error) {
 	if ((claim.Kind != "image" && claim.Kind != "video" && claim.Kind != "audio") || claim.Executor != "server") &&
-		(claim.Kind != "workflow" || claim.Executor != "workflow") {
+		(claim.Kind != "workflow" || claim.Executor != "workflow") &&
+		(claim.Kind != "export" || claim.Executor != "film-export") {
 		return TenantGenerationJob{}, errors.New("invalid generation claim")
 	}
 	_ = now
@@ -2501,7 +2649,8 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 		), '{}'::jsonb), true) ELSE result END
 		WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running') AND
 		  ((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR
-		   (kind='workflow' AND parameters->>'executor'='workflow'))
+		   (kind='workflow' AND parameters->>'executor'='workflow') OR
+		   (kind='export' AND parameters->>'executor'='film-export'))
 		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
 		parameters, result, error, created_at, updated_at`, tenantID, id, now))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -2555,7 +2704,8 @@ func serverOwnedGenerationJob(job GenerationJob) bool {
 		return false
 	}
 	return ((job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && value.Executor == "server") ||
-		(job.Kind == "workflow" && value.Executor == "workflow")
+		(job.Kind == "workflow" && value.Executor == "workflow") ||
+		(job.Kind == "export" && value.Executor == "film-export")
 }
 
 func (s *PostgresStore) DeleteGenerationJob(ctx context.Context, tenantID, id string) error {
@@ -2734,7 +2884,8 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND status IN ('queued','running') AND
 		  ((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR
-		   (kind='workflow' AND parameters->>'executor'='workflow'))`, tenantID).Scan(&activeServerJobs); err != nil {
+		   (kind='workflow' AND parameters->>'executor'='workflow') OR
+		   (kind='export' AND parameters->>'executor'='film-export'))`, tenantID).Scan(&activeServerJobs); err != nil {
 		return err
 	}
 	if activeServerJobs > 0 {
@@ -2806,7 +2957,8 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	}
 	var active int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs WHERE tenant_id=$1 AND status IN ('queued','running') AND
-		((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR (kind='workflow' AND parameters->>'executor'='workflow'))`, tenantID).Scan(&active); err != nil {
+		((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR (kind='workflow' AND parameters->>'executor'='workflow') OR
+		 (kind='export' AND parameters->>'executor'='film-export'))`, tenantID).Scan(&active); err != nil {
 		return err
 	}
 	if active > 0 {

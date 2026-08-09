@@ -530,6 +530,30 @@ func TestFilmMutationResponseKeepsCapabilityEnvelope(t *testing.T) {
 	}
 }
 
+func TestFilmIdentityVersionStoresProductionMetadata(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	characterResponse := request(t, handler, http.MethodPost, "/api/film/projects/film-api/assets", []byte(`{"kind":"character","title":"Mira"}`))
+	character := decodeFilmResponse(t, characterResponse).Assets[0]
+	body, _ := json.Marshal(map[string]any{"kind": "identity", "title": "Mira / Winter", "parentAssetId": character.ID, "ageStage": "adult", "costume": "winter field coat", "storyPeriod": "episode 3", "isDefault": true})
+	created := request(t, handler, http.MethodPost, "/api/film/projects/film-api/assets", body)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("identity metadata: %d %s", created.Code, created.Body.String())
+	}
+	identity := decodeFilmResponse(t, created).Assets[1]
+	if identity.ParentAssetID != character.ID || identity.AgeStage != "adult" || identity.Costume != "winter field coat" || identity.StoryPeriod != "episode 3" || !identity.IsDefault {
+		t.Fatalf("identity metadata was not preserved: %#v", identity)
+	}
+	secondBody, _ := json.Marshal(map[string]any{"kind": "identity", "title": "Mira / Summer", "parentAssetId": character.ID, "isDefault": true})
+	second := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/assets", secondBody))
+	if second.Assets[1].IsDefault || second.Assets[1].Revision != identity.Revision+1 || !second.Assets[2].IsDefault {
+		t.Fatalf("default identity selection was not exclusive: %#v", second.Assets)
+	}
+	invalid := request(t, handler, http.MethodPost, "/api/film/projects/film-api/assets", []byte(`{"kind":"prop","title":"Coat","ageStage":"adult"}`))
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("non-identity metadata accepted: %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestFilmAPIRejectsCanvasProjectsAndDisabledCapability(t *testing.T) {
 	backend, handler := filmAPIHandler(t)
 	canvas := []byte(`{"schemaVersion":3,"projectKind":"canvas","id":"canvas-api","title":"Canvas","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
@@ -606,6 +630,71 @@ func TestFilmAPIStrictImportsCRUDAndProjectionCAS(t *testing.T) {
 	}
 }
 
+func TestFilmCanvasMediaAdoptionBindsVerifiedTenantBlobAndProvenance(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	imported := request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. SET - DAY\nA performer enters."}`))
+	document := decodeFilmResponse(t, imported)
+	payload := []byte("independent-image-bytes")
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/image:canvas-candidate", payload, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatalf("seed candidate: %d %s", response.Code, response.Body.String())
+	}
+	body, _ := json.Marshal(map[string]any{
+		"targetType": "shot", "targetId": document.Shots[0].ID, "targetField": "image",
+		"expectedRevision": document.Shots[0].Revision, "sourceNodeId": "node-candidate",
+		"storageKey": "image:canvas-candidate",
+	})
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/projection/adopt", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("adopt candidate: %d %s", response.Code, response.Body.String())
+	}
+	adopted := decodeFilmResponse(t, response)
+	if adopted.Shots[0].ImageStorageKey != "image:canvas-candidate" || adopted.Shots[0].Revision != document.Shots[0].Revision+1 ||
+		len(adopted.Adoptions) != 1 || adopted.Adoptions[0].SourceNodeID != "node-candidate" || adopted.Adoptions[0].SHA256 != sha256Hex(payload) {
+		t.Fatalf("adoption was not durably attributed: %#v %#v", adopted.Shots[0], adopted.Adoptions)
+	}
+	stale := request(t, handler, http.MethodPost, "/api/film/projects/film-api/projection/adopt", body)
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale adoption accepted: %d %s", stale.Code, stale.Body.String())
+	}
+}
+
+func TestFilmDialogueCRUDUsesRevisionAndShotRelations(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	document := decodeFilmResponse(t, request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. SET - DAY\nA performer enters."}`)))
+	if len(document.Dialogues) != 1 || document.Dialogues[0].Kind != "narration" {
+		t.Fatalf("decomposition did not create a narration draft: %#v", document.Dialogues)
+	}
+	created := request(t, handler, http.MethodPost, "/api/film/projects/film-api/dialogues", []byte(`{"shotId":"`+document.Shots[0].ID+`","kind":"dialogue","text":"We begin."}`))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create dialogue: %d %s", created.Code, created.Body.String())
+	}
+	dialogue := decodeFilmResponse(t, created).Dialogues[1]
+	updated := request(t, handler, http.MethodPut, "/api/film/projects/film-api/dialogues/"+dialogue.ID, []byte(`{"revision":1,"text":"We begin now."}`))
+	if updated.Code != http.StatusOK || decodeFilmResponse(t, updated).Dialogues[1].Revision != 2 {
+		t.Fatalf("update dialogue: %d %s", updated.Code, updated.Body.String())
+	}
+	stale := request(t, handler, http.MethodPut, "/api/film/projects/film-api/dialogues/"+dialogue.ID, []byte(`{"revision":1,"text":"stale"}`))
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale dialogue update accepted: %d %s", stale.Code, stale.Body.String())
+	}
+}
+
+func TestFilmQualityValidationDetectsMediaChangedAfterAdoption(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	document := decodeFilmResponse(t, request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. SET - DAY\nA performer enters."}`)))
+	_ = requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/image:quality-candidate", []byte("original"), map[string]string{"Content-Type": "image/png"})
+	body, _ := json.Marshal(map[string]any{"targetType": "shot", "targetId": document.Shots[0].ID, "targetField": "image", "expectedRevision": document.Shots[0].Revision, "sourceNodeId": "node-quality", "storageKey": "image:quality-candidate"})
+	adopted := request(t, handler, http.MethodPost, "/api/film/projects/film-api/projection/adopt", body)
+	if adopted.Code != http.StatusOK {
+		t.Fatal(adopted.Body.String())
+	}
+	_ = requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/image:quality-candidate", []byte("changed"), map[string]string{"Content-Type": "image/png"})
+	validated := request(t, handler, http.MethodPost, "/api/film/projects/film-api/validate", []byte(`{}`))
+	if validated.Code != http.StatusOK || !bytes.Contains(validated.Body.Bytes(), []byte(`"media_corrupt"`)) {
+		t.Fatalf("changed media was not reported: %d %s", validated.Code, validated.Body.String())
+	}
+}
+
 func TestFilmAPISceneCRUDInvalidationAndCapabilities(t *testing.T) {
 	_, handler := filmAPIHandler(t)
 	capabilities := request(t, handler, http.MethodGet, "/api/film/capabilities", nil)
@@ -663,7 +752,7 @@ func TestFilmAPIExportRevisionMP4DisableAndAuthenticatedDownload(t *testing.T) {
 		t.Fatalf("manifest: %d %s", manifest.Code, manifest.Body.String())
 	}
 	document = decodeFilmResponse(t, manifest)
-	deliverable := document.Deliverables[len(document.Deliverables)-1]
+	deliverable := waitForFilmDeliverable(t, handler, document.Deliverables[len(document.Deliverables)-1].ID, filmStatusApproved)
 	download := request(t, handler, http.MethodGet, "/api/film/projects/film-api/deliverables/"+deliverable.ID+"/download", nil)
 	if download.Code != http.StatusOK || download.Header().Get("Content-Type") != "application/json" || !bytes.Contains(download.Body.Bytes(), []byte(`"projectId"`)) {
 		t.Fatalf("download: %d %s", download.Code, download.Body.String())

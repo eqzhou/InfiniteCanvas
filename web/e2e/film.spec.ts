@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const runId = process.env.OPENBOARD_E2E_RUN_ID ?? `${Date.now()}-${process.pid}`;
 function pdfFixture(text?: string): Buffer {
@@ -20,6 +20,20 @@ function pdfFixture(text?: string): Buffer {
 
 const textLayerPDF = pdfFixture("EPISODE 1\nINT. PDF STAGE - DAY\nA text layer rolls.");
 
+async function createFilmProject(page: Page): Promise<void> {
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-shell")).toBeVisible();
+  const createButton = page.getByTitle("新建");
+  if (!await createButton.isVisible()) {
+    await page.getByRole("button", { name: /打开项目侧栏|展开侧栏/ }).click();
+  }
+  await expect(createButton).toBeVisible();
+  await createButton.click();
+  await page.getByRole("button", { name: /影片制作/ }).click();
+  await expect(page).toHaveURL(/\/film\/[A-Za-z0-9_-]+$/);
+  await expect(page.getByTestId("film-workbench")).toBeVisible();
+}
+
 test.beforeEach(async ({ context, request }, testInfo) => {
   const suffix = createHash("sha256")
     .update(`${runId}:${testInfo.project.name}:${testInfo.testId}:${testInfo.retry}`)
@@ -38,13 +52,7 @@ test.beforeEach(async ({ context, request }, testInfo) => {
 });
 
 test("creates a film, imports a manuscript, approves decomposition, validates, and exports", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.getByTestId("workspace-shell")).toBeVisible();
-  await page.getByTitle("新建").click();
-  await page.getByRole("button", { name: /影片制作/ }).click();
-
-  await expect(page).toHaveURL(/\/film\/[A-Za-z0-9_-]+$/);
-  await expect(page.getByTestId("film-workbench")).toBeVisible();
+  await createFilmProject(page);
   await page.getByLabel("粘贴剧本原稿").fill([
     "EPISODE 1 — Arrival",
     "INT. OBSERVATORY - NIGHT",
@@ -57,17 +65,24 @@ test("creates a film, imports a manuscript, approves decomposition, validates, a
   await decompose.getByRole("button", { name: "批准" }).click();
   await expect(decompose).toContainText("approved");
 
+  const projectId = page.url().split("/").pop()!;
+  await page.getByRole("button", { name: "刷新到真实画布" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "真实画布" })).toBeVisible();
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const project = await (await fetch(`/api/projects/${id}`)).json();
+    return project.nodes?.filter((node: { metadata?: { filmProjectionKey?: string } }) => node.metadata?.filmProjectionKey).length ?? 0;
+  }, projectId)).toBeGreaterThan(0);
+
   await page.getByRole("button", { name: "运行检查" }).click();
   await expect(page.getByText(/个问题，/)).toBeVisible();
   await page.getByRole("button", { name: "请求导出" }).click();
   await expect(page.getByText("Production manifest")).toBeVisible();
+  await expect(page.getByText("manifest · approved")).toBeVisible();
+  await expect(page.getByRole("link", { name: "下载" })).toBeVisible();
 });
 
 test("preflights imports, edits a multitrack timeline, and surfaces revision conflicts", async ({ page }) => {
-  await page.goto("/");
-  await page.getByTitle("新建").click();
-  await page.getByRole("button", { name: /影片制作/ }).click();
-  await expect(page.getByTestId("film-workbench")).toBeVisible();
+  await createFilmProject(page);
 
   await expect(page.getByTestId("film-format-pdf")).toHaveAttribute("aria-disabled", "false");
   await page.getByTestId("film-manuscript-file").setInputFiles({
@@ -120,13 +135,10 @@ test("preflights imports, edits a multitrack timeline, and surfaces revision con
 });
 
 test("runs a scoped generation pass and retries one failed shot job", async ({ page }) => {
-  await page.goto("/");
-  await page.getByTitle("新建").click();
-  await page.getByRole("button", { name: /影片制作/ }).click();
-  await expect(page).toHaveURL(/\/film\/[A-Za-z0-9_-]+$/);
-  await expect(page.getByTestId("film-workbench")).toBeVisible();
+  await createFilmProject(page);
   await page.getByLabel("粘贴剧本原稿").fill("EPISODE 1\nINT. STAGE - NIGHT\nA camera rolls.");
   await page.getByRole("button", { name: "导入并拆解" }).click();
+  await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
   const projectId = page.url().split("/").pop()!;
   const response = await page.evaluate(async (id) => (await fetch(`/api/film/projects/${id}/status`)).json(), projectId);
   const capable = {
@@ -137,6 +149,11 @@ test("runs a scoped generation pass and retries one failed shot job", async ({ p
         ...stage,
         status: ["decompose", "script", "storyboard"].includes(stage.id) ? "approved" : stage.status,
       })),
+      tasks: [...response.data.tasks, {
+        id: "task-1", revision: 1, stage: "video", title: "Shot 1", status: "failed", progress: 0,
+        shotId: response.data.shots[0].id, generationJobId: "child-1",
+        createdAt: "2026-08-09T00:00:00Z", updatedAt: "2026-08-09T00:00:00Z",
+      }],
     },
     capabilities: {
       ...response.capabilities,
@@ -174,6 +191,8 @@ test("runs a scoped generation pass and retries one failed shot job", async ({ p
   await page.getByLabel("Provider").fill("studio-provider");
   await page.getByLabel("Model").fill("video-v2");
   await page.getByLabel("幂等键").fill("video-pass-0001");
+  await expect(page.getByLabel("Provider")).toHaveValue("studio-provider");
+  await expect(page.getByLabel("Model")).toHaveValue("video-v2");
   const startGeneration = page.getByRole("button", { name: "开始生成" });
   await expect(startGeneration).toBeEnabled();
   await startGeneration.click();

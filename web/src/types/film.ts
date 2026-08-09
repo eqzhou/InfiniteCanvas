@@ -7,7 +7,7 @@ export type FilmEntityStatus =
   | "canceled";
 
 export type FilmAssetKind = "character" | "identity" | "location" | "prop" | "style" | "voice";
-export type FilmStageKind = "decompose" | "script" | "storyboard" | "audio" | "video" | "compose" | "delivery";
+export type FilmStageKind = "decompose" | "script" | "storyboard" | "first_frame" | "audio" | "video" | "compose" | "delivery";
 
 export type FilmSource = {
   revision: number;
@@ -52,6 +52,10 @@ export type FilmShot = {
   imageSha256?: string;
   imageObjectVersion?: string;
   imageGenerationJobId?: string;
+  firstFrameStorageKey?: string;
+  firstFrameSha256?: string;
+  firstFrameObjectVersion?: string;
+  firstFrameGenerationJobId?: string;
   videoStorageKey?: string;
   videoSha256?: string;
   videoObjectVersion?: string;
@@ -62,6 +66,22 @@ export type FilmShot = {
   audioGenerationJobId?: string;
   subtitle?: string;
   mediaMimeType?: string;
+};
+
+export type FilmDialogue = {
+  id: string;
+  revision: number;
+  shotId: string;
+  order: number;
+  kind: "dialogue" | "narration";
+  characterAssetId?: string;
+  voiceAssetId?: string;
+  text: string;
+  status: FilmEntityStatus;
+  audioStorageKey?: string;
+  audioSha256?: string;
+  audioObjectVersion?: string;
+  audioGenerationJobId?: string;
 };
 
 export type FilmAsset = {
@@ -79,6 +99,10 @@ export type FilmAsset = {
   voice?: string;
   stylePrompt?: string;
   aspectRatio?: string;
+  ageStage?: string;
+  costume?: string;
+  storyPeriod?: string;
+  isDefault?: boolean;
 };
 
 export type FilmStage = {
@@ -103,6 +127,21 @@ export type FilmTask = {
   idempotencyKey?: string;
   requestHash?: string;
   error?: string;
+  snapshot?: FilmGenerationSnapshot;
+};
+
+export type FilmGenerationSnapshot = {
+  shotRevision: number;
+  prompt: string;
+  providerId: string;
+  model: string;
+  config: Record<string, unknown>;
+  identityVersions: FilmAsset[];
+  styleVersion?: FilmAsset;
+  referenceStorageKeys: string[];
+  estimatedGenerations: number;
+  estimatedCredits?: number;
+  createdAt: string;
 };
 
 export type FilmIssueCode =
@@ -114,7 +153,12 @@ export type FilmIssueCode =
   | "missing_audio"
   | "duration_invalid"
   | "missing_subtitle"
-  | "media_invalid";
+  | "media_invalid"
+  | "media_corrupt"
+  | "subtitle_overflow"
+  | "duration_conflict"
+  | "identity_drift"
+  | "style_drift";
 
 export type FilmQualityIssue = {
   id: string;
@@ -135,6 +179,19 @@ export type FilmRepairProposal = {
   summary: string;
   approved: boolean;
   appliedAt?: string;
+  affectedTargets?: string[];
+  estimatedGenerations?: number;
+  estimatedCredits?: number;
+};
+
+export type FilmEntityVersion = {
+  id: string;
+  entityType: "shot" | "asset" | "timeline";
+  entityId: string;
+  revision: number;
+  snapshot: Record<string, unknown>;
+  reason: string;
+  createdAt: string;
 };
 
 export type FilmQualityReport = {
@@ -194,7 +251,27 @@ export type FilmDeliverable = {
   content?: string;
   bytes?: number;
   diagnostic?: string;
+  generationJobId?: string;
   createdAt: string;
+};
+
+export type FilmMediaAdoption = {
+  id: string;
+  revision: number;
+  targetType: "shot" | "asset";
+  targetId: string;
+  targetField: "image" | "first_frame" | "video" | "audio" | "media";
+  targetRevision: number;
+  sourceNodeId: string;
+  storageKey: string;
+  mimeType: string;
+  sha256: string;
+  objectVersion: string;
+  generationJobId?: string;
+  prompt?: string;
+  providerId?: string;
+  model?: string;
+  adoptedAt: string;
 };
 
 export type FilmDocument = {
@@ -208,12 +285,15 @@ export type FilmDocument = {
   episodes: FilmEpisode[];
   scenes: FilmScene[];
   shots: FilmShot[];
+  dialogues?: FilmDialogue[];
   assets: FilmAsset[];
   stages: FilmStage[];
   tasks: FilmTask[];
   qualityReports: FilmQualityReport[];
   timeline: FilmTimeline;
   deliverables: FilmDeliverable[];
+  adoptions?: FilmMediaAdoption[];
+  versions?: FilmEntityVersion[];
   projectionRevision: number;
 };
 

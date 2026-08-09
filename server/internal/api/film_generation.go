@@ -75,7 +75,7 @@ func validFilmIdempotencyKey(value string) bool {
 
 func filmStageGenerationKind(stage string) string {
 	switch stage {
-	case "storyboard":
+	case "storyboard", "first_frame":
 		return "image"
 	case "audio", "video":
 		return stage
@@ -165,7 +165,7 @@ func validateFilmGenerationConfig(stage string, config filmGenerationConfig) err
 			return errors.New("generation config contains an invalid reference storage key")
 		}
 	}
-	if stage == "storyboard" && config.Size != "" && !imageSizePattern.MatchString(config.Size) {
+	if (stage == "storyboard" || stage == "first_frame") && config.Size != "" && !imageSizePattern.MatchString(config.Size) {
 		return errors.New("storyboard size is invalid")
 	}
 	if stage == "video" && (config.Seconds < 0 || config.Seconds > 15) {
@@ -222,7 +222,7 @@ func findFilmIdempotentTasks(document filmDocument, stage, idempotencyKey, reque
 }
 
 func (s *Server) validateFilmGenerationReferences(ctx context.Context, tenantID, stage string, keys []string) error {
-	if stage == "storyboard" {
+	if stage == "storyboard" || stage == "first_frame" {
 		for _, key := range keys {
 			if _, err := s.readTenantImageBlobContext(ctx, tenantID, key); err != nil {
 				return errors.New("storyboard references must be tenant-owned PNG or JPEG media")
@@ -253,7 +253,7 @@ func (s *Server) filmGenerationProvider(ctx context.Context, tenantID, stage, pr
 				continue
 			}
 			switch stage {
-			case "storyboard":
+			case "storyboard", "first_frame":
 				model = channel.DefaultImageModel
 			case "video":
 				model = channel.DefaultVideoModel
@@ -273,7 +273,7 @@ func buildFilmGenerationJob(stage string, shot filmShot, projectID, providerID, 
 	prompt := strings.TrimSpace(shot.Description)
 	job := store.GenerationJob{ID: jobID, ProjectID: projectID, Kind: filmStageGenerationKind(stage), Status: "queued", Prompt: prompt, ProviderID: providerID, Model: model, Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now}
 	switch stage {
-	case "storyboard":
+	case "storyboard", "first_frame":
 		size := config.Size
 		if size == "" {
 			size = "1024x1024"
@@ -324,6 +324,61 @@ func buildFilmGenerationJob(stage string, shot filmShot, projectID, providerID, 
 	return job, nil
 }
 
+func buildFilmGenerationSnapshot(document filmDocument, shot filmShot, providerID, model string, config filmGenerationConfig, now string) *filmGenerationSnapshot {
+	identities := make([]filmAsset, 0, len(shot.IdentityVersionIDs))
+	wanted := make(map[string]struct{}, len(shot.IdentityVersionIDs))
+	for _, id := range shot.IdentityVersionIDs {
+		wanted[id] = struct{}{}
+	}
+	var style *filmAsset
+	for _, asset := range document.Assets {
+		if _, ok := wanted[asset.ID]; ok && asset.Kind == "identity" {
+			identities = append(identities, asset)
+		}
+		if shot.StyleAssetID != "" && asset.ID == shot.StyleAssetID && asset.Kind == "style" {
+			copy := asset
+			style = &copy
+		}
+	}
+	sort.SliceStable(identities, func(i, j int) bool { return identities[i].ID < identities[j].ID })
+	prompt := strings.TrimSpace(shot.Description)
+	if strings.TrimSpace(shot.Subtitle) != "" && config.Format != "" {
+		prompt = strings.TrimSpace(shot.Subtitle)
+	}
+	return &filmGenerationSnapshot{
+		ShotRevision: shot.Revision, Prompt: prompt, ProviderID: providerID, Model: model,
+		Config: config, IdentityVersions: identities, StyleVersion: style,
+		ReferenceStorageKeys: append([]string(nil), config.ReferenceStorageKeys...),
+		EstimatedGenerations: 1, EstimatedCredits: 1, CreatedAt: now,
+	}
+}
+
+func filmAudioInputs(document filmDocument, shot filmShot, config filmGenerationConfig) (filmShot, filmGenerationConfig) {
+	dialogues := make([]filmDialogue, 0)
+	for _, dialogue := range document.Dialogues {
+		if dialogue.ShotID == shot.ID {
+			dialogues = append(dialogues, dialogue)
+		}
+	}
+	sort.SliceStable(dialogues, func(i, j int) bool { return dialogues[i].Order < dialogues[j].Order })
+	lines := make([]string, 0, len(dialogues))
+	for _, dialogue := range dialogues {
+		lines = append(lines, strings.TrimSpace(dialogue.Text))
+		if config.Voice == "" && dialogue.VoiceAssetID != "" {
+			for _, asset := range document.Assets {
+				if asset.ID == dialogue.VoiceAssetID && asset.Kind == "voice" {
+					config.Voice = asset.Voice
+					break
+				}
+			}
+		}
+	}
+	if len(lines) > 0 {
+		shot.Subtitle = strings.Join(lines, "\n")
+	}
+	return shot, config
+}
+
 func filmJobBinding(job store.GenerationJob) (*filmGenerationBinding, string) {
 	if job.Kind == "image" {
 		var parameters persistedImageJobParameters
@@ -361,7 +416,7 @@ func filmGenerationStoreError(err error) error {
 
 func (s *Server) notifyFilmGenerationWorkers(stage string) {
 	switch stage {
-	case "storyboard":
+	case "storyboard", "first_frame":
 		s.notifyGenerationWorkers()
 	case "audio":
 		s.notifyAudioWorkers()
@@ -433,6 +488,24 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 	next := cloneFilmDocument(document)
 	createdJobs := make([]string, 0, len(shots))
 	for _, shot := range shots {
+		jobShot, jobConfig := shot, input.Config
+		if stage == "audio" {
+			jobShot, jobConfig = filmAudioInputs(document, shot, jobConfig)
+		}
+		if stage == "video" && shot.FirstFrameStorageKey != "" {
+			found := false
+			for _, key := range jobConfig.ReferenceStorageKeys {
+				found = found || key == shot.FirstFrameStorageKey
+			}
+			if !found {
+				jobConfig.ReferenceStorageKeys = append(append([]string(nil), jobConfig.ReferenceStorageKeys...), shot.FirstFrameStorageKey)
+			}
+			if err := s.validateFilmGenerationReferences(r.Context(), tenantID, stage, jobConfig.ReferenceStorageKeys); err != nil {
+				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
+				writeFilmOperationError(w, err)
+				return
+			}
+		}
 		taskID := stableFilmID("task", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), shot.ID)
 		jobID := stableFilmID("job", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), shot.ID)
 		selectedProviderID, snapshot, snapshotErr := s.snapshotGenerationChannel(r.Context(), tenantID, filmStageGenerationKind(stage), jobID, providerID, model)
@@ -445,7 +518,7 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		if snapshot != nil {
 			selectedModel = snapshot.Model
 		}
-		job, buildErr := buildFilmGenerationJob(stage, shot, document.ProjectID, selectedProviderID, selectedModel, taskID, jobID, requestHash, input.Config, snapshot, now)
+		job, buildErr := buildFilmGenerationJob(stage, jobShot, document.ProjectID, selectedProviderID, selectedModel, taskID, jobID, requestHash, jobConfig, snapshot, now)
 		if buildErr != nil {
 			s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 			writeFilmError(w, http.StatusUnprocessableEntity, "generation_request_invalid", buildErr.Error())
@@ -477,7 +550,7 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			}
 			createdJobs = append(createdJobs, jobID)
 		}
-		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, Title: "Generate " + stage + " for " + shot.Title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash})
+		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, Title: "Generate " + stage + " for " + shot.Title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: buildFilmGenerationSnapshot(document, jobShot, selectedProviderID, selectedModel, jobConfig, now)})
 	}
 	if len(next.Tasks) > 1_000 {
 		s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
@@ -520,7 +593,7 @@ func validFilmGenerationResult(ctx context.Context, server *Server, tenantID, st
 	if item.StorageKey == "" || item.Bytes <= 0 || item.MIMEType == "" {
 		return mediaGenerationItem{}, errors.New("generation result media metadata is invalid")
 	}
-	expectedPrefix := map[string]string{"storyboard": "image/", "audio": "audio/", "video": "video/"}[stage]
+	expectedPrefix := map[string]string{"storyboard": "image/", "first_frame": "image/", "audio": "audio/", "video": "video/"}[stage]
 	if !strings.HasPrefix(item.MIMEType, expectedPrefix) {
 		return mediaGenerationItem{}, errors.New("generation result media type does not match the stage")
 	}
@@ -540,6 +613,8 @@ func setFilmShotMediaBinding(shot *filmShot, stage string, item mediaGenerationI
 	switch stage {
 	case "storyboard":
 		shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, generationJobID
+	case "first_frame":
+		shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, generationJobID
 	case "audio":
 		shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, generationJobID
 	case "video":
@@ -565,6 +640,10 @@ func filmStageHasBoundMedia(document filmDocument, stage string) bool {
 		switch stage {
 		case "storyboard":
 			if shot.ImageStorageKey == "" {
+				return false
+			}
+		case "first_frame":
+			if shot.FirstFrameStorageKey == "" {
 				return false
 			}
 		case "audio":
@@ -649,7 +728,7 @@ func (s *Server) syncFilmStage(w http.ResponseWriter, r *http.Request) {
 						before := shot
 						setFilmShotMediaBinding(&shot, stage, item, job.ID)
 						shot.MediaMIMEType, shot.Status = item.MIMEType, filmStatusNeedsReview
-						if shot.ImageStorageKey != before.ImageStorageKey || shot.AudioStorageKey != before.AudioStorageKey ||
+						if shot.ImageStorageKey != before.ImageStorageKey || shot.FirstFrameStorageKey != before.FirstFrameStorageKey || shot.AudioStorageKey != before.AudioStorageKey ||
 							shot.VideoStorageKey != before.VideoStorageKey || shot.MediaMIMEType != before.MediaMIMEType || shot.Status != before.Status {
 							shot.Revision++
 							next.Shots[shotIndex] = shot

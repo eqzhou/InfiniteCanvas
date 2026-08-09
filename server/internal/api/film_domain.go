@@ -14,6 +14,13 @@ import (
 )
 
 var (
+	errFilmQualityLimit = errors.New("film quality issue limit reached")
+	errFilmRepairLimit  = errors.New("film quality repair limit reached")
+	errFilmQualityBusy  = errors.New("film quality check concurrency or rate limit reached")
+	errFilmQualityMedia = errors.New("film quality media inspection limit reached")
+)
+
+var (
 	filmEpisodeHeading = regexp.MustCompile(`(?i)^(EPISODE[[:space:]]+[0-9]+|第[[:space:]]*[一二三四五六七八九十百0-9]+[[:space:]]*集)`)
 	filmSceneHeading   = regexp.MustCompile(`(?i)^((INT|EXT|INT/EXT|EXT/INT)\.?[[:space:]]|内景[：:[:space:]]|外景[：:[:space:]]|内外景[：:[:space:]]|场景[[:space:]]*[0-9]+)`)
 	filmMIMEType       = regexp.MustCompile(`(?i)^(image|video|audio)/[a-z0-9.+-]+$`)
@@ -40,7 +47,7 @@ func defaultFilmTimeline() filmTimeline {
 
 func newFilmDocument(projectID string) filmDocument {
 	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
-	stageIDs := []string{"decompose", "script", "storyboard", "audio", "video", "compose", "delivery"}
+	stageIDs := []string{"decompose", "script", "storyboard", "first_frame", "audio", "video", "compose", "delivery"}
 	stages := make([]filmStage, len(stageIDs))
 	for index, id := range stageIDs {
 		stages[index] = filmStage{ID: id, Revision: 1, Status: filmStatusDraft, UpdatedAt: timestamp}
@@ -48,7 +55,7 @@ func newFilmDocument(projectID string) filmDocument {
 	return filmDocument{
 		SchemaVersion: 1, ProjectID: projectID, Revision: 1, CreatedAt: timestamp, UpdatedAt: timestamp,
 		AspectRatio: "16:9", Source: filmSource{Format: "text", ImportedAt: timestamp},
-		Episodes: []filmEpisode{}, Scenes: []filmScene{}, Shots: []filmShot{}, Assets: []filmAsset{},
+		Episodes: []filmEpisode{}, Scenes: []filmScene{}, Shots: []filmShot{}, Dialogues: []filmDialogue{}, Assets: []filmAsset{},
 		Stages: stages, Tasks: []filmTask{}, QualityReports: []filmQualityReport{},
 		Timeline: defaultFilmTimeline(), Deliverables: []filmDeliverable{},
 	}
@@ -142,6 +149,7 @@ func decomposeFilmSourceWithLimits(document filmDocument, source string, limits 
 	episodes := []filmEpisode{}
 	scenes := []filmScene{}
 	shots := []filmShot{}
+	dialogues := []filmDialogue{}
 	sceneCount := 0
 	for episodeIndex, block := range episodeBlocks {
 		if len(episodes) >= limits.Episodes || len(episodes)+len(scenes)+len(shots) >= limits.Entities {
@@ -193,18 +201,20 @@ func decomposeFilmSourceWithLimits(document filmDocument, source string, limits 
 				if len(shots) >= limits.Shots || len(episodes)+len(scenes)+len(shots) >= limits.Entities {
 					return filmDocument{}, errors.New("film decomposition shot limit reached")
 				}
+				shotID := stableFilmID("shot", sceneID, shotIndex, sentence)
 				shots = append(shots, filmShot{
-					ID: stableFilmID("shot", sceneID, shotIndex, sentence), Revision: 1, SceneID: sceneID, Order: shotIndex,
+					ID: shotID, Revision: 1, SceneID: sceneID, Order: shotIndex,
 					Title: fmt.Sprintf("Shot %d", shotIndex+1), Description: sentence, Status: filmStatusDraft,
 					DurationSeconds: 4, AspectRatio: document.AspectRatio, IdentityVersionIDs: []string{},
 				})
+				dialogues = append(dialogues, filmDialogue{ID: stableFilmID("dialogue", shotID, 0), Revision: 1, ShotID: shotID, Order: 0, Kind: "narration", Text: sentence, Status: filmStatusDraft})
 			}
 		}
 	}
 	next := cloneFilmDocument(document)
 	next.Revision++
 	next.Source = filmSource{Revision: document.Source.Revision + 1, Text: normalized, Format: document.Source.Format, OriginalName: document.Source.OriginalName, ImportedAt: document.UpdatedAt}
-	next.Episodes, next.Scenes, next.Shots = episodes, scenes, shots
+	next.Episodes, next.Scenes, next.Shots, next.Dialogues = episodes, scenes, shots, dialogues
 	next.QualityReports = []filmQualityReport{}
 	next.ProjectionRevision++
 	next = invalidateFilmStages(next, "decompose", document.UpdatedAt)
@@ -235,7 +245,7 @@ func filmShotRepair(qualityIssue filmQualityIssue, shot filmShot) (filmRepairPro
 	case "missing_media":
 		patch["description"] = shot.Description + "\nMedia pending."
 		summary = "Mark the draft description for a new media generation pass."
-	case "missing_audio", "media_invalid":
+	case "missing_audio", "media_invalid", "media_corrupt", "subtitle_overflow":
 		patch["status"] = filmStatusDraft
 		summary = "Return the shot to draft for safe regeneration."
 	case "duration_invalid":
@@ -250,7 +260,11 @@ func filmShotRepair(qualityIssue filmQualityIssue, shot filmShot) (filmRepairPro
 	default:
 		return filmRepairProposal{}, false
 	}
-	return filmRepairProposal{ID: stableFilmID("repair", qualityIssue.ID), IssueID: qualityIssue.ID, TargetType: "shot", TargetID: shot.ID, ExpectedRevision: shot.Revision, Patch: patch, Summary: summary}, true
+	estimated := 0
+	if qualityIssue.Code == "missing_media" || qualityIssue.Code == "missing_audio" || qualityIssue.Code == "media_invalid" || qualityIssue.Code == "media_corrupt" {
+		estimated = 1
+	}
+	return filmRepairProposal{ID: stableFilmID("repair", qualityIssue.ID), IssueID: qualityIssue.ID, TargetType: "shot", TargetID: shot.ID, ExpectedRevision: shot.Revision, Patch: patch, Summary: summary, AffectedTargets: []string{shot.ID}, EstimatedGenerations: estimated, EstimatedCredits: estimated}, true
 }
 
 func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
@@ -325,9 +339,51 @@ func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
 				return filmQualityReport{}, err
 			}
 		}
+		if subtitleRunes := len([]rune(shot.Subtitle)); subtitleRunes > 0 && float64(subtitleRunes) > math.Max(42, shot.DurationSeconds*20) {
+			if err := appendIssue(newFilmIssue("subtitle_overflow", "shot", shot.ID, "Subtitle density exceeds the safe reading bound for this shot.", "warning")); err != nil {
+				return filmQualityReport{}, err
+			}
+		}
 		if shot.MediaMIMEType != "" && !filmMIMEType.MatchString(shot.MediaMIMEType) {
 			if err := appendIssue(newFilmIssue("media_invalid", "shot", shot.ID, "Shot media type is invalid.", "error")); err != nil {
 				return filmQualityReport{}, err
+			}
+		}
+	}
+	for _, scene := range document.Scenes {
+		sceneShots := make([]filmShot, 0)
+		for _, shot := range document.Shots {
+			if shot.SceneID == scene.ID {
+				sceneShots = append(sceneShots, shot)
+			}
+		}
+		sort.SliceStable(sceneShots, func(i, j int) bool { return sceneShots[i].Order < sceneShots[j].Order })
+		for index := 1; index < len(sceneShots); index++ {
+			previous, current := sceneShots[index-1], sceneShots[index]
+			if len(previous.IdentityVersionIDs) > 0 && len(current.IdentityVersionIDs) > 0 && strings.Join(previous.IdentityVersionIDs, "\x00") != strings.Join(current.IdentityVersionIDs, "\x00") {
+				if err := appendIssue(newFilmIssue("identity_drift", "shot", current.ID, "Adjacent shots in the same scene use different identity versions.", "warning")); err != nil {
+					return filmQualityReport{}, err
+				}
+			}
+			if previous.StyleAssetID != "" && current.StyleAssetID != "" && previous.StyleAssetID != current.StyleAssetID {
+				if err := appendIssue(newFilmIssue("style_drift", "shot", current.ID, "Adjacent shots in the same scene use different style versions.", "warning")); err != nil {
+					return filmQualityReport{}, err
+				}
+			}
+		}
+	}
+	for _, track := range document.Timeline.Tracks {
+		if track.Kind != "video" {
+			continue
+		}
+		for _, clip := range track.Clips {
+			if !strings.HasPrefix(clip.Source, "shot:") {
+				continue
+			}
+			if shot, ok := shotByID[strings.TrimPrefix(clip.Source, "shot:")]; ok && math.Abs((clip.End-clip.Start-clip.TrimOut)-shot.DurationSeconds) > 0.25 {
+				if err := appendIssue(newFilmIssue("duration_conflict", "timeline", clip.ID, "Timeline clip duration conflicts with its shot duration.", "warning")); err != nil {
+					return filmQualityReport{}, err
+				}
 			}
 		}
 	}
@@ -376,6 +432,15 @@ func applyFilmRepair(document filmDocument, repairID string) (filmDocument, erro
 		if shot.Revision != repair.ExpectedRevision {
 			return filmDocument{}, errors.New("repair revision conflict")
 		}
+		snapshot, snapshotErr := json.Marshal(shot)
+		if snapshotErr != nil {
+			return filmDocument{}, snapshotErr
+		}
+		if len(next.Versions) >= 1_000 {
+			return filmDocument{}, errors.New("film entity version limit reached")
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		next.Versions = append(next.Versions, filmEntityVersion{ID: stableFilmID("version", "shot", shot.ID, shot.Revision, repair.ID), EntityType: "shot", EntityID: shot.ID, Revision: shot.Revision, Snapshot: snapshot, Reason: "repair:" + repair.ID, CreatedAt: now})
 		for key, value := range repair.Patch {
 			switch key {
 			case "title":
@@ -395,7 +460,6 @@ func applyFilmRepair(document filmDocument, repairID string) (filmDocument, erro
 		shot.Revision++
 		next.Shots[index] = shot
 		next.Revision++
-		now := time.Now().UTC().Format(time.RFC3339Nano)
 		for reportIndex := range next.QualityReports {
 			for repairIndex := range next.QualityReports[reportIndex].Repairs {
 				if next.QualityReports[reportIndex].Repairs[repairIndex].ID == repairID {
@@ -415,13 +479,14 @@ func normalizeFilmOrdering(document *filmDocument) {
 }
 
 var filmStageDependencies = map[string][]string{
-	"decompose":  {},
-	"script":     {"decompose"},
-	"storyboard": {"script"},
-	"audio":      {"storyboard"},
-	"video":      {"storyboard"},
-	"compose":    {"audio", "video"},
-	"delivery":   {"compose"},
+	"decompose":   {},
+	"script":      {"decompose"},
+	"storyboard":  {"script"},
+	"first_frame": {"storyboard"},
+	"audio":       {"storyboard"},
+	"video":       {"first_frame"},
+	"compose":     {"audio", "video"},
+	"delivery":    {"compose"},
 }
 
 func filmStageAffectedBy(stageID, changedStageID string) bool {
@@ -467,11 +532,11 @@ func invalidateFilmStages(document filmDocument, changedStageID, now string) fil
 }
 
 func validateFilmAggregateLimits(document filmDocument) error {
-	entityCount := len(document.Episodes) + len(document.Scenes) + len(document.Shots) + len(document.Assets)
+	entityCount := len(document.Episodes) + len(document.Scenes) + len(document.Shots) + len(document.Dialogues) + len(document.Assets)
 	if entityCount > maxFilmEntities {
 		return errors.New("film aggregate entity limit reached")
 	}
-	if len(document.Tasks) > 1_000 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 {
+	if len(document.Tasks) > 1_000 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 {
 		return errors.New("film aggregate retention limit reached")
 	}
 	issues, repairs := 0, 0
@@ -527,6 +592,12 @@ func validateFilmStageReadiness(document filmDocument, stageID string) error {
 		for _, shot := range document.Shots {
 			if strings.TrimSpace(shot.ImageStorageKey) == "" {
 				return fmt.Errorf("storyboard requires image media for shot %s", shot.ID)
+			}
+		}
+	case "first_frame":
+		for _, shot := range document.Shots {
+			if strings.TrimSpace(shot.FirstFrameStorageKey) == "" {
+				return fmt.Errorf("first frame requires image media for shot %s", shot.ID)
 			}
 		}
 	case "audio":

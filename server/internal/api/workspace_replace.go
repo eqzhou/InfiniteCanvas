@@ -185,7 +185,10 @@ func validateWorkspaceReplacement(input workspaceReplaceRequest) (store.Workspac
 		snapshot.Projects = append(snapshot.Projects, store.WorkspaceProject{ID: id, Document: append([]byte(nil), raw...)})
 	}
 	filmIDs := make(map[string]struct{}, len(input.Films))
-	for _, film := range input.Films {
+	for index := range input.Films {
+		film := input.Films[index]
+		film.Document = migrateFilmDocumentTopology(film.Document)
+		input.Films[index].Document = film.Document
 		raw, err := json.Marshal(film.Document)
 		total += len(raw)
 		if err != nil || len(raw) > maxProjectBytes || total > maxWorkspaceReplaceBytes || projectKinds[film.Document.ProjectID] != "film" {

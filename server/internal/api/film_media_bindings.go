@@ -38,6 +38,8 @@ func filmShotMediaIdentity(shot filmShot, stage string) (key, digest, version, j
 	switch stage {
 	case "storyboard":
 		return shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID, "image/"
+	case "first_frame":
+		return shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID, "image/"
 	case "audio":
 		return shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID, "audio/"
 	case "video":
@@ -89,7 +91,7 @@ func (s *Server) validateRestoredFilmMediaBindings(ctx context.Context, tenantID
 		}
 	}
 	for _, shot := range document.Shots {
-		for _, stage := range []string{"storyboard", "audio", "video"} {
+		for _, stage := range []string{"storyboard", "first_frame", "audio", "video"} {
 			key, _, _, _, _ := filmShotMediaIdentity(shot, stage)
 			if key == "" {
 				continue

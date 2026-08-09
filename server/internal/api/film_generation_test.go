@@ -85,6 +85,11 @@ func TestFilmGenerationRunCreatesExistingServerJobIdempotently(t *testing.T) {
 	if task.GenerationJobID == "" || task.ShotID != document.Shots[0].ID || task.Status != filmStatusRunning {
 		t.Fatalf("generation task was not bound: %#v", task)
 	}
+	if task.Snapshot == nil || task.Snapshot.Prompt != document.Shots[0].Description ||
+		task.Snapshot.ProviderID != "provider-a" || task.Snapshot.Model != "model-a" ||
+		task.Snapshot.ShotRevision != document.Shots[0].Revision || task.Snapshot.EstimatedGenerations != 1 {
+		t.Fatalf("generation task did not freeze its production inputs: %#v", task.Snapshot)
+	}
 	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
 	if err != nil || job.Kind != "image" || job.Status != "queued" || job.ProjectID != "film-api" {
 		t.Fatalf("generation job = %#v err=%v", job, err)
@@ -257,6 +262,10 @@ func TestFilmOldGenerationJobCannotOverwriteLatestShotMedia(t *testing.T) {
 	syncBody, _ = json.Marshal(map[string]any{"revision": secondDocument.Revision})
 	newSync := request(t, handler, http.MethodPost, "/api/film/projects/film-api/generation-jobs/"+newJob.ID+"/sync", syncBody)
 	current := decodeFilmResponse(t, newSync)
+	historicalRetry := request(t, handler, http.MethodPost, "/api/film/projects/film-api/generation-jobs/"+oldJob.ID+"/retry", nil)
+	if historicalRetry.Code != http.StatusConflict {
+		t.Fatalf("old job retry accepted: %d %s", historicalRetry.Code, historicalRetry.Body.String())
+	}
 
 	oldJob.Status = "succeeded"
 	oldJob.Result = json.RawMessage(`{"items":[{"storageKey":"image:old-round","mimeType":"image/png","bytes":3}]}`)

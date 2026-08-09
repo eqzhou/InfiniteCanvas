@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -8,7 +9,7 @@ import (
 	"time"
 )
 
-var filmStageOrder = []string{"decompose", "script", "storyboard", "audio", "video", "compose", "delivery"}
+var filmStageOrder = []string{"decompose", "script", "storyboard", "first_frame", "audio", "video", "compose", "delivery"}
 
 func validFilmStatus(status string) bool {
 	switch status {
@@ -108,11 +109,12 @@ func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[st
 		if err := addUniqueFilmID(ids, asset.ID, "asset"); err != nil {
 			return nil, nil, nil, nil, err
 		}
-		if _, supported := filmAssetKinds[asset.Kind]; !supported || asset.Revision < 1 || !validFilmStatus(asset.Status) || !validFilmText(asset.Title, 500, true) || !validFilmText(asset.Description, 50_000, false) || !validFilmText(asset.Voice, 500, false) || !validFilmText(asset.StylePrompt, 20_000, false) || !validFilmText(asset.AspectRatio, 20, false) || !validFilmStorageKey(asset.MediaStorageKey) {
+		if _, supported := filmAssetKinds[asset.Kind]; !supported || asset.Revision < 1 || !validFilmStatus(asset.Status) || !validFilmText(asset.Title, 500, true) || !validFilmText(asset.Description, 50_000, false) || !validFilmText(asset.Voice, 500, false) || !validFilmText(asset.StylePrompt, 20_000, false) || !validFilmText(asset.AspectRatio, 20, false) || !validFilmText(asset.AgeStage, 200, false) || !validFilmText(asset.Costume, 1_000, false) || !validFilmText(asset.StoryPeriod, 500, false) || !validFilmStorageKey(asset.MediaStorageKey) || (asset.Kind != "identity" && (asset.AgeStage != "" || asset.Costume != "" || asset.StoryPeriod != "" || asset.IsDefault)) {
 			return nil, nil, nil, nil, fmt.Errorf("film asset %s is invalid", asset.ID)
 		}
 		assets[asset.ID] = asset
 	}
+	defaultIdentities := map[string]string{}
 	for _, asset := range document.Assets {
 		if asset.ParentAssetID != "" {
 			if asset.ParentAssetID == asset.ID {
@@ -122,13 +124,19 @@ func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[st
 				return nil, nil, nil, nil, fmt.Errorf("film asset %s references a missing parent", asset.ID)
 			}
 		}
+		if asset.Kind == "identity" && asset.IsDefault {
+			if previous := defaultIdentities[asset.ParentAssetID]; previous != "" {
+				return nil, nil, nil, nil, fmt.Errorf("film identity assets %s and %s are both default for one character", previous, asset.ID)
+			}
+			defaultIdentities[asset.ParentAssetID] = asset.ID
+		}
 	}
 	ids = map[string]struct{}{}
 	for _, shot := range document.Shots {
 		if err := addUniqueFilmID(ids, shot.ID, "shot"); err != nil {
 			return nil, nil, nil, nil, err
 		}
-		if shot.Revision < 1 || shot.Order < 0 || shot.Order > maxFilmEntities || !validFilmText(shot.Title, 500, true) || !validFilmText(shot.Description, 100_000, true) || !validFilmStatus(shot.Status) || math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) || shot.DurationSeconds <= 0 || shot.DurationSeconds > 900 || !validFilmText(shot.AspectRatio, 20, true) || len(shot.IdentityVersionIDs) > 100 || !validFilmStorageKey(shot.ImageStorageKey) || !validFilmStorageKey(shot.VideoStorageKey) || !validFilmStorageKey(shot.AudioStorageKey) || !validFilmText(shot.Subtitle, 20_000, false) || (shot.MediaMIMEType != "" && !filmMIMEType.MatchString(shot.MediaMIMEType)) {
+		if shot.Revision < 1 || shot.Order < 0 || shot.Order > maxFilmEntities || !validFilmText(shot.Title, 500, true) || !validFilmText(shot.Description, 100_000, true) || !validFilmStatus(shot.Status) || math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) || shot.DurationSeconds <= 0 || shot.DurationSeconds > 900 || !validFilmText(shot.AspectRatio, 20, true) || len(shot.IdentityVersionIDs) > 100 || !validFilmStorageKey(shot.ImageStorageKey) || !validFilmStorageKey(shot.FirstFrameStorageKey) || !validFilmStorageKey(shot.VideoStorageKey) || !validFilmStorageKey(shot.AudioStorageKey) || !validFilmText(shot.Subtitle, 20_000, false) || (shot.MediaMIMEType != "" && !filmMIMEType.MatchString(shot.MediaMIMEType)) {
 			return nil, nil, nil, nil, fmt.Errorf("film shot %s is invalid", shot.ID)
 		}
 		if _, exists := scenes[shot.SceneID]; !exists {
@@ -152,6 +160,29 @@ func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[st
 		}
 		shots[shot.ID] = shot
 	}
+	dialogueIDs := map[string]struct{}{}
+	for _, dialogue := range document.Dialogues {
+		if err := addUniqueFilmID(dialogueIDs, dialogue.ID, "dialogue"); err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if dialogue.Revision < 1 || dialogue.Order < 0 || dialogue.Order > maxFilmEntities || (dialogue.Kind != "dialogue" && dialogue.Kind != "narration") ||
+			!validFilmText(dialogue.Text, 20_000, true) || !validFilmStatus(dialogue.Status) || !validFilmStorageKey(dialogue.AudioStorageKey) {
+			return nil, nil, nil, nil, fmt.Errorf("film dialogue %s is invalid", dialogue.ID)
+		}
+		if _, ok := shots[dialogue.ShotID]; !ok {
+			return nil, nil, nil, nil, fmt.Errorf("film dialogue %s references a missing shot", dialogue.ID)
+		}
+		if dialogue.CharacterAssetID != "" {
+			if asset, ok := assets[dialogue.CharacterAssetID]; !ok || asset.Kind != "character" {
+				return nil, nil, nil, nil, fmt.Errorf("film dialogue %s references a missing character", dialogue.ID)
+			}
+		}
+		if dialogue.VoiceAssetID != "" {
+			if asset, ok := assets[dialogue.VoiceAssetID]; !ok || asset.Kind != "voice" {
+				return nil, nil, nil, nil, fmt.Errorf("film dialogue %s references a missing voice", dialogue.ID)
+			}
+		}
+	}
 	return episodes, scenes, shots, assets, nil
 }
 
@@ -166,6 +197,42 @@ func validateFilmTasks(tasks []filmTask) error {
 		}
 		if _, exists := filmStageDependencies[task.Stage]; !exists || task.Revision < 1 || !validFilmStatus(task.Status) || !validFilmText(task.Title, 500, true) || math.IsNaN(task.Progress) || math.IsInf(task.Progress, 0) || task.Progress < 0 || task.Progress > 1 || !validFilmTimestamp(task.CreatedAt) || !validFilmTimestamp(task.UpdatedAt) || !validFilmText(task.Error, 2_000, false) || (task.GenerationJobID != "" && (!validProjectID(task.GenerationJobID) || filmStageGenerationKind(task.Stage) == "" || !validProjectID(task.ShotID) || !validFilmIdempotencyKey(task.IdempotencyKey) || !validFilmRequestHash(task.RequestHash))) || (task.GenerationJobID == "" && (task.ShotID != "" || task.IdempotencyKey != "" || task.RequestHash != "")) {
 			return fmt.Errorf("film task %s is invalid", task.ID)
+		}
+		if task.Snapshot != nil {
+			snapshot := task.Snapshot
+			if snapshot.ShotRevision < 1 || !validFilmText(snapshot.Prompt, 100_000, true) ||
+				!validFilmText(snapshot.ProviderID, 500, true) || !validFilmText(snapshot.Model, 500, true) ||
+				len(snapshot.IdentityVersions) > 100 || len(snapshot.ReferenceStorageKeys) > 16 ||
+				snapshot.EstimatedGenerations != 1 || snapshot.EstimatedCredits < 0 || !validFilmTimestamp(snapshot.CreatedAt) ||
+				validateFilmGenerationConfig(task.Stage, snapshot.Config) != nil {
+				return fmt.Errorf("film task %s generation snapshot is invalid", task.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func validateFilmAdoptions(document filmDocument, shots map[string]filmShot, assets map[string]filmAsset) error {
+	if len(document.Adoptions) > 1_000 {
+		return errors.New("film adoption history limit reached")
+	}
+	ids := map[string]struct{}{}
+	for _, adoption := range document.Adoptions {
+		if err := addUniqueFilmID(ids, adoption.ID, "adoption"); err != nil {
+			return err
+		}
+		expected := filmAdoptionExpectedMIME(adoption.TargetType, adoption.TargetField)
+		_, shotExists := shots[adoption.TargetID]
+		_, assetExists := assets[adoption.TargetID]
+		if adoption.Revision < 1 || adoption.TargetRevision < 2 || expected == "invalid" ||
+			(adoption.TargetType == "shot" && !shotExists) || (adoption.TargetType == "asset" && !assetExists) ||
+			!validProjectID(adoption.SourceNodeID) || !validFilmStorageKey(adoption.StorageKey) || adoption.StorageKey == "" ||
+			!filmMIMEType.MatchString(adoption.MIMEType) || (expected != "" && !strings.HasPrefix(adoption.MIMEType, expected)) ||
+			len(adoption.SHA256) != 64 || !validFilmText(adoption.ObjectVersion, 256, true) ||
+			(adoption.GenerationJobID != "" && !validProjectID(adoption.GenerationJobID)) ||
+			!validFilmText(adoption.Prompt, 100_000, false) || !validFilmText(adoption.ProviderID, 500, false) ||
+			!validFilmText(adoption.Model, 500, false) || !validFilmTimestamp(adoption.AdoptedAt) {
+			return fmt.Errorf("film adoption %s is invalid", adoption.ID)
 		}
 	}
 	return nil
@@ -247,6 +314,7 @@ func validateFilmQualityReports(document filmDocument, scenes map[string]filmSce
 		validIssueCodes := map[string]struct{}{
 			"missing_shots": {}, "missing_media": {}, "identity_mismatch": {}, "style_mismatch": {},
 			"aspect_mismatch": {}, "missing_audio": {}, "duration_invalid": {}, "missing_subtitle": {}, "media_invalid": {},
+			"media_corrupt": {}, "subtitle_overflow": {}, "duration_conflict": {}, "identity_drift": {}, "style_drift": {},
 		}
 		for _, issue := range report.Issues {
 			if err := addUniqueFilmID(issueIDs, issue.ID, "quality issue"); err != nil {
@@ -262,9 +330,26 @@ func validateFilmQualityReports(document filmDocument, scenes map[string]filmSce
 			if err := addUniqueFilmID(repairIDs, repair.ID, "repair proposal"); err != nil {
 				return err
 			}
-			if _, exists := issueIDs[repair.IssueID]; !exists || repair.ExpectedRevision < 1 || !validFilmText(repair.Summary, 2_000, true) || !validateFilmRepairPatch(repair.Patch) || !validFilmQualityTarget(repair.TargetType, repair.TargetID, scenes, shots, assets, document.Timeline) || (repair.AppliedAt != "" && !validFilmTimestamp(repair.AppliedAt)) {
+			if _, exists := issueIDs[repair.IssueID]; !exists || repair.ExpectedRevision < 1 || !validFilmText(repair.Summary, 2_000, true) || !validateFilmRepairPatch(repair.Patch) || !validFilmQualityTarget(repair.TargetType, repair.TargetID, scenes, shots, assets, document.Timeline) || (repair.AppliedAt != "" && !validFilmTimestamp(repair.AppliedAt)) || len(repair.AffectedTargets) > 100 || repair.EstimatedGenerations < 0 || repair.EstimatedGenerations > 100 || repair.EstimatedCredits < 0 {
 				return fmt.Errorf("film repair proposal %s is invalid", repair.ID)
 			}
+		}
+	}
+	return nil
+}
+
+func validateFilmVersions(document filmDocument, shots map[string]filmShot, assets map[string]filmAsset) error {
+	if len(document.Versions) > 1_000 {
+		return errors.New("film entity version limit reached")
+	}
+	ids := map[string]struct{}{}
+	for _, version := range document.Versions {
+		if err := addUniqueFilmID(ids, version.ID, "entity version"); err != nil {
+			return err
+		}
+		validTarget := version.EntityType == "shot" && shots[version.EntityID].ID != "" || version.EntityType == "asset" && assets[version.EntityID].ID != "" || version.EntityType == "timeline" && version.EntityID == "timeline"
+		if !validTarget || version.Revision < 1 || len(version.Snapshot) == 0 || len(version.Snapshot) > maxProjectBytes || !json.Valid(version.Snapshot) || !validFilmText(version.Reason, 500, true) || !validFilmTimestamp(version.CreatedAt) {
+			return fmt.Errorf("film entity version %s is invalid", version.ID)
 		}
 	}
 	return nil
@@ -281,9 +366,13 @@ func validateFilmDeliverables(deliverables []filmDeliverable) error {
 		}
 		_, expectedMIME, _, validKind := filmDeliverableSpec(deliverable.Kind)
 		external := deliverable.StorageKey != ""
-		validBytes := deliverable.Bytes > 0 && ((external && deliverable.Content == "") || (!external && deliverable.Bytes == int64(len(deliverable.Content))))
-		validIdempotency := !external || validFilmIdempotencyKey(deliverable.IdempotencyKey) && validFilmRequestHash(deliverable.RequestHash)
-		if !validKind || deliverable.Revision < 1 || !validFilmStatus(deliverable.Status) || !validFilmText(deliverable.Title, 500, true) || deliverable.MIMEType != expectedMIME || !validFilmStorageKey(deliverable.StorageKey) || len(deliverable.Content) > maxProjectBytes || !validBytes || !validIdempotency || !validFilmText(deliverable.Diagnostic, 2_000, false) || !validFilmTimestamp(deliverable.CreatedAt) {
+		terminalMedia := deliverable.Status == filmStatusApproved
+		validBytes := (!terminalMedia && deliverable.Bytes == 0 && !external && deliverable.Content == "") ||
+			(terminalMedia && deliverable.Bytes > 0 && ((external && deliverable.Content == "") || (!external && deliverable.Bytes == int64(len(deliverable.Content)))))
+		validIdempotency := (!external && terminalMedia && deliverable.GenerationJobID == "") ||
+			(validFilmIdempotencyKey(deliverable.IdempotencyKey) && validFilmRequestHash(deliverable.RequestHash))
+		validJob := deliverable.GenerationJobID == "" || validProjectID(deliverable.GenerationJobID)
+		if !validKind || deliverable.Revision < 1 || !validFilmStatus(deliverable.Status) || !validFilmText(deliverable.Title, 500, true) || deliverable.MIMEType != expectedMIME || !validFilmStorageKey(deliverable.StorageKey) || len(deliverable.Content) > maxProjectBytes || !validBytes || !validIdempotency || !validJob || !validFilmText(deliverable.Diagnostic, 2_000, false) || !validFilmTimestamp(deliverable.CreatedAt) {
 			return fmt.Errorf("film deliverable %s is invalid", deliverable.ID)
 		}
 	}
@@ -321,6 +410,12 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 		return err
 	}
 	if err := validateFilmDeliverables(document.Deliverables); err != nil {
+		return err
+	}
+	if err := validateFilmAdoptions(document, shots, assets); err != nil {
+		return err
+	}
+	if err := validateFilmVersions(document, shots, assets); err != nil {
 		return err
 	}
 	for _, stage := range document.Stages {

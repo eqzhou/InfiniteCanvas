@@ -98,6 +98,12 @@ function isFilmStorageKey(value: string): boolean {
   return value.startsWith("image:") || value.startsWith("media:") || value.startsWith("film:");
 }
 
+const filmShotMediaFields = ["imageStorageKey", "firstFrameStorageKey", "videoStorageKey", "audioStorageKey"] as const;
+
+function collectFilmAssetKey(asset: FilmDocument["assets"][number] | undefined, keys: Set<string>): void {
+  if (asset?.mediaStorageKey) keys.add(asset.mediaStorageKey);
+}
+
 function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[] {
   const keys = new Set<string>();
   for (const node of project.nodes) {
@@ -117,17 +123,33 @@ function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[
 
   for (const shot of film?.shots ?? []) {
     if (shot.imageStorageKey) keys.add(shot.imageStorageKey);
+    if (shot.firstFrameStorageKey) keys.add(shot.firstFrameStorageKey);
     if (shot.videoStorageKey) keys.add(shot.videoStorageKey);
     if (shot.audioStorageKey) keys.add(shot.audioStorageKey);
   }
   for (const asset of film?.assets ?? []) {
-    if (asset.mediaStorageKey) keys.add(asset.mediaStorageKey);
+    collectFilmAssetKey(asset, keys);
+  }
+  for (const dialogue of film?.dialogues ?? []) {
+    if (dialogue.audioStorageKey) keys.add(dialogue.audioStorageKey);
+  }
+  for (const task of film?.tasks ?? []) {
+    for (const asset of task.snapshot?.identityVersions ?? []) collectFilmAssetKey(asset, keys);
+    collectFilmAssetKey(task.snapshot?.styleVersion, keys);
+    for (const key of task.snapshot?.referenceStorageKeys ?? []) keys.add(key);
   }
   for (const track of film?.timeline.tracks ?? []) {
     for (const clip of track.clips) if (isFilmStorageKey(clip.source)) keys.add(clip.source);
   }
   for (const deliverable of film?.deliverables ?? []) {
     if (deliverable.storageKey) keys.add(deliverable.storageKey);
+  }
+  for (const version of film?.versions ?? []) {
+    if (version.entityType !== "shot") continue;
+    for (const field of filmShotMediaFields) {
+      const key = version.snapshot[field];
+      if (typeof key === "string") keys.add(key);
+    }
   }
   return [...keys];
 }
@@ -211,7 +233,7 @@ function parseManifest(value: unknown): ProjectBundleManifest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid bundle manifest");
   }
-  const input = value as Record<string, unknown>;
+  const input = structuredClone(value as Record<string, unknown>);
   if (input.format !== "openboard.project-bundle" || (input.version !== 1 && input.version !== 2)) {
     throw new Error("Unsupported bundle format or version");
   }
@@ -275,17 +297,30 @@ export function parseBundleFilm(value: unknown, projectId: string): FilmDocument
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid film bundle payload");
   }
-  const input = value as Record<string, unknown>;
+  const input = structuredClone(value as Record<string, unknown>);
+  const legacyStages = ["decompose", "script", "storyboard", "audio", "video", "compose", "delivery"];
+  if (Array.isArray(input.stages) && input.stages.length === legacyStages.length && input.stages.every((stage, index) => (stage as Record<string, unknown>)?.id === legacyStages[index])) {
+    const storyboard = input.stages[2] as Record<string, unknown>;
+    input.stages.splice(3, 0, { id: "first_frame", revision: 1, status: storyboard.status === "approved" ? "approved" : "draft", updatedAt: input.updatedAt });
+    if (storyboard.status === "approved" && Array.isArray(input.shots)) input.shots = input.shots.map((value) => {
+      const shot = value as Record<string, unknown>;
+      return { ...shot, firstFrameStorageKey: shot.firstFrameStorageKey ?? shot.imageStorageKey, firstFrameSha256: shot.firstFrameSha256 ?? shot.imageSha256, firstFrameObjectVersion: shot.firstFrameObjectVersion ?? shot.imageObjectVersion, firstFrameGenerationJobId: shot.firstFrameGenerationJobId ?? shot.imageGenerationJobId };
+    });
+  }
+  for (const field of ["dialogues", "adoptions", "versions"] as const) {
+    if (input[field] === undefined) input[field] = [];
+  }
   const boundedCollections = [
     input.episodes, input.scenes, input.shots, input.assets, input.stages,
-    input.tasks, input.qualityReports, input.deliverables,
+    input.dialogues, input.tasks, input.qualityReports, input.deliverables, input.adoptions, input.versions,
   ];
   if (
     input.schemaVersion !== 1 || input.projectId !== projectId ||
     typeof input.revision !== "number" || !Number.isSafeInteger(input.revision) || input.revision < 1 ||
     !Array.isArray(input.episodes) || !Array.isArray(input.scenes) || !Array.isArray(input.shots) ||
-    !Array.isArray(input.assets) || !Array.isArray(input.stages) || !Array.isArray(input.tasks) ||
+    !Array.isArray(input.assets) || !Array.isArray(input.stages) || !Array.isArray(input.dialogues) || !Array.isArray(input.tasks) ||
     !Array.isArray(input.qualityReports) || !Array.isArray(input.deliverables) ||
+    !Array.isArray(input.adoptions) || !Array.isArray(input.versions) ||
     !input.timeline || typeof input.timeline !== "object" ||
     boundedCollections.some((collection) => !Array.isArray(collection) || collection.length > 10_000)
   ) {
@@ -293,7 +328,7 @@ export function parseBundleFilm(value: unknown, projectId: string): FilmDocument
   }
   const idPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
   const statuses = new Set(["draft", "running", "needs_review", "approved", "failed", "canceled"]);
-  const stageIds = ["decompose", "script", "storyboard", "audio", "video", "compose", "delivery"];
+  const stageIds = ["decompose", "script", "storyboard", "first_frame", "audio", "video", "compose", "delivery"];
   const validEntity = (entity: unknown, idField = "id"): entity is Record<string, unknown> => {
     if (!entity || typeof entity !== "object" || Array.isArray(entity)) return false;
     const item = entity as Record<string, unknown>;
@@ -371,6 +406,31 @@ export function parseBundleFilm(value: unknown, projectId: string): FilmDocument
     }
   }
 
+  const dialogues = input.dialogues as unknown[];
+  uniqueRecords(dialogues, "dialogue");
+  const shotIds = new Set(shots.map((shot) => (shot as Record<string, unknown>).id as string));
+  for (const value of dialogues) {
+    const dialogue = value as Record<string, unknown>;
+    if (!shotIds.has(String(dialogue.shotId)) || !["dialogue", "narration"].includes(String(dialogue.kind)) ||
+      typeof dialogue.text !== "string" || !dialogue.text.trim() || dialogue.text.length > 20_000) {
+      throw new Error("Invalid film dialogue");
+    }
+  }
+
+  const versions = input.versions as unknown[];
+  uniqueRecords(versions, "entity version");
+  for (const value of versions) {
+    const version = value as Record<string, unknown>;
+    if (!["shot", "asset", "timeline"].includes(String(version.entityType)) ||
+      !version.snapshot || typeof version.snapshot !== "object" || Array.isArray(version.snapshot) ||
+      JSON.stringify(version.snapshot).length > 256_000) {
+      throw new Error("Invalid film entity version");
+    }
+  }
+
+  const adoptions = input.adoptions as unknown[];
+  uniqueRecords(adoptions, "media adoption");
+
   const tasks = input.tasks as unknown[];
   if (tasks.length > 1_000) throw new Error("Film bundle contains too many tasks");
   uniqueRecords(tasks, "task");
@@ -442,7 +502,7 @@ export function parseBundleFilm(value: unknown, projectId: string): FilmDocument
     typeof input.updatedAt !== "string" || !Number.isFinite(Date.parse(input.updatedAt))) {
     throw new Error("Invalid film bundle metadata");
   }
-  return structuredClone(value) as FilmDocument;
+  return input as unknown as FilmDocument;
 }
 
 function remapProject(
@@ -502,17 +562,32 @@ function remapFilm(
     if (!result) throw new Error(`Bundle media declaration is missing: ${storageKey}`);
     return result.storageKey;
   };
+  const remapAsset = (asset: FilmDocument["assets"][number]) => ({
+    ...asset,
+    mediaStorageKey: replace(asset.mediaStorageKey),
+  });
   return {
     ...film,
     shots: film.shots.map((shot) => ({
       ...shot,
       imageStorageKey: replace(shot.imageStorageKey),
+      firstFrameStorageKey: replace(shot.firstFrameStorageKey),
       videoStorageKey: replace(shot.videoStorageKey),
       audioStorageKey: replace(shot.audioStorageKey),
     })),
-    assets: film.assets.map((asset) => ({
-      ...asset,
-      mediaStorageKey: replace(asset.mediaStorageKey),
+    dialogues: film.dialogues?.map((dialogue) => ({
+      ...dialogue,
+      audioStorageKey: replace(dialogue.audioStorageKey),
+    })),
+    assets: film.assets.map(remapAsset),
+    tasks: film.tasks.map((task) => !task.snapshot ? task : ({
+      ...task,
+      snapshot: {
+        ...task.snapshot,
+        identityVersions: task.snapshot.identityVersions.map(remapAsset),
+        styleVersion: task.snapshot.styleVersion ? remapAsset(task.snapshot.styleVersion) : undefined,
+        referenceStorageKeys: task.snapshot.referenceStorageKeys.map((key) => replace(key)!),
+      },
     })),
     timeline: {
       ...film.timeline,
@@ -524,6 +599,12 @@ function remapFilm(
     deliverables: film.deliverables.map((deliverable) => ({
       ...deliverable,
       storageKey: replace(deliverable.storageKey),
+    })),
+    versions: film.versions?.map((version) => version.entityType !== "shot" ? version : ({
+      ...version,
+      snapshot: Object.fromEntries(Object.entries(version.snapshot).map(([field, value]) =>
+        filmShotMediaFields.includes(field as typeof filmShotMediaFields[number]) && typeof value === "string"
+          ? [field, replace(value)] : [field, value])),
     })),
   };
 }

@@ -94,6 +94,9 @@ func TestApplyFilmRepairRequiresApprovalAndRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(repaired.Versions) != 1 || repaired.Versions[0].EntityID != document.Shots[0].ID || repaired.Versions[0].Revision != document.Shots[0].Revision {
+		t.Fatalf("repair did not preserve the previous entity version: %#v", repaired.Versions)
+	}
 	if _, err := applyFilmRepair(repaired, repairID); err == nil {
 		t.Fatal("stale repair revision was accepted")
 	}

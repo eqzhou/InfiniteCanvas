@@ -70,6 +70,7 @@ func (s *Server) restoreFilmProduction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectID := chi.URLParam(r, "projectId")
+	input.Document = migrateFilmDocumentTopology(input.Document)
 	if err := validateFilmRestoreDocument(input.Document, projectID); err != nil {
 		writeFilmOperationError(w, err)
 		return

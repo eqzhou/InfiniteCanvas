@@ -151,17 +151,28 @@ implementation evidence.
 ## Local Film Production Mode
 
 - [verified] Project chain and dependency state: original text → `decompose` →
-  `script` → `storyboard` → parallel `audio`/`video` → `compose` → `delivery`,
+  `script` → `storyboard` → `first_frame` → parallel `audio`/`video` → `compose` → `delivery`,
   with revision conflicts, downstream invalidation and explicit review/approval.
 - [verified] Bounded text/Markdown, DOCX OOXML and PDF text-layer import. Scanned
   or textless PDFs fail with an OCR-required diagnostic; no server-side OCR or
   arbitrary document execution is implied.
-- [verified] Shot/asset/task editing, scoped storyboard/audio/video generation,
-  parent/child job state, failed-shot retry, five-track timeline validation,
-  quality reports and durable deliverables.
+- [verified] Shot/dialogue/asset/task editing, identity age/costume/period/default
+  variants, immutable generation-input snapshots, scoped storyboard/first-frame/
+  audio/video generation, parent/child job state, failed-shot retry, five-track
+  timeline validation, quality reports and restorable repair versions.
+- [verified] Managed Film nodes are refreshed into the real canvas with stable
+  projection keys; user nodes/layout survive refresh, approved canvas media can
+  be adopted with blob integrity, GenerationJob and prompt/model provenance, and
+  white-listed edits use entity revisions on commit.
 - [verified] Manifest, SRT and asset-bundle exports do not depend on FFmpeg or
   real Provider credentials. MP4 is independently capability-gated by probed
-  absolute FFmpeg/FFprobe paths and bounded render timeout/storage.
+  absolute FFmpeg/FFprobe paths and bounded render timeout/storage. All four
+  exports use persistent, cancellable, restart-resumable GenerationJobs.
+- [verified] Film aggregates are atomically stored for restore while PostgreSQL
+  maintains a tenant/project/entity/revision projection in the same transaction.
+- [verified] Read-only and confirmed write `film.*` Agent/MCP tools expose status,
+  next steps, validation, stage approval, repair application and export without
+  bypassing the normal API, authorization or revision checks.
 - [verified] `OPENBOARD_FILM_MODE=false` disables Film routes without deleting
   project data. Missing media tools degrade only `mp4Export`; local/PM2 startup,
   other Film work and all non-Film services continue.

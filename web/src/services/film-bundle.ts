@@ -41,27 +41,79 @@ export function prepareFilmRestore(
   };
   for (const shot of document.shots) {
     add(shot.imageStorageKey, { kind: "shot", entityId: shot.id, field: "imageStorageKey" });
+    add(shot.firstFrameStorageKey, { kind: "shot", entityId: shot.id, field: "firstFrameStorageKey" });
     add(shot.audioStorageKey, { kind: "shot", entityId: shot.id, field: "audioStorageKey" });
     add(shot.videoStorageKey, { kind: "shot", entityId: shot.id, field: "videoStorageKey" });
   }
   for (const asset of document.assets) add(asset.mediaStorageKey, { kind: "asset", entityId: asset.id, field: "mediaStorageKey" });
+  for (const dialogue of document.dialogues ?? []) add(dialogue.audioStorageKey, { kind: "dialogue", entityId: dialogue.id, field: "audioStorageKey" });
+  for (const task of document.tasks) {
+    for (const asset of task.snapshot?.identityVersions ?? []) add(asset.mediaStorageKey, { kind: "task", entityId: task.id, field: `identity:${asset.id}` });
+    add(task.snapshot?.styleVersion?.mediaStorageKey, { kind: "task", entityId: task.id, field: "style" });
+    for (const [index, key] of (task.snapshot?.referenceStorageKeys ?? []).entries()) add(key, { kind: "task", entityId: task.id, field: `reference:${index}` });
+  }
   for (const track of document.timeline.tracks) {
     for (const clip of track.clips) add(clip.source, { kind: "timeline", entityId: clip.id, field: "source" });
   }
   for (const deliverable of document.deliverables) add(deliverable.storageKey, { kind: "deliverable", entityId: deliverable.id, field: "storageKey" });
+  const versionMediaFields = ["imageStorageKey", "firstFrameStorageKey", "audioStorageKey", "videoStorageKey"] as const;
+  for (const version of document.versions ?? []) {
+    if (version.entityType !== "shot") continue;
+    for (const field of versionMediaFields) {
+      const key = version.snapshot[field];
+      if (typeof key === "string") add(key, { kind: "version", entityId: version.id, field });
+    }
+  }
   const identity = (key?: string) => key ? byKey.get(key) : undefined;
+  const restoreAssetIdentity = (asset: FilmDocument["assets"][number]) => {
+    const item = identity(asset.mediaStorageKey);
+    return item ? { ...asset, mediaMimeType: item.mimeType, mediaSha256: item.sha256, mediaObjectVersion: item.objectVersion } : { ...asset };
+  };
   const restoredDocument: FilmDocument = {
     ...document,
     shots: document.shots.map((shot) => {
-      const image = identity(shot.imageStorageKey), video = identity(shot.videoStorageKey), audio = identity(shot.audioStorageKey);
+      const image = identity(shot.imageStorageKey), firstFrame = identity(shot.firstFrameStorageKey), video = identity(shot.videoStorageKey), audio = identity(shot.audioStorageKey);
       return { ...shot,
         ...(image ? { imageSha256: image.sha256, imageObjectVersion: image.objectVersion, mediaMimeType: image.mimeType } : {}),
+        ...(firstFrame ? { firstFrameSha256: firstFrame.sha256, firstFrameObjectVersion: firstFrame.objectVersion, mediaMimeType: firstFrame.mimeType } : {}),
         ...(video ? { videoSha256: video.sha256, videoObjectVersion: video.objectVersion, mediaMimeType: video.mimeType } : {}),
         ...(audio ? { audioSha256: audio.sha256, audioObjectVersion: audio.objectVersion, mediaMimeType: audio.mimeType } : {}),
       };
     }),
-    assets: document.assets.map((asset) => { const item = identity(asset.mediaStorageKey); return item ? { ...asset, mediaMimeType: item.mimeType, mediaSha256: item.sha256, mediaObjectVersion: item.objectVersion } : { ...asset }; }),
+    dialogues: document.dialogues?.map((dialogue) => {
+      const item = identity(dialogue.audioStorageKey);
+      return item ? { ...dialogue, audioSha256: item.sha256, audioObjectVersion: item.objectVersion } : { ...dialogue };
+    }),
+    assets: document.assets.map(restoreAssetIdentity),
+    tasks: document.tasks.map((task) => !task.snapshot ? task : ({
+      ...task,
+      snapshot: {
+        ...task.snapshot,
+        identityVersions: task.snapshot.identityVersions.map(restoreAssetIdentity),
+        styleVersion: task.snapshot.styleVersion ? restoreAssetIdentity(task.snapshot.styleVersion) : undefined,
+      },
+    })),
     deliverables: document.deliverables.map((deliverable) => { const item = identity(deliverable.storageKey); return item ? { ...deliverable, mimeType: item.mimeType, bytes: item.bytes, sha256: item.sha256, objectVersion: item.objectVersion } : { ...deliverable }; }),
+    versions: document.versions?.map((version) => {
+      if (version.entityType !== "shot") return version;
+      const snapshot = { ...version.snapshot };
+      const identities = [
+        ["imageStorageKey", "imageSha256", "imageObjectVersion"],
+        ["firstFrameStorageKey", "firstFrameSha256", "firstFrameObjectVersion"],
+        ["audioStorageKey", "audioSha256", "audioObjectVersion"],
+        ["videoStorageKey", "videoSha256", "videoObjectVersion"],
+      ] as const;
+      for (const [keyField, digestField, versionField] of identities) {
+        const key = snapshot[keyField];
+        const item = typeof key === "string" ? identity(key) : undefined;
+        if (item) {
+          snapshot[digestField] = item.sha256;
+          snapshot[versionField] = item.objectVersion;
+          snapshot.mediaMimeType = item.mimeType;
+        }
+      }
+      return { ...version, snapshot };
+    }),
   };
   const media = imported.flatMap((item): FilmRestoreMedia[] => {
     const references = provenance.get(item.storageKey);

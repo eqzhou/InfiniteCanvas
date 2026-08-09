@@ -35,7 +35,7 @@ func TestInitializeAndListTools(t *testing.T) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
 		}
 	}
-	for _, name := range []string{"film.status", "film.list", "film.check", "film.proposals", "film.validate", "film.run_stage"} {
+	for _, name := range []string{"film.status", "film.list", "film.check", "film.proposals", "film.validate", "film.run_stage", "film.next_steps", "film.approve_stage", "film.apply_repair", "film.export"} {
 		if !strings.Contains(lines[1], `"`+name+`"`) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
 		}
@@ -45,10 +45,8 @@ func TestInitializeAndListTools(t *testing.T) {
 			t.Fatalf("film.run_stage schema does not expose generation input %s: %s", field, lines[1])
 		}
 	}
-	for _, name := range []string{"film.approve_stage", "film.export"} {
-		if strings.Contains(lines[1], `"`+name+`"`) {
-			t.Fatalf("privileged film tool %s remains exposed: %s", name, lines[1])
-		}
+	if !strings.Contains(lines[1], `"destructiveHint":true`) || !strings.Contains(lines[1], `"openWorldHint":true`) {
+		t.Fatalf("privileged Film tools do not declare confirmation-relevant annotations: %s", lines[1])
 	}
 }
 

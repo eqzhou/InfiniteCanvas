@@ -221,7 +221,7 @@ func retryFilmJobClone(job store.GenerationJob, task filmTask, projectID string,
 	retryTask := filmTask{
 		ID: newTaskID, Revision: 1, Stage: task.Stage, ShotID: task.ShotID, Title: task.Title,
 		Status: filmStatusRunning, CreatedAt: now, UpdatedAt: now, GenerationJobID: newJobID,
-		IdempotencyKey: "retry:" + job.ID, RequestHash: requestHash,
+		IdempotencyKey: "retry:" + job.ID, RequestHash: requestHash, Snapshot: task.Snapshot,
 	}
 	return job, retryTask, nil
 }
@@ -231,9 +231,13 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	_, task, err := findFilmTaskByJob(document, chi.URLParam(r, "jobId"))
+	taskIndex, task, err := findFilmTaskByJob(document, chi.URLParam(r, "jobId"))
 	if err != nil {
 		writeFilmError(w, http.StatusNotFound, "generation_job_not_found", err.Error())
+		return
+	}
+	if latestFilmStageTasks(document, task.Stage)[task.ShotID] != taskIndex {
+		writeFilmError(w, http.StatusConflict, "generation_job_historical", "historical generation jobs cannot be retried")
 		return
 	}
 	job, err := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), task.GenerationJobID)

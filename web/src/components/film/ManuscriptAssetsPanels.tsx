@@ -63,13 +63,17 @@ function AssetEditor({ asset, characters, busy, onSave }: { asset: FilmAsset; ch
   const [description, setDescription] = useState(asset.description);
   const [detail, setDetail] = useState(asset.stylePrompt ?? asset.voice ?? "");
   const [parentAssetId, setParent] = useState(asset.parentAssetId ?? "");
+  const [ageStage, setAgeStage] = useState(asset.ageStage ?? "");
+  const [costume, setCostume] = useState(asset.costume ?? "");
+  const [storyPeriod, setStoryPeriod] = useState(asset.storyPeriod ?? "");
+  const [isDefault, setIsDefault] = useState(asset.isDefault ?? false);
   return <li data-testid={`film-asset-${asset.id}`} data-revision={asset.revision} className="rounded-lg border border-[var(--ob-line)] p-3">
     <div className="mb-2 flex items-center justify-between"><strong className="text-xs uppercase tracking-wide">{asset.kind}</strong><span className="text-xs text-[var(--ob-muted)]">r{asset.revision}</span></div>
     <input aria-label="资产名称编辑" className="ob-input w-full" value={title} onChange={(event) => setTitle(event.target.value)} />
     <textarea aria-label="资产描述" className="ob-input mt-2 min-h-20 w-full" value={description} onChange={(event) => setDescription(event.target.value)} />
     {asset.kind === "style" || asset.kind === "voice" ? <input aria-label={asset.kind === "style" ? "风格提示" : "声音身份"} className="ob-input mt-2 w-full" value={detail} onChange={(event) => setDetail(event.target.value)} /> : null}
-    {asset.kind === "identity" ? <select aria-label="所属角色" className="ob-input mt-2 w-full" value={parentAssetId} onChange={(event) => setParent(event.target.value)}><option value="">未绑定角色</option>{characters.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select> : null}
-    <button type="button" className="ob-btn mt-2" disabled={busy || !title.trim()} onClick={() => onSave(asset, { title, description, parentAssetId, ...(asset.kind === "style" ? { stylePrompt: detail } : {}), ...(asset.kind === "voice" ? { voice: detail } : {}) })}><Save size={14} /> 保存资产</button>
+    {asset.kind === "identity" ? <div className="mt-2 grid gap-2 sm:grid-cols-2"><select aria-label="所属角色" className="ob-input" value={parentAssetId} onChange={(event) => setParent(event.target.value)}><option value="">未绑定角色</option>{characters.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><input aria-label="年龄阶段" className="ob-input" value={ageStage} onChange={(event) => setAgeStage(event.target.value)} placeholder="年龄阶段" /><input aria-label="长期造型" className="ob-input" value={costume} onChange={(event) => setCostume(event.target.value)} placeholder="服装 / 长期造型" /><input aria-label="剧情时期" className="ob-input" value={storyPeriod} onChange={(event) => setStoryPeriod(event.target.value)} placeholder="剧情时期" /><label className="text-xs"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} /> 默认身份</label></div> : null}
+    <button type="button" className="ob-btn mt-2" disabled={busy || !title.trim()} onClick={() => onSave(asset, { title, description, parentAssetId, ...(asset.kind === "style" ? { stylePrompt: detail } : {}), ...(asset.kind === "voice" ? { voice: detail } : {}), ...(asset.kind === "identity" ? { ageStage, costume, storyPeriod, isDefault } : {}) })}><Save size={14} /> 保存资产</button>
   </li>;
 }
 

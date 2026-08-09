@@ -17,7 +17,7 @@ const maxGenerationJobBytes = 1 << 20
 const maxGenerationRestoreBytes = 32 << 20
 const maxGenerationRestoreItems = 10_000
 
-var generationKinds = map[string]bool{"image": true, "video": true, "audio": true, "workflow": true}
+var generationKinds = map[string]bool{"image": true, "video": true, "audio": true, "workflow": true, "export": true}
 var generationStatuses = map[string]bool{
 	"queued": true, "running": true, "succeeded": true, "failed": true, "cancelled": true, "deleted": true,
 }
@@ -415,6 +415,9 @@ func validGenerationJobFields(job store.GenerationJob) bool {
 	if job.Kind == "workflow" {
 		_, _, err := validatePersistedWorkflowJob(job)
 		return err == nil
+	}
+	if job.Kind == "export" {
+		return validPersistedFilmExportJob(job)
 	}
 	return true
 }

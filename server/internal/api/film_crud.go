@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -50,6 +51,10 @@ type filmAssetInput struct {
 	Voice           *string `json:"voice,omitempty"`
 	StylePrompt     *string `json:"stylePrompt,omitempty"`
 	AspectRatio     *string `json:"aspectRatio,omitempty"`
+	AgeStage        *string `json:"ageStage,omitempty"`
+	Costume         *string `json:"costume,omitempty"`
+	StoryPeriod     *string `json:"storyPeriod,omitempty"`
+	IsDefault       *bool   `json:"isDefault,omitempty"`
 }
 
 func cleanFilmText(value *string, name string, maximum int, required bool) (string, error) {
@@ -311,12 +316,16 @@ func (s *Server) deleteFilmScene(w http.ResponseWriter, r *http.Request) {
 			return filmDocument{}, errors.New("scene not found")
 		}
 		shots := make([]filmShot, 0, len(document.Shots))
+		removedShotIDs := map[string]struct{}{}
 		for _, shot := range document.Shots {
 			if shot.SceneID != id {
 				shots = append(shots, shot)
+			} else {
+				removedShotIDs[shot.ID] = struct{}{}
 			}
 		}
 		document.Scenes, document.Shots = scenes, shots
+		document.Dialogues = slices.DeleteFunc(document.Dialogues, func(dialogue filmDialogue) bool { _, removed := removedShotIDs[dialogue.ShotID]; return removed })
 		document.ProjectionRevision++
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
@@ -482,6 +491,7 @@ func (s *Server) deleteFilmShot(w http.ResponseWriter, r *http.Request) {
 			return filmDocument{}, errors.New("shot not found")
 		}
 		document.Shots = shots
+		document.Dialogues = slices.DeleteFunc(document.Dialogues, func(dialogue filmDialogue) bool { return dialogue.ShotID == id })
 		document.ProjectionRevision++
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
@@ -525,6 +535,9 @@ func applyFilmAssetInput(asset filmAsset, input filmAssetInput, create bool) (fi
 		{input.Voice, &asset.Voice, "voice", 500},
 		{input.StylePrompt, &asset.StylePrompt, "stylePrompt", 20_000},
 		{input.AspectRatio, &asset.AspectRatio, "aspectRatio", 20},
+		{input.AgeStage, &asset.AgeStage, "ageStage", 200},
+		{input.Costume, &asset.Costume, "costume", 1_000},
+		{input.StoryPeriod, &asset.StoryPeriod, "storyPeriod", 500},
 	}
 	for _, field := range fields {
 		if field.source == nil {
@@ -535,7 +548,28 @@ func applyFilmAssetInput(asset filmAsset, input filmAssetInput, create bool) (fi
 			return filmAsset{}, err
 		}
 	}
+	if input.IsDefault != nil {
+		asset.IsDefault = *input.IsDefault
+	}
+	if asset.Kind != "identity" && (asset.AgeStage != "" || asset.Costume != "" || asset.StoryPeriod != "" || asset.IsDefault) {
+		return filmAsset{}, errors.New("identity metadata is only valid for identity assets")
+	}
 	return asset, nil
+}
+
+func selectDefaultFilmIdentity(assets []filmAsset, selected filmAsset) []filmAsset {
+	if selected.Kind != "identity" || !selected.IsDefault {
+		return assets
+	}
+	next := append([]filmAsset(nil), assets...)
+	for index, asset := range next {
+		if asset.ID != selected.ID && asset.Kind == "identity" && asset.ParentAssetID == selected.ParentAssetID && asset.IsDefault {
+			asset.IsDefault = false
+			asset.Revision++
+			next[index] = asset
+		}
+	}
+	return next
 }
 
 func (s *Server) createFilmAsset(w http.ResponseWriter, r *http.Request) {
@@ -554,6 +588,7 @@ func (s *Server) createFilmAsset(w http.ResponseWriter, r *http.Request) {
 		}
 		asset.ID = stableFilmID("asset", document.ProjectID, document.Revision, asset.Kind, asset.Title)
 		document.Assets = append(document.Assets, asset)
+		document.Assets = selectDefaultFilmIdentity(document.Assets, asset)
 		return invalidateFilmStages(document, "storyboard", document.UpdatedAt), nil
 	})
 	if ok {
@@ -582,6 +617,7 @@ func (s *Server) updateFilmAsset(w http.ResponseWriter, r *http.Request) {
 			}
 			updated.Revision++
 			document.Assets[index] = updated
+			document.Assets = selectDefaultFilmIdentity(document.Assets, updated)
 			return invalidateFilmStages(document, "storyboard", document.UpdatedAt), nil
 		}
 		return filmDocument{}, errors.New("asset not found")

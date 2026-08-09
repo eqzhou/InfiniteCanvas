@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-31T18:23:43.751Z",
+  "generatedAt": "2026-08-09T09:19:17.882Z",
   "packages": [
     {
       "name": "@babel/code-frame",
@@ -1259,7 +1259,7 @@
     },
     {
       "name": "postcss",
-      "version": "8.5.19",
+      "version": "8.5.25",
       "license": "MIT",
       "noticeFile": "LICENSE",
       "repository": "postcss/postcss",

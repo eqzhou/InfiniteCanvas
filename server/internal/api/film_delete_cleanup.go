@@ -38,7 +38,7 @@ func filmCleanupInventory(document filmDocument, projectID string) filmCleanupMa
 		items[item.StorageKey] = item
 	}
 	for _, shot := range document.Shots {
-		for _, stage := range []string{"storyboard", "audio", "video"} {
+		for _, stage := range []string{"storyboard", "first_frame", "audio", "video"} {
 			key, digest, version, mimeType, _ := filmShotMediaIdentity(shot, stage)
 			add(filmCleanupItem{StorageKey: key, Kind: "shot-" + stage, MIMEType: mimeType, SHA256: digest, ObjectVersion: version})
 		}
@@ -52,6 +52,11 @@ func filmCleanupInventory(document filmDocument, projectID string) filmCleanupMa
 	for _, track := range document.Timeline.Tracks {
 		for _, clip := range track.Clips {
 			add(filmCleanupItem{StorageKey: clip.Source, Kind: "timeline-" + track.Kind})
+		}
+	}
+	for storageKey := range filmRestoreReferences(document) {
+		if _, exists := items[storageKey]; !exists {
+			add(filmCleanupItem{StorageKey: storageKey, Kind: "nested-film-reference"})
 		}
 	}
 	manifest := filmCleanupManifest{ProjectID: projectID, Items: make([]filmCleanupItem, 0, len(items))}

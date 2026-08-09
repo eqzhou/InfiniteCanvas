@@ -1,6 +1,6 @@
 import { authFetch } from "@/services/auth-session";
 import { cancelServerGenerationJob, getGenerationJob } from "@/services/generation-jobs";
-import type { FilmAssetKind, FilmDocument, FilmProjectionCommit, FilmStageKind, FilmTask, FilmTimeline } from "@/types/film";
+import type { FilmAssetKind, FilmDialogue, FilmDocument, FilmProjectionCommit, FilmStageKind, FilmTask, FilmTimeline } from "@/types/film";
 
 export class FilmAPIError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -17,10 +17,13 @@ export type FilmStatus = {
 };
 
 export type FilmRestoreMediaProvenance =
-  | { kind: "shot"; entityId: string; field: "imageStorageKey" | "audioStorageKey" | "videoStorageKey" }
+  | { kind: "shot"; entityId: string; field: "imageStorageKey" | "firstFrameStorageKey" | "audioStorageKey" | "videoStorageKey" }
   | { kind: "asset"; entityId: string; field: "mediaStorageKey" }
+  | { kind: "dialogue"; entityId: string; field: "audioStorageKey" }
+  | { kind: "task"; entityId: string; field: `identity:${string}` | "style" | `reference:${number}` }
   | { kind: "timeline"; entityId: string; field: "source" }
-  | { kind: "deliverable"; entityId: string; field: "storageKey" };
+  | { kind: "deliverable"; entityId: string; field: "storageKey" }
+  | { kind: "version"; entityId: string; field: "imageStorageKey" | "firstFrameStorageKey" | "audioStorageKey" | "videoStorageKey" };
 
 export type FilmRestoreMedia = {
   storageKey: string;
@@ -49,7 +52,7 @@ export type FilmCapabilities = {
   agentOperations: FilmAgentOperation[];
 };
 
-export type FilmAgentOperation = "status" | "list" | "validate" | "run_stage";
+export type FilmAgentOperation = "status" | "list" | "validate" | "run_stage" | "next_steps" | "approve_stage" | "apply_repair" | "export";
 export type FilmGenerationJobStatus = "queued" | "running" | "needs_review" | "failed" | "canceled";
 export type FilmGenerationJob = {
   id: string;
@@ -102,14 +105,14 @@ type RawFilmCapabilities = Omit<Partial<Omit<FilmCapabilities, "agentOperations"
 };
 
 const DEFAULT_MAX_IMPORT_BYTES = 50 * 1024 * 1024;
-const SAFE_AGENT_OPERATIONS = new Set<FilmAgentOperation>(["status", "list", "validate", "run_stage"]);
+const SAFE_AGENT_OPERATIONS = new Set<FilmAgentOperation>(["status", "list", "validate", "run_stage", "next_steps", "approve_stage", "apply_repair", "export"]);
 const capabilitiesByProject = new Map<string, FilmCapabilities>();
 
 export function normalizeFilmCapabilities(raw: RawFilmCapabilities | null | undefined): FilmCapabilities {
   const operations = Array.isArray(raw?.agentOperations)
     ? raw.agentOperations.filter((value): value is FilmAgentOperation => typeof value === "string" && SAFE_AGENT_OPERATIONS.has(value as FilmAgentOperation))
     : ["status", "list", "validate", "run_stage"] satisfies FilmAgentOperation[];
-  const supportedGenerationStages: FilmStageKind[] = ["storyboard", "audio", "video"];
+  const supportedGenerationStages: FilmStageKind[] = ["storyboard", "first_frame", "audio", "video"];
   const generationStages = Array.isArray(raw?.generationStages)
     ? raw.generationStages.filter((stage): stage is FilmStageKind => supportedGenerationStages.includes(stage as FilmStageKind))
     : raw?.generationStages && typeof raw.generationStages === "object"
@@ -270,6 +273,18 @@ export function createFilmAsset(
   return requestFilm(projectId, "/assets", { method: "POST", body: JSON.stringify(input) });
 }
 
+export function createFilmDialogue(projectId: string, input: Pick<FilmDialogue, "shotId" | "kind" | "text"> & Partial<Pick<FilmDialogue, "order" | "characterAssetId" | "voiceAssetId">>): Promise<FilmStatus> {
+  return requestFilm(projectId, "/dialogues", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function updateFilmDialogue(projectId: string, dialogueId: string, input: { revision: number } & Partial<Pick<FilmDialogue, "shotId" | "kind" | "text" | "order" | "characterAssetId" | "voiceAssetId">>): Promise<FilmStatus> {
+  return requestFilm(projectId, `/dialogues/${encodeURIComponent(dialogueId)}`, { method: "PUT", body: JSON.stringify(input) });
+}
+
+export function deleteFilmDialogue(projectId: string, dialogueId: string, revision: number): Promise<FilmStatus> {
+  return requestFilm(projectId, `/dialogues/${encodeURIComponent(dialogueId)}?revision=${revision}`, { method: "DELETE" });
+}
+
 export function updateFilmAsset(
   projectId: string,
   assetId: string,
@@ -283,6 +298,10 @@ export function updateFilmAsset(
     voice?: string;
     stylePrompt?: string;
     aspectRatio?: string;
+    ageStage?: string;
+    costume?: string;
+    storyPeriod?: string;
+    isDefault?: boolean;
   },
 ): Promise<FilmStatus> {
   return requestFilm(projectId, `/assets/${encodeURIComponent(assetId)}`, { method: "PUT", body: JSON.stringify(patch) });
@@ -348,7 +367,7 @@ export function resolveFilmStageSelection(
 
 function normalizeFilmGenerationJob(value: unknown): FilmGenerationJob {
   const job = value as Omit<Partial<FilmGenerationJob>, "status"> & { status?: string };
-  const stageKinds = new Set<FilmStageKind>(["decompose", "script", "storyboard", "audio", "video", "compose", "delivery"]);
+  const stageKinds = new Set<FilmStageKind>(["decompose", "script", "storyboard", "first_frame", "audio", "video", "compose", "delivery"]);
   const status = job.status === "succeeded" ? "needs_review" : job.status === "cancelled" ? "canceled" : job.status;
   if (
     typeof job.id !== "string" || !stageKinds.has(job.stage as FilmStageKind) ||
@@ -552,6 +571,10 @@ export function applyFilmRepair(projectId: string, repairId: string, revision: n
   });
 }
 
+export function restoreFilmEntityVersion(projectId: string, versionId: string, currentRevision: number): Promise<FilmStatus> {
+  return requestFilm(projectId, `/versions/${encodeURIComponent(versionId)}/restore`, { method: "POST", body: JSON.stringify({ revision: currentRevision }) });
+}
+
 export async function refreshFilmProjection(projectId: string): Promise<FilmProjectionPlan> {
   const response = await authFetch(filmPath(projectId, "/projection/refresh"));
   const payload = await response.json().catch(() => null) as { data?: FilmProjectionPlan; error?: { code?: string; message?: string } } | null;
@@ -565,6 +588,20 @@ export async function refreshFilmProjection(projectId: string): Promise<FilmProj
 
 export function commitFilmProjection(projectId: string, commit: FilmProjectionCommit): Promise<FilmStatus> {
   return requestFilm(projectId, "/projection/commit", { method: "POST", body: JSON.stringify(commit) });
+}
+
+export type FilmCanvasAdoptionRequest = {
+  targetType: "shot" | "asset";
+  targetId: string;
+  targetField: "image" | "first_frame" | "video" | "audio" | "media";
+  expectedRevision: number;
+  sourceNodeId: string;
+  storageKey: string;
+  generationJobId?: string;
+};
+
+export function adoptFilmCanvasMedia(projectId: string, input: FilmCanvasAdoptionRequest): Promise<FilmStatus> {
+  return requestFilm(projectId, "/projection/adopt", { method: "POST", body: JSON.stringify(input) });
 }
 
 export function saveFilmTimeline(projectId: string, timeline: FilmTimeline): Promise<FilmStatus> {
@@ -582,6 +619,11 @@ export function requestFilmExport(
     headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({ kind, revision, idempotencyKey }),
   });
+}
+
+export async function cancelFilmExport(projectId: string, generationJobId: string): Promise<FilmStatus> {
+  await cancelServerGenerationJob(generationJobId);
+  return loadFilmStatus(projectId);
 }
 
 function stableFilmIdempotencyKey(scope: string, projectId: string, discriminator: string, revision: number): string {

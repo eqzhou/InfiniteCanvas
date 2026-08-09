@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +29,19 @@ type filmAgentStageArguments struct {
 	Model          string                `json:"model,omitempty"`
 	Config         *filmGenerationConfig `json:"config,omitempty"`
 	IdempotencyKey string                `json:"idempotencyKey,omitempty"`
+}
+
+type filmAgentRepairArguments struct {
+	ProjectID string `json:"projectId"`
+	RepairID  string `json:"repairId"`
+	Revision  int    `json:"revision"`
+	Approved  bool   `json:"approved"`
+}
+type filmAgentExportArguments struct {
+	ProjectID      string `json:"projectId"`
+	Kind           string `json:"kind"`
+	Revision       int    `json:"revision"`
+	IdempotencyKey string `json:"idempotencyKey"`
 }
 
 func (s *Server) runFilmGenerationStageForAgent(ctx context.Context, tenantID string, args filmAgentStageArguments) (filmDocument, error) {
@@ -171,6 +185,82 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 		}
 		return saveFilmForAgent(ctx, backend, tenantID, record, next)
 	}
+	if tool == "film.approve_stage" {
+		var args filmAgentStageArguments
+		if err := decodeToolArguments(raw, &args); err != nil {
+			return nil, err
+		}
+		backend, record, document, err := s.loadFilmForAgent(ctx, tenantID, args.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		next, err := updateFilmStage(document, args.Stage, "approve", args.Revision, time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return nil, badToolRequest(err.Error())
+		}
+		return saveFilmForAgent(ctx, backend, tenantID, record, next)
+	}
+	if tool == "film.apply_repair" {
+		var args filmAgentRepairArguments
+		if err := decodeToolArguments(raw, &args); err != nil {
+			return nil, err
+		}
+		if !args.Approved || args.Revision < 1 || !validProjectID(args.RepairID) {
+			return nil, badToolRequest("repair requires explicit approval and exact revision")
+		}
+		backend, record, document, err := s.loadFilmForAgent(ctx, tenantID, args.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		for reportIndex := range document.QualityReports {
+			for repairIndex := range document.QualityReports[reportIndex].Repairs {
+				repair := &document.QualityReports[reportIndex].Repairs[repairIndex]
+				if repair.ID == args.RepairID {
+					if repair.ExpectedRevision != args.Revision {
+						return nil, badToolRequest("repair revision conflict")
+					}
+					repair.Approved = true
+				}
+			}
+		}
+		next, err := applyFilmRepair(document, args.RepairID)
+		if err != nil {
+			return nil, badToolRequest(err.Error())
+		}
+		return saveFilmForAgent(ctx, backend, tenantID, record, next)
+	}
+	if tool == "film.export" {
+		var args filmAgentExportArguments
+		if err := decodeToolArguments(raw, &args); err != nil {
+			return nil, err
+		}
+		body, _ := json.Marshal(filmExportRequest{Kind: args.Kind, Revision: args.Revision, IdempotencyKey: args.IdempotencyKey})
+		routeContext := chi.NewRouteContext()
+		routeContext.URLParams.Add("projectId", args.ProjectID)
+		requestContext := context.WithValue(ctx, chi.RouteCtxKey, routeContext)
+		if user, ok := authUserFrom(requestContext); ok {
+			user.TenantID = tenantID
+			requestContext = context.WithValue(requestContext, authUserKey, user)
+		} else if tenantID != store.DefaultTenantID {
+			requestContext = context.WithValue(requestContext, authUserKey, store.AuthUser{TenantID: tenantID})
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/film/projects/"+args.ProjectID+"/exports", bytes.NewReader(body)).WithContext(requestContext)
+		recorder := httptest.NewRecorder()
+		s.createFilmExport(recorder, request)
+		var payload struct {
+			Data  filmDocument `json:"data"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(recorder.Body.Bytes(), &payload) != nil {
+			return nil, errors.New("film export response is invalid")
+		}
+		if recorder.Code >= 400 {
+			return nil, &toolError{status: recorder.Code, message: payload.Error.Message}
+		}
+		return payload.Data, nil
+	}
 	var project projectArguments
 	if err := decodeToolArguments(raw, &project); err != nil {
 		return nil, err
@@ -188,12 +278,33 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 			"mp4Diagnostic":  renderDiagnostic,
 		}, nil
 	}
+	if tool == "film.next_steps" {
+		_, _, document, err := s.loadFilmForAgent(ctx, tenantID, project.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		steps := []string{}
+		for _, stage := range document.Stages {
+			if stage.Status != filmStatusApproved {
+				steps = append(steps, "Complete and approve stage "+stage.ID)
+				break
+			}
+		}
+		report, _ := s.validateFilmDocumentWithMedia(ctx, tenantID, cloneFilmDocument(document))
+		if len(report.Issues) > 0 {
+			steps = append(steps, "Review "+fmt.Sprint(len(report.Issues))+" quality issues before delivery")
+		}
+		if len(document.Deliverables) == 0 {
+			steps = append(steps, "Create versioned deliverables after compose approval")
+		}
+		return map[string]any{"steps": steps, "qualityIssueCount": len(report.Issues)}, nil
+	}
 	if tool == "film.check" {
 		_, record, document, err := s.loadFilmForAgent(ctx, tenantID, project.ProjectID)
 		if err != nil {
 			return nil, err
 		}
-		report, err := checkFilmDocument(document)
+		report, err := s.validateFilmDocumentWithMedia(ctx, tenantID, cloneFilmDocument(document))
 		if err != nil {
 			return nil, &toolError{status: http.StatusUnprocessableEntity, message: err.Error()}
 		}
@@ -211,7 +322,7 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 		if err != nil {
 			return nil, err
 		}
-		report, err := validateFilmDocument(document)
+		report, err := s.validateFilmDocumentWithMedia(ctx, tenantID, document)
 		if err != nil {
 			return nil, &toolError{status: http.StatusUnprocessableEntity, message: err.Error()}
 		}

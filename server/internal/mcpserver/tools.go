@@ -230,6 +230,7 @@ var boardTools = []toolDefinition{
 		Title:       "Validate film production",
 		Description: "Run quality validation and persist non-destructive repair proposals.",
 		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty()}, "projectId"),
+		Annotations: map[string]any{"destructiveHint": true},
 	},
 	{
 		Name:        "film.run_stage",
@@ -237,7 +238,7 @@ var boardTools = []toolDefinition{
 		Description: "Run a dependency-checked film stage at its exact optimistic revision. Generation stages require providerId, model, config, and idempotencyKey.",
 		InputSchema: objectSchema(map[string]any{
 			"projectId":  projectIDProperty(),
-			"stage":      map[string]any{"type": "string", "enum": []string{"decompose", "script", "storyboard", "audio", "video", "compose", "delivery"}},
+			"stage":      map[string]any{"type": "string", "enum": []string{"decompose", "script", "storyboard", "first_frame", "audio", "video", "compose", "delivery"}},
 			"revision":   map[string]any{"type": "integer", "minimum": 1},
 			"shotIds":    map[string]any{"type": "array", "items": projectIDProperty(), "maxItems": 1000, "uniqueItems": true},
 			"providerId": projectIDProperty(),
@@ -253,6 +254,31 @@ var boardTools = []toolDefinition{
 			}},
 			"idempotencyKey": map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
 		}, "projectId", "stage", "revision"),
+		Annotations: map[string]any{"destructiveHint": true, "openWorldHint": true},
+	},
+	{
+		Name: "film.next_steps", Title: "Suggest film production next steps",
+		Description: "Return deterministic next-stage and quality guidance without changing production data.",
+		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty()}, "projectId"),
+		Annotations: map[string]any{"readOnlyHint": true},
+	},
+	{
+		Name: "film.approve_stage", Title: "Approve film stage",
+		Description: "Approve one exact stage revision after host/user confirmation.",
+		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty(), "stage": map[string]any{"type": "string"}, "revision": map[string]any{"type": "integer", "minimum": 1}}, "projectId", "stage", "revision"),
+		Annotations: map[string]any{"destructiveHint": true},
+	},
+	{
+		Name: "film.apply_repair", Title: "Apply approved film repair",
+		Description: "Apply a version-checked repair only when approved=true after host/user confirmation.",
+		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty(), "repairId": projectIDProperty(), "revision": map[string]any{"type": "integer", "minimum": 1}, "approved": map[string]any{"type": "boolean", "const": true}}, "projectId", "repairId", "revision", "approved"),
+		Annotations: map[string]any{"destructiveHint": true},
+	},
+	{
+		Name: "film.export", Title: "Export film deliverable",
+		Description: "Create a versioned deliverable after host/user confirmation.",
+		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty(), "kind": map[string]any{"type": "string", "enum": []string{"mp4", "srt", "manifest", "asset_bundle"}}, "revision": map[string]any{"type": "integer", "minimum": 1}, "idempotencyKey": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}}, "projectId", "kind", "revision", "idempotencyKey"),
+		Annotations: map[string]any{"destructiveHint": true, "openWorldHint": true},
 	},
 }
 

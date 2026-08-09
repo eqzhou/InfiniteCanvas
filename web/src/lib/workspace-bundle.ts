@@ -147,6 +147,12 @@ function isFilmStorageKey(value: string): boolean {
   return value.startsWith("image:") || value.startsWith("media:") || value.startsWith("film:");
 }
 
+const filmShotMediaFields = ["imageStorageKey", "firstFrameStorageKey", "videoStorageKey", "audioStorageKey"] as const;
+
+function collectFilmAssetKey(asset: FilmDocument["assets"][number] | undefined, keys: Set<string>): void {
+  if (asset?.mediaStorageKey) keys.add(asset.mediaStorageKey);
+}
+
 function collectProjectKeys(project: BoardProject, keys: Set<string>): void {
   for (const node of project.nodes) {
     if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
@@ -170,12 +176,23 @@ function collectKeys(snapshot: WorkspaceSnapshot): string[] {
   for (const film of snapshot.films ?? []) {
     for (const shot of film.shots) {
       if (shot.imageStorageKey) keys.add(shot.imageStorageKey);
+      if (shot.firstFrameStorageKey) keys.add(shot.firstFrameStorageKey);
       if (shot.videoStorageKey) keys.add(shot.videoStorageKey);
       if (shot.audioStorageKey) keys.add(shot.audioStorageKey);
     }
-    for (const asset of film.assets) if (asset.mediaStorageKey) keys.add(asset.mediaStorageKey);
+    for (const asset of film.assets) collectFilmAssetKey(asset, keys);
+    for (const dialogue of film.dialogues ?? []) if (dialogue.audioStorageKey) keys.add(dialogue.audioStorageKey);
+    for (const task of film.tasks) {
+      for (const asset of task.snapshot?.identityVersions ?? []) collectFilmAssetKey(asset, keys);
+      collectFilmAssetKey(task.snapshot?.styleVersion, keys);
+      for (const key of task.snapshot?.referenceStorageKeys ?? []) keys.add(key);
+    }
     for (const track of film.timeline.tracks) for (const clip of track.clips) if (isFilmStorageKey(clip.source)) keys.add(clip.source);
     for (const deliverable of film.deliverables) if (deliverable.storageKey) keys.add(deliverable.storageKey);
+    for (const version of film.versions ?? []) if (version.entityType === "shot") for (const field of filmShotMediaFields) {
+      const key = version.snapshot[field];
+      if (typeof key === "string") keys.add(key);
+    }
   }
   return [...keys];
 }
@@ -531,12 +548,32 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, StoredWork
     shots: film.shots.map((shot) => ({
       ...shot,
       imageStorageKey: replace(shot.imageStorageKey)?.storageKey,
+      firstFrameStorageKey: replace(shot.firstFrameStorageKey)?.storageKey,
       videoStorageKey: replace(shot.videoStorageKey)?.storageKey,
       audioStorageKey: replace(shot.audioStorageKey)?.storageKey,
+    })),
+    dialogues: film.dialogues?.map((dialogue) => ({
+      ...dialogue,
+      audioStorageKey: replace(dialogue.audioStorageKey)?.storageKey,
     })),
     assets: film.assets.map((asset) => ({
       ...asset,
       mediaStorageKey: replace(asset.mediaStorageKey)?.storageKey,
+    })),
+    tasks: film.tasks.map((task) => !task.snapshot ? task : ({
+      ...task,
+      snapshot: {
+        ...task.snapshot,
+        identityVersions: task.snapshot.identityVersions.map((asset) => ({
+          ...asset,
+          mediaStorageKey: replace(asset.mediaStorageKey)?.storageKey,
+        })),
+        styleVersion: task.snapshot.styleVersion ? {
+          ...task.snapshot.styleVersion,
+          mediaStorageKey: replace(task.snapshot.styleVersion.mediaStorageKey)?.storageKey,
+        } : undefined,
+        referenceStorageKeys: task.snapshot.referenceStorageKeys.map((key) => replace(key)!.storageKey),
+      },
     })),
     timeline: {
       ...film.timeline,
@@ -548,6 +585,12 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, StoredWork
     deliverables: film.deliverables.map((deliverable) => ({
       ...deliverable,
       storageKey: replace(deliverable.storageKey)?.storageKey,
+    })),
+    versions: film.versions?.map((version) => version.entityType !== "shot" ? version : ({
+      ...version,
+      snapshot: Object.fromEntries(Object.entries(version.snapshot).map(([field, value]) =>
+        filmShotMediaFields.includes(field as typeof filmShotMediaFields[number]) && typeof value === "string"
+          ? [field, replace(value)?.storageKey] : [field, value])),
     })),
   }));
   return copy;

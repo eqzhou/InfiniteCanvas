@@ -13,6 +13,7 @@ import {
   waitForFilmGenerationStage,
   refreshFilmProjection,
   commitFilmProjection,
+  adoptFilmCanvasMedia,
   restoreFilmProduction,
   updateFilmAsset,
 } from "./film-client";
@@ -319,6 +320,18 @@ describe("film client", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/projection/refresh");
     expect(fetcher.mock.calls[1]?.[0]).toBe("/api/film/projects/film-1/projection/commit");
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ expectedRevision: 4 });
+  });
+
+  test("adopts canvas media with exact target and source provenance", async () => {
+    const film = createFilmDocument("film-1", "2026-08-08T00:00:00.000Z");
+    const fetcher = mock(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ data: film, meta: { recordRevision: 4 } }), { status: 200 }));
+    globalThis.fetch = fetcher as typeof fetch;
+    await adoptFilmCanvasMedia("film-1", {
+      targetType: "shot", targetId: "shot-1", targetField: "image", expectedRevision: 3,
+      sourceNodeId: "node-1", storageKey: "image:candidate", generationJobId: "job-1",
+    });
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/projection/adopt");
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ targetId: "shot-1", sourceNodeId: "node-1", generationJobId: "job-1" });
   });
 
   test("restores a film aggregate through the scoped create revision", async () => {

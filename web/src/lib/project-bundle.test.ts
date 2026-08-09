@@ -139,6 +139,21 @@ describe("project media bundle", () => {
     expect(restored.film).toBeUndefined();
   });
 
+  test("migrates seven-stage film payloads from existing v2 bundles", async () => {
+    const filmProject = createProject("Legacy film", "film");
+    const legacyFilm = createFilmDocument(filmProject.id, "2026-08-08T00:00:00.000Z");
+    legacyFilm.stages = legacyFilm.stages.filter((stage) => stage.id !== "first_frame");
+    const archive = await createZipStore([
+      { name: "manifest.json", data: JSON.stringify({ format: "openboard.project-bundle", version: 2, exportedAt: legacyFilm.createdAt, media: [], film: { version: 2, entry: "film.json" } }) },
+      { name: "project.json", data: JSON.stringify(filmProject) },
+      { name: "film.json", data: JSON.stringify(legacyFilm) },
+    ]);
+
+    const restored = await importProjectBundlePayload(archive, memoryStorage(new Map()).storage);
+
+    expect(restored.film?.stages.map((stage) => stage.id)).toEqual(["decompose", "script", "storyboard", "first_frame", "audio", "video", "compose", "delivery"]);
+  });
+
   test("writes v2 film payloads and reads them atomically", async () => {
     const filmProject = createProject("Film bundle", "film");
     const film = createFilmDocument(filmProject.id, "2026-08-08T00:00:00.000Z");
@@ -161,6 +176,24 @@ describe("project media bundle", () => {
         id: "asset-1", revision: 1, kind: "style" as const, title: "Look",
         status: "draft" as const, description: "", mediaStorageKey: "image:film-asset",
       }],
+      dialogues: [{
+        id: "dialogue-1", revision: 1, shotId: "shot-1", order: 0, kind: "narration" as const,
+        text: "Voice over", status: "draft" as const, audioStorageKey: "media:dialogue-audio",
+      }],
+      tasks: [{
+        id: "task-1", revision: 1, stage: "storyboard" as const, shotId: "shot-1", title: "Frozen task",
+        status: "needs_review" as const, progress: 1, createdAt: film.createdAt, updatedAt: film.updatedAt,
+        snapshot: {
+          shotRevision: 1, prompt: "Action", providerId: "provider", model: "model", config: {},
+          identityVersions: [], referenceStorageKeys: ["image:task-reference"], estimatedGenerations: 1,
+          createdAt: film.createdAt,
+        },
+      }],
+      versions: [{
+        id: "version-shot-1", entityType: "shot" as const, entityId: "shot-1", revision: 1,
+        snapshot: { id: "shot-1", revision: 1, imageStorageKey: "image:film-shot" },
+        reason: "quality-repair", createdAt: "2026-08-08T00:00:00.000Z",
+      }],
       deliverables: [{
         id: "deliverable-mp4", revision: 1, kind: "mp4" as const, status: "approved" as const,
         title: "Master MP4", mimeType: "video/mp4", storageKey: "film:deliverable:master",
@@ -176,6 +209,8 @@ describe("project media bundle", () => {
       ["media:film-video", new Blob(["video"], { type: "video/mp4" })],
       ["media:film-audio", new Blob(["audio"], { type: "audio/mpeg" })],
       ["image:film-asset", new Blob(["asset"], { type: "image/png" })],
+      ["media:dialogue-audio", new Blob(["dialogue"], { type: "audio/mpeg" })],
+      ["image:task-reference", new Blob(["reference"], { type: "image/png" })],
       ["film:deliverable:master", new Blob(["master"], { type: "video/mp4" })],
       ["film:deliverable:assets", new Blob(["assets"], { type: "application/zip" })],
     ]);
@@ -193,7 +228,10 @@ describe("project media bundle", () => {
     expect(restored.film?.shots[0]?.videoStorageKey).toBe("media:imported-2");
     expect(restored.film?.shots[0]?.audioStorageKey).toBe("media:imported-3");
     expect(restored.film?.assets[0]?.mediaStorageKey).toBe("image:imported-4");
-    expect(restored.film?.deliverables.map((item) => item.storageKey)).toEqual(["media:imported-5", "media:imported-6"]);
+    expect(restored.film?.dialogues?.[0]?.audioStorageKey).toBe("media:imported-5");
+    expect(restored.film?.tasks[0]?.snapshot?.referenceStorageKeys).toEqual(["image:imported-6"]);
+    expect(restored.film?.versions?.[0]?.snapshot.imageStorageKey).toBe("image:imported-1");
+    expect(restored.film?.deliverables.map((item) => item.storageKey)).toEqual(["media:imported-7", "media:imported-8"]);
   });
 
   test("rejects corrupt film payload topology, duplicate ids, and broken relations", async () => {
@@ -215,6 +253,9 @@ describe("project media bundle", () => {
           id: "scene_orphan", revision: 1, episodeId: "episode_missing", order: 0,
           heading: "INT. VOID - DAY", synopsis: "", status: "draft",
         }];
+      }],
+      ["oversized version snapshot", (film) => {
+        film.versions = [{ id: "version-large", entityType: "shot", entityId: "shot-missing", revision: 1, snapshot: { value: "x".repeat(256_001) }, reason: "test", createdAt: film.createdAt }];
       }],
     ];
 

@@ -81,6 +81,9 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/shots", server.createFilmShot)
 		r.Put("/shots/{entityId}", server.updateFilmShot)
 		r.Delete("/shots/{entityId}", server.deleteFilmShot)
+		r.Post("/dialogues", server.createFilmDialogue)
+		r.Put("/dialogues/{entityId}", server.updateFilmDialogue)
+		r.Delete("/dialogues/{entityId}", server.deleteFilmDialogue)
 		r.Post("/assets", server.createFilmAsset)
 		r.Put("/assets/{entityId}", server.updateFilmAsset)
 		r.Delete("/assets/{entityId}", server.deleteFilmAsset)
@@ -94,8 +97,10 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/stages/{stageId}/reject", server.rejectFilmStage)
 		r.Post("/validate", server.validateFilmProduction)
 		r.Post("/repairs/{repairId}/apply", server.applyFilmRepairProposal)
+		r.Post("/versions/{versionId}/restore", server.restoreFilmEntityVersion)
 		r.Get("/projection/refresh", server.refreshFilmProjectionPlan)
 		r.Post("/projection/commit", server.commitFilmProjectionEntity)
+		r.Post("/projection/adopt", server.adoptFilmCanvasMedia)
 		r.Get("/timeline", server.getFilmTimeline)
 		r.Put("/timeline", server.putFilmTimeline)
 		r.Post("/exports", server.createFilmExport)
@@ -122,7 +127,7 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 	if !available {
 		renderAvailable = false
 	}
-	generation := map[string]bool{"storyboard": false, "audio": false, "video": false}
+	generation := map[string]bool{"storyboard": false, "first_frame": false, "audio": false, "video": false}
 	if available && s.secrets != nil {
 		var config storedImageConfig
 		if raw, err := s.store.GetState(r.Context(), tenantIDFrom(r), "config"); err == nil && len(raw) <= 1<<20 && json.Unmarshal(raw, &config) == nil {
@@ -131,12 +136,13 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 					continue
 				}
 				generation["storyboard"] = strings.TrimSpace(channel.DefaultImageModel) != ""
+				generation["first_frame"] = strings.TrimSpace(channel.DefaultImageModel) != ""
 				generation["audio"] = strings.TrimSpace(channel.DefaultAudioModel) != ""
 				generation["video"] = strings.TrimSpace(channel.DefaultVideoModel) != ""
 			}
 		}
 	}
-	generationAvailable := generation["storyboard"] || generation["audio"] || generation["video"]
+	generationAvailable := generation["storyboard"] || generation["first_frame"] || generation["audio"] || generation["video"]
 	return map[string]any{
 		"available":         available,
 		"reason":            reason,
@@ -153,6 +159,7 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 		"importMaxBytes":    filmImportByteLimit(),
 		"mp4Export":         renderAvailable,
 		"mp4Diagnostic":     renderDiagnostic,
+		"agentOperations":   []string{"status", "list", "validate", "run_stage", "next_steps", "approve_stage", "apply_repair", "export"},
 	}
 }
 
@@ -329,7 +336,9 @@ func writeFilmOperationError(w http.ResponseWriter, err error) {
 	}
 	message := err.Error()
 	status, code := http.StatusUnprocessableEntity, "film_validation_error"
-	if strings.Contains(message, "revision conflict") {
+	if errors.Is(err, errFilmQualityBusy) {
+		status, code = http.StatusTooManyRequests, "film_quality_busy"
+	} else if strings.Contains(message, "revision conflict") {
 		status, code = http.StatusConflict, "revision_conflict"
 	} else if strings.Contains(message, "requires ") || strings.Contains(message, "current state") || strings.Contains(message, "review-ready") {
 		status, code = http.StatusConflict, "stage_state_conflict"
@@ -357,9 +366,22 @@ func (s *Server) createFilmProduction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getFilmStatus(w http.ResponseWriter, r *http.Request) {
-	_, record, document, ok := s.loadFilmProduction(w, r, false)
+	backend, record, document, ok := s.loadFilmProduction(w, r, false)
 	if !ok {
 		return
+	}
+	if s.reconcileMissingFilmExportJobs(r.Context(), tenantIDFrom(r), document) {
+		var err error
+		record, err = backend.GetFilmProject(r.Context(), tenantIDFrom(r), document.ProjectID)
+		if err != nil {
+			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be reloaded")
+			return
+		}
+		document, err = decodeFilmDocument(record.Document)
+		if err != nil {
+			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be decoded")
+			return
+		}
 	}
 	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", record.Revision))
 	writeJSON(w, map[string]any{
@@ -428,7 +450,7 @@ func (s *Server) changeFilmStage(w http.ResponseWriter, r *http.Request, action 
 
 func (s *Server) runFilmStage(w http.ResponseWriter, r *http.Request) {
 	switch chi.URLParam(r, "stageId") {
-	case "storyboard", "audio", "video":
+	case "storyboard", "first_frame", "audio", "video":
 		s.runFilmGenerationStage(w, r)
 	default:
 		s.changeFilmStage(w, r, "run")
@@ -448,7 +470,7 @@ func (s *Server) validateFilmProduction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	record, document, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
-		report, err := validateFilmDocument(document)
+		report, err := s.validateFilmDocumentWithMedia(r.Context(), tenantIDFrom(r), document)
 		if err != nil {
 			return filmDocument{}, err
 		}
@@ -494,7 +516,7 @@ func (s *Server) applyFilmRepairProposal(w http.ResponseWriter, r *http.Request)
 }
 
 func filmProjectionTargets(document filmDocument) []map[string]any {
-	targets := make([]map[string]any, 0, len(document.Episodes)+len(document.Scenes)+len(document.Shots))
+	targets := make([]map[string]any, 0, len(document.Episodes)+len(document.Scenes)+len(document.Shots)+len(document.Assets))
 	for _, episode := range document.Episodes {
 		targets = append(targets, map[string]any{"projectionKey": "episode:" + episode.ID, "revision": episode.Revision, "type": "group", "title": episode.Title, "content": episode.Synopsis})
 	}
@@ -503,6 +525,9 @@ func filmProjectionTargets(document filmDocument) []map[string]any {
 	}
 	for _, shot := range document.Shots {
 		targets = append(targets, map[string]any{"projectionKey": "shot:" + shot.ID, "revision": shot.Revision, "type": "text", "title": shot.Title, "content": shot.Description})
+	}
+	for _, asset := range document.Assets {
+		targets = append(targets, map[string]any{"projectionKey": "asset:" + asset.ID, "revision": asset.Revision, "type": "text", "title": asset.Title, "content": asset.Description})
 	}
 	return targets
 }
@@ -520,7 +545,7 @@ func (s *Server) refreshFilmProjectionPlan(w http.ResponseWriter, r *http.Reques
 
 func applyFilmProjectionCommit(document filmDocument, input filmProjectionCommitRequest) (filmDocument, error) {
 	kind, id, found := strings.Cut(input.ProjectionKey, ":")
-	if !found || !validProjectID(id) || (kind != "episode" && kind != "scene" && kind != "shot") {
+	if !found || !validProjectID(id) || (kind != "episode" && kind != "scene" && kind != "shot" && kind != "asset") {
 		return filmDocument{}, errors.New("invalid projection key")
 	}
 	if len(input.Fields) == 0 || len(input.Fields) > 2 {
@@ -573,7 +598,7 @@ func applyFilmProjectionCommit(document filmDocument, input filmProjectionCommit
 			document.Scenes[index] = entity
 			updated = true
 		}
-	} else {
+	} else if kind == "shot" {
 		for index, entity := range document.Shots {
 			if entity.ID != id {
 				continue
@@ -589,6 +614,24 @@ func applyFilmProjectionCommit(document filmDocument, input filmProjectionCommit
 			}
 			entity.Revision++
 			document.Shots[index] = entity
+			updated = true
+		}
+	} else {
+		for index, entity := range document.Assets {
+			if entity.ID != id {
+				continue
+			}
+			if entity.Revision != input.ExpectedRevision {
+				return filmDocument{}, errors.New("projection revision conflict")
+			}
+			if hasTitle {
+				entity.Title = title
+			}
+			if hasContent {
+				entity.Description = content
+			}
+			entity.Revision++
+			document.Assets[index] = entity
 			updated = true
 		}
 	}

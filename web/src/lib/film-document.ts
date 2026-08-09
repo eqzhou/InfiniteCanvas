@@ -2,6 +2,7 @@ import { createNode } from "@/lib/defaults";
 import type { BoardNode, BoardProject } from "@/types/board";
 import type {
   FilmDocument,
+  FilmAsset,
   FilmEpisode,
   FilmProjectionCommit,
   FilmQualityIssue,
@@ -14,7 +15,7 @@ import type {
 } from "@/types/film";
 
 const STAGE_IDS: FilmStage["id"][] = [
-  "decompose", "script", "storyboard", "audio", "video", "compose", "delivery",
+  "decompose", "script", "storyboard", "first_frame", "audio", "video", "compose", "delivery",
 ];
 const SCENE_HEADING = /^(?:(?:INT|EXT|INT\/EXT|EXT\/INT)\.?\s|(?:内景|外景|内外景)[：:\s]|场景\s*\d+)/i;
 const EPISODE_HEADING = /^(?:EPISODE\s+\d+|第\s*[一二三四五六七八九十百0-9]+\s*集)\b/i;
@@ -75,6 +76,7 @@ export function createFilmDocument(projectId: string, timestamp = new Date().toI
     episodes: [],
     scenes: [],
     shots: [],
+    dialogues: [],
     assets: [],
     stages: STAGE_IDS.map((id) => ({ id, revision: 1, status: "draft", updatedAt: timestamp })),
     tasks: [],
@@ -124,6 +126,7 @@ export function decomposeFilmSource(
   const episodes: FilmEpisode[] = [];
   const scenes: FilmScene[] = [];
   const shots: FilmShot[] = [];
+  const dialogues: NonNullable<FilmDocument["dialogues"]> = [];
   let parsedSceneCount = 0;
   for (const [episodeIndex, block] of episodeBlocks.entries()) {
     if (episodes.length >= limits.episodes || episodes.length + scenes.length + shots.length >= limits.entities) {
@@ -174,8 +177,9 @@ export function decomposeFilmSource(
         if (shots.length >= limits.shots || episodes.length + scenes.length + shots.length >= limits.entities) {
           throw new Error("Film decomposition shot limit reached");
         }
+        const shotId = stableId("shot", sceneId, shotIndex, sentence);
         shots.push({
-          id: stableId("shot", sceneId, shotIndex, sentence),
+          id: shotId,
           revision: 1,
           sceneId,
           order: shotIndex,
@@ -186,6 +190,7 @@ export function decomposeFilmSource(
           aspectRatio: document.aspectRatio,
           identityVersionIds: [],
         });
+        dialogues.push({ id: stableId("dialogue", shotId, 0), revision: 1, shotId, order: 0, kind: "narration", text: sentence, status: "draft" });
       }
     }
   }
@@ -203,6 +208,7 @@ export function decomposeFilmSource(
     episodes,
     scenes,
     shots,
+    dialogues,
     qualityReports: [],
     projectionRevision: document.projectionRevision + 1,
     stages: document.stages.map((stage) => stage.id === "decompose"
@@ -339,10 +345,17 @@ type ProjectionTarget = {
   order: number;
 };
 
+export type FilmProjectionDiff = {
+  projectionKey: string;
+  expectedRevision: number;
+  before: { title: string; content: string };
+  after: { title: string; content: string };
+};
+
 function projectionTargets(document: FilmDocument): ProjectionTarget[] {
   return [
     ...document.episodes.map((episode) => ({
-      key: `episode:${episode.id}`, revision: episode.revision, type: "group" as const,
+      key: `episode:${episode.id}`, revision: episode.revision, type: "text" as const,
       title: episode.title, content: episode.synopsis, order: episode.order * 1000,
     })),
     ...document.scenes.map((scene) => ({
@@ -352,6 +365,10 @@ function projectionTargets(document: FilmDocument): ProjectionTarget[] {
     ...document.shots.map((shot) => ({
       key: `shot:${shot.id}`, revision: shot.revision, type: "text" as const,
       title: shot.title, content: shot.description, order: 20_000 + shot.order,
+    })),
+    ...document.assets.map((asset, index) => ({
+      key: `asset:${asset.id}`, revision: asset.revision, type: "text" as const,
+      title: asset.title, content: asset.description, order: 30_000 + index,
     })),
   ];
 }
@@ -400,14 +417,30 @@ export function refreshFilmProjection(project: BoardProject, document: FilmDocum
   return { ...project, nodes: [...refreshed, ...additions] };
 }
 
+export function buildFilmProjectionDiffs(project: BoardProject, document: FilmDocument): FilmProjectionDiff[] {
+  const targets = new Map(projectionTargets(document).map((target) => [target.key, target]));
+  return project.nodes.flatMap((node) => {
+    const key = node.metadata.filmProjectionKey;
+    const revision = node.metadata.filmProjectionRevision;
+    if (!key || node.metadata.filmProjectionArchived || !Number.isSafeInteger(revision)) return [];
+    const target = targets.get(key);
+    if (!target || target.revision !== revision) return [];
+    const after = { title: node.title, content: typeof node.metadata.content === "string" ? node.metadata.content : "" };
+    const before = { title: target.title, content: target.content };
+    return before.title === after.title && before.content === after.content
+      ? []
+      : [{ projectionKey: key, expectedRevision: revision!, before, after }];
+  });
+}
+
 export function commitFilmProjection(document: FilmDocument, commit: FilmProjectionCommit): FilmDocument {
   const [kind, id] = commit.projectionKey.split(":", 2);
-  if (!id || !["episode", "scene", "shot"].includes(kind)) throw new Error("invalid projection key");
+  if (!id || !["episode", "scene", "shot", "asset"].includes(kind)) throw new Error("invalid projection key");
   const content = commit.fields.content;
   const title = commit.fields.title;
   if (title !== undefined && title.length > 500) throw new Error("projection title is too long");
   if (content !== undefined && content.length > 100_000) throw new Error("projection content is too long");
-  const update = <T extends FilmEpisode | FilmScene | FilmShot>(items: T[]): T[] => {
+  const update = <T extends FilmEpisode | FilmScene | FilmShot | FilmAsset>(items: T[]): T[] => {
     const target = items.find((item) => item.id === id);
     if (!target) throw new Error("projection target not found");
     if (target.revision !== commit.expectedRevision) throw new Error("projection revision conflict");
@@ -419,6 +452,10 @@ export function commitFilmProjection(document: FilmDocument, commit: FilmProject
       } as T;
       if (kind === "scene") return {
         ...item, ...(title === undefined ? {} : { heading: title }), ...(content === undefined ? {} : { synopsis: content }),
+        revision: item.revision + 1,
+      } as T;
+      if (kind === "asset") return {
+        ...item, ...(title === undefined ? {} : { title }), ...(content === undefined ? {} : { description: content }),
         revision: item.revision + 1,
       } as T;
       return {
@@ -433,5 +470,6 @@ export function commitFilmProjection(document: FilmDocument, commit: FilmProject
     episodes: kind === "episode" ? update(document.episodes) : document.episodes,
     scenes: kind === "scene" ? update(document.scenes) : document.scenes,
     shots: kind === "shot" ? update(document.shots) : document.shots,
+    assets: kind === "asset" ? update(document.assets) : document.assets,
   };
 }

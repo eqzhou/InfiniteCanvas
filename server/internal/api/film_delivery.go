@@ -21,9 +21,10 @@ import (
 
 func filmManifest(document filmDocument) ([]byte, error) {
 	return json.MarshalIndent(map[string]any{
-		"version": 1, "projectId": document.ProjectID, "revision": document.Revision,
+		"version": 2, "projectId": document.ProjectID, "revision": document.Revision,
 		"episodes": document.Episodes, "scenes": document.Scenes, "shots": document.Shots,
-		"assets": document.Assets, "timeline": document.Timeline,
+		"dialogues": document.Dialogues, "assets": document.Assets, "tasks": document.Tasks,
+		"adoptions": document.Adoptions, "versions": document.Versions, "timeline": document.Timeline,
 	}, "", "  ")
 }
 
@@ -82,6 +83,7 @@ func (s *Server) authorizedFilmMedia(ctx context.Context, tenantID string, docum
 	for _, shot := range document.Shots {
 		for _, binding := range []mediaBinding{
 			{shot: shot, stage: "storyboard", key: shot.ImageStorageKey},
+			{shot: shot, stage: "first_frame", key: shot.FirstFrameStorageKey},
 			{shot: shot, stage: "video", key: shot.VideoStorageKey},
 			{shot: shot, stage: "audio", key: shot.AudioStorageKey},
 		} {
@@ -354,6 +356,19 @@ func (s *Server) createStoredFilmDeliverable(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	requestHash, _ := hashGenerationInput(input)
+	if s.reconcileMissingFilmExportJobs(r.Context(), tenantIDFrom(r), document) {
+		refreshed, refreshErr := backend.GetFilmProject(r.Context(), tenantIDFrom(r), record.ProjectID)
+		if refreshErr != nil {
+			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be reloaded")
+			return
+		}
+		document, refreshErr = decodeFilmDocument(refreshed.Document)
+		if refreshErr != nil {
+			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production is invalid")
+			return
+		}
+		record = refreshed
+	}
 	for _, deliverable := range document.Deliverables {
 		if deliverable.IdempotencyKey != input.IdempotencyKey {
 			continue
@@ -378,71 +393,58 @@ func (s *Server) createStoredFilmDeliverable(w http.ResponseWriter, r *http.Requ
 		writeFilmError(w, http.StatusUnprocessableEntity, "export_kind_invalid", "Export kind must be mp4, srt, manifest, or asset_bundle")
 		return
 	}
-	data, err := s.exportFilmBytes(r.Context(), tenantIDFrom(r), document, input.Kind)
-	if err != nil {
-		if errors.Is(err, errFilmFFmpegUnavailable) {
-			writeFilmError(w, http.StatusServiceUnavailable, "ffmpeg_unavailable", err.Error())
+	if input.Kind == "mp4" {
+		if _, available, _ := s.filmFFmpegCapability(r.Context()); !available {
+			writeFilmError(w, http.StatusServiceUnavailable, "ffmpeg_unavailable", errFilmFFmpegUnavailable.Error())
 			return
 		}
-		if errors.Is(err, errFilmRenderBusy) {
-			writeFilmError(w, http.StatusTooManyRequests, "render_busy", "film render concurrency limit reached")
-			return
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			writeFilmError(w, http.StatusRequestTimeout, "export_canceled", "Film export was canceled or timed out")
-			return
-		}
-		writeFilmOperationError(w, err)
-		return
 	}
 	deliverableID := stableFilmID("deliverable", document.ProjectID, input.IdempotencyKey)
-	storageKey := "film:deliverable:" + document.ProjectID + ":" + deliverableID
-	storeErr := s.storeTenantBlobConditional(r.Context(), tenantIDFrom(r), userIDFrom(r), storageKey, mimeType, data, blobVersionAbsent)
-	createdBlob := storeErr == nil
-	if errors.Is(storeErr, errBlobObjectConflict) {
-		existing, readErr := s.readTenantBlob(r.Context(), tenantIDFrom(r), storageKey, maxFilmRenderBytes)
-		if readErr != nil || existing.Metadata.ContentType != mimeType || !bytes.Equal(existing.Data, data) {
-			writeFilmError(w, http.StatusConflict, "export_storage_conflict", "export storage key already contains different bytes")
-			return
-		}
-	} else if storeErr != nil {
-		writeFilmError(w, http.StatusInsufficientStorage, "export_storage_error", "Film export could not be stored")
+	jobID := stableFilmID("export-job", document.ProjectID, input.IdempotencyKey)
+	snapshot, err := json.Marshal(document)
+	if err != nil {
+		writeFilmError(w, http.StatusInternalServerError, "film_export_snapshot_error", "Film export snapshot could not be created")
 		return
 	}
-	stored, readErr := s.readTenantBlob(r.Context(), tenantIDFrom(r), storageKey, maxFilmRenderBytes)
-	if readErr != nil || !bytes.Equal(stored.Data, data) || stored.Metadata.ContentType != mimeType {
-		writeFilmError(w, http.StatusInternalServerError, "export_storage_error", "stored film export failed integrity verification")
+	parameters, err := json.Marshal(filmExportJobParameters{
+		Executor: filmExportExecutorMarker, ProjectID: document.ProjectID, Kind: input.Kind,
+		IdempotencyKey: input.IdempotencyKey, RequestHash: requestHash, UserID: userIDFrom(r), Snapshot: snapshot,
+	})
+	if err != nil {
+		writeFilmError(w, http.StatusInternalServerError, "film_export_snapshot_error", "Film export snapshot could not be created")
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	deliverable := filmDeliverable{ID: deliverableID, Revision: 1, Kind: input.Kind, Status: filmStatusApproved, Title: title, MIMEType: mimeType, StorageKey: storageKey, SHA256: sha256Hex(data), ObjectVersion: blobIdentityVersion(stored), Bytes: int64(len(data)), CreatedAt: now, IdempotencyKey: input.IdempotencyKey, RequestHash: requestHash}
+	deliverable := filmDeliverable{ID: deliverableID, Revision: 1, Kind: input.Kind, Status: filmStatusRunning, Title: title, MIMEType: mimeType, CreatedAt: now, IdempotencyKey: input.IdempotencyKey, RequestHash: requestHash, GenerationJobID: jobID, Provenance: "generation-job:" + jobID}
 	next := cloneFilmDocument(document)
 	next.Deliverables = append(next.Deliverables, deliverable)
 	next.Revision++
 	next.UpdatedAt = now
 	if err := validateFilmAggregateLimits(next); err != nil {
-		if createdBlob {
-			s.cleanupUnreferencedFilmBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), document.ProjectID, storageKey)
-		}
 		writeFilmOperationError(w, err)
 		return
 	}
 	raw, _ := json.Marshal(next)
 	updated, err := backend.CompareAndSwapFilmProject(r.Context(), tenantIDFrom(r), record.ProjectID, record.Revision, raw)
 	if errors.Is(err, store.ErrConflict) {
-		if createdBlob {
-			s.cleanupUnreferencedFilmBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), document.ProjectID, storageKey)
-		}
 		writeFilmError(w, http.StatusConflict, "revision_conflict", "Film production changed; retry with the same idempotency key")
 		return
 	}
 	if err != nil {
-		if createdBlob {
-			s.cleanupUnreferencedFilmBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), document.ProjectID, storageKey)
-		}
 		writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be saved")
 		return
 	}
+	job := store.GenerationJob{ID: jobID, ProjectID: document.ProjectID, Kind: "export", Status: "queued", Prompt: "film export " + input.Kind, Parameters: parameters, Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now}
+	usageMeta, _ := json.Marshal(map[string]any{"jobId": jobID, "kind": "export", "executor": filmExportExecutorMarker, "filmProjectId": document.ProjectID, "exportKind": input.Kind})
+	if err := s.store.CreateServerGenerationJob(r.Context(), tenantIDFrom(r), userIDFrom(r), job, 0, usageMeta); err != nil {
+		s.updateFilmExportDeliverable(r.Context(), tenantIDFrom(r), document.ProjectID, deliverableID, jobID, func(item filmDeliverable) filmDeliverable {
+			item.Status, item.Diagnostic, item.Revision = filmStatusFailed, "导出任务无法入队", item.Revision+1
+			return item
+		})
+		writeFilmError(w, http.StatusInternalServerError, "film_export_queue_error", "Film export task could not be queued")
+		return
+	}
+	s.notifyFilmExportWorkers()
 	s.writeFilmDocument(w, r, http.StatusCreated, updated, next)
 }
 

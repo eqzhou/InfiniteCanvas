@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { createProject } from "@/lib/defaults";
 import {
   applyApprovedFilmRepair,
+  buildFilmProjectionDiffs,
   commitFilmProjection,
   createFilmDocument,
   decomposeFilmSource,
@@ -143,5 +144,24 @@ describe("film document", () => {
       expectedRevision: projected.metadata.filmProjectionRevision!,
       fields: { title: "Stale write" },
     })).toThrow("revision");
+  });
+
+  test("builds canvas projection differences and ignores unchanged managed nodes", () => {
+    const document = decomposeFilmSource(createFilmDocument("film-diff", "2026-08-09T00:00:00.000Z"), "INT. ROOM - DAY\nA door opens.");
+    const project = refreshFilmProjection({ ...createProject("Film", "film"), id: "film-diff" }, document);
+    const managed = project.nodes.find((node) => node.metadata.filmProjectionKey?.startsWith("shot:"))!;
+    const changed = {
+      ...project,
+      nodes: project.nodes.map((node) => node.id === managed.id
+        ? { ...node, title: "Close shot", metadata: { ...node.metadata, content: "The door opens slowly." } }
+        : node),
+    };
+    expect(buildFilmProjectionDiffs(project, document)).toEqual([]);
+    expect(buildFilmProjectionDiffs(changed, document)).toEqual([{
+      projectionKey: managed.metadata.filmProjectionKey,
+      expectedRevision: managed.metadata.filmProjectionRevision,
+      before: { title: managed.title, content: managed.metadata.content },
+      after: { title: "Close shot", content: "The door opens slowly." },
+    }]);
   });
 });

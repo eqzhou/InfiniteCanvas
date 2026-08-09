@@ -146,7 +146,7 @@ export function findInterruptedGenerationJobs(
 }
 
 export function validateGenerationJob(job: GenerationJob): GenerationJob {
-	const kinds = new Set<GenerationKind>(["image", "video", "audio", "workflow"]);
+	const kinds = new Set<GenerationKind>(["image", "video", "audio", "workflow", "export"]);
   const statuses = new Set<GenerationStatus>(["queued", "running", "succeeded", "failed", "cancelled", "deleted"]);
   if (!ID.test(job.id) || (job.projectId && !ID.test(job.projectId)) || !kinds.has(job.kind) ||
     !statuses.has(job.status) || job.prompt.length > 100_000 || (job.providerId?.length ?? 0) > 500 ||

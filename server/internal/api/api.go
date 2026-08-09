@@ -86,6 +86,10 @@ type Server struct {
 	audioWG                 sync.WaitGroup
 	audioWorkersOnce        sync.Once
 	audioWake               chan struct{}
+	filmExportWorkerWG      sync.WaitGroup
+	filmExportWG            sync.WaitGroup
+	filmExportWorkersOnce   sync.Once
+	filmExportWake          chan struct{}
 	processToken            string
 	debugWriter             io.Writer
 	fileManagerLauncher     fileManagerLaunch
@@ -100,6 +104,10 @@ type Server struct {
 	filmImportMu            sync.Mutex
 	filmTenantImports       map[string]int
 	filmImportStarts        map[string][]time.Time
+	filmQualityGlobal       chan struct{}
+	filmQualityMu           sync.Mutex
+	filmTenantQuality       map[string]int
+	filmQualityStarts       map[string][]time.Time
 }
 
 func Mount(r chi.Router, dataDir string) {
@@ -268,6 +276,9 @@ func NewServer(dataDir string) *Server {
 		filmImportGlobal:    make(chan struct{}, 4),
 		filmTenantImports:   make(map[string]int),
 		filmImportStarts:    make(map[string][]time.Time),
+		filmQualityGlobal:   make(chan struct{}, 4),
+		filmTenantQuality:   make(map[string]int),
+		filmQualityStarts:   make(map[string][]time.Time),
 		generationCancels:   make(map[string]context.CancelFunc),
 		generationRoot:      generationRoot,
 		stopGeneration:      stopGeneration,
@@ -277,6 +288,7 @@ func NewServer(dataDir string) *Server {
 		workflowWake:        make(chan struct{}, 1),
 		videoWake:           make(chan struct{}, 1),
 		audioWake:           make(chan struct{}, 1),
+		filmExportWake:      make(chan struct{}, 1),
 	}
 }
 
@@ -298,6 +310,9 @@ func (s *Server) SetRuntimeOrigins(origins map[string]struct{}) {
 func NewServerWithStore(dataDir string, backend store.Store) *Server {
 	s := NewServer(dataDir)
 	s.store = backend
+	if _, ok := backend.(store.FilmStore); ok {
+		s.startFilmExportWorkers(1)
+	}
 	return s
 }
 
@@ -359,6 +374,8 @@ func (s *Server) Close() {
 	s.videoWG.Wait()
 	s.audioWorkerWG.Wait()
 	s.audioWG.Wait()
+	s.filmExportWorkerWG.Wait()
+	s.filmExportWG.Wait()
 	s.promptSchedulerWG.Wait()
 }
 
@@ -612,6 +629,10 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 			"film.list",
 			"film.validate",
 			"film.run_stage",
+			"film.next_steps",
+			"film.approve_stage",
+			"film.apply_repair",
+			"film.export",
 		},
 	})
 }

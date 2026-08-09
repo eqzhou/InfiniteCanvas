@@ -27,6 +27,190 @@ func filmExportBody(t *testing.T, kind, key string, revision int) []byte {
 	return value
 }
 
+func waitForFilmDeliverable(t *testing.T, handler http.Handler, id string, statuses ...string) filmDeliverable {
+	t.Helper()
+	wanted := map[string]bool{}
+	for _, status := range statuses {
+		wanted[status] = true
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		document := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api", nil))
+		for _, item := range document.Deliverables {
+			if item.ID == id && wanted[item.Status] {
+				return item
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("deliverable %s did not reach %v", id, statuses)
+	return filmDeliverable{}
+}
+
+func seedPersistentFilmExport(t *testing.T, backend *filmMemoryStore, projectID, key string) (string, string) {
+	t.Helper()
+	document := newFilmDocument(projectID)
+	requestHash := strings.Repeat("a", 64)
+	jobID := stableFilmID("export-job", projectID, key)
+	deliverableID := stableFilmID("deliverable", projectID, key)
+	snapshot, _ := json.Marshal(document)
+	parameters, _ := json.Marshal(filmExportJobParameters{Executor: filmExportExecutorMarker, ProjectID: projectID, Kind: "manifest", IdempotencyKey: key, RequestHash: requestHash, Snapshot: snapshot})
+	document.Deliverables = append(document.Deliverables, filmDeliverable{ID: deliverableID, Revision: 1, Kind: "manifest", Status: filmStatusRunning, Title: "Production manifest", MIMEType: "application/json", IdempotencyKey: key, RequestHash: requestHash, GenerationJobID: jobID, CreatedAt: document.CreatedAt})
+	document.Revision++
+	raw, _ := json.Marshal(document)
+	if _, err := backend.CreateFilmProject(t.Context(), store.DefaultTenantID, projectID, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.CreateGenerationJob(t.Context(), store.DefaultTenantID, store.GenerationJob{ID: jobID, ProjectID: projectID, Kind: "export", Status: "queued", Prompt: "film export manifest", Parameters: parameters, Result: json.RawMessage(`{}`), CreatedAt: document.CreatedAt, UpdatedAt: document.CreatedAt}); err != nil {
+		t.Fatal(err)
+	}
+	return jobID, deliverableID
+}
+
+func TestFilmExportWorkerResumesPersistedQueuedJob(t *testing.T) {
+	backend := newFilmMemoryStore()
+	jobID, deliverableID := seedPersistentFilmExport(t, backend, "film-export-resume", "resume-manifest")
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		record, _ := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-export-resume")
+		document, _ := decodeFilmDocument(record.Document)
+		for _, item := range document.Deliverables {
+			if item.ID == deliverableID && item.Status == filmStatusApproved && item.StorageKey != "" {
+				job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, jobID)
+				if err != nil || job.Status != "succeeded" {
+					t.Fatalf("resumed export job = %#v err=%v", job, err)
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("persisted export was not resumed")
+}
+
+func TestQueuedFilmExportCancellationUpdatesDeliverable(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	backend := newFilmMemoryStore()
+	jobID, deliverableID := seedPersistentFilmExport(t, backend, "film-export-cancel", "cancel-manifest")
+	server := NewServer(t.TempDir())
+	server.store = backend
+	server.SetProcessToken("test-token")
+	t.Cleanup(server.Close)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	response := request(t, router, http.MethodPost, "/api/generation-jobs/"+jobID+"/cancel", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("cancel export: %d %s", response.Code, response.Body.String())
+	}
+	record, _ := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-export-cancel")
+	document, _ := decodeFilmDocument(record.Document)
+	for _, item := range document.Deliverables {
+		if item.ID == deliverableID && item.Status == filmStatusCanceled && item.Diagnostic != "" {
+			return
+		}
+	}
+	t.Fatalf("queued deliverable was not canceled: %#v", document.Deliverables)
+}
+
+func TestFilmExportCancellationWinsAfterDeliverableApprovalRace(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	backend := newFilmMemoryStore()
+	jobID, deliverableID := seedPersistentFilmExport(t, backend, "film-export-cancel-race", "cancel-race")
+	record, _ := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-export-cancel-race")
+	document, _ := decodeFilmDocument(record.Document)
+	document.Deliverables[0].Status = filmStatusApproved
+	document.Deliverables[0].StorageKey = "film:deliverable:film-export-cancel-race:" + deliverableID
+	raw, _ := json.Marshal(document)
+	_, _ = backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, record.Revision, raw)
+	server := NewServer(t.TempDir())
+	server.store = backend
+	server.SetProcessToken("test-token")
+	t.Cleanup(server.Close)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	if response := request(t, router, http.MethodPost, "/api/generation-jobs/"+jobID+"/cancel", nil); response.Code != http.StatusOK {
+		t.Fatalf("cancel export race: %d %s", response.Code, response.Body.String())
+	}
+	record, _ = backend.GetFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID)
+	document, _ = decodeFilmDocument(record.Document)
+	if document.Deliverables[0].Status != filmStatusCanceled {
+		t.Fatalf("approved deliverable won cancellation race: %#v", document.Deliverables[0])
+	}
+}
+
+func TestCompletedFilmExportCancellationKeepsApprovedDeliverable(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	backend := newFilmMemoryStore()
+	jobID, _ := seedPersistentFilmExport(t, backend, "film-export-completed", "completed-export")
+	backend.mu.Lock()
+	job := backend.jobs[tenantKey(store.DefaultTenantID, jobID)]
+	job.Status = "succeeded"
+	backend.jobs[tenantKey(store.DefaultTenantID, jobID)] = job
+	backend.mu.Unlock()
+	record, _ := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-export-completed")
+	document, _ := decodeFilmDocument(record.Document)
+	document.Deliverables[0].Status = filmStatusApproved
+	document.Deliverables[0].StorageKey = "film:deliverable:film-export-completed:approved"
+	raw, _ := json.Marshal(document)
+	_, _ = backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, record.Revision, raw)
+	server := NewServer(t.TempDir())
+	server.store = backend
+	server.SetProcessToken("test-token")
+	t.Cleanup(server.Close)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	if response := request(t, router, http.MethodPost, "/api/generation-jobs/"+jobID+"/cancel", nil); response.Code != http.StatusOK {
+		t.Fatalf("cancel completed export: %d %s", response.Code, response.Body.String())
+	}
+	record, _ = backend.GetFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID)
+	document, _ = decodeFilmDocument(record.Document)
+	if document.Deliverables[0].Status != filmStatusApproved {
+		t.Fatalf("completed export deliverable was canceled: %#v", document.Deliverables[0])
+	}
+}
+
+func TestFilmStatusReconcilesMissingExportJob(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	record, _ := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-api")
+	document, _ := decodeFilmDocument(record.Document)
+	document.Deliverables = append(document.Deliverables, filmDeliverable{ID: "missing-export", Revision: 1, Kind: "manifest", Status: filmStatusRunning, Title: "Manifest", MIMEType: "application/json", GenerationJobID: "missing-export-job", CreatedAt: document.CreatedAt})
+	raw, _ := json.Marshal(document)
+	_, _ = backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, record.Revision, raw)
+	current := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api/status", nil))
+	if current.Deliverables[0].Status != filmStatusFailed || current.Deliverables[0].Diagnostic == "" {
+		t.Fatalf("missing export job remained running: %#v", current.Deliverables[0])
+	}
+}
+
+func TestFilmExportIdempotencyReplayReconcilesMissingJob(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	record, _ := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-api")
+	document, _ := decodeFilmDocument(record.Document)
+	input := filmExportRequest{Kind: "manifest", Revision: document.Revision, IdempotencyKey: "missing-replay"}
+	requestHash, _ := hashGenerationInput(input)
+	document.Deliverables = append(document.Deliverables, filmDeliverable{
+		ID: stableFilmID("deliverable", document.ProjectID, input.IdempotencyKey), Revision: 1, Kind: input.Kind,
+		Status: filmStatusRunning, Title: "Manifest", MIMEType: "application/json", IdempotencyKey: input.IdempotencyKey,
+		RequestHash: requestHash, GenerationJobID: stableFilmID("export-job", document.ProjectID, input.IdempotencyKey), CreatedAt: document.CreatedAt,
+	})
+	document.Revision++
+	raw, _ := json.Marshal(document)
+	_, _ = backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, record.Revision, raw)
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", filmExportBody(t, input.Kind, input.IdempotencyKey, input.Revision))
+	if response.Code != http.StatusOK {
+		t.Fatalf("replay missing export: %d %s", response.Code, response.Body.String())
+	}
+	current := decodeFilmResponse(t, response)
+	if current.Deliverables[len(current.Deliverables)-1].Status != filmStatusFailed {
+		t.Fatalf("missing export job was not reconciled on replay: %#v", current.Deliverables)
+	}
+}
+
 func TestFilmShotsCSVNeutralizesSpreadsheetFormulas(t *testing.T) {
 	document := newFilmDocument("csv-safe")
 	document.Shots = []filmShot{{ID: "shot", SceneID: "scene", Order: 0, Title: "=CMD()", Description: "+payload", Subtitle: "@lookup", DurationSeconds: 1}}
@@ -50,8 +234,12 @@ func TestFilmManifestExportIsIdempotentAndStoredOutsideDocument(t *testing.T) {
 		t.Fatalf("manifest export: %d %s", first.Code, first.Body.String())
 	}
 	created := decodeFilmResponse(t, first)
-	if len(created.Deliverables) != 1 || created.Deliverables[0].StorageKey == "" || created.Deliverables[0].Content != "" {
-		t.Fatalf("manifest was not externalized: %#v", created.Deliverables)
+	if len(created.Deliverables) != 1 || created.Deliverables[0].GenerationJobID == "" || created.Deliverables[0].Content != "" {
+		t.Fatalf("manifest was not queued durably: %#v", created.Deliverables)
+	}
+	deliverable := waitForFilmDeliverable(t, handler, created.Deliverables[0].ID, filmStatusApproved)
+	if deliverable.StorageKey == "" {
+		t.Fatalf("manifest was not externalized: %#v", deliverable)
 	}
 
 	replay := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", body)
@@ -62,7 +250,7 @@ func TestFilmManifestExportIsIdempotentAndStoredOutsideDocument(t *testing.T) {
 		t.Fatalf("replay duplicated deliverable id: %#v", got.Deliverables)
 	}
 
-	download := request(t, handler, http.MethodGet, "/api/film/projects/film-api/deliverables/"+created.Deliverables[0].ID+"/download", nil)
+	download := request(t, handler, http.MethodGet, "/api/film/projects/film-api/deliverables/"+deliverable.ID+"/download", nil)
 	if download.Code != http.StatusOK || !bytes.Contains(download.Body.Bytes(), []byte(`"projectId"`)) {
 		t.Fatalf("external manifest download: %d %s", download.Code, download.Body.String())
 	}
@@ -126,7 +314,7 @@ func TestFilmAssetBundleUsesGeneratedSafeZipPaths(t *testing.T) {
 		t.Fatalf("bundle export: %d %s", exported.Code, exported.Body.String())
 	}
 	document = decodeFilmResponse(t, exported)
-	deliverable := document.Deliverables[len(document.Deliverables)-1]
+	deliverable := waitForFilmDeliverable(t, handler, document.Deliverables[len(document.Deliverables)-1].ID, filmStatusApproved)
 	download := request(t, handler, http.MethodGet, "/api/film/projects/film-api/deliverables/"+deliverable.ID+"/download", nil)
 	if download.Code != http.StatusOK || download.Header().Get("Content-Type") != "application/zip" {
 		t.Fatalf("bundle download: %d %s", download.Code, download.Body.String())
@@ -169,8 +357,13 @@ func TestFilmAssetBundleFailsWhenAnyReferencedMediaIsUnavailable(t *testing.T) {
 	_, _ = backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, "film-api", record.Revision, raw)
 
 	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", filmExportBody(t, "asset_bundle", "missing-media", document.Revision))
-	if response.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("bundle silently omitted missing media: %d %s", response.Code, response.Body.String())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("bundle task was not queued: %d %s", response.Code, response.Body.String())
+	}
+	queued := decodeFilmResponse(t, response).Deliverables
+	failed := waitForFilmDeliverable(t, handler, queued[len(queued)-1].ID, filmStatusFailed)
+	if failed.Diagnostic == "" {
+		t.Fatal("failed bundle did not retain a diagnostic")
 	}
 }
 
