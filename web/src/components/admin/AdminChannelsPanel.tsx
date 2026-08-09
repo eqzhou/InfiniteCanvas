@@ -10,6 +10,7 @@ import {
   type AdminChannelProtocol,
 } from "@/services/admin";
 import { invalidateSharedChannelCatalog } from "@/services/shared-channels";
+import { uid } from "@/lib/id";
 import {
   applyAdminChannelModelSelection,
   adminChannelSecretBindingIsCurrent,
@@ -29,7 +30,7 @@ export function adminChannelCanTest(
 
 export function emptyAdminChannel(index: number): AdminChannel {
   return {
-    id: `shared-${index}`,
+    id: uid("shared"),
     name: `共享渠道 ${index}`,
     baseUrl: "https://api.openai.com/v1",
     protocol: "openai",
@@ -44,6 +45,20 @@ export function emptyAdminChannel(index: number): AdminChannel {
     defaultAudioModel: "",
     secretConfigured: false,
   };
+}
+
+export function AdminChannelNameField({
+  channel,
+  onChange,
+}: {
+  channel: Pick<AdminChannel, "name">;
+  onChange: (name: string) => void;
+}) {
+  return (
+    <Field label="渠道名称（用户可见）">
+      <input className="ob-field" value={channel.name} onChange={(event) => onChange(event.target.value)} />
+    </Field>
+  );
 }
 
 function modelsText(channel: AdminChannel): string {
@@ -108,8 +123,7 @@ export function AdminChannelsPanel() {
       {channels.map((channel) => (
         <section key={channel.id} className="space-y-3 rounded-xl border border-[var(--ob-line)] p-4">
           <div className="grid gap-3 md:grid-cols-4">
-            <Field label="渠道 ID"><input className="ob-field" value={channel.id} disabled={persistedIdsRef.current.has(channel.id)} onChange={(event) => update(channel.id, { id: event.target.value })} /></Field>
-            <Field label="名称"><input className="ob-field" value={channel.name} onChange={(event) => update(channel.id, { name: event.target.value })} /></Field>
+            <AdminChannelNameField channel={channel} onChange={(name) => update(channel.id, { name })} />
             <Field label="协议"><select className="ob-field" value={channel.protocol} onChange={(event) => update(channel.id, { protocol: event.target.value as AdminChannelProtocol })}>{protocols.map((protocol) => <option key={protocol}>{protocol}</option>)}</select></Field>
             <Field label="基础 URL"><input className="ob-field" value={channel.baseUrl} onChange={(event) => update(channel.id, { baseUrl: event.target.value })} /></Field>
             <Field label="图片模型"><input className="ob-field" value={channel.defaultImageModel} onChange={(event) => update(channel.id, { defaultImageModel: event.target.value })} /></Field>

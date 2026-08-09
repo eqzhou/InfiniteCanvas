@@ -444,7 +444,17 @@ test("admin console manages users, credit logs, and model costs through protecte
   await expect(processStorage).toContainText("未知（提供商未暴露）");
   await expect(processStorage).toContainText("权重 3");
   await page.getByRole("tab", { name: "共享渠道" }).click();
-  await expect(page.locator('input[value="Shared E2E"]')).toBeVisible();
+  await expect(page.getByLabel("渠道 ID")).toHaveCount(0);
+  const channelName = page.getByLabel("渠道名称（用户可见）");
+  await expect(channelName).toHaveValue("Shared E2E");
+  await channelName.evaluate((element) => { element.dataset.focusSentinel = "stable"; });
+  await channelName.focus();
+  await channelName.press("End");
+  await channelName.pressSequentially(" Updated");
+  await expect(channelName).toHaveValue("Shared E2E Updated");
+  await expect(channelName).toBeFocused();
+  await expect(channelName).toHaveAttribute("data-focus-sentinel", "stable");
+  await channelName.fill("Shared E2E");
   await page.getByLabel(/API 密钥/).fill("shared-secret-e2e");
   await page.getByRole("button", { name: "保存密钥" }).click();
   await expect.poll(() => savedSharedSecret).toEqual({ apiKey: "shared-secret-e2e", secretBindingId: "binding-e2e" });
