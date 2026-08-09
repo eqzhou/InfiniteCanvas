@@ -12,20 +12,11 @@ import type {
   PromptItem,
   Viewport,
 } from "@/types/board";
-import {
-  WorkspaceReplacementRollbackError,
-  type WorkspaceSnapshot,
-} from "@/lib/workspace-bundle";
+import type { WorkspaceSnapshot } from "@/lib/workspace-bundle";
 import {
   deleteGenerationJobsForNodeIds,
   deleteGenerationJobsForProject,
-  listAllGenerationJobs,
-  replaceGenerationJobs,
 } from "@/services/generation-jobs";
-import {
-  loadPersonalWorkflowTemplates,
-  replacePersonalWorkflowTemplates,
-} from "@/services/workflow-templates";
 import { createDefaultConfig, createEmptySession, createNode, createProject } from "@/lib/defaults";
 import { normalizeAppConfig } from "@/lib/app-config";
 import { HistoryStack } from "@/lib/history";
@@ -47,7 +38,6 @@ import {
   rehydrateAssets,
   rehydrateProjects,
   resetStorageScopeState,
-  replaceProjects,
   saveAssets,
   saveConfig,
   saveProjects,
@@ -56,6 +46,7 @@ import {
   uploadMedia,
   resolveObjectUrl,
 } from "@/services/storage";
+import { replaceCompleteWorkspace } from "@/services/workspace-transactions";
 import { ConfigPreconditionError, SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
 import type { GenerationDefaults } from "@/lib/generation-defaults";
@@ -1371,7 +1362,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       assetWrites.flush(),
       promptWrites.flush(),
     ]);
-    const current = get();
     const rawImported = structuredClone(snapshot);
     const importedAudioRoles = migrateLegacyAudioRoles(
       rawImported.projects,
@@ -1384,47 +1374,52 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         ? rawImported.config
         : { ...rawImported.config, audioRoles: undefined },
     };
-    const previous: WorkspaceSnapshot = {
-      projects: structuredClone(current.projects),
-      assets: structuredClone(current.assets),
-      prompts: structuredClone(current.prompts),
-      config: structuredClone(current.config),
-      generationJobs: await listAllGenerationJobs(),
-      workflowTemplates: await loadPersonalWorkflowTemplates(),
-    };
-    const persistSnapshot = async (value: WorkspaceSnapshot): Promise<boolean> => {
-      await replaceProjects(value.projects);
-      await saveAssets(value.assets);
-      await savePrompts(value.prompts);
-		const configSaved = await saveWorkspaceReplacementConfig(() => saveConfig(value.config));
-      await replaceGenerationJobs(value.generationJobs);
-      await replacePersonalWorkflowTemplates(value.workflowTemplates);
-		return configSaved;
-    };
-		let importedConfigSaved = true;
-    try {
-		importedConfigSaved = await persistSnapshot(imported);
-    } catch (error) {
-      try {
-        await persistSnapshot(previous);
-      } catch (rollbackError) {
-        throw new WorkspaceReplacementRollbackError(error, rollbackError);
-      }
-      throw error;
+    if ((imported.films?.length ?? 0) > 0) {
+      throw new Error("Film workspace replacement requires the complete bundle transaction");
     }
-    histories.clear();
-    set({
-      projects: structuredClone(imported.projects),
-      activeProjectId: imported.projects[0]?.id ?? null,
-      selectedIds: [],
-      clipboard: null,
-		config: structuredClone(importedConfigSaved ? imported.config : previous.config),
-      assets: structuredClone(imported.assets),
-      prompts: structuredClone(imported.prompts),
-      connectingFrom: null,
-    });
+    const workspace: Omit<WorkspaceSnapshot, "films"> = {
+      projects: imported.projects,
+      assets: imported.assets,
+      prompts: imported.prompts,
+      config: imported.config,
+      generationJobs: imported.generationJobs,
+      workflowTemplates: imported.workflowTemplates,
+    };
+    await replaceCompleteWorkspace({ snapshot: workspace, films: [] });
+    adoptCommittedWorkspace(imported);
   },
 }));
+
+/** Applies a project already committed by the backend import transaction. */
+export function adoptCommittedProject(project: BoardProject): void {
+  const committed = structuredClone(project);
+  histories.delete(committed.id);
+  useBoardStore.setState((state) => ({
+    projects: [committed, ...state.projects.filter((item) => item.id !== committed.id)],
+    activeProjectId: committed.id,
+    selectedIds: [],
+  }));
+}
+
+/** Updates browser state after the backend has atomically committed a workspace restore. */
+export function adoptCommittedWorkspace(snapshot: WorkspaceSnapshot): void {
+  const raw = structuredClone(snapshot);
+  const importedAudioRoles = migrateLegacyAudioRoles(raw.projects, raw.config.audioRoles);
+  const config = raw.config.audioRoles === undefined
+    ? raw.config
+    : { ...raw.config, audioRoles: undefined };
+  histories.clear();
+  useBoardStore.setState({
+    projects: importedAudioRoles.projects,
+    activeProjectId: importedAudioRoles.projects[0]?.id ?? null,
+    selectedIds: [],
+    clipboard: null,
+    config,
+    assets: raw.assets,
+    prompts: raw.prompts,
+    connectingFrom: null,
+  });
+}
 
 export type AttachUploadedImageOptions = {
   /** Force ordinary image or panorama import; default auto prompts for strict 2:1 candidates. */

@@ -13,6 +13,11 @@ Status: `verified` means the behavior is implemented and has repeatable unit,
 integration, E2E, or formal-storage evidence in this repository. Provider
 smoke tests that require real paid credentials remain opt-in.
 
+Film Production Mode is a local additive capability, not a behavior-parity
+claim about either reference product. Its status and evidence are recorded
+separately below so local engineering verification is not presented as legal,
+source-origin, visual-similarity, or Provider certification.
+
 ## Tiger v0.4.5 convergence baseline
 
 The broader product goal additionally tracks the publicly documented behavior
@@ -143,6 +148,33 @@ implementation evidence.
 | Image/video/audio asset upload, preview, insertion, deletion and archive restore | asset E2E and `workspace-bundle.test.ts` |
 | Active-canvas archive from the top bar and bounded multi-element ZIP export | project lifecycle and element panel E2E plus `node-export.test.ts` |
 
+## Local Film Production Mode
+
+- [verified] Project chain and dependency state: original text → `decompose` →
+  `script` → `storyboard` → parallel `audio`/`video` → `compose` → `delivery`,
+  with revision conflicts, downstream invalidation and explicit review/approval.
+- [verified] Bounded text/Markdown, DOCX OOXML and PDF text-layer import. Scanned
+  or textless PDFs fail with an OCR-required diagnostic; no server-side OCR or
+  arbitrary document execution is implied.
+- [verified] Shot/asset/task editing, scoped storyboard/audio/video generation,
+  parent/child job state, failed-shot retry, five-track timeline validation,
+  quality reports and durable deliverables.
+- [verified] Manifest, SRT and asset-bundle exports do not depend on FFmpeg or
+  real Provider credentials. MP4 is independently capability-gated by probed
+  absolute FFmpeg/FFprobe paths and bounded render timeout/storage.
+- [verified] `OPENBOARD_FILM_MODE=false` disables Film routes without deleting
+  project data. Missing media tools degrade only `mp4Export`; local/PM2 startup,
+  other Film work and all non-Film services continue.
+- [external] Storyboard/audio/video generation requires operator-supplied model
+  configuration, credentials, quota and Provider availability. Paid real-Provider
+  smoke is opt-in and is not a required CI fixture.
+
+Evidence surfaces are `server/internal/api/film_*_test.go`,
+`web/src/lib/film-*.test.ts`, `web/src/services/film-*.test.ts`, the explicit
+credential-free Chromium `web/e2e/film.spec.ts` CI step, media-degradation script
+tests, deployment-environment audit, and container capability smoke. These are
+engineering tests of this repository; they are not an independent legal review.
+
 ## Intentional differences
 
 - OpenBoard uses PostgreSQL, Redis and protected media files in every runtime;
@@ -161,7 +193,7 @@ implementation evidence.
   loopback/LAN http(s) prompt-source URLs. Credential query parameters and
   redirects remain rejected.
 - OpenBoard adds audio nodes and durable audio jobs, image/video workbenches, plugin isolation, the browser
-  runtime, expanded MCP tools and a production-shaped local backend. These are
+  runtime, expanded MCP tools, Film Production Mode and a production-shaped local backend. These are
   additive and do not redefine the frozen reference requirements.
 - Hosted marketplace/payment infrastructure and organization-wide enterprise SSO
   remain outside this local multi-tenant product and parity claim.
@@ -171,14 +203,14 @@ implementation evidence.
 - [verified] Admin site policies: allowRegister / allowCustomChannel / allowCloudChannel via `/api/site-policy`, Settings admin toggles, AuthPanel registration gating, and backend generation enforcement
 - [verified] AI call logs: backend proxy audit with request/response summary, duration, model/channel; admin browse/filter/delete/cleanup at `/ai-logs` with secret redaction
 - [verified] Server material library: tenant-scoped URL/text catalog with browse/insert for users and admin CRUD (`/library`, `/api/library-assets`)
-- [verified] 768 Bun unit/integration tests at the 2026-08-05 verification baseline; the same run reports 81.71% line and 83.17% function coverage. CI publishes this report but does not currently enforce a numeric threshold
+- [verified] 833 Bun unit/integration tests at the 2026-08-09 local verification baseline; the same run reports 82.24% line and 83.42% function coverage. `bun run --cwd web test:coverage` and CI fail if either aggregate metric is below 80%
 - [verified] Go `test -race`, `vet`, API/WebSocket/MCP integration tests, and two binary builds; the v0.12.0 Agent follow-up also passes the focused API race suite
 - [verified] 136 passed and 8 intentional environment skips across Chromium, Firefox, WebKit, and mobile Chromium in CI run `29621823209`
 - [verified] 99/99 desktop Chromium scenarios passed against the production Vite build and isolated Go data directory in one sequential run (local run 2026-07-26)
 - [verified] 52 passed and 12 intentional desktop-only skips in production mobile Chromium
 - [verified] 7/7 formal PostgreSQL/Redis/media E2E with an isolated run ID, Redis DB 14, temporary media data, and zero test-database/Redis residue after cleanup
-- [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI
-- [verified] Clean-room identifier scan, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit
+- [verified] Docker Compose build and hardened PostgreSQL/Redis runtime smoke in CI; the current gate also checks the non-root user, exact distro FFmpeg package, FFmpeg/FFprobe paths/probes and Film MP4 capability
+- [verified] Clean-room identifier scan, deployment environment/script tests, strict direct-license audit, SPDX SBOM, and dependency vulnerability audit; container/base-image and FFmpeg redistribution review remain explicitly open release-audit items
 
 
 ### Public CHANGELOG Unreleased recheck (2026-07-24)

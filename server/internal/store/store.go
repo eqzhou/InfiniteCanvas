@@ -298,6 +298,128 @@ type FilmStore interface {
 	CompareAndSwapFilmProject(ctx context.Context, tenantID, projectID string, expectedRevision int, document []byte) (FilmRecord, error)
 }
 
+// FilmRestoreStore makes the film aggregate update and its rollback point one
+// durable operation. Tokens are stored as digests and are tenant/project bound.
+type FilmRestoreStore interface {
+	RestoreFilmProject(ctx context.Context, tenantID, projectID string, expectedRevision int, document []byte, tokenDigest string, expiresAt time.Time, createdMedia []WorkspaceMedia) (FilmRecord, error)
+	RollbackFilmProject(ctx context.Context, tenantID, projectID string, expectedRevision int, tokenDigest string, now time.Time) (FilmRecord, bool, error)
+}
+
+type WorkspaceProject struct {
+	ID       string          `json:"id"`
+	Document json.RawMessage `json:"document"`
+}
+
+type WorkspaceFilm struct {
+	ProjectID string          `json:"projectId"`
+	Revision  int             `json:"revision,omitempty"`
+	Document  json.RawMessage `json:"document"`
+}
+
+type WorkspaceGenerationJob struct {
+	Job       GenerationJob `json:"job"`
+	DeletedAt string        `json:"deletedAt,omitempty"`
+}
+
+type WorkspaceState struct {
+	Key    string          `json:"key"`
+	Exists bool            `json:"exists"`
+	Value  json.RawMessage `json:"value,omitempty"`
+}
+
+type WorkspaceMedia struct {
+	ProjectID  string `json:"projectId"`
+	StorageKey string `json:"storageKey"`
+}
+
+type FilmCleanupGeneration struct {
+	GenerationID string            `json:"generationId"`
+	ProjectID    string            `json:"projectId"`
+	Documents    []json.RawMessage `json:"documents"`
+	Media        []WorkspaceMedia  `json:"media"`
+}
+
+type FilmCleanupStore interface {
+	DeleteProjectWithFilmCleanup(ctx context.Context, tenantID, projectID, generationID string) error
+	ListFilmCleanupGenerations(ctx context.Context, tenantID, projectID string) ([]FilmCleanupGeneration, error)
+	CompleteFilmCleanupGeneration(ctx context.Context, tenantID, projectID, generationID string) error
+}
+
+type WorkspaceSnapshot struct {
+	Projects       []WorkspaceProject       `json:"projects"`
+	Films          []WorkspaceFilm          `json:"films"`
+	GenerationJobs []WorkspaceGenerationJob `json:"generationJobs"`
+	States         []WorkspaceState         `json:"states"`
+}
+
+type WorkspaceReplaceResult struct {
+	Version           string
+	CleanupProjectIDs []string
+}
+
+// WorkspaceStore atomically replaces board projects and their Film aggregates.
+// Its rollback token is opaque, tenant-bound, single-use, and CAS-protected by
+// the workspace version produced by the replacement.
+type WorkspaceStore interface {
+	WorkspaceVersion(ctx context.Context, tenantID string) (string, error)
+	ReplaceWorkspace(ctx context.Context, tenantID, expectedVersion, tokenDigest string, expiresAt time.Time, snapshot WorkspaceSnapshot, createdMedia []WorkspaceMedia) (WorkspaceReplaceResult, error)
+	ReplaceWorkspaceProject(ctx context.Context, tenantID, projectID, expectedVersion, tokenDigest string, expiresAt time.Time, project WorkspaceProject, film *WorkspaceFilm, createdMedia []WorkspaceMedia) (WorkspaceReplaceResult, error)
+	RollbackWorkspace(ctx context.Context, tenantID, expectedVersion, tokenDigest string, now time.Time) (WorkspaceReplaceResult, error)
+}
+
+func ComputeWorkspaceVersion(snapshot WorkspaceSnapshot) (string, error) {
+	projects := append([]WorkspaceProject(nil), snapshot.Projects...)
+	films := append([]WorkspaceFilm(nil), snapshot.Films...)
+	jobs := append([]WorkspaceGenerationJob(nil), snapshot.GenerationJobs...)
+	states := append([]WorkspaceState(nil), snapshot.States...)
+	sort.Slice(projects, func(i, j int) bool { return projects[i].ID < projects[j].ID })
+	sort.Slice(films, func(i, j int) bool { return films[i].ProjectID < films[j].ProjectID })
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Job.ID < jobs[j].Job.ID })
+	sort.Slice(states, func(i, j int) bool { return states[i].Key < states[j].Key })
+	hash := sha256.New()
+	for _, project := range projects {
+		var value any
+		if json.Unmarshal(project.Document, &value) != nil {
+			return "", ErrInvalidInput
+		}
+		canonical, _ := json.Marshal(value)
+		_, _ = hash.Write([]byte("project\x00" + project.ID + "\x00"))
+		_, _ = hash.Write(canonical)
+	}
+	for _, film := range films {
+		var value any
+		if json.Unmarshal(film.Document, &value) != nil {
+			return "", ErrInvalidInput
+		}
+		canonical, _ := json.Marshal(value)
+		_, _ = hash.Write([]byte("film\x00" + film.ProjectID + "\x00"))
+		_, _ = hash.Write(canonical)
+	}
+	for _, item := range jobs {
+		canonical, err := json.Marshal(item)
+		if err != nil || !json.Valid(item.Job.Parameters) || !json.Valid(item.Job.Result) {
+			return "", ErrInvalidInput
+		}
+		_, _ = hash.Write([]byte("job\x00" + item.Job.ID + "\x00"))
+		_, _ = hash.Write(canonical)
+	}
+	for _, state := range states {
+		if state.Exists && !json.Valid(state.Value) {
+			return "", ErrInvalidInput
+		}
+		_, _ = hash.Write([]byte("state\x00" + state.Key + "\x00"))
+		if state.Exists {
+			var value any
+			_ = json.Unmarshal(state.Value, &value)
+			canonical, _ := json.Marshal(value)
+			_, _ = hash.Write(canonical)
+		} else {
+			_, _ = hash.Write([]byte("absent"))
+		}
+	}
+	return "w1-" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 type Store interface {
 	Close()
 	Ping(context.Context) error

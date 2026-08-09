@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import core from "./pm2-env-core.cjs";
 
-const { missingRequiredKeys, resolveDeploymentEnv } = core;
+const { DEPLOYMENT_ENV_KEYS, missingRequiredKeys, resolveDeploymentEnv } = core;
 const root = "/srv/openboard";
 
 test(".env wins over an inherited shell variable", () => {
@@ -86,14 +86,45 @@ test("an explicit OpenBoard provider proxy remains available", () => {
   assert.equal(resolved.OPENBOARD_PROVIDER_PROXY_URL, "http://127.0.0.1:7899");
 });
 
-test("unrelated .env entries are still passed through", () => {
+test("only allowlisted deployment settings are passed through", () => {
   const resolved = resolveDeploymentEnv(
-    { OPENBOARD_TOKEN: "t", OPENBOARD_MASTER_KEY: "k", OPENBOARD_POSTGRES_PASSWORD: "p" },
-    {},
+    {
+      OPENBOARD_TOKEN: "t",
+      OPENBOARD_MASTER_KEY: "k",
+      OPENBOARD_FFMPEG_PATH: "/usr/bin/ffmpeg",
+      OPENBOARD_POSTGRES_PASSWORD: "must-not-leak",
+      NODE_OPTIONS: "--require /tmp/injected.cjs",
+    },
+    { OPENBOARD_UNKNOWN_SETTING: "must-not-leak", PATH: "/tmp/untrusted" },
     { root },
   );
   assert.equal(resolved.OPENBOARD_MASTER_KEY, "k");
-  assert.equal(resolved.OPENBOARD_POSTGRES_PASSWORD, "p");
+  assert.equal(resolved.OPENBOARD_FFMPEG_PATH, "/usr/bin/ffmpeg");
+  assert.equal(resolved.OPENBOARD_POSTGRES_PASSWORD, undefined);
+  assert.equal(resolved.OPENBOARD_UNKNOWN_SETTING, undefined);
+  assert.equal(resolved.NODE_OPTIONS, undefined);
+  assert.equal(resolved.PATH, undefined);
+});
+
+test("the PM2 allowlist includes both bounded media executables", () => {
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_FFMPEG_PATH"));
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_FFPROBE_PATH"));
+});
+
+test("final capability overrides can clear stale inherited media paths", () => {
+  const resolved = resolveDeploymentEnv(
+    {},
+    {
+      OPENBOARD_FFMPEG_PATH: "/stale/ffmpeg",
+      OPENBOARD_FFPROBE_PATH: "/stale/ffprobe",
+    },
+    {
+      root,
+      overrides: { OPENBOARD_FFMPEG_PATH: "", OPENBOARD_FFPROBE_PATH: "" },
+    },
+  );
+  assert.equal(resolved.OPENBOARD_FFMPEG_PATH, "");
+  assert.equal(resolved.OPENBOARD_FFPROBE_PATH, "");
 });
 
 test("required keys may come from either source", () => {

@@ -76,6 +76,7 @@ canvas.
 - Persistent image/video/audio generation jobs, history, retry, cancel, soft-delete tombstones, and canvas insertion; stale restore/update paths cannot resurrect deleted jobs. The image workbench adds side/bottom layouts, concurrent runs, persistent categories and filtering, reference/result previews with byte sizes, reusable assets, a draggable workflow entrance, common aspect-ratio presets, and per-channel/per-kind model preferences. Formal OpenAI/Gemini/APIMart/KIE/restricted-Template image, OpenAI/Ark/APIMart/KIE/restricted-Template video, OpenAI audio, and multi-step image workflows execute in the Go service and continue across browser reloads, including indexed canvas image batches
 - Public/personal image workflow templates with typed variables, DAG references, AI-assisted draft creation, durable step checkpoints, image-history children, and atomic canvas insertion
 - WebDAV project and full-workspace backup/restore for projects, assets, prompts, workflow templates, history, and deduplicated media
+- Local Film Production Mode: text/DOCX/text-layer PDF intake, review-gated decomposition, script → storyboard → parallel audio/video → compose → delivery stages, multitrack timeline, quality checks, scoped provider jobs, and manifest/SRT/asset-bundle delivery; MP4 assembly is an optional FFmpeg/FFprobe capability
 
 ### Phase 3 — Independent plugins
 - Manifest v2 permissions, registry install/enable/disable/upgrade/rollback/uninstall
@@ -123,6 +124,7 @@ ratio/resolution/size behavior.
 
 ```bash
 bun run test                         # web unit/integration tests + all Go packages
+bun run --cwd web test:coverage      # fail unless aggregate function/line coverage is >=80%
 bun run build                        # production web build
 bun run benchmark:indexes:assert     # 1k/10k spatial-index performance gate
 bun run audit:vulnerabilities        # fail-closed OSV scan for installed npm and Go modules
@@ -132,10 +134,11 @@ bun run test:e2e:formal               # temporary PostgreSQL + Redis DB 14 + med
 cd server && go test -race ./... && go vet ./...
 ```
 
-GitHub Actions runs the web tests, typecheck, production build, performance
-assertion, OSV dependency audit, cross-browser and production Playwright suites, Go race
-detector/vet/build, and container build plus a hardened runtime smoke test on
-pull requests. The dated count and coverage snapshot lives only in
+GitHub Actions runs the web tests, the aggregate 80% function/line coverage gate,
+typecheck, production build, performance assertion, OSV/deployment/license/clean-room
+audits, an explicit credential-free Film Chromium flow, cross-browser and production
+Playwright suites, Go race detector/vet/build, and container build plus a hardened
+runtime/media-capability smoke test on pull requests. The dated count and coverage snapshot lives only in
 `docs/FEATURE_PARITY.md`; use `bun run test` and the CI result as the live source
 of truth. Browser-only UI and persistence paths are validated by Playwright.
 
@@ -173,10 +176,13 @@ bun run start:local
 ```
 
 This command validates the required database, Redis, token, and encryption-key
-settings; builds the SPA with server storage enabled; starts the Go service; and
+settings; probes FFmpeg and FFprobe; builds the SPA with server storage enabled; starts the Go service; and
 serves the production build at http://localhost:5173. Projects and application
 state are stored in PostgreSQL, Redis is used only as a disposable cache, and
-media is stored under the user-scoped OpenBoard data directory. `bun run dev`
+media is stored under the user-scoped OpenBoard data directory. A missing or invalid
+media executable prints a diagnostic and clears both media paths so only MP4 export
+is disabled; it does not block the server, UI, imports, other film exports, or other
+services. `bun run dev`
 is the frontend development mode and must not be used as the formal local data
 entry point.
 
@@ -191,7 +197,9 @@ pm2 describe openboard-web
 
 PM2 serves the web UI at `http://127.0.0.1:5173` and the loopback API at
 `http://127.0.0.1:8790`. `pm2:start` reloads both processes with `.env`, then
-saves the process list.
+saves the process list. PM2 accepts only its explicit OpenBoard deployment-variable
+allowlist. `.env` outranks inherited shell values, and FFmpeg/FFprobe symlinks are
+resolved to executable real paths before they reach the Go capability probe.
 
 The database-backed end-to-end test uses one uniquely named
 `openboard_e2e_*` database, Redis database 14, and a temporary media directory.
@@ -217,7 +225,10 @@ container deployment uses its isolated `/data` volume.
 ### Production container
 
 The production image contains a prebuilt Vite SPA, a non-root Nginx listener,
-and the Go API bound only to loopback inside the container. Nginx serves the app
+the Go API bound only to loopback inside the container, and Alpine's signed
+`ffmpeg=8.0.1-r1` package from the digest-pinned Alpine 3.23 base. That one package
+provides `/usr/bin/ffmpeg` and `/usr/bin/ffprobe`; no standalone binary is downloaded.
+Nginx serves the app
 and proxies `/api/`. PostgreSQL is the authoritative project/state store, Redis
 is a disposable cache, and protected media uses the OpenBoard data volume by
 default. Set the optional `OPENBOARD_BLOB_BACKEND=s3` variables documented in
@@ -244,6 +255,10 @@ is required by Compose and should be a long random value.
 
 The container runs as an unprivileged user, drops Linux capabilities, uses a
 read-only root filesystem, and writes only to `/data` plus its in-memory `/tmp`.
+Compose bounds `/tmp` at 512 MiB. Render work directories live under the persistent
+`/data/film-render` boundary, are deleted after each bounded render, and stale
+server-named render directories are removed at container startup. Capacity-plan
+`/data` for source media, protected deliverables, and at least one render intermediate.
 Terminate TLS at a trusted reverse proxy for internet-facing deployments and
 set `OPENBOARD_ORIGINS` to the exact public origin. Do not publish the internal
 Go port. When `OPENBOARD_TOKEN` is set, the bundled reverse proxy injects it
@@ -255,13 +270,75 @@ To build and run without Compose:
 docker build -t openboard:local .
 export OPENBOARD_TOKEN="$(openssl rand -hex 32)"
 docker run --rm --read-only --cap-drop ALL \
-  --security-opt no-new-privileges --tmpfs /tmp:rw,size=128m \
+  --security-opt no-new-privileges --tmpfs /tmp:rw,size=512m \
   -p 127.0.0.1:8080:8080 \
   -v openboard-data:/data \
   -e OPENBOARD_TOKEN \
   -e OPENBOARD_ORIGINS=http://127.0.0.1:8080 \
   openboard:local
 ```
+
+### Deployment runbook: capability, backup, restore, and rollback
+
+After every start or upgrade, check the base service and the optional Film media
+capability separately:
+
+```bash
+bun run diagnose:media
+curl --fail http://127.0.0.1:8080/healthz
+curl --fail http://127.0.0.1:8080/api/film/capabilities
+docker compose exec -T openboard sh -c \
+  '"$OPENBOARD_FFMPEG_PATH" -hide_banner -version && "$OPENBOARD_FFPROBE_PATH" -hide_banner -version'
+```
+
+`available`/`import` describe Film Mode, while `mp4Export` and `mp4Diagnostic`
+describe local assembly. Provider generation is reported per stage and depends on
+configured active-channel models/credentials; health and deployment smoke tests do
+not require real Provider credentials.
+
+For a consistent Compose backup, stop application writes, then back up all three
+authoritative pieces. Redis is a disposable cache and is not restored:
+
+```bash
+mkdir -p backup
+chmod 700 backup
+docker compose stop openboard
+docker compose exec -T postgres pg_dump -U openboard_local -d openboard_local \
+  --format=custom > backup/openboard.dump
+docker compose run --rm --no-deps -T openboard tar -C /data -cf - . \
+  > backup/openboard-data.tar
+install -m 600 .env backup/openboard.env
+docker compose start openboard
+```
+
+If `OPENBOARD_BLOB_BACKEND=s3`, back up/version the configured bucket instead of
+treating `/data` as the complete media copy. Preserve the exact
+`OPENBOARD_MASTER_KEY`; without it, restored Provider/object-store credentials cannot
+be decrypted. WebDAV workspace exports are useful user-level archives but intentionally
+omit Provider credentials and do not replace a deployment backup.
+
+Restore only into a stopped deployment from one matched database/media/key snapshot:
+
+```bash
+docker compose stop openboard
+docker compose exec -T postgres dropdb -U openboard_local --if-exists openboard_local
+docker compose exec -T postgres createdb -U openboard_local openboard_local
+docker compose exec -T postgres pg_restore -U openboard_local -d openboard_local \
+  --no-owner --no-privileges < backup/openboard.dump
+docker compose run --rm --no-deps -T openboard tar -C /data -xf - \
+  < backup/openboard-data.tar
+docker compose start openboard
+```
+
+Before an upgrade, record `git rev-parse HEAD`, keep the prior `openboard:local`
+image under a release-specific local tag, and take the matched snapshot above. To
+roll back, stop OpenBoard, restore the prior database/media/key snapshot, retag the
+prior image as `openboard:local`, and run `docker compose up -d --no-build`. Do not
+run an older binary against a database already migrated by a newer build unless that
+release explicitly documents backward schema compatibility. For PM2, use the same
+database/media/key rule and preserve a release directory containing the matching
+`server/bin/openboard-server` and `web/dist-local`; reload that directory only after
+restore, then repeat health and capability checks.
 
 ## Tech stack
 

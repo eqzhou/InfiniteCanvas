@@ -161,12 +161,23 @@ describe("project media bundle", () => {
         id: "asset-1", revision: 1, kind: "style" as const, title: "Look",
         status: "draft" as const, description: "", mediaStorageKey: "image:film-asset",
       }],
+      deliverables: [{
+        id: "deliverable-mp4", revision: 1, kind: "mp4" as const, status: "approved" as const,
+        title: "Master MP4", mimeType: "video/mp4", storageKey: "film:deliverable:master",
+        bytes: 6, createdAt: "2026-08-08T00:00:00.000Z",
+      }, {
+        id: "deliverable-bundle", revision: 1, kind: "asset_bundle" as const, status: "approved" as const,
+        title: "Assets", mimeType: "application/zip", storageKey: "film:deliverable:assets",
+        bytes: 6, createdAt: "2026-08-08T00:00:00.000Z",
+      }],
     };
     const blobs = new Map<string, Blob>([
       ["image:film-shot", new Blob(["shot"], { type: "image/png" })],
       ["media:film-video", new Blob(["video"], { type: "video/mp4" })],
       ["media:film-audio", new Blob(["audio"], { type: "audio/mpeg" })],
       ["image:film-asset", new Blob(["asset"], { type: "image/png" })],
+      ["film:deliverable:master", new Blob(["master"], { type: "video/mp4" })],
+      ["film:deliverable:assets", new Blob(["assets"], { type: "application/zip" })],
     ]);
     const storage = memoryStorage(blobs).storage;
 
@@ -182,6 +193,7 @@ describe("project media bundle", () => {
     expect(restored.film?.shots[0]?.videoStorageKey).toBe("media:imported-2");
     expect(restored.film?.shots[0]?.audioStorageKey).toBe("media:imported-3");
     expect(restored.film?.assets[0]?.mediaStorageKey).toBe("image:imported-4");
+    expect(restored.film?.deliverables.map((item) => item.storageKey)).toEqual(["media:imported-5", "media:imported-6"]);
   });
 
   test("rejects corrupt film payload topology, duplicate ids, and broken relations", async () => {

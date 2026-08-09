@@ -65,3 +65,15 @@ test("every documented setting reaches the container", () => {
   const hostOnly = ["OPENBOARD_PORT", "OPENBOARD_BIND", "OPENBOARD_POSTGRES_PASSWORD", "OPENBOARD_REDIS_PASSWORD"];
   assert.deepEqual(unforwardedEnvNames(documented, compose, hostOnly), []);
 });
+
+test("the deployment sample documents bounded film resource controls", () => {
+  const documented = documentedEnvNames(readFileSync(join(root, ".env.example"), "utf8"));
+  for (const name of [
+    "OPENBOARD_FFMPEG_PATH",
+    "OPENBOARD_FFPROBE_PATH",
+    "OPENBOARD_FILM_IMPORT_MAX_BYTES",
+    "OPENBOARD_FILM_RENDER_TIMEOUT_SECONDS",
+  ]) {
+    assert.ok(documented.includes(name), `${name} must be documented`);
+  }
+});

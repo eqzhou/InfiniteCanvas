@@ -11,8 +11,7 @@ import {
 import { createDefaultChannel } from "@/lib/defaults";
 import { listModels } from "@/services/ai-client";
 import { webdavGetBlob, webdavPutBlob } from "@/services/webdav";
-import { exportCompleteProjectBundle, importCompleteProjectBundle } from "@/services/film-bundle";
-import { exportWorkspaceBundle, importWorkspaceBundle } from "@/lib/workspace-bundle";
+import { exportCompleteProjectBundle, exportCompleteWorkspaceBundle, importCompleteProjectBundle, importCompleteWorkspaceBundle } from "@/services/film-bundle";
 import { getProvider, normalizeChannel } from "@/lib/ai-config";
 import type { AiProviderKind } from "@/types/board";
 import type { AiTemplateConfig } from "@/types/board";
@@ -729,7 +728,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     void (async () => {
                       try {
                         const state = useBoardStore.getState();
-                        const bundle = await exportWorkspaceBundle({
+                        const bundle = await exportCompleteWorkspaceBundle({
                           projects: state.projects,
                           assets: state.assets,
                           prompts: state.prompts,
@@ -777,7 +776,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         if (!confirm("恢复完整工作区会替换当前项目、素材、提示词和生成历史。继续吗？")) return;
                         const state = useBoardStore.getState();
                         const blob = await webdavGetBlob(state.config, "openboard-workspace.obundle");
-                        await importWorkspaceBundle(blob, state.config, undefined, state.replaceWorkspace);
+                        await importCompleteWorkspaceBundle(blob, state.config);
                         alert("已恢复完整工作区");
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e));

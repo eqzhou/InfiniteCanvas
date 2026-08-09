@@ -110,6 +110,9 @@ func (s *Server) executeTool(ctx context.Context, scope agentScope, tool string,
 	if tenantID == "" {
 		tenantID = store.DefaultTenantID
 	}
+	if isReadOnlyServerTool(tool) {
+		return s.runAgentTool(ctx, tenantID, tool, arguments)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	release, err := s.acquireWriteLock()
@@ -118,6 +121,15 @@ func (s *Server) executeTool(ctx context.Context, scope agentScope, tool string,
 	}
 	defer release()
 	return s.runAgentTool(ctx, tenantID, tool, arguments)
+}
+
+func isReadOnlyServerTool(tool string) bool {
+	switch tool {
+	case "board.list_nodes", "board.export_json", "film.status", "film.list", "film.check", "film.proposals":
+		return true
+	default:
+		return false
+	}
 }
 
 func isBrowserRuntimeTool(tool string) bool {
@@ -135,7 +147,7 @@ func isBrowserRuntimeTool(tool string) bool {
 
 func (s *Server) runAgentTool(ctx context.Context, tenantID string, tool string, raw json.RawMessage) (any, error) {
 	switch tool {
-	case "film.status", "film.list", "film.validate", "film.run_stage":
+	case "film.status", "film.list", "film.check", "film.proposals", "film.validate", "film.run_stage":
 		return s.runFilmAgentTool(ctx, tenantID, tool, raw)
 	case "board.list_nodes":
 		var args projectArguments

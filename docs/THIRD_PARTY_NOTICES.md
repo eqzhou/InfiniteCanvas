@@ -37,6 +37,20 @@ Core MIT notice texts are included under `third_party/licenses/`; verify the
 complete upstream Rollup notice, including bundled dependency notices, before
 shipping a build that includes the native binding.
 
+## Container media package
+
+| Package | Version | Package source and declared license |
+|---|---:|---|
+| FFmpeg | 8.0.1-r1 | Alpine Linux v3.23 `community` signed package metadata; `GPL-2.0-or-later AND LGPL-2.1-or-later` |
+
+The digest-pinned Alpine 3.23 runtime installs this exact repository package,
+which provides both `/usr/bin/ffmpeg` and `/usr/bin/ffprobe`. No standalone
+binary is downloaded. This inventory records package metadata; it does not
+determine which license options apply to a particular FFmpeg build or complete
+source-offer, notice, codec/patent, or distribution obligations. Preserve the
+APK/base-image package records and complete the container redistribution review
+before shipping an image.
+
 The Go standard library is distributed under the Go license. Container base
 images, Nginx, Bun, and Playwright browser binaries require separate release
 inventory and attribution review.
@@ -46,5 +60,5 @@ inventory and attribution review.
 - [x] Generate a preliminary SPDX SBOM from the installed frozen web dependency tree
 - [x] Scan installed npm and Go module versions against OSV in CI
 - [ ] Include complete license texts and notices for shipped dependencies
-- [ ] Inventory container/base-image licenses
+- [ ] Complete container/base-image and FFmpeg build/redistribution license review
 - [ ] Review fonts, icons, screenshots, and generated media

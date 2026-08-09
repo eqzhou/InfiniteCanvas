@@ -33,7 +33,17 @@ type ProjectBundleManifest = {
 export type ImportedProjectBundle = {
   project: BoardProject;
   film?: FilmDocument;
+  media: ImportedBundleMedia[];
   cleanup: () => Promise<void>;
+  cleanupMigrated: (storageKeys: readonly string[]) => Promise<void>;
+};
+
+export type ImportedBundleMedia = {
+  storageKey: string;
+  mimeType: string;
+  bytes: number;
+  sha256: string;
+  objectVersion: string;
 };
 
 export type ProjectBundleStorage = {
@@ -49,6 +59,18 @@ export type ProjectBundleStorage = {
   remove: (kind: MediaKind, storageKey: string) => Promise<void>;
 };
 type StoredBundleMedia = Awaited<ReturnType<ProjectBundleStorage["store"]>>;
+
+async function digestHex(bytes: Uint8Array): Promise<string> {
+  const copy = new Uint8Array(bytes.byteLength); copy.set(bytes);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", copy.buffer))].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function importedMediaIdentity(bytes: Uint8Array, mimeType: string): Promise<{ sha256: string; objectVersion: string }> {
+  const prefix = new TextEncoder().encode(`${mimeType}\0`);
+  const versionBytes = new Uint8Array(prefix.length + bytes.length);
+  versionBytes.set(prefix); versionBytes.set(bytes, prefix.length);
+  return { sha256: await digestHex(bytes), objectVersion: `m1-${await digestHex(versionBytes)}` };
+}
 
 const defaultStorage: ProjectBundleStorage = {
   load: getBlob,
@@ -69,7 +91,11 @@ const defaultStorage: ProjectBundleStorage = {
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 function kindForStorageKey(storageKey: string): MediaKind {
-  return storageKey.startsWith("media:") ? "media" : "image";
+  return storageKey.startsWith("image:") ? "image" : "media";
+}
+
+function isFilmStorageKey(value: string): boolean {
+  return value.startsWith("image:") || value.startsWith("media:") || value.startsWith("film:");
 }
 
 function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[] {
@@ -96,6 +122,12 @@ function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[
   }
   for (const asset of film?.assets ?? []) {
     if (asset.mediaStorageKey) keys.add(asset.mediaStorageKey);
+  }
+  for (const track of film?.timeline.tracks ?? []) {
+    for (const clip of track.clips) if (isFilmStorageKey(clip.source)) keys.add(clip.source);
+  }
+  for (const deliverable of film?.deliverables ?? []) {
+    if (deliverable.storageKey) keys.add(deliverable.storageKey);
   }
   return [...keys];
 }
@@ -239,7 +271,7 @@ function parseManifest(value: unknown): ProjectBundleManifest {
   };
 }
 
-function parseBundleFilm(value: unknown, projectId: string): FilmDocument {
+export function parseBundleFilm(value: unknown, projectId: string): FilmDocument {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid film bundle payload");
   }
@@ -389,8 +421,15 @@ function parseBundleFilm(value: unknown, projectId: string): FilmDocument {
   uniqueRecords(deliverables, "deliverable");
   for (const value of deliverables) {
     const deliverable = value as Record<string, unknown>;
-    if ((deliverable.kind !== "manifest" && deliverable.kind !== "srt") || !validStatus(deliverable) ||
-      typeof deliverable.content !== "string" || !Number.isSafeInteger(deliverable.bytes) || deliverable.bytes !== new TextEncoder().encode(deliverable.content).byteLength) {
+    const kinds = new Set(["mp4", "srt", "manifest", "asset_bundle"]);
+    const external = typeof deliverable.storageKey === "string" && isFilmStorageKey(deliverable.storageKey);
+    const inline = typeof deliverable.content === "string";
+    const validBytes = deliverable.bytes === undefined || Number.isSafeInteger(deliverable.bytes) && Number(deliverable.bytes) >= 0;
+    const inlineBytesMatch = !inline || Number.isSafeInteger(deliverable.bytes) && deliverable.bytes === new TextEncoder().encode(deliverable.content as string).byteLength;
+    if (!kinds.has(String(deliverable.kind)) || !validStatus(deliverable) || typeof deliverable.title !== "string" ||
+      typeof deliverable.mimeType !== "string" || typeof deliverable.createdAt !== "string" || !Number.isFinite(Date.parse(deliverable.createdAt)) ||
+      !validBytes || !inlineBytesMatch || (inline && deliverable.kind !== "manifest" && deliverable.kind !== "srt") ||
+      (deliverable.storageKey !== undefined && !external)) {
       throw new Error("Invalid film deliverable");
     }
   }
@@ -475,6 +514,17 @@ function remapFilm(
       ...asset,
       mediaStorageKey: replace(asset.mediaStorageKey),
     })),
+    timeline: {
+      ...film.timeline,
+      tracks: film.timeline.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) => ({ ...clip, source: isFilmStorageKey(clip.source) ? replace(clip.source)! : clip.source })),
+      })),
+    },
+    deliverables: film.deliverables.map((deliverable) => ({
+      ...deliverable,
+      storageKey: replace(deliverable.storageKey),
+    })),
   };
 }
 
@@ -526,6 +576,7 @@ export async function importProjectBundlePayload(
 
   const replacements = new Map<string, StoredBundleMedia>();
   const stored: Array<{ kind: MediaKind; storageKey: string }> = [];
+  const importedMedia: ImportedBundleMedia[] = [];
   const panoramaKeys = new Set(project.nodes
     .filter((node) => node.type === "panorama" && node.metadata.storageKey)
     .map((node) => node.metadata.storageKey!));
@@ -557,14 +608,21 @@ export async function importProjectBundlePayload(
         }
       }
       replacements.set(item.storageKey, result);
+      const identity = await importedMediaIdentity(data, result.mimeType);
+      importedMedia.push({ storageKey: result.storageKey, mimeType: result.mimeType, bytes: result.bytes, ...identity });
     }
     const restored = remapProject(project, replacements);
     validateProjectPanoramaBudget(restored.nodes);
     return {
       project: restored,
       ...(film ? { film: remapFilm(film, replacements) } : {}),
+      media: importedMedia,
       cleanup: async () => {
         await Promise.all(stored.map((item) => storage.remove(item.kind, item.storageKey)));
+      },
+      cleanupMigrated: async (storageKeys) => {
+        const selected = new Set(storageKeys);
+        await Promise.all(stored.filter((item) => selected.has(item.storageKey)).map((item) => storage.remove(item.kind, item.storageKey)));
       },
     };
   } catch (error) {

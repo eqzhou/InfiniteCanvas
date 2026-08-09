@@ -168,6 +168,7 @@ type persistedMediaJobParameters struct {
 	Speed                float64                    `json:"speed,omitempty"`
 	Instructions         string                     `json:"instructions,omitempty"`
 	SharedChannel        *generationChannelSnapshot `json:"sharedChannel,omitempty"`
+	Film                 *filmGenerationBinding     `json:"film,omitempty"`
 }
 
 type serverMediaJobResult struct {
@@ -176,9 +177,11 @@ type serverMediaJobResult struct {
 }
 
 type mediaGenerationItem struct {
-	StorageKey string `json:"storageKey"`
-	MIMEType   string `json:"mimeType"`
-	Bytes      int    `json:"bytes"`
+	StorageKey    string `json:"storageKey"`
+	MIMEType      string `json:"mimeType"`
+	Bytes         int    `json:"bytes"`
+	SHA256        string `json:"sha256,omitempty"`
+	ObjectVersion string `json:"objectVersion,omitempty"`
 }
 
 func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
@@ -629,7 +632,8 @@ func (s *Server) executeClaimedMediaJob(claimed store.TenantGenerationJob, gener
 		finish("failed", nil, "生成失败，请检查模型服务配置后重试")
 		return
 	}
-	item, storageKey, err := s.persistGeneratedMedia(ctx, tenantID, "", job.ID, job.LeaseOwner, job.Kind, media)
+	filmBinding, _ := filmJobBinding(job)
+	item, storageKey, err := s.persistGeneratedMediaScoped(ctx, tenantID, "", job.ID, job.LeaseOwner, job.Kind, media, filmBinding != nil)
 	if err != nil {
 		log.Printf("server %s job %s/%s persistence failed: %v", job.Kind, tenantID, job.ID, err)
 		if storageKey != "" {
@@ -825,16 +829,27 @@ func validVideoCheckpoint(value videoProviderCheckpoint) bool {
 }
 
 func (s *Server) persistGeneratedMedia(ctx context.Context, tenantID, userID, jobID, attemptID, kind string, media generatedMedia) (mediaGenerationItem, string, error) {
+	return s.persistGeneratedMediaScoped(ctx, tenantID, userID, jobID, attemptID, kind, media, false)
+}
+
+func (s *Server) persistGeneratedMediaScoped(ctx context.Context, tenantID, userID, jobID, attemptID, kind string, media generatedMedia, protected bool) (mediaGenerationItem, string, error) {
 	mimeType, err := validateGeneratedMedia(kind, media)
 	if err != nil {
 		return mediaGenerationItem{}, "", err
 	}
 	sum := sha256.Sum256(append([]byte(fmt.Sprintf("%s:%s:", jobID, attemptID)), media.Data...))
 	key := "media:generated:" + kind + ":" + jobID + ":" + hex.EncodeToString(sum[:12])
+	if protected {
+		key = "film:media:" + kind + ":" + jobID + ":" + hex.EncodeToString(sum[:12])
+	}
 	if err := s.storeTenantBlob(ctx, tenantID, userID, key, mimeType, media.Data); err != nil {
 		return mediaGenerationItem{}, "", err
 	}
-	return mediaGenerationItem{StorageKey: key, MIMEType: mimeType, Bytes: len(media.Data)}, key, nil
+	stored, err := s.readTenantBlob(ctx, tenantID, key, int64(len(media.Data)))
+	if err != nil {
+		return mediaGenerationItem{}, key, err
+	}
+	return mediaGenerationItem{StorageKey: key, MIMEType: mimeType, Bytes: len(media.Data), SHA256: sha256Hex(media.Data), ObjectVersion: blobIdentityVersion(stored)}, key, nil
 }
 
 func validateGeneratedMedia(kind string, media generatedMedia) (string, error) {

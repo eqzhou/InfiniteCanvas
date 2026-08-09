@@ -345,6 +345,12 @@ func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
 	return filmQualityReport{ID: stableFilmID("quality", document.ProjectID, document.Revision), Revision: 1, CreatedAt: document.UpdatedAt, Issues: issues, Repairs: repairs}, nil
 }
 
+// checkFilmDocument performs the same deterministic checks as validation but
+// operates on a copy so a read-only caller cannot persist or approve a repair.
+func checkFilmDocument(document filmDocument) (filmQualityReport, error) {
+	return validateFilmDocument(cloneFilmDocument(document))
+}
+
 func applyFilmRepair(document filmDocument, repairID string) (filmDocument, error) {
 	var repair *filmRepairProposal
 	for reportIndex := range document.QualityReports {

@@ -16,9 +16,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath -ldflags="-s -w" -o /openboard-server ./cmd/server
 
 FROM nginx:1.30-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1 AS runtime
-RUN apk add --no-cache dumb-init gettext \
-    && mkdir -p /data /tmp/nginx/client_temp \
-    && chown -R nginx:nginx /data /tmp/nginx
+# The digest-pinned base is Alpine 3.23. Install its signed repository package
+# at an exact revision; do not fetch standalone media binaries.
+RUN apk add --no-cache dumb-init gettext ffmpeg=8.0.1-r1 \
+    && mkdir -p /data/film-render /tmp/openboard /tmp/nginx/client_temp \
+    && chown -R nginx:nginx /data /tmp/openboard /tmp/nginx
 
 COPY --from=web-build /src/web/dist /usr/share/nginx/html
 COPY --from=server-build /openboard-server /usr/local/bin/openboard-server
@@ -34,7 +36,10 @@ VOLUME ["/data"]
 
 ENV OPENBOARD_ADDR=127.0.0.1:8790 \
     OPENBOARD_DATA=/data \
-    OPENBOARD_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
+    OPENBOARD_ORIGINS=http://localhost:8080,http://127.0.0.1:8080 \
+    OPENBOARD_FFMPEG_PATH=/usr/bin/ffmpeg \
+    OPENBOARD_FFPROBE_PATH=/usr/bin/ffprobe \
+    TMPDIR=/tmp/openboard
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -q -T 2 -O /dev/null http://127.0.0.1:8080/healthz || exit 1

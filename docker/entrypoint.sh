@@ -25,11 +25,20 @@ case "${OPENBOARD_TOKEN:-}" in
 esac
 
 mkdir -p \
+  /tmp/openboard \
   /tmp/nginx/client_temp \
   /tmp/nginx/proxy_temp \
   /tmp/nginx/fastcgi_temp \
   /tmp/nginx/uwsgi_temp \
   /tmp/nginx/scgi_temp
+
+# A graceful render removes its own directory. Remove only server-named stale
+# render directories left by a prior container crash; unrelated media stays.
+if [ -d /data/film-render ]; then
+  find /data/film-render -mindepth 1 -maxdepth 1 -type d \
+    \( -name 'render-*' -o -name 'timeline-*' \) \
+    -exec rm -rf -- {} \;
+fi
 
 envsubst '${OPENBOARD_TOKEN}' \
   < /etc/nginx/nginx.conf \

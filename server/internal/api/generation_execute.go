@@ -246,6 +246,7 @@ type persistedImageJobParameters struct {
 	WorkflowRunID         string                     `json:"workflowRunId,omitempty"`
 	WorkflowStepID        string                     `json:"workflowStepId,omitempty"`
 	SharedChannel         *generationChannelSnapshot `json:"sharedChannel,omitempty"`
+	Film                  *filmGenerationBinding     `json:"film,omitempty"`
 }
 
 type storedImageProvider struct {
@@ -291,11 +292,13 @@ type storedConfigSecrets struct {
 }
 
 type generationResultItem struct {
-	StorageKey string `json:"storageKey"`
-	MIMEType   string `json:"mimeType"`
-	Width      int    `json:"width"`
-	Height     int    `json:"height"`
-	Bytes      int    `json:"bytes"`
+	StorageKey    string `json:"storageKey"`
+	MIMEType      string `json:"mimeType"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	Bytes         int    `json:"bytes"`
+	SHA256        string `json:"sha256,omitempty"`
+	ObjectVersion string `json:"objectVersion,omitempty"`
 }
 
 type serverImageJobResult struct {
@@ -714,7 +717,8 @@ func (s *Server) executeClaimedImageJob(claimed store.TenantGenerationJob) {
 		finish("failed", nil, imageGenerationFailureMessage(err))
 		return
 	}
-	items, keys, err := s.persistGeneratedImages(ctx, tenantID, "", job.ID, job.LeaseOwner, images)
+	filmBinding, _ := filmJobBinding(job)
+	items, keys, err := s.persistGeneratedImagesScoped(ctx, tenantID, "", job.ID, job.LeaseOwner, images, filmBinding != nil)
 	if err != nil {
 		log.Printf("server image job %s/%s result persistence failed: %v", tenantID, job.ID, err)
 		for _, storageKey := range keys {
@@ -973,6 +977,10 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 }
 
 func (s *Server) persistGeneratedImages(ctx context.Context, tenantID, userID, jobID, attemptID string, images []generatedImage) ([]generationResultItem, []string, error) {
+	return s.persistGeneratedImagesScoped(ctx, tenantID, userID, jobID, attemptID, images, false)
+}
+
+func (s *Server) persistGeneratedImagesScoped(ctx context.Context, tenantID, userID, jobID, attemptID string, images []generatedImage, protected bool) ([]generationResultItem, []string, error) {
 	if len(images) < 1 || len(images) > 8 {
 		return nil, nil, errors.New("invalid generated image count")
 	}
@@ -993,12 +1001,19 @@ func (s *Server) persistGeneratedImages(ctx context.Context, tenantID, userID, j
 		}
 		sum := sha256.Sum256(append([]byte(fmt.Sprintf("%s:%s:%d:", jobID, attemptID, index)), value.Data...))
 		storageKey := "image:generated:" + jobID + ":" + hex.EncodeToString(sum[:12])
+		if protected {
+			storageKey = "film:media:image:" + jobID + ":" + hex.EncodeToString(sum[:12])
+		}
 		if err := s.storeTenantBlob(ctx, tenantID, userID, storageKey, mimeType, value.Data); err != nil {
+			return nil, keys, err
+		}
+		stored, err := s.readTenantBlob(ctx, tenantID, storageKey, int64(len(value.Data)))
+		if err != nil {
 			return nil, keys, err
 		}
 		keys = append(keys, storageKey)
 		items = append(items, generationResultItem{
-			StorageKey: storageKey, MIMEType: mimeType, Width: width, Height: height, Bytes: len(value.Data),
+			StorageKey: storageKey, MIMEType: mimeType, Width: width, Height: height, Bytes: len(value.Data), SHA256: sha256Hex(value.Data), ObjectVersion: blobIdentityVersion(stored),
 		})
 	}
 	return items, keys, nil

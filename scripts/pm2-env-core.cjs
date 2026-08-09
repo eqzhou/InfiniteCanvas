@@ -13,6 +13,41 @@
  */
 const path = require("node:path");
 
+const DEPLOYMENT_ENV_KEYS = Object.freeze([
+  "OPENBOARD_ADDR",
+  "OPENBOARD_AGENT_ACCOUNT_EXECUTION",
+  "OPENBOARD_AGENT_WORKSPACE_ROOTS",
+  "OPENBOARD_API_TARGET",
+  "OPENBOARD_AUTH_MODE",
+  "OPENBOARD_BLOB_BACKEND",
+  "OPENBOARD_CLAUDE_PERMISSION_MODE",
+  "OPENBOARD_DATA",
+  "OPENBOARD_DATABASE_URL",
+  "OPENBOARD_DEBUG",
+  "OPENBOARD_FFMPEG_PATH",
+  "OPENBOARD_FFPROBE_PATH",
+  "OPENBOARD_FILM_IMPORT_MAX_BYTES",
+  "OPENBOARD_FILM_MODE",
+  "OPENBOARD_FILM_RENDER_TIMEOUT_SECONDS",
+  "OPENBOARD_LINUXDO_CLIENT_ID",
+  "OPENBOARD_LINUXDO_CLIENT_SECRET",
+  "OPENBOARD_LINUXDO_REDIRECT_URL",
+  "OPENBOARD_MASTER_KEY",
+  "OPENBOARD_ORIGINS",
+  "OPENBOARD_PROVIDER_PROXY_URL",
+  "OPENBOARD_PUBLIC_BASE_URL",
+  "OPENBOARD_REDIS_URL",
+  "OPENBOARD_S3_ACCESS_KEY_ID",
+  "OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK",
+  "OPENBOARD_S3_BUCKET",
+  "OPENBOARD_S3_ENDPOINT",
+  "OPENBOARD_S3_PREFIX",
+  "OPENBOARD_S3_REGION",
+  "OPENBOARD_S3_SECRET_ACCESS_KEY",
+  "OPENBOARD_S3_SESSION_TOKEN",
+  "OPENBOARD_TOKEN",
+]);
+
 /** Values this config owns; they describe the build, not the deployment. */
 const PROCESS_OWNED = Object.freeze({
   OPENBOARD_WEB_OUT_DIR: "dist-local",
@@ -43,20 +78,22 @@ function missingRequiredKeys(fileEnv, processEnv, required) {
  * Precedence, highest first: process-owned constants, `.env`, the inherited
  * shell environment, then built-in fallbacks.
  */
-function resolveDeploymentEnv(fileEnv, processEnv, { root }) {
-  // Only OPENBOARD_* is inherited; the rest of the shell is not deployment
-  // configuration and must not leak into the app environment.
+function resolveDeploymentEnv(fileEnv, processEnv, { root, overrides = {} }) {
+  // Only explicitly supported deployment keys are inherited. This keeps host
+  // package-manager, loader, proxy and Compose-only secrets out of PM2.
   const inherited = {};
-  for (const [key, value] of Object.entries(processEnv)) {
-    if (key.startsWith("OPENBOARD_") && value) inherited[key] = value;
+  const fromFile = {};
+  for (const key of DEPLOYMENT_ENV_KEYS) {
+    if (processEnv[key]) inherited[key] = processEnv[key];
+    if (fileEnv[key]) fromFile[key] = fileEnv[key];
   }
 
-  const resolved = { ...inherited, ...fileEnv };
+  const resolved = { ...inherited, ...fromFile };
   const fallbacks = { ...FALLBACKS, OPENBOARD_DATA: path.join(root, "server/data") };
   for (const [key, value] of Object.entries(fallbacks)) {
     if (!resolved[key]) resolved[key] = value;
   }
-  return { ...resolved, ...PROCESS_OWNED };
+  return { ...resolved, ...overrides, ...PROCESS_OWNED };
 }
 
-module.exports = { FALLBACKS, PROCESS_OWNED, missingRequiredKeys, resolveDeploymentEnv };
+module.exports = { DEPLOYMENT_ENV_KEYS, FALLBACKS, PROCESS_OWNED, missingRequiredKeys, resolveDeploymentEnv };

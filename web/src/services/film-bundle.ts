@@ -3,9 +3,97 @@ import {
   exportProjectBundle,
   importProjectBundlePayload,
   type ImportedProjectBundle,
+  type ImportedBundleMedia,
 } from "@/lib/project-bundle";
-import { loadFilmStatus, restoreFilmProduction } from "@/services/film-client";
-import { useBoardStore } from "@/stores/use-board-store";
+import { FilmAPIError, loadFilmStatus, type FilmRestoreMedia, type FilmRestoreMediaProvenance } from "@/services/film-client";
+import { adoptCommittedProject, adoptCommittedWorkspace, useBoardStore } from "@/stores/use-board-store";
+import {
+  exportWorkspaceBundle,
+  importWorkspaceBundle,
+  type WorkspaceBundleStorage,
+  type ImportedWorkspaceMedia,
+  type WorkspaceImportContext,
+  type WorkspaceSnapshot,
+} from "@/lib/workspace-bundle";
+import type { AppConfig } from "@/types/board";
+import type { FilmDocument } from "@/types/film";
+import { collectGenerationStorageKeysFromJobs, listAllGenerationJobs } from "@/services/generation-jobs";
+import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
+import { nowIso, uid } from "@/lib/id";
+import {
+  importProjectAtomically,
+  replaceCompleteWorkspace,
+  type CompleteWorkspaceTransactionInput,
+  type ProjectImportTransactionInput,
+  type ProjectImportTransactionResult,
+  type WorkspaceRestoreReceipt,
+} from "@/services/workspace-transactions";
+
+export function prepareFilmRestore(
+  document: FilmDocument,
+  imported: readonly (ImportedBundleMedia | ImportedWorkspaceMedia)[],
+): { document: FilmDocument; media: FilmRestoreMedia[] } {
+  const byKey = new Map(imported.map((item) => [item.storageKey, item]));
+  const provenance = new Map<string, FilmRestoreMediaProvenance[]>();
+  const add = (storageKey: string | undefined, value: FilmRestoreMediaProvenance) => {
+    if (!storageKey || !byKey.has(storageKey)) return;
+    provenance.set(storageKey, [...(provenance.get(storageKey) ?? []), value]);
+  };
+  for (const shot of document.shots) {
+    add(shot.imageStorageKey, { kind: "shot", entityId: shot.id, field: "imageStorageKey" });
+    add(shot.audioStorageKey, { kind: "shot", entityId: shot.id, field: "audioStorageKey" });
+    add(shot.videoStorageKey, { kind: "shot", entityId: shot.id, field: "videoStorageKey" });
+  }
+  for (const asset of document.assets) add(asset.mediaStorageKey, { kind: "asset", entityId: asset.id, field: "mediaStorageKey" });
+  for (const track of document.timeline.tracks) {
+    for (const clip of track.clips) add(clip.source, { kind: "timeline", entityId: clip.id, field: "source" });
+  }
+  for (const deliverable of document.deliverables) add(deliverable.storageKey, { kind: "deliverable", entityId: deliverable.id, field: "storageKey" });
+  const identity = (key?: string) => key ? byKey.get(key) : undefined;
+  const restoredDocument: FilmDocument = {
+    ...document,
+    shots: document.shots.map((shot) => {
+      const image = identity(shot.imageStorageKey), video = identity(shot.videoStorageKey), audio = identity(shot.audioStorageKey);
+      return { ...shot,
+        ...(image ? { imageSha256: image.sha256, imageObjectVersion: image.objectVersion, mediaMimeType: image.mimeType } : {}),
+        ...(video ? { videoSha256: video.sha256, videoObjectVersion: video.objectVersion, mediaMimeType: video.mimeType } : {}),
+        ...(audio ? { audioSha256: audio.sha256, audioObjectVersion: audio.objectVersion, mediaMimeType: audio.mimeType } : {}),
+      };
+    }),
+    assets: document.assets.map((asset) => { const item = identity(asset.mediaStorageKey); return item ? { ...asset, mediaMimeType: item.mimeType, mediaSha256: item.sha256, mediaObjectVersion: item.objectVersion } : { ...asset }; }),
+    deliverables: document.deliverables.map((deliverable) => { const item = identity(deliverable.storageKey); return item ? { ...deliverable, mimeType: item.mimeType, bytes: item.bytes, sha256: item.sha256, objectVersion: item.objectVersion } : { ...deliverable }; }),
+  };
+  const media = imported.flatMap((item): FilmRestoreMedia[] => {
+    const references = provenance.get(item.storageKey);
+    return references?.length ? [{ ...item, provenance: references }] : [];
+  });
+  return { document: restoredDocument, media };
+}
+
+function collectProjectStorageKeys(project: BoardProject, keys: Set<string>): void {
+  for (const node of project.nodes) {
+    if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
+    for (const key of node.metadata.referenceStorageKeys ?? []) keys.add(key);
+  }
+  for (const session of project.chatSessions) {
+    for (const message of session.messages) {
+      for (const image of message.images ?? []) if (image.storageKey) keys.add(image.storageKey);
+      for (const reference of message.references ?? []) if (reference.storageKey) keys.add(reference.storageKey);
+    }
+  }
+}
+
+export function collectNonFilmStorageKeys(snapshot: Omit<WorkspaceSnapshot, "films">): Set<string> {
+  const keys = new Set<string>();
+  for (const project of snapshot.projects) collectProjectStorageKeys(project, keys);
+  for (const asset of snapshot.assets) if (asset.storageKey) keys.add(asset.storageKey);
+  for (const key of collectGenerationStorageKeysFromJobs(snapshot.generationJobs)) keys.add(key);
+  return keys;
+}
+
+function unreferencedMigratedKeys(keys: readonly string[], retained: ReadonlySet<string>): string[] {
+  return [...new Set(keys)].filter((key) => !retained.has(key));
+}
 
 export async function exportCompleteProjectBundle(project: BoardProject): Promise<Blob> {
   const film = project.projectKind === "film"
@@ -16,19 +104,34 @@ export async function exportCompleteProjectBundle(project: BoardProject): Promis
 
 export type FilmBundleImportDependencies = {
   readBundle: (source: Blob | ArrayBuffer | Uint8Array) => Promise<ImportedProjectBundle>;
-  importProject: (project: BoardProject) => string;
-  persist: () => Promise<void>;
-  restoreFilm: typeof restoreFilmProduction;
-  deleteProjectsDurably: (ids: string[]) => Promise<void>;
+  prepareProject: (project: BoardProject) => BoardProject;
+  commitImport: (input: ProjectImportTransactionInput) => Promise<ProjectImportTransactionResult>;
+  adoptProject: (project: BoardProject) => void;
+  retainedStorageKeys: (project: BoardProject) => Promise<ReadonlySet<string>>;
 };
+
+function prepareImportedProject(project: BoardProject): BoardProject {
+  const timestamp = nowIso();
+  return { ...structuredClone(project), id: uid("proj"), title: `${project.title} (导入)`, createdAt: timestamp, updatedAt: timestamp };
+}
 
 function defaultImportDependencies(): FilmBundleImportDependencies {
   return {
     readBundle: importProjectBundlePayload,
-    importProject: (project) => useBoardStore.getState().importProject(project),
-    persist: () => useBoardStore.getState().persistNow(),
-    restoreFilm: restoreFilmProduction,
-    deleteProjectsDurably: (ids) => useBoardStore.getState().deleteProjectsDurably(ids),
+    prepareProject: prepareImportedProject,
+    commitImport: importProjectAtomically,
+    adoptProject: adoptCommittedProject,
+    retainedStorageKeys: async (project) => {
+      const state = useBoardStore.getState();
+      return collectNonFilmStorageKeys({
+        projects: [project, ...state.projects],
+        assets: state.assets,
+        prompts: state.prompts,
+        config: state.config,
+        generationJobs: await listAllGenerationJobs(),
+        workflowTemplates: await loadPersonalWorkflowTemplates(),
+      });
+    },
   };
 }
 
@@ -37,28 +140,101 @@ export async function importCompleteProjectBundleWithDependencies(
   dependencies: FilmBundleImportDependencies,
 ): Promise<string> {
   const payload = await dependencies.readBundle(source);
-  const importedProjectId = dependencies.importProject(payload.project);
+  const project = dependencies.prepareProject(payload.project);
+  let result: ProjectImportTransactionResult;
   try {
-    await dependencies.persist();
-    if (payload.film) {
-      await dependencies.restoreFilm(importedProjectId, {
+    const film = payload.film
+      ? prepareFilmRestore({
         ...payload.film,
-        projectId: importedProjectId,
-      });
-    }
-    return importedProjectId;
+        projectId: project.id,
+      }, payload.media)
+      : undefined;
+    result = await dependencies.commitImport({
+      project,
+      ...(film ? { film: { revision: 0, ...film } } : {}),
+    });
   } catch (error) {
-    try {
-      await dependencies.deleteProjectsDurably([importedProjectId]);
-    } catch (rollbackError) {
-      const reason = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
-      throw new Error(`Film bundle rollback incomplete; restored media was retained: ${reason}`, { cause: error });
-    }
     await payload.cleanup();
     throw error;
   }
+  dependencies.adoptProject(result.project);
+  try {
+    const retained = await dependencies.retainedStorageKeys(result.project);
+    await payload.cleanupMigrated(unreferencedMigratedKeys(result.migratedStorageKeys, retained));
+  } catch {
+    // The transaction is committed. Retaining redundant source objects is safer
+    // than letting import cleanup delete media now referenced by committed state.
+  }
+  return result.project.id;
 }
 
 export async function importCompleteProjectBundle(source: Blob | ArrayBuffer | Uint8Array): Promise<string> {
   return importCompleteProjectBundleWithDependencies(source, defaultImportDependencies());
+}
+
+export async function exportCompleteWorkspaceBundle(
+  snapshot: Omit<WorkspaceSnapshot, "films">,
+  storage?: WorkspaceBundleStorage,
+): Promise<Blob> {
+  const filmProjects = snapshot.projects.filter((project) => project.projectKind === "film");
+  const films = await Promise.all(filmProjects.map(async (project) => (await loadFilmStatus(project.id)).document));
+  return exportWorkspaceBundle({ ...snapshot, films }, storage);
+}
+
+export async function importCompleteWorkspaceBundle(
+  source: Blob | ArrayBuffer | Uint8Array,
+  localConfig: AppConfig,
+  storage?: WorkspaceBundleStorage,
+): Promise<WorkspaceSnapshot> {
+  return importCompleteWorkspaceBundleWithDependencies(source, localConfig, storage, {
+    importWorkspace: importWorkspaceBundle,
+    loadFilm: loadFilmStatus,
+    commitWorkspace: replaceCompleteWorkspace,
+    adoptWorkspace: adoptCommittedWorkspace,
+  });
+}
+
+export type CompleteWorkspaceBundleDependencies = {
+  importWorkspace: (
+    source: Blob | ArrayBuffer | Uint8Array,
+    localConfig: AppConfig,
+    storage: WorkspaceBundleStorage | undefined,
+    apply?: (snapshot: WorkspaceSnapshot, context: WorkspaceImportContext) => Promise<WorkspaceSnapshot | void>,
+  ) => Promise<WorkspaceSnapshot>;
+  loadFilm: typeof loadFilmStatus;
+  commitWorkspace: (input: CompleteWorkspaceTransactionInput) => Promise<WorkspaceRestoreReceipt>;
+  adoptWorkspace: (snapshot: WorkspaceSnapshot) => void;
+};
+
+async function currentFilmRevision(projectId: string, load: typeof loadFilmStatus): Promise<number> {
+  try { return (await load(projectId)).recordRevision; }
+  catch (cause) {
+    if (cause instanceof FilmAPIError && cause.status === 404) return 0;
+    throw cause;
+  }
+}
+
+export async function importCompleteWorkspaceBundleWithDependencies(
+  source: Blob | ArrayBuffer | Uint8Array,
+  localConfig: AppConfig,
+  storage: WorkspaceBundleStorage | undefined,
+  dependencies: CompleteWorkspaceBundleDependencies,
+): Promise<WorkspaceSnapshot> {
+  return dependencies.importWorkspace(source, localConfig, storage, async (snapshot, context) => {
+    const { films: bundledFilms = [], ...workspace } = snapshot;
+    const films = await Promise.all(bundledFilms.map(async (film) => ({
+      revision: await currentFilmRevision(film.projectId, dependencies.loadFilm),
+      ...prepareFilmRestore(film, context.media),
+    })));
+    const receipt = await dependencies.commitWorkspace({ snapshot: workspace, films });
+    const committed: WorkspaceSnapshot = { ...workspace, films: films.map((item) => item.document) };
+    dependencies.adoptWorkspace(committed);
+    const retained = collectNonFilmStorageKeys(workspace);
+    try {
+      await context.cleanupMigrated(unreferencedMigratedKeys(receipt.migratedStorageKeys, retained));
+    } catch {
+      // Imported objects are retained when post-commit cleanup is uncertain.
+    }
+    return committed;
+  });
 }

@@ -114,7 +114,7 @@ func (s *Server) createFilmEpisode(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusCreated, record, document)
+		s.writeFilmDocument(w, r, http.StatusCreated, record, document)
 	}
 }
 
@@ -155,7 +155,7 @@ func (s *Server) updateFilmEpisode(w http.ResponseWriter, r *http.Request) {
 		return filmDocument{}, errors.New("episode not found")
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -198,7 +198,7 @@ func (s *Server) deleteFilmEpisode(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -252,7 +252,7 @@ func (s *Server) createFilmScene(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusCreated, record, document)
+		s.writeFilmDocument(w, r, http.StatusCreated, record, document)
 	}
 }
 
@@ -287,7 +287,7 @@ func (s *Server) updateFilmScene(w http.ResponseWriter, r *http.Request) {
 		return filmDocument{}, errors.New("scene not found")
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -321,7 +321,7 @@ func (s *Server) deleteFilmScene(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -335,6 +335,11 @@ func filmSceneExists(document filmDocument, id string) bool {
 }
 
 func applyFilmShotInput(shot filmShot, input filmShotInput, create bool) (filmShot, error) {
+	if (input.ImageStorageKey != nil && strings.TrimSpace(*input.ImageStorageKey) != "") ||
+		(input.VideoStorageKey != nil && strings.TrimSpace(*input.VideoStorageKey) != "") ||
+		(input.AudioStorageKey != nil && strings.TrimSpace(*input.AudioStorageKey) != "") {
+		return filmShot{}, errors.New("shot media storage keys can only be bound by generation sync")
+	}
 	var err error
 	if create || input.SceneID != nil {
 		shot.SceneID, err = cleanFilmText(input.SceneID, "sceneId", 128, true)
@@ -418,7 +423,7 @@ func (s *Server) createFilmShot(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusCreated, record, document)
+		s.writeFilmDocument(w, r, http.StatusCreated, record, document)
 	}
 }
 
@@ -453,7 +458,7 @@ func (s *Server) updateFilmShot(w http.ResponseWriter, r *http.Request) {
 		return filmDocument{}, errors.New("shot not found")
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -481,7 +486,7 @@ func (s *Server) deleteFilmShot(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -490,6 +495,9 @@ var filmAssetKinds = map[string]struct{}{
 }
 
 func applyFilmAssetInput(asset filmAsset, input filmAssetInput, create bool) (filmAsset, error) {
+	if input.MediaStorageKey != nil && strings.TrimSpace(*input.MediaStorageKey) != "" {
+		return filmAsset{}, errors.New("asset media storage keys can only be bound by a verified media sync")
+	}
 	var err error
 	if create || input.Kind != nil {
 		asset.Kind, err = cleanFilmText(input.Kind, "kind", 32, true)
@@ -549,7 +557,7 @@ func (s *Server) createFilmAsset(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "storyboard", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusCreated, record, document)
+		s.writeFilmDocument(w, r, http.StatusCreated, record, document)
 	}
 }
 
@@ -579,7 +587,7 @@ func (s *Server) updateFilmAsset(w http.ResponseWriter, r *http.Request) {
 		return filmDocument{}, errors.New("asset not found")
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -606,6 +614,6 @@ func (s *Server) deleteFilmAsset(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "storyboard", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }

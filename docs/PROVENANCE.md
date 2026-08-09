@@ -27,6 +27,8 @@ working-tree action was clean-room compliant.
 | Director screenshot synchronization | Original tenant resource contract built on this repository's protected blob and CAS-state boundaries, informed only by Tiger's public director/cloud-sync behavior names | PNG validation, isolation, quota compensation and prune API tests plus independent-browser formal E2E |
 | Codex panel and OpenBoard Codex plugin | Original local integration over public app-server/MCP concepts | Fake app-server tests, Markdown/attachment/interrupt/approval E2E, owner-only connection-file tests |
 | Codex model controls and Agent diagnostics | Original bounded adapter and shared React components based on the official Codex App Server protocol plus public Basket release/CHANGELOG behavior names | Fake app-server catalog/turn tests, Bun normalization/diagnostic tests, typecheck, and Agent E2E assertions |
+| Film Production Mode | Repository-authored project/stage/timeline/delivery contracts using generic production-workflow concepts and public Provider protocols; recorded as a local additive capability rather than reference parity | Film Go/unit tests, Bun film document/import/timeline/client tests, credential-free Chromium Film E2E, and bounded FFmpeg/FFprobe capability tests |
+| Deployment media capability | Repository-authored optional-capability diagnostics and hardened container integration; FFmpeg itself is the Alpine-distributed third-party package listed in `THIRD_PARTY_NOTICES.md` | Script RED/GREEN tests, deployment environment audit, exact-package container smoke, non-root/read-only/tmpfs checks, and capability endpoint verification |
 
 ## Reference behavior
 
@@ -48,3 +50,7 @@ the listed icon dependency. Review generated screenshots before distribution.
 - [x] Dated public behavior specification log
 - [ ] Independent similarity review
 - [ ] Counsel review for copyright, AGPL boundary, trademark, trade dress, and patents
+
+The entries above record implementation intent and test surfaces only. They do
+not close the unchecked contributor, similarity, dependency-notice, container
+redistribution, or counsel review items.

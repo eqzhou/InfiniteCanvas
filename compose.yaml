@@ -74,6 +74,12 @@ services:
       OPENBOARD_S3_SESSION_TOKEN: "${OPENBOARD_S3_SESSION_TOKEN:-}"
       OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK: "${OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK:-false}"
       OPENBOARD_FILM_MODE: "${OPENBOARD_FILM_MODE:-true}"
+      # The image owns these exact package paths. Empty/invalid host overrides
+      # are ignored here so Compose cannot accidentally hide image capability.
+      OPENBOARD_FFMPEG_PATH: /usr/bin/ffmpeg
+      OPENBOARD_FFPROBE_PATH: /usr/bin/ffprobe
+      OPENBOARD_FILM_IMPORT_MAX_BYTES: "${OPENBOARD_FILM_IMPORT_MAX_BYTES:-52428800}"
+      OPENBOARD_FILM_RENDER_TIMEOUT_SECONDS: "${OPENBOARD_FILM_RENDER_TIMEOUT_SECONDS:-900}"
       OPENBOARD_DEBUG: "${OPENBOARD_DEBUG:-false}"
       # Direct provider traffic remains the default; opt in explicitly.
       OPENBOARD_PROVIDER_PROXY_URL: "${OPENBOARD_PROVIDER_PROXY_URL:-}"
@@ -81,7 +87,7 @@ services:
       - openboard-data:/data
     read_only: true
     tmpfs:
-      - /tmp:size=128m,mode=1777,uid=101,gid=101
+      - /tmp:size=512m,mode=1777,uid=101,gid=101
     security_opt:
       - no-new-privileges:true
     cap_drop:

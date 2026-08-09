@@ -55,6 +55,25 @@ func TestFilmValidationCreatesNonDestructiveRepairs(t *testing.T) {
 	}
 }
 
+func TestFilmReadOnlyCheckDoesNotPersistOrApproveProposals(t *testing.T) {
+	document, err := decomposeFilmSource(newFilmDocument("project-check"), "INT. ROOM - DAY\nA light flickers.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := checkFilmDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.QualityReports) != 0 || len(report.Repairs) == 0 {
+		t.Fatalf("read-only check mutated document or omitted proposals: %#v", document.QualityReports)
+	}
+	for _, proposal := range report.Repairs {
+		if proposal.Approved || proposal.AppliedAt != "" {
+			t.Fatalf("proposal self-approved: %#v", proposal)
+		}
+	}
+}
+
 func TestApplyFilmRepairRequiresApprovalAndRevision(t *testing.T) {
 	document, err := decomposeFilmSource(newFilmDocument("project-repair"), "INT. SOUNDSTAGE - DAY\nAn actor crosses the empty set.")
 	if err != nil {
@@ -260,5 +279,34 @@ func TestBuildFFmpegArgumentsUsesValidatedArgumentsWithoutShell(t *testing.T) {
 	timeline.Tracks[0].Clips[0].Source = "https://example.com/input.mp4;touch /tmp/pwned"
 	if _, err := buildFilmFFmpegArguments(timeline, "/private/output.mp4"); err == nil {
 		t.Fatal("unsafe clip source was accepted")
+	}
+}
+
+func TestBuildFFmpegArgumentsPreservesVideoGapsAndRejectsOverlap(t *testing.T) {
+	timeline := defaultFilmTimeline()
+	timeline.Tracks[0].Clips = []filmTimelineClip{
+		{ID: "clip-a", Source: "/private/a.mp4", Start: 2, End: 4, Transition: "cut", Revision: 1},
+		{ID: "clip-b", Source: "/private/b.mp4", Start: 5, End: 7, Transition: "cut", Revision: 1, Order: 1},
+	}
+	args, err := buildFilmFFmpegArguments(timeline, "/private/output.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "color=c=black") || !strings.Contains(joined, "setpts=PTS-STARTPTS+2.000/TB") || !strings.Contains(joined, "d=7.000") {
+		t.Fatalf("video gap lost from filter graph: %s", joined)
+	}
+	timeline.Tracks[0].Clips[1].Start = 3.5
+	if _, err := buildFilmFFmpegArguments(timeline, "/private/output.mp4"); err == nil {
+		t.Fatal("overlapping video clips were silently accepted")
+	}
+}
+
+func TestFilmTimelineRejectsExcessivePixelFrameBudget(t *testing.T) {
+	timeline := defaultFilmTimeline()
+	timeline.Width, timeline.Height, timeline.FrameRate = 3840, 2160, 60
+	timeline.Tracks[0].Clips = []filmTimelineClip{{ID: "expensive", Source: "/private/a.mp4", Start: 0, End: 3600, Transition: "cut", Revision: 1}}
+	if err := validateFilmTimeline(timeline); err == nil {
+		t.Fatal("excessive pixel-frame render budget was accepted")
 	}
 }

@@ -117,6 +117,11 @@ func (m *memoryStore) DeleteProject(_ context.Context, tenantID, id string) erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.projects, tenantKey(tenantID, id))
+	for key, job := range m.jobs {
+		if strings.HasPrefix(key, tenantKey(tenantID, "")) && job.ProjectID == id {
+			delete(m.jobs, key)
+		}
+	}
 	return nil
 }
 func (m *memoryStore) GetState(_ context.Context, tenantID, key string) ([]byte, error) {

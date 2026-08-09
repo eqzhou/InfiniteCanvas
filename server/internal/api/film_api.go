@@ -46,8 +46,24 @@ type filmProjectionCommitRequest struct {
 }
 
 type filmRestoreRequest struct {
-	Revision int          `json:"revision"`
-	Document filmDocument `json:"document"`
+	Revision int                `json:"revision"`
+	Document filmDocument       `json:"document"`
+	Media    []filmRestoreMedia `json:"media,omitempty"`
+}
+
+type filmRestoreMediaProvenance struct {
+	Kind     string `json:"kind"`
+	EntityID string `json:"entityId"`
+	Field    string `json:"field"`
+}
+
+type filmRestoreMedia struct {
+	StorageKey    string                       `json:"storageKey"`
+	MIMEType      string                       `json:"mimeType"`
+	Bytes         int64                        `json:"bytes"`
+	SHA256        string                       `json:"sha256"`
+	ObjectVersion string                       `json:"objectVersion"`
+	Provenance    []filmRestoreMediaProvenance `json:"provenance"`
 }
 
 func mountFilmRoutes(r chi.Router, server *Server) {
@@ -55,7 +71,7 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 	r.Route("/film/projects/{projectId}", func(r chi.Router) {
 		r.Get("/status", server.getFilmStatus)
 		r.Put("/source/text", server.putFilmSource)
-		r.Post("/source/import", server.putFilmSource)
+		r.Post("/source/import", server.importFilmSource)
 		r.Post("/episodes", server.createFilmEpisode)
 		r.Put("/episodes/{entityId}", server.updateFilmEpisode)
 		r.Delete("/episodes/{entityId}", server.deleteFilmEpisode)
@@ -69,6 +85,11 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Put("/assets/{entityId}", server.updateFilmAsset)
 		r.Delete("/assets/{entityId}", server.deleteFilmAsset)
 		r.Post("/stages/{stageId}/run", server.runFilmStage)
+		r.Post("/stages/{stageId}/sync", server.syncFilmStage)
+		r.Get("/generation-jobs", server.listFilmGenerationJobs)
+		r.Post("/generation-jobs/{jobId}/sync", server.syncFilmGenerationJob)
+		r.Post("/generation-jobs/{jobId}/retry", server.retryFilmGenerationJob)
+		r.Post("/generation-jobs/{jobId}/cancel", server.cancelFilmGenerationJob)
 		r.Post("/stages/{stageId}/approve", server.approveFilmStage)
 		r.Post("/stages/{stageId}/reject", server.rejectFilmStage)
 		r.Post("/validate", server.validateFilmProduction)
@@ -81,12 +102,14 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Get("/deliverables", server.listFilmDeliverables)
 		r.Get("/deliverables/{deliverableId}/download", server.downloadFilmDeliverable)
 		r.Put("/restore", server.restoreFilmProduction)
+		r.Post("/restore/rollback", server.rollbackFilmProductionRestore)
+		r.Post("/cleanup", server.retryFilmMediaCleanup)
 	})
 	r.Get("/film/projects/{projectId}", server.getFilmProduction)
 	r.Post("/film/projects/{projectId}", server.createFilmProduction)
 }
 
-func (s *Server) getFilmCapabilities(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 	_, storageAvailable := s.store.(store.FilmStore)
 	available := filmModeEnabled() && storageAvailable
 	reason := ""
@@ -95,12 +118,46 @@ func (s *Server) getFilmCapabilities(w http.ResponseWriter, _ *http.Request) {
 	} else if !storageAvailable {
 		reason = "Durable film storage is unavailable"
 	}
-	writeJSON(w, map[string]any{"data": map[string]any{
-		"available":     available,
-		"reason":        reason,
-		"mp4Export":     false,
-		"mp4Diagnostic": "MP4 export is disabled until a bounded multitrack renderer is available",
-	}})
+	_, renderAvailable, renderDiagnostic := s.filmFFmpegCapability(r.Context())
+	if !available {
+		renderAvailable = false
+	}
+	generation := map[string]bool{"storyboard": false, "audio": false, "video": false}
+	if available && s.secrets != nil {
+		var config storedImageConfig
+		if raw, err := s.store.GetState(r.Context(), tenantIDFrom(r), "config"); err == nil && len(raw) <= 1<<20 && json.Unmarshal(raw, &config) == nil {
+			for _, channel := range config.Channels {
+				if channel.ID != config.ActiveChannelID {
+					continue
+				}
+				generation["storyboard"] = strings.TrimSpace(channel.DefaultImageModel) != ""
+				generation["audio"] = strings.TrimSpace(channel.DefaultAudioModel) != ""
+				generation["video"] = strings.TrimSpace(channel.DefaultVideoModel) != ""
+			}
+		}
+	}
+	generationAvailable := generation["storyboard"] || generation["audio"] || generation["video"]
+	return map[string]any{
+		"available":         available,
+		"reason":            reason,
+		"import":            available,
+		"generation":        generationAvailable,
+		"generationStages":  generation,
+		"stageGeneration":   generationAvailable,
+		"generationJobs":    available && s.store != nil,
+		"render":            renderAvailable,
+		"package":           available,
+		"assetBundleExport": available,
+		"docxImport":        available,
+		"pdfImport":         available,
+		"importMaxBytes":    filmImportByteLimit(),
+		"mp4Export":         renderAvailable,
+		"mp4Diagnostic":     renderDiagnostic,
+	}
+}
+
+func (s *Server) getFilmCapabilities(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"data": s.filmCapabilityData(r)})
 }
 
 func filmModeEnabled() bool {
@@ -126,13 +183,30 @@ func writeFilmError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, map[string]any{"error": map[string]any{"code": code, "message": message}})
 }
 
-func writeFilmDocument(w http.ResponseWriter, status int, record store.FilmRecord, document filmDocument) {
+func (s *Server) writeFilmDocument(w http.ResponseWriter, r *http.Request, status int, record store.FilmRecord, document filmDocument) {
+	s.writeFilmDocumentWithRehydration(w, r, status, record, document, nil)
+}
+
+func (s *Server) writeFilmDocumentWithRehydration(w http.ResponseWriter, r *http.Request, status int, record store.FilmRecord, document filmDocument, migratedStorageKeys []string) {
+	s.writeFilmDocumentWithRestoreMetadata(w, r, status, record, document, migratedStorageKeys, "")
+}
+
+func (s *Server) writeFilmDocumentWithRestoreMetadata(w http.ResponseWriter, r *http.Request, status int, record store.FilmRecord, document filmDocument, migratedStorageKeys []string, restoreToken string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", record.Revision))
 	w.WriteHeader(status)
+	meta := map[string]any{"recordRevision": record.Revision, "updatedAt": record.UpdatedAt}
+	if migratedStorageKeys != nil {
+		rehydration := map[string]any{"migratedStorageKeys": migratedStorageKeys}
+		if restoreToken != "" {
+			rehydration["restoreToken"] = restoreToken
+		}
+		meta["rehydration"] = rehydration
+	}
 	writeJSON(w, map[string]any{
-		"data": document,
-		"meta": map[string]any{"recordRevision": record.Revision, "updatedAt": record.UpdatedAt},
+		"data":         document,
+		"meta":         meta,
+		"capabilities": s.filmCapabilityData(r),
 	})
 }
 
@@ -243,6 +317,7 @@ func (s *Server) mutateFilmProduction(
 		writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be saved")
 		return store.FilmRecord{}, filmDocument{}, false
 	}
+	s.cancelPostCASFilmTasks(r.Context(), tenantIDFrom(r), record.ProjectID, document.Tasks, next.Tasks)
 	return updated, next, true
 }
 
@@ -265,7 +340,7 @@ func writeFilmOperationError(w http.ResponseWriter, err error) {
 func (s *Server) getFilmProduction(w http.ResponseWriter, r *http.Request) {
 	_, record, document, ok := s.loadFilmProduction(w, r, false)
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -277,7 +352,7 @@ func (s *Server) createFilmProduction(w http.ResponseWriter, r *http.Request) {
 	}
 	_, record, document, ok := s.loadFilmProduction(w, r, true)
 	if ok {
-		writeFilmDocument(w, http.StatusCreated, record, document)
+		s.writeFilmDocument(w, r, http.StatusCreated, record, document)
 	}
 }
 
@@ -288,13 +363,9 @@ func (s *Server) getFilmStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", record.Revision))
 	writeJSON(w, map[string]any{
-		"data": document,
-		"meta": map[string]any{"recordRevision": record.Revision, "updatedAt": record.UpdatedAt},
-		"capabilities": map[string]any{
-			"plainTextImport": true, "markdownImport": true, "docxImport": false, "pdfImport": false,
-			"mp4Export":     false,
-			"mp4Diagnostic": "MP4 export is disabled until a bounded multitrack renderer is available",
-		},
+		"data":         document,
+		"meta":         map[string]any{"recordRevision": record.Revision, "updatedAt": record.UpdatedAt},
+		"capabilities": s.filmCapabilityData(r),
 	})
 }
 
@@ -333,7 +404,7 @@ func (s *Server) putFilmSource(w http.ResponseWriter, r *http.Request) {
 		return decomposeFilmSource(document, input.Text)
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -351,11 +422,18 @@ func (s *Server) changeFilmStage(w http.ResponseWriter, r *http.Request, action 
 		if action == "run" {
 			status = http.StatusAccepted
 		}
-		writeFilmDocument(w, status, record, document)
+		s.writeFilmDocument(w, r, status, record, document)
 	}
 }
 
-func (s *Server) runFilmStage(w http.ResponseWriter, r *http.Request) { s.changeFilmStage(w, r, "run") }
+func (s *Server) runFilmStage(w http.ResponseWriter, r *http.Request) {
+	switch chi.URLParam(r, "stageId") {
+	case "storyboard", "audio", "video":
+		s.runFilmGenerationStage(w, r)
+	default:
+		s.changeFilmStage(w, r, "run")
+	}
+}
 func (s *Server) approveFilmStage(w http.ResponseWriter, r *http.Request) {
 	s.changeFilmStage(w, r, "approve")
 }
@@ -381,7 +459,7 @@ func (s *Server) validateFilmProduction(w http.ResponseWriter, r *http.Request) 
 		return document, nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -411,7 +489,7 @@ func (s *Server) applyFilmRepairProposal(w http.ResponseWriter, r *http.Request)
 		return applyFilmRepair(document, repairID)
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -531,7 +609,7 @@ func (s *Server) commitFilmProjectionEntity(w http.ResponseWriter, r *http.Reque
 		return applyFilmProjectionCommit(document, input)
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -561,7 +639,7 @@ func (s *Server) putFilmTimeline(w http.ResponseWriter, r *http.Request) {
 		return invalidateFilmStages(document, "compose", document.UpdatedAt), nil
 	})
 	if ok {
-		writeFilmDocument(w, http.StatusOK, record, document)
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
 
@@ -572,45 +650,15 @@ func (s *Server) createFilmExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
-	if input.Kind == "mp4" {
-		writeFilmError(w, http.StatusNotImplemented, "mp4_export_disabled", "MP4 export is disabled until a bounded multitrack renderer is available")
+	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
+	if input.IdempotencyKey == "" && input.Revision >= 0 && input.Kind != "" {
+		input.IdempotencyKey = fmt.Sprintf("export:%s:%d", input.Kind, input.Revision)
+	}
+	if !validFilmIdempotencyKey(input.IdempotencyKey) {
+		writeFilmError(w, http.StatusUnprocessableEntity, "idempotency_key_invalid", "A valid idempotencyKey is required")
 		return
 	}
-	if input.Kind != "manifest" && input.Kind != "srt" {
-		writeFilmError(w, http.StatusUnprocessableEntity, "export_kind_invalid", "Export kind must be manifest or srt")
-		return
-	}
-	record, document, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
-		if input.Revision != document.Revision {
-			return filmDocument{}, errors.New("export revision conflict")
-		}
-		createdAt := time.Now().UTC().Format(time.RFC3339Nano)
-		deliverable := filmDeliverable{ID: stableFilmID("deliverable", document.ProjectID, input.Kind, document.Revision), Revision: 1, Status: filmStatusApproved, CreatedAt: createdAt}
-		switch input.Kind {
-		case "manifest":
-			raw, err := json.MarshalIndent(map[string]any{"version": 1, "projectId": document.ProjectID, "episodes": document.Episodes, "scenes": document.Scenes, "shots": document.Shots, "assets": document.Assets}, "", "  ")
-			if err != nil {
-				return filmDocument{}, err
-			}
-			deliverable.Kind, deliverable.Title, deliverable.MIMEType = "manifest", "Production manifest", "application/json"
-			deliverable.Content, deliverable.Bytes = string(raw), int64(len(raw))
-		case "srt":
-			content := buildFilmSRT(document.Timeline)
-			if content == "" {
-				return filmDocument{}, errors.New("timeline has no subtitle clips")
-			}
-			deliverable.Kind, deliverable.Title, deliverable.MIMEType = "srt", "Subtitles", "application/x-subrip"
-			deliverable.Content, deliverable.Bytes = content, int64(len(content))
-		}
-		document.Deliverables = append(document.Deliverables, deliverable)
-		if len(document.Deliverables) > 100 {
-			document.Deliverables = document.Deliverables[len(document.Deliverables)-100:]
-		}
-		return invalidateFilmStages(document, "delivery", document.UpdatedAt), nil
-	})
-	if ok {
-		writeFilmDocument(w, http.StatusCreated, record, document)
-	}
+	s.createStoredFilmDeliverable(w, r, input)
 }
 
 func buildFilmSRT(timeline filmTimeline) string {
@@ -658,7 +706,15 @@ func (s *Server) downloadFilmDeliverable(w http.ResponseWriter, r *http.Request)
 		if deliverable.ID != id {
 			continue
 		}
-		if deliverable.Content == "" || deliverable.Bytes <= 0 || (deliverable.Kind != "manifest" && deliverable.Kind != "srt") {
+		if deliverable.Bytes <= 0 {
+			writeFilmError(w, http.StatusNotFound, "deliverable_unavailable", "Deliverable bytes are unavailable")
+			return
+		}
+		if s.downloadStoredFilmDeliverable(w, r, deliverable) {
+			return
+		}
+		// Backward-compatible read path for pre-externalization manifests/SRT.
+		if deliverable.Content == "" || (deliverable.Kind != "manifest" && deliverable.Kind != "srt") {
 			writeFilmError(w, http.StatusNotFound, "deliverable_unavailable", "Deliverable bytes are unavailable")
 			return
 		}
@@ -673,59 +729,6 @@ func (s *Server) downloadFilmDeliverable(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeFilmError(w, http.StatusNotFound, "deliverable_not_found", "Deliverable not found")
-}
-
-func validateFilmRestoreDocument(document filmDocument, projectID string) error {
-	return validateFilmAggregate(document, projectID)
-}
-
-func (s *Server) restoreFilmProduction(w http.ResponseWriter, r *http.Request) {
-	var input filmRestoreRequest
-	if err := decodeFilmRequest(w, r, maxProjectBytes+4096, &input); err != nil {
-		writeFilmError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if input.Revision < 0 {
-		writeFilmError(w, http.StatusUnprocessableEntity, "film_validation_error", "Film restore revision is invalid")
-		return
-	}
-	backend, ok := s.filmStore(w)
-	if !ok {
-		return
-	}
-	if err := s.requireFilmBoardProject(r); err != nil {
-		writeFilmOperationError(w, err)
-		return
-	}
-	projectID := chi.URLParam(r, "projectId")
-	if err := validateFilmRestoreDocument(input.Document, projectID); err != nil {
-		writeFilmOperationError(w, err)
-		return
-	}
-	raw, err := json.Marshal(input.Document)
-	if err != nil || len(raw) > maxProjectBytes {
-		writeFilmError(w, http.StatusUnprocessableEntity, "film_document_too_large", "Film production exceeds its storage limit")
-		return
-	}
-	var record store.FilmRecord
-	if input.Revision == 0 {
-		record, err = backend.CreateFilmProject(r.Context(), tenantIDFrom(r), projectID, raw)
-	} else {
-		record, err = backend.CompareAndSwapFilmProject(r.Context(), tenantIDFrom(r), projectID, input.Revision, raw)
-	}
-	if errors.Is(err, store.ErrConflict) {
-		writeFilmError(w, http.StatusConflict, "revision_conflict", "Film production changed; reload before retrying")
-		return
-	}
-	if errors.Is(err, store.ErrNotFound) {
-		writeFilmError(w, http.StatusNotFound, "film_not_found", "Film production has not been created")
-		return
-	}
-	if err != nil {
-		writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be restored")
-		return
-	}
-	writeFilmDocument(w, http.StatusOK, record, input.Document)
 }
 
 func decodeFilmMap(raw []byte) (map[string]any, error) {

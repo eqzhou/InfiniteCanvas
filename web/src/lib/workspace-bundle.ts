@@ -5,6 +5,7 @@ import type {
   GenerationJob,
   PromptItem,
 } from "@/types/board";
+import type { FilmDocument } from "@/types/film";
 import type { WorkflowTemplate, WorkflowValues, WorkflowRunResult } from "@/types/workflow";
 import { parseBoardProject } from "@/lib/board-document";
 import { createZipStore, readZipStore, type ZipStoreInput } from "@/lib/zip-store";
@@ -25,6 +26,7 @@ import {
   validateProjectPanoramaBudget,
 } from "@/lib/panorama";
 import { assertBundlePanoramaMediaManaged } from "@/lib/plain-project-import";
+import { parseBundleFilm } from "@/lib/project-bundle";
 
 type MediaKind = "image" | "media";
 
@@ -51,6 +53,7 @@ export type WorkspaceSnapshot = {
   config: AppConfig;
   generationJobs: GenerationJob[];
   workflowTemplates: WorkflowTemplate[];
+  films?: FilmDocument[];
 };
 
 export class WorkspaceReplacementRollbackError extends AggregateError {
@@ -61,7 +64,7 @@ export class WorkspaceReplacementRollbackError extends AggregateError {
 }
 
 type WorkspaceDocument = Omit<WorkspaceSnapshot, "config"> & {
-  version: 2;
+  version: 3;
   exportedAt: string;
   config: BackupConfig;
 };
@@ -79,6 +82,31 @@ export type WorkspaceBundleStorage = {
   remove: (kind: MediaKind, storageKey: string) => Promise<void>;
 };
 type StoredWorkspaceMedia = Awaited<ReturnType<WorkspaceBundleStorage["store"]>>;
+
+export type ImportedWorkspaceMedia = {
+  storageKey: string;
+  mimeType: string;
+  bytes: number;
+  sha256: string;
+  objectVersion: string;
+};
+
+export type WorkspaceImportContext = {
+  media: ImportedWorkspaceMedia[];
+  cleanupMigrated: (storageKeys: readonly string[]) => Promise<void>;
+};
+
+async function digestHex(bytes: Uint8Array): Promise<string> {
+  const copy = new Uint8Array(bytes.byteLength); copy.set(bytes);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", copy.buffer))].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function importedMediaIdentity(bytes: Uint8Array, mimeType: string): Promise<{ sha256: string; objectVersion: string }> {
+  const prefix = new TextEncoder().encode(`${mimeType}\0`);
+  const versionBytes = new Uint8Array(prefix.length + bytes.length);
+  versionBytes.set(prefix); versionBytes.set(bytes, prefix.length);
+  return { sha256: await digestHex(bytes), objectVersion: `m1-${await digestHex(versionBytes)}` };
+}
 
 const defaultStorage: WorkspaceBundleStorage = {
   load: getBlob,
@@ -112,7 +140,11 @@ function decodeJSON(bytes: Uint8Array, label: string): unknown {
 }
 
 function kindForKey(storageKey: string): MediaKind {
-  return storageKey.startsWith("media:") ? "media" : "image";
+  return storageKey.startsWith("image:") ? "image" : "media";
+}
+
+function isFilmStorageKey(value: string): boolean {
+  return value.startsWith("image:") || value.startsWith("media:") || value.startsWith("film:");
 }
 
 function collectProjectKeys(project: BoardProject, keys: Set<string>): void {
@@ -135,6 +167,16 @@ function collectKeys(snapshot: WorkspaceSnapshot): string[] {
   for (const project of snapshot.projects) collectProjectKeys(project, keys);
   for (const asset of snapshot.assets) if (asset.storageKey) keys.add(asset.storageKey);
   for (const key of collectGenerationStorageKeysFromJobs(snapshot.generationJobs)) keys.add(key);
+  for (const film of snapshot.films ?? []) {
+    for (const shot of film.shots) {
+      if (shot.imageStorageKey) keys.add(shot.imageStorageKey);
+      if (shot.videoStorageKey) keys.add(shot.videoStorageKey);
+      if (shot.audioStorageKey) keys.add(shot.audioStorageKey);
+    }
+    for (const asset of film.assets) if (asset.mediaStorageKey) keys.add(asset.mediaStorageKey);
+    for (const track of film.timeline.tracks) for (const clip of track.clips) if (isFilmStorageKey(clip.source)) keys.add(clip.source);
+    for (const deliverable of film.deliverables) if (deliverable.storageKey) keys.add(deliverable.storageKey);
+  }
   return [...keys];
 }
 
@@ -212,7 +254,7 @@ export async function exportWorkspaceBundle(
     media,
   };
   const workspace: WorkspaceDocument = {
-    version: 2,
+    version: 3,
     exportedAt,
     projects: backup.projects,
     assets: backup.assets,
@@ -220,6 +262,7 @@ export async function exportWorkspaceBundle(
     config: backup.config,
     generationJobs: canonical.generationJobs,
     workflowTemplates: canonical.workflowTemplates,
+    films: canonical.films ?? [],
   };
   return createZipStore([
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
@@ -314,7 +357,7 @@ function parseWorkspace(value: unknown, localConfig: AppConfig): WorkspaceSnapsh
     maxEntries: 500_000,
   });
   const input = record(value, "Workspace document");
-  if ((input.version !== 1 && input.version !== 2) || typeof input.exportedAt !== "string" ||
+  if ((input.version !== 1 && input.version !== 2 && input.version !== 3) || typeof input.exportedAt !== "string" ||
       Number.isNaN(Date.parse(input.exportedAt)) || !Array.isArray(input.projects) ||
       !Array.isArray(input.assets) || !Array.isArray(input.prompts) ||
       !Array.isArray(input.generationJobs) || input.projects.length > 10_000 ||
@@ -330,6 +373,23 @@ function parseWorkspace(value: unknown, localConfig: AppConfig): WorkspaceSnapsh
     throw new Error("Invalid workspace config");
   }
   const projects = input.projects.map((project) => parseBoardProject(project));
+  if (input.version !== 3 && input.films !== undefined) throw new Error("A legacy workspace cannot contain film payloads");
+  const rawFilms = input.version === 3 ? input.films : [];
+  if (!Array.isArray(rawFilms) || rawFilms.length > 10_000) throw new Error("Invalid workspace films");
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+  const films = rawFilms.map((film, index) => {
+    const projectId = film && typeof film === "object" && !Array.isArray(film)
+      ? (film as { projectId?: unknown }).projectId
+      : undefined;
+    if (typeof projectId !== "string" || projectsById.get(projectId)?.projectKind !== "film") {
+      throw new Error(`Invalid workspace film ${index}`);
+    }
+    return parseBundleFilm(film, projectId);
+  });
+  const filmProjectIds = projects.filter((project) => project.projectKind === "film").map((project) => project.id);
+  if (new Set(films.map((film) => film.projectId)).size !== films.length || filmProjectIds.some((id) => !films.some((film) => film.projectId === id))) {
+    throw new Error("Workspace film payloads do not match film projects");
+  }
   const assets = input.assets.map(parseAsset);
   const prompts = input.prompts.map(parsePrompt);
   const generationJobs = input.generationJobs.map((job, index) => {
@@ -373,6 +433,7 @@ function parseWorkspace(value: unknown, localConfig: AppConfig): WorkspaceSnapsh
     prompts,
     generationJobs,
     workflowTemplates,
+    films,
     config: normalizeAppConfig(mergeBackupConfig(localConfig, config as BackupConfig)),
   };
 }
@@ -465,6 +526,30 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, StoredWork
       result.url = replacement.url;
     }
   }
+  copy.films = (copy.films ?? []).map((film) => ({
+    ...film,
+    shots: film.shots.map((shot) => ({
+      ...shot,
+      imageStorageKey: replace(shot.imageStorageKey)?.storageKey,
+      videoStorageKey: replace(shot.videoStorageKey)?.storageKey,
+      audioStorageKey: replace(shot.audioStorageKey)?.storageKey,
+    })),
+    assets: film.assets.map((asset) => ({
+      ...asset,
+      mediaStorageKey: replace(asset.mediaStorageKey)?.storageKey,
+    })),
+    timeline: {
+      ...film.timeline,
+      tracks: film.timeline.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) => ({ ...clip, source: isFilmStorageKey(clip.source) ? replace(clip.source)!.storageKey : clip.source })),
+      })),
+    },
+    deliverables: film.deliverables.map((deliverable) => ({
+      ...deliverable,
+      storageKey: replace(deliverable.storageKey)?.storageKey,
+    })),
+  }));
   return copy;
 }
 
@@ -472,7 +557,7 @@ export async function importWorkspaceBundle(
   source: Blob | ArrayBuffer | Uint8Array,
   localConfig: AppConfig,
   storage: WorkspaceBundleStorage = defaultStorage,
-  apply?: (snapshot: WorkspaceSnapshot) => Promise<void>,
+  apply?: (snapshot: WorkspaceSnapshot, context: WorkspaceImportContext) => Promise<WorkspaceSnapshot | void>,
 ): Promise<WorkspaceSnapshot> {
   const entries = await readZipStore(source);
   const manifestBytes = entries.get("manifest.json");
@@ -498,6 +583,7 @@ export async function importWorkspaceBundle(
 
   const replacements = new Map<string, StoredWorkspaceMedia>();
   const stored: Array<{ kind: MediaKind; storageKey: string }> = [];
+  const importedMedia: ImportedWorkspaceMedia[] = [];
   const panoramaKeys = new Set(snapshot.projects.flatMap((project) => project.nodes
     .filter((node) => node.type === "panorama" && node.metadata.storageKey)
     .map((node) => node.metadata.storageKey!)));
@@ -529,11 +615,16 @@ export async function importWorkspaceBundle(
         }
       }
       replacements.set(item.storageKey, replacement);
+      const identity = await importedMediaIdentity(bytes, replacement.mimeType);
+      importedMedia.push({ storageKey: replacement.storageKey, mimeType: replacement.mimeType, bytes: replacement.bytes, ...identity });
     }
     const restored = remap(snapshot, replacements);
     restored.projects.forEach((project) => validateProjectPanoramaBudget(project.nodes));
-    await apply?.(restored);
-    return restored;
+    const cleanupMigrated = async (storageKeys: readonly string[]) => {
+      const selected = new Set(storageKeys);
+      await Promise.all(stored.filter((item) => selected.has(item.storageKey)).map((item) => storage.remove(item.kind, item.storageKey)));
+    };
+    return await apply?.(restored, { media: importedMedia, cleanupMigrated }) ?? restored;
   } catch (error) {
     if (!(error instanceof WorkspaceReplacementRollbackError)) {
       await Promise.allSettled(stored.map((item) => storage.remove(item.kind, item.storageKey)));

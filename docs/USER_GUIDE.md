@@ -1,9 +1,10 @@
-# OpenBoard 用户指南：Agent Skills 与视频生成
+# OpenBoard 用户指南：Agent Skills、视频生成与影视模式
 
 这份指南面向实际使用 OpenBoard 的用户，覆盖本轮新增的两组能力：
 
 - 在画布 Agent 中管理本机 Codex Agent Skills；
-- 在视频工作台和视频配置节点中使用比例、清晰度、尺寸联动。
+- 在视频工作台和视频配置节点中使用比例、清晰度、尺寸联动；
+- 从原稿导入到分镜、生成、时间线、质检和交付的影视模式主链路。
 
 工程验证和上游差异记录请看 [`FEATURE_PARITY.md`](FEATURE_PARITY.md) 与
 [`UPSTREAM_GAP_PLAN_7.md`](UPSTREAM_GAP_PLAN_7.md)。
@@ -304,10 +305,105 @@ curl --fail \
 先用较低清晰度验证提示词、参考图和镜头运动，再提高到目标清晰度，可以减少失败请求和
 不必要的额度消耗。
 
-## 4. 导出或迁移前的检查清单
+## 4. 影视模式完整主链路
+
+### 4.1 开关与能力诊断
+
+影视模式默认启用。`OPENBOARD_FILM_MODE=false` 会关闭所有 `/api/film/*`
+业务路由，但不会删除已有影视项目。MP4 是单独的可选能力：
+
+```bash
+bun run diagnose:media
+curl --fail http://127.0.0.1:8790/api/film/capabilities \
+  -H "Authorization: Bearer $OPENBOARD_TOKEN"
+```
+
+本地/PM2 会优先使用 `.env` 中的 `OPENBOARD_FFMPEG_PATH` 和
+`OPENBOARD_FFPROBE_PATH`，未设置时从 `PATH` 发现，并把符号链接解析为真实的可执行绝对
+路径。两个 `-version` 探针都通过才启用 MP4；任一个缺失或失败时，启动继续，只把
+`mp4Export` 置为不可用并返回 `mp4Diagnostic`。文本导入、项目编辑、Provider 生成、清单、
+SRT、资产包和 OpenBoard 其他服务不受影响。容器镜像已固定并设置
+`/usr/bin/ffmpeg`、`/usr/bin/ffprobe`。
+
+`OPENBOARD_FILM_IMPORT_MAX_BYTES` 控制原稿上传边界（样例默认 50 MiB），
+`OPENBOARD_FILM_RENDER_TIMEOUT_SECONDS` 控制一次 MP4 组装的超时（样例默认 900 秒，
+接受 1–3600）。修改后重启服务，并重新查看 capability；不要把这两个资源边界当作
+绕过 Provider 自身限制的手段。
+
+### 4.2 原稿导入：文本、DOCX 与 PDF 文本层
+
+从首页“新建”选择“影片制作”，或打开已有 `/film/<project-id>` 项目。原稿区支持直接
+粘贴文本，也支持受大小/结构限制的文本、Markdown、DOCX 和 PDF 导入：
+
+- DOCX 读取 OOXML 主文档中的文本，不执行宏、脚本或外部关系；损坏、路径不安全、重复
+  条目、异常压缩比或展开超限的文件会被拒绝。
+- PDF 只提取已有文本层。扫描件或没有可用文本层的 PDF 会提示先 OCR；OpenBoard 不会
+  在服务端静默做 OCR，也不会把任意 PDF 交给外部 Provider。
+- 先在可信工具中完成 OCR，再导入新的带文本层 PDF；保留原件和 OCR 版本用于追溯。
+
+导入成功后，“拆解”进入 `needs_review`。检查集、场、镜头和顺序，再批准该阶段。上游
+原稿或拆解结果发生变化时，下游阶段会按依赖关系回到待复核状态，避免沿用过期交付物。
+
+### 4.3 阶段顺序、Provider 依赖与人工复核
+
+主链路为：
+
+```text
+原稿 → decompose → script → storyboard ─┬→ audio ─┐
+                                        └→ video ─┴→ compose → delivery
+```
+
+`audio` 与 `video` 都依赖已批准的 `storyboard`，可以分别推进；`compose` 同时依赖两者。
+每个阶段都应检查修订号、状态和质量报告后再批准。镜头级生成支持只跑选定范围、幂等键、
+失败子任务重试和 `needs_review` 回收，不应把“Provider 已返回”视为自动批准。
+
+Provider 依赖按能力分开：
+
+| 工作 | 必需依赖 | 无依赖时的行为 |
+|---|---|---|
+| 原稿导入、拆解、编辑、质量检查 | PostgreSQL/受保护媒体存储 | 正常可用，不需要 Provider 密钥 |
+| 分镜图生成 | 活跃渠道的图片模型与有效凭据 | 仅 storyboard 生成不可用 |
+| 音频生成 | 活跃渠道的音频模型与有效凭据 | 仅 audio 生成不可用 |
+| 视频生成 | 活跃渠道的视频模型与有效凭据 | 仅 video 生成不可用 |
+| manifest/SRT/asset bundle | 已保存的影视文档和媒体 | 不需要 FFmpeg 或 Provider |
+| MP4 时间线成片 | FFmpeg + FFprobe 探针、足够 `/data` 空间 | 仅 MP4 关闭，并显示诊断 |
+
+真实 Provider 调用可能收费、受区域/配额/内容策略影响，凭据只在部署端配置。CI 的影视
+Chromium 主链路使用本地隔离数据和 mock，不要求也不读取真实 Provider 凭据。
+
+### 4.4 时间线、质量与交付
+
+在“时间线”检查 video、dialogue、music、sfx、subtitle 五轨，确认入点早于出点、裁剪、
+音量、淡入淡出、字幕文本和输出尺寸/帧率。保存冲突时刷新最新修订再合并，不要覆盖另一
+窗口的新版本。
+
+交付前运行质量检查并处理阻断项，然后按需生成：
+
+- `manifest`：结构化制作清单；
+- `srt`：字幕文件；
+- `asset_bundle`：受保护资产包；
+- `mp4`：按当前时间线本地组装的成片，仅在 capability 允许时可用。
+
+交付请求使用新的幂等键；同一键不能复用于不同内容。下载后核对文件大小、摘要记录、字幕
+同步和实际播放。FFmpeg 超时、空间不足或输入容器不合规时，保留其他交付物，修复诊断后
+重试 MP4，不需要重建项目。
+
+### 4.5 影视项目的备份与恢复边界
+
+影视文档、阶段状态和交付索引在 PostgreSQL；源媒体、生成结果和交付文件在 `/data` 或
+配置的 S3/R2；Provider/对象存储秘密依赖 `OPENBOARD_MASTER_KEY` 解密。完整恢复必须使用
+同一时点的数据库、媒体存储和 master key。Redis 只是缓存。WebDAV 工作区备份会省略
+Provider 凭据，不能替代部署级备份。Compose/PM2 的停写、备份、恢复和版本回滚命令见
+根目录 [`README.md`](../README.md#deployment-runbook-capability-backup-restore-and-rollback)。
+
+## 5. 导出或迁移前的检查清单
 
 - Agent 服务仍在运行，且连接地址和令牌没有写入画布内容或截图。
 - Skill 中没有秘密信息；要迁移时单独备份本机 Skills 根目录。
 - 视频节点的“自定义尺寸”是否有意覆盖了自动联动；不需要时清空它。
 - 生成历史中的渠道、模型、比例、清晰度和参考素材是否仍然可用。
+- 影视项目的下游阶段是否因原稿/镜头变更回到待复核，质量报告是否已处理。
+- MP4 交付前是否确认 `mp4Export=true`、`/data` 余量以及 FFmpeg/FFprobe 诊断。
+- 部署迁移是否同时备份 PostgreSQL、媒体存储和 `OPENBOARD_MASTER_KEY`；不要把 Redis 或
+  省略凭据的 WebDAV 包误当成完整备份。
 - 变更环境变量后已重启 Go 服务，并在 Agent 面板点击刷新。

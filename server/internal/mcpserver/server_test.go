@@ -35,9 +35,14 @@ func TestInitializeAndListTools(t *testing.T) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
 		}
 	}
-	for _, name := range []string{"film.status", "film.list", "film.validate", "film.run_stage"} {
+	for _, name := range []string{"film.status", "film.list", "film.check", "film.proposals", "film.validate", "film.run_stage"} {
 		if !strings.Contains(lines[1], `"`+name+`"`) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
+		}
+	}
+	for _, field := range []string{`"providerId"`, `"model"`, `"config"`, `"idempotencyKey"`} {
+		if !strings.Contains(lines[1], field) {
+			t.Fatalf("film.run_stage schema does not expose generation input %s: %s", field, lines[1])
 		}
 	}
 	for _, name := range []string{"film.approve_stage", "film.export"} {

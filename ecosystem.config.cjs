@@ -14,6 +14,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { missingRequiredKeys, resolveDeploymentEnv } = require("./scripts/pm2-env-core.cjs");
+const { diagnoseMediaCapabilities } = require("./scripts/media-capability-core.cjs");
 
 const root = __dirname;
 
@@ -50,7 +51,9 @@ if (missing.length) {
   throw new Error(`${missing.join(", ")} is required in ${path.join(root, ".env")}`);
 }
 
-const sharedEnv = resolveDeploymentEnv(fileEnv, process.env, { root });
+const media = diagnoseMediaCapabilities(fileEnv, process.env);
+console.warn(`[openboard] ${media.diagnostic}`);
+const sharedEnv = resolveDeploymentEnv(fileEnv, process.env, { root, overrides: media.env });
 
 module.exports = {
   apps: [

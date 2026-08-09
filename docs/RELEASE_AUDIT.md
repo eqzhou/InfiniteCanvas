@@ -26,6 +26,10 @@ not indicate missing local canvas functionality.
 - [x] Bun unit tests, TypeScript build, Go race tests, and `go vet` pass.
 - [x] CI performs a fail-closed OSV batch audit for installed npm and Go module versions.
 - [x] Container build and PostgreSQL/Redis smoke pass in the latest required `main` CI workflow.
+- [x] Container smoke verifies the unprivileged runtime, exact Alpine FFmpeg package,
+  FFmpeg/FFprobe executable probes, configured paths, and Film MP4 capability.
+- [x] Local/PM2 media diagnosis degrades only MP4 and is covered by script tests;
+  Provider credentials are not required by CI.
 - [x] Formal local PostgreSQL/Redis/media E2E passes and leaves zero temporary databases and zero Redis DB 14 keys.
 - [ ] Independent security and similarity review is signed off.
 
@@ -52,6 +56,9 @@ not indicate missing local canvas functionality.
   notices, before redistribution; the core MIT text is present locally.
 - [ ] Review the generated SBOM against frozen lockfiles, transitive source
   licenses, browser binaries, and container/base-image licenses.
+- [ ] Complete FFmpeg/codec build-option, source-offer, notice, patent and target-
+  market redistribution review for the pinned Alpine package. Recording package
+  metadata in `THIRD_PARTY_NOTICES.md` is not legal sign-off.
 - [ ] Include complete third-party license texts and notices.
 - [ ] Review fonts, icons, screenshots, favicon, generated media, and customer
   supplied assets.

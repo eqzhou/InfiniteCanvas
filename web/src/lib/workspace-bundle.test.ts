@@ -10,6 +10,7 @@ import { createDefaultConfig, createNode, createProject } from "./defaults";
 import type { AssetItem, GenerationJob } from "@/types/board";
 import { buildWorkflowGenerationJob } from "./workflow-job";
 import { parseWorkflowTemplate } from "./workflow-document";
+import { createFilmDocument } from "./film-document";
 
 const TEST_BACKUP_KEY = ["backup", "placeholder"].join("-");
 const TEST_LOCAL_KEY = ["local", "placeholder"].join("-");
@@ -109,6 +110,66 @@ function snapshot() {
 }
 
 describe("workspace media bundle", () => {
+  test("round trips FilmDocument payloads and their protected film media", async () => {
+    const sourceSnapshot = snapshot();
+    const project = createProject("Film workspace", "film");
+    const film = createFilmDocument(project.id, "2026-08-08T00:00:00.000Z");
+    film.assets = [{
+      id: "asset_film_voice", revision: 1, kind: "voice", title: "Narrator", status: "draft",
+      description: "Voice identity", mediaStorageKey: "media:film-voice",
+    }];
+    film.deliverables = [{
+      id: "deliverable_film_mp4", revision: 1, kind: "mp4", title: "Master", status: "approved",
+      mimeType: "video/mp4", storageKey: "film:deliverable:master", bytes: 6,
+      createdAt: "2026-08-08T00:00:00.000Z",
+    }];
+    sourceSnapshot.projects = [project];
+    sourceSnapshot.assets = [];
+    sourceSnapshot.generationJobs = [];
+    const archive = await exportWorkspaceBundle(
+      { ...sourceSnapshot, films: [film] },
+      fakeStorage({
+        "media:film-voice": new Blob(["voice"], { type: "audio/mpeg" }),
+        "film:deliverable:master": new Blob(["master"], { type: "video/mp4" }),
+      }).storage,
+    );
+
+    const target = fakeStorage();
+    const restored = await importWorkspaceBundle(archive, createDefaultConfig(), target.storage);
+
+    expect(restored.films).toHaveLength(1);
+    expect(restored.films?.[0]?.projectId).toBe(project.id);
+    expect(restored.films?.[0]?.assets[0]?.mediaStorageKey).toBe("media:restored-1");
+    expect(restored.films?.[0]?.deliverables[0]?.storageKey).toBe("media:restored-2");
+    expect(target.blobs.get("media:restored-1")?.type).toBe("audio/mpeg");
+  });
+
+  test("provides strict media identities and removes only confirmed migrated uploads", async () => {
+    const sourceSnapshot = snapshot();
+    const project = createProject("Safe film workspace", "film");
+    const film = createFilmDocument(project.id, "2026-08-08T00:00:00.000Z");
+    film.assets = [{ id: "asset-safe", revision: 1, kind: "style", title: "Look", status: "approved", description: "", mediaStorageKey: "image:film-safe" }];
+    film.deliverables = [{ id: "delivery-safe", revision: 1, kind: "mp4", title: "Master", status: "approved", mimeType: "video/mp4", storageKey: "film:deliverable:safe", bytes: 6, createdAt: film.createdAt }];
+    sourceSnapshot.projects = [project]; sourceSnapshot.assets = []; sourceSnapshot.generationJobs = [];
+    const archive = await exportWorkspaceBundle({ ...sourceSnapshot, films: [film] }, fakeStorage({
+      "image:film-safe": new Blob(["image"], { type: "image/png" }),
+      "film:deliverable:safe": new Blob(["master"], { type: "video/mp4" }),
+    }).storage);
+    const target = fakeStorage();
+
+    const restored = await importWorkspaceBundle(archive, createDefaultConfig(), target.storage, async (candidate, context) => {
+      expect(context.media).toHaveLength(2);
+      expect(context.media.every((item) => item.sha256.length === 64 && item.objectVersion.startsWith("m1-") && item.mimeType && item.bytes > 0)).toBe(true);
+      await context.cleanupMigrated([context.media[1]!.storageKey]);
+      return candidate;
+    });
+
+    expect(restored.films?.[0]?.assets[0]?.mediaStorageKey).toBe("image:restored-1");
+    expect(restored.films?.[0]?.deliverables[0]?.storageKey).toBe("media:restored-2");
+    expect(target.removed).toEqual(["media:restored-2"]);
+    expect(target.blobs.has("image:restored-1")).toBe(true);
+  });
+
   test("deduplicates media and restores every reference without exporting credentials", async () => {
     const source = fakeStorage({
       "image:shared": new Blob(["image-bytes"], { type: "image/png" }),
@@ -210,7 +271,7 @@ describe("workspace media bundle", () => {
     const archive = await exportWorkspaceBundle(sourceSnapshot, source.storage);
     const entries = await readZipStore(archive);
     const workspace = JSON.parse(new TextDecoder().decode(entries.get("workspace.json")));
-    expect(workspace.version).toBe(2);
+    expect(workspace.version).toBe(3);
     expect(workspace.workflowTemplates).toEqual([template]);
 
     const target = fakeStorage();
@@ -239,6 +300,7 @@ describe("workspace media bundle", () => {
     const workspace = JSON.parse(new TextDecoder().decode(entries.get("workspace.json")));
     workspace.version = 1;
     delete workspace.workflowTemplates;
+    delete workspace.films;
     const legacyArchive = await createZipStore([...entries.entries()].map(([name, data]) => ({
       name,
       data: name === "workspace.json" ? JSON.stringify(workspace) : data,

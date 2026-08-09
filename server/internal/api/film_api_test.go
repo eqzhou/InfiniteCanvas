@@ -3,13 +3,18 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
@@ -17,12 +22,338 @@ import (
 
 type filmMemoryStore struct {
 	*memoryStore
-	filmMu sync.Mutex
-	films  map[string]store.FilmRecord
+	filmMu             sync.Mutex
+	films              map[string]store.FilmRecord
+	casHook            func()
+	casErr             error
+	tokens             map[string]filmMemoryRestoreToken
+	workspaceTokens    map[string]filmMemoryWorkspaceToken
+	cleanupGenerations map[string]store.FilmCleanupGeneration
+}
+
+type filmMemoryWorkspaceToken struct {
+	prior          store.WorkspaceSnapshot
+	appliedVersion string
+	expiresAt      time.Time
+	consumed       bool
+	createdMedia   []store.WorkspaceMedia
+}
+
+type filmMemoryRestoreToken struct {
+	prior           store.FilmRecord
+	priorExists     bool
+	appliedRevision int
+	expiresAt       time.Time
+	consumed        bool
+	createdMedia    []store.WorkspaceMedia
 }
 
 func newFilmMemoryStore() *filmMemoryStore {
-	return &filmMemoryStore{memoryStore: newMemoryStore(), films: map[string]store.FilmRecord{}}
+	return &filmMemoryStore{
+		memoryStore: newMemoryStore(), films: map[string]store.FilmRecord{}, tokens: map[string]filmMemoryRestoreToken{},
+		workspaceTokens: map[string]filmMemoryWorkspaceToken{}, cleanupGenerations: map[string]store.FilmCleanupGeneration{},
+	}
+}
+
+func (m *filmMemoryStore) workspaceSnapshotLocked(tenantID string) store.WorkspaceSnapshot {
+	snapshot := store.WorkspaceSnapshot{Projects: []store.WorkspaceProject{}, Films: []store.WorkspaceFilm{}, GenerationJobs: []store.WorkspaceGenerationJob{}, States: []store.WorkspaceState{}}
+	prefix := tenantKey(tenantID, "")
+	for key, document := range m.projects {
+		if strings.HasPrefix(key, prefix) {
+			snapshot.Projects = append(snapshot.Projects, store.WorkspaceProject{ID: strings.TrimPrefix(key, prefix), Document: append([]byte(nil), document...)})
+		}
+	}
+	for key, record := range m.films {
+		if strings.HasPrefix(key, prefix) {
+			snapshot.Films = append(snapshot.Films, store.WorkspaceFilm{ProjectID: strings.TrimPrefix(key, prefix), Revision: record.Revision, Document: append([]byte(nil), record.Document...)})
+		}
+	}
+	for key, job := range m.jobs {
+		if strings.HasPrefix(key, prefix) {
+			snapshot.GenerationJobs = append(snapshot.GenerationJobs, store.WorkspaceGenerationJob{Job: job})
+		}
+	}
+	for _, key := range workspaceTransactionStateKeys {
+		value, exists := m.state[tenantKey(tenantID, key)]
+		snapshot.States = append(snapshot.States, store.WorkspaceState{Key: key, Exists: exists, Value: append([]byte(nil), value...)})
+	}
+	return snapshot
+}
+
+func (m *filmMemoryStore) WorkspaceVersion(_ context.Context, tenantID string) (string, error) {
+	m.mu.RLock()
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	defer m.mu.RUnlock()
+	return store.ComputeWorkspaceVersion(m.workspaceSnapshotLocked(tenantID))
+}
+
+func (m *filmMemoryStore) applyWorkspaceLocked(tenantID string, snapshot store.WorkspaceSnapshot) {
+	prefix := tenantKey(tenantID, "")
+	filmRevisions := map[string]int{}
+	for key := range m.projects {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.projects, key)
+		}
+	}
+	for key := range m.films {
+		if strings.HasPrefix(key, prefix) {
+			filmRevisions[strings.TrimPrefix(key, prefix)] = m.films[key].Revision
+			delete(m.films, key)
+		}
+	}
+	for key := range m.jobs {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.jobs, key)
+		}
+	}
+	for _, key := range workspaceTransactionStateKeys {
+		delete(m.state, tenantKey(tenantID, key))
+	}
+	for _, project := range snapshot.Projects {
+		m.projects[tenantKey(tenantID, project.ID)] = append([]byte(nil), project.Document...)
+	}
+	for _, film := range snapshot.Films {
+		revision := film.Revision
+		if current := filmRevisions[film.ProjectID]; current > revision {
+			revision = current
+		}
+		revision++
+		if revision < 1 {
+			revision = 1
+		}
+		m.films[tenantKey(tenantID, film.ProjectID)] = store.FilmRecord{ProjectID: film.ProjectID, Revision: revision, Document: append([]byte(nil), film.Document...)}
+	}
+	for _, item := range snapshot.GenerationJobs {
+		m.jobs[tenantKey(tenantID, item.Job.ID)] = item.Job
+	}
+	for _, state := range snapshot.States {
+		if state.Exists {
+			m.state[tenantKey(tenantID, state.Key)] = append([]byte(nil), state.Value...)
+		}
+	}
+}
+
+func (m *filmMemoryStore) ReplaceWorkspace(_ context.Context, tenantID, expectedVersion, tokenDigest string, expiresAt time.Time, snapshot store.WorkspaceSnapshot, createdMedia []store.WorkspaceMedia) (store.WorkspaceReplaceResult, error) {
+	m.mu.Lock()
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	defer m.mu.Unlock()
+	prior := m.workspaceSnapshotLocked(tenantID)
+	currentVersion, _ := store.ComputeWorkspaceVersion(prior)
+	if currentVersion != expectedVersion {
+		return store.WorkspaceReplaceResult{}, store.ErrConflict
+	}
+	currentFilmRevisions := map[string]int{}
+	for _, film := range prior.Films {
+		currentFilmRevisions[film.ProjectID] = film.Revision
+	}
+	for _, film := range snapshot.Films {
+		if film.Revision != currentFilmRevisions[film.ProjectID] {
+			return store.WorkspaceReplaceResult{}, store.ErrConflict
+		}
+	}
+	version, err := store.ComputeWorkspaceVersion(snapshot)
+	if err != nil {
+		return store.WorkspaceReplaceResult{}, err
+	}
+	m.applyWorkspaceLocked(tenantID, snapshot)
+	m.workspaceTokens[tenantKey(tenantID, tokenDigest)] = filmMemoryWorkspaceToken{prior: prior, appliedVersion: version, expiresAt: expiresAt, createdMedia: append([]store.WorkspaceMedia(nil), createdMedia...)}
+	return store.WorkspaceReplaceResult{Version: version}, nil
+}
+
+func (m *filmMemoryStore) ReplaceWorkspaceProject(ctx context.Context, tenantID, projectID, expectedVersion, tokenDigest string, expiresAt time.Time, project store.WorkspaceProject, film *store.WorkspaceFilm, createdMedia []store.WorkspaceMedia) (store.WorkspaceReplaceResult, error) {
+	m.mu.RLock()
+	m.filmMu.Lock()
+	prior := m.workspaceSnapshotLocked(tenantID)
+	m.filmMu.Unlock()
+	m.mu.RUnlock()
+	desired := store.WorkspaceSnapshot{Projects: append([]store.WorkspaceProject(nil), prior.Projects...), Films: append([]store.WorkspaceFilm(nil), prior.Films...), GenerationJobs: append([]store.WorkspaceGenerationJob(nil), prior.GenerationJobs...), States: append([]store.WorkspaceState(nil), prior.States...)}
+	found := false
+	for index := range desired.Projects {
+		if desired.Projects[index].ID == projectID {
+			desired.Projects[index], found = project, true
+		}
+	}
+	if !found {
+		desired.Projects = append(desired.Projects, project)
+	}
+	films := desired.Films[:0]
+	for _, current := range desired.Films {
+		if current.ProjectID != projectID {
+			films = append(films, current)
+		}
+	}
+	if film != nil {
+		films = append(films, *film)
+	}
+	desired.Films = films
+	return m.ReplaceWorkspace(ctx, tenantID, expectedVersion, tokenDigest, expiresAt, desired, createdMedia)
+}
+
+func (m *filmMemoryStore) RollbackWorkspace(_ context.Context, tenantID, expectedVersion, tokenDigest string, now time.Time) (store.WorkspaceReplaceResult, error) {
+	m.mu.Lock()
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	defer m.mu.Unlock()
+	key := tenantKey(tenantID, tokenDigest)
+	token, ok := m.workspaceTokens[key]
+	if !ok || token.consumed || !now.Before(token.expiresAt) {
+		return store.WorkspaceReplaceResult{}, store.ErrNotFound
+	}
+	currentVersion, _ := store.ComputeWorkspaceVersion(m.workspaceSnapshotLocked(tenantID))
+	if currentVersion != expectedVersion || token.appliedVersion != expectedVersion {
+		return store.WorkspaceReplaceResult{}, store.ErrConflict
+	}
+	m.applyWorkspaceLocked(tenantID, token.prior)
+	cleanupProjects := map[string]struct{}{}
+	for _, media := range token.createdMedia {
+		cleanupProjects[media.ProjectID] = struct{}{}
+	}
+	for projectID := range cleanupProjects {
+		generationID := "workspace-" + tokenDigest[:24]
+		m.cleanupGenerations[tenantKey(tenantID, projectID+"\x00"+generationID)] = store.FilmCleanupGeneration{GenerationID: generationID, ProjectID: projectID, Media: append([]store.WorkspaceMedia(nil), token.createdMedia...)}
+	}
+	token.consumed = true
+	m.workspaceTokens[key] = token
+	version, err := store.ComputeWorkspaceVersion(token.prior)
+	projectIDs := make([]string, 0, len(cleanupProjects))
+	for projectID := range cleanupProjects {
+		projectIDs = append(projectIDs, projectID)
+	}
+	return store.WorkspaceReplaceResult{Version: version, CleanupProjectIDs: projectIDs}, err
+}
+
+func (m *filmMemoryStore) RestoreFilmProject(_ context.Context, tenantID, projectID string, expectedRevision int, document []byte, tokenDigest string, expiresAt time.Time, createdMedia []store.WorkspaceMedia) (store.FilmRecord, error) {
+	if m.casHook != nil {
+		m.casHook()
+	}
+	if m.casErr != nil {
+		return store.FilmRecord{}, m.casErr
+	}
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	key := tenantKey(tenantID, projectID)
+	prior, exists := m.films[key]
+	if !exists && expectedRevision != 0 {
+		return store.FilmRecord{}, store.ErrNotFound
+	}
+	if exists && prior.Revision != expectedRevision || !exists && expectedRevision != 0 {
+		return store.FilmRecord{}, store.ErrConflict
+	}
+	nextRevision := 1
+	if exists {
+		nextRevision = prior.Revision + 1
+	}
+	record := store.FilmRecord{ProjectID: projectID, Revision: nextRevision, Document: append([]byte(nil), document...)}
+	m.films[key] = record
+	m.tokens[tenantKey(tenantID, projectID+"\x00"+tokenDigest)] = filmMemoryRestoreToken{
+		prior: prior, priorExists: exists, appliedRevision: nextRevision, expiresAt: expiresAt, createdMedia: append([]store.WorkspaceMedia(nil), createdMedia...),
+	}
+	return record, nil
+}
+
+func (m *filmMemoryStore) RollbackFilmProject(_ context.Context, tenantID, projectID string, expectedRevision int, tokenDigest string, now time.Time) (store.FilmRecord, bool, error) {
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	tokenKey := tenantKey(tenantID, projectID+"\x00"+tokenDigest)
+	token, ok := m.tokens[tokenKey]
+	if !ok || token.consumed || !now.Before(token.expiresAt) {
+		return store.FilmRecord{}, false, store.ErrNotFound
+	}
+	key := tenantKey(tenantID, projectID)
+	current, exists := m.films[key]
+	if !exists || current.Revision != expectedRevision || token.appliedRevision != expectedRevision {
+		return store.FilmRecord{}, false, store.ErrConflict
+	}
+	token.consumed = true
+	m.tokens[tokenKey] = token
+	if len(token.createdMedia) > 0 {
+		generationID := "restore-" + tokenDigest[:24]
+		m.cleanupGenerations[tenantKey(tenantID, projectID+"\x00"+generationID)] = store.FilmCleanupGeneration{GenerationID: generationID, ProjectID: projectID, Media: append([]store.WorkspaceMedia(nil), token.createdMedia...)}
+	}
+	if !token.priorExists {
+		delete(m.films, key)
+		return store.FilmRecord{}, false, nil
+	}
+	record := token.prior
+	record.Revision = current.Revision + 1
+	record.Document = append([]byte(nil), token.prior.Document...)
+	m.films[key] = record
+	return record, true, nil
+}
+
+func (m *filmMemoryStore) DeleteProjectWithFilmCleanup(_ context.Context, tenantID, projectID, generationID string) error {
+	m.mu.Lock()
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	defer m.mu.Unlock()
+	documents := []json.RawMessage{}
+	media := []store.WorkspaceMedia{}
+	if current, ok := m.films[tenantKey(tenantID, projectID)]; ok {
+		documents = append(documents, append([]byte(nil), current.Document...))
+	}
+	tenantPrefix := tenantKey(tenantID, "")
+	filmTokenPrefix := tenantKey(tenantID, projectID+"\x00")
+	for key, token := range m.tokens {
+		if strings.HasPrefix(key, filmTokenPrefix) {
+			if token.priorExists {
+				documents = append(documents, append([]byte(nil), token.prior.Document...))
+			}
+			media = append(media, token.createdMedia...)
+			delete(m.tokens, key)
+		}
+	}
+	for key, token := range m.workspaceTokens {
+		if strings.HasPrefix(key, tenantPrefix) && !token.consumed {
+			for _, film := range token.prior.Films {
+				if film.ProjectID == projectID {
+					documents = append(documents, append([]byte(nil), film.Document...))
+				}
+			}
+			media = append(media, token.createdMedia...)
+			delete(m.workspaceTokens, key)
+		}
+	}
+	filtered := media[:0]
+	for _, item := range media {
+		if item.ProjectID == projectID {
+			filtered = append(filtered, item)
+		}
+	}
+	m.cleanupGenerations[tenantKey(tenantID, projectID+"\x00"+generationID)] = store.FilmCleanupGeneration{GenerationID: generationID, ProjectID: projectID, Documents: documents, Media: append([]store.WorkspaceMedia(nil), filtered...)}
+	delete(m.projects, tenantKey(tenantID, projectID))
+	delete(m.films, tenantKey(tenantID, projectID))
+	for key, job := range m.jobs {
+		if strings.HasPrefix(key, tenantPrefix) && job.ProjectID == projectID {
+			delete(m.jobs, key)
+		}
+	}
+	return nil
+}
+
+func (m *filmMemoryStore) ListFilmCleanupGenerations(_ context.Context, tenantID, projectID string) ([]store.FilmCleanupGeneration, error) {
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	prefix := tenantKey(tenantID, projectID+"\x00")
+	out := []store.FilmCleanupGeneration{}
+	for key, generation := range m.cleanupGenerations {
+		if strings.HasPrefix(key, prefix) {
+			out = append(out, generation)
+		}
+	}
+	return out, nil
+}
+
+func (m *filmMemoryStore) CompleteFilmCleanupGeneration(_ context.Context, tenantID, projectID, generationID string) error {
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	key := tenantKey(tenantID, projectID+"\x00"+generationID)
+	if _, ok := m.cleanupGenerations[key]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.cleanupGenerations, key)
+	return nil
 }
 
 func (m *filmMemoryStore) GetFilmProject(_ context.Context, tenantID, projectID string) (store.FilmRecord, error) {
@@ -49,6 +380,12 @@ func (m *filmMemoryStore) CreateFilmProject(_ context.Context, tenantID, project
 }
 
 func (m *filmMemoryStore) CompareAndSwapFilmProject(_ context.Context, tenantID, projectID string, expectedRevision int, document []byte) (store.FilmRecord, error) {
+	if m.casHook != nil {
+		m.casHook()
+	}
+	if m.casErr != nil {
+		return store.FilmRecord{}, m.casErr
+	}
 	m.filmMu.Lock()
 	defer m.filmMu.Unlock()
 	key := tenantKey(tenantID, projectID)
@@ -69,8 +406,10 @@ func filmAPIHandler(t *testing.T) (*filmMemoryStore, http.Handler) {
 	t.Helper()
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	t.Setenv("OPENBOARD_FILM_MODE", "true")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
 	backend := newFilmMemoryStore()
 	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
 	t.Cleanup(server.Close)
 	router := chi.NewRouter()
 	MountServer(router, server)
@@ -123,16 +462,6 @@ func TestFilmAPIVerticalWorkflowAndRevisionConflicts(t *testing.T) {
 		t.Fatalf("shot update: %d %s", updated.Code, updated.Body.String())
 	}
 	document = decodeFilmResponse(t, updated)
-	for index := range document.Shots {
-		shot := document.Shots[index]
-		mediaBody, _ := json.Marshal(map[string]any{"revision": shot.Revision, "imageStorageKey": "image:shot-" + shot.ID})
-		response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/shots/"+shot.ID, mediaBody)
-		if response.Code != http.StatusOK {
-			t.Fatalf("attach storyboard media: %d %s", response.Code, response.Body.String())
-		}
-		document = decodeFilmResponse(t, response)
-	}
-
 	decompose := document.Stages[0]
 	approveDecompose, _ := json.Marshal(map[string]any{"revision": decompose.Revision})
 	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/approve", approveDecompose)
@@ -154,21 +483,6 @@ func TestFilmAPIVerticalWorkflowAndRevisionConflicts(t *testing.T) {
 		t.Fatalf("approve script: %d %s", response.Code, response.Body.String())
 	}
 	document = decodeFilmResponse(t, response)
-
-	run := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run", []byte(`{"revision":1}`))
-	if run.Code != http.StatusAccepted {
-		t.Fatalf("run stage: %d %s", run.Code, run.Body.String())
-	}
-	document = decodeFilmResponse(t, run)
-	stage := document.Stages[2]
-	if stage.Status != filmStatusNeedsReview {
-		t.Fatalf("generated stage status=%q", stage.Status)
-	}
-	approveBody, _ := json.Marshal(map[string]any{"revision": stage.Revision})
-	approved := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/approve", approveBody)
-	if approved.Code != http.StatusOK {
-		t.Fatalf("approve stage: %d %s", approved.Code, approved.Body.String())
-	}
 
 	validated := request(t, handler, http.MethodPost, "/api/film/projects/film-api/validate", []byte(`{}`))
 	if validated.Code != http.StatusOK {
@@ -197,7 +511,7 @@ func TestFilmAPIVerticalWorkflowAndRevisionConflicts(t *testing.T) {
 	}
 
 	document = decodeFilmResponse(t, timelinePut)
-	exportBody, _ := json.Marshal(map[string]any{"kind": "manifest", "revision": document.Revision})
+	exportBody, _ := json.Marshal(map[string]any{"kind": "manifest", "revision": document.Revision, "idempotencyKey": "vertical-manifest"})
 	exported := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", exportBody)
 	if exported.Code != http.StatusCreated {
 		t.Fatalf("manifest export: %d %s", exported.Code, exported.Body.String())
@@ -205,6 +519,14 @@ func TestFilmAPIVerticalWorkflowAndRevisionConflicts(t *testing.T) {
 	deliverables := request(t, handler, http.MethodGet, "/api/film/projects/film-api/deliverables", nil)
 	if deliverables.Code != http.StatusOK || !bytes.Contains(deliverables.Body.Bytes(), []byte(`"manifest"`)) || bytes.Contains(deliverables.Body.Bytes(), []byte(`"asset_bundle"`)) {
 		t.Fatalf("deliverables: %d %s", deliverables.Code, deliverables.Body.String())
+	}
+}
+
+func TestFilmMutationResponseKeepsCapabilityEnvelope(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/episodes", []byte(`{"title":"Episode"}`))
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"stageGeneration"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"assetBundleExport"`)) {
+		t.Fatalf("mutation capability envelope: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -278,7 +600,7 @@ func TestFilmAPIStrictImportsCRUDAndProjectionCAS(t *testing.T) {
 		t.Fatalf("stale projection accepted: %d %s", staleProjection.Code, staleProjection.Body.String())
 	}
 
-	blocked := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run", []byte(`{"revision":1}`))
+	blocked := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run", []byte(`{"revision":1,"providerId":"provider-a","idempotencyKey":"dependency-check"}`))
 	if blocked.Code != http.StatusConflict {
 		t.Fatalf("stage dependency bypassed: %d %s", blocked.Code, blocked.Body.String())
 	}
@@ -314,26 +636,28 @@ func TestFilmAPISceneCRUDInvalidationAndCapabilities(t *testing.T) {
 }
 
 func TestFilmAPIExportRevisionMP4DisableAndAuthenticatedDownload(t *testing.T) {
+	t.Setenv("OPENBOARD_FFMPEG_PATH", "")
 	_, handler := filmAPIHandler(t)
 	production := request(t, handler, http.MethodGet, "/api/film/projects/film-api", nil)
 	document := decodeFilmResponse(t, production)
 
-	stale := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", []byte(`{"kind":"manifest","revision":999}`))
+	stale := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", []byte(`{"kind":"manifest","revision":999,"idempotencyKey":"stale-export"}`))
 	if stale.Code != http.StatusConflict {
 		t.Fatalf("stale export accepted: %d %s", stale.Code, stale.Body.String())
 	}
-	mp4Body, _ := json.Marshal(map[string]any{"kind": "mp4", "revision": document.Revision})
+	mp4Body, _ := json.Marshal(map[string]any{"kind": "mp4", "revision": document.Revision, "idempotencyKey": "missing-mp4"})
 	mp4 := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", mp4Body)
-	if mp4.Code != http.StatusNotImplemented || bytes.Contains(mp4.Body.Bytes(), []byte("OPENBOARD_FFMPEG_PATH")) {
+	if mp4.Code != http.StatusServiceUnavailable || bytes.Contains(mp4.Body.Bytes(), []byte("/usr/")) {
 		t.Fatalf("mp4 was not safely disabled: %d %s", mp4.Code, mp4.Body.String())
 	}
-	assetBundleBody, _ := json.Marshal(map[string]any{"kind": "asset_bundle", "revision": document.Revision})
+	assetBundleBody, _ := json.Marshal(map[string]any{"kind": "asset_bundle", "revision": document.Revision, "idempotencyKey": "empty-bundle"})
 	assetBundle := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", assetBundleBody)
-	if assetBundle.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("fake asset bundle accepted: %d %s", assetBundle.Code, assetBundle.Body.String())
+	if assetBundle.Code != http.StatusCreated {
+		t.Fatalf("asset bundle: %d %s", assetBundle.Code, assetBundle.Body.String())
 	}
 
-	manifestBody, _ := json.Marshal(map[string]any{"kind": "manifest", "revision": document.Revision})
+	document = decodeFilmResponse(t, assetBundle)
+	manifestBody, _ := json.Marshal(map[string]any{"kind": "manifest", "revision": document.Revision, "idempotencyKey": "download-manifest"})
 	manifest := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", manifestBody)
 	if manifest.Code != http.StatusCreated {
 		t.Fatalf("manifest: %d %s", manifest.Code, manifest.Body.String())
@@ -409,5 +733,360 @@ func TestFilmAPIRestoreRejectsCorruptAggregates(t *testing.T) {
 				t.Fatalf("corrupt restore accepted: %d %s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestFilmAPIRestoreRejectsUnverifiedMediaStorageKey(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	document, err := decomposeFilmSource(newFilmDocument("film-api"), "INT. ROOM - DAY\nA light turns on.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Shots[0].ImageStorageKey = "image:unverified-restore"
+	document.Shots[0].MediaMIMEType = "image/png"
+	body, _ := json.Marshal(map[string]any{"revision": 1, "document": document})
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if response.Code != http.StatusUnprocessableEntity || !bytes.Contains(bytes.ToLower(response.Body.Bytes()), []byte("verified")) {
+		t.Fatalf("unverified restore media accepted: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFilmRestoreCASFailureCleansRehydratedMedia(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	media := []byte("restore-cas-media")
+	digest := sha256Hex(media)
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/upload:restore-cas", media, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatal(response.Body.String())
+	}
+	document, err := decomposeFilmSource(newFilmDocument("film-api"), "INT. ROOM - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Shots[0].ImageStorageKey = "upload:restore-cas"
+	document.Shots[0].ImageSHA256 = digest
+	document.Shots[0].MediaMIMEType = "image/png"
+	backend.casErr = store.ErrConflict
+	body, _ := json.Marshal(map[string]any{"revision": 1, "document": document})
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("restore conflict: %d %s", response.Code, response.Body.String())
+	}
+	key := restoredFilmMediaKey("film-api", digest, "")
+	if orphan := request(t, handler, http.MethodGet, "/api/blobs/"+key, nil); orphan.Code != http.StatusNotFound {
+		t.Fatalf("orphan restore media remains: %d %s", orphan.Code, orphan.Body.String())
+	}
+}
+
+func TestFilmAPIRestoreAllowsDigestVerifiedTenantUploadsForShotsAndAssets(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	image := []byte("tenant-image-payload")
+	digest := sha256.Sum256(image)
+	digestHex := hex.EncodeToString(digest[:])
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/upload:film-restore", image, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatalf("seed upload: %d %s", response.Code, response.Body.String())
+	}
+	video := []byte("tenant-video-payload")
+	videoDigest := sha256Hex(video)
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/upload:film-restore-video", video, map[string]string{"Content-Type": "video/mp4"}); response.Code != http.StatusNoContent {
+		t.Fatalf("seed video: %d %s", response.Code, response.Body.String())
+	}
+	deliverableBytes := []byte(`{"restored":true}`)
+	deliverableDigest := sha256Hex(deliverableBytes)
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/upload:film-restore-deliverable", deliverableBytes, map[string]string{"Content-Type": "application/json"}); response.Code != http.StatusNoContent {
+		t.Fatalf("seed deliverable: %d %s", response.Code, response.Body.String())
+	}
+	document, err := decomposeFilmSource(newFilmDocument("film-api"), "INT. ROOM - DAY\nA light turns on.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Shots[0].ImageStorageKey = "upload:film-restore"
+	document.Shots[0].ImageSHA256 = digestHex
+	document.Shots[0].VideoStorageKey = "upload:film-restore-video"
+	document.Shots[0].VideoSHA256 = videoDigest
+	document.Shots[0].MediaMIMEType = "image/png"
+	document.Assets = []filmAsset{{ID: "asset-upload", Revision: 1, Kind: "style", Title: "Upload", Status: filmStatusDraft, Description: "Tenant upload", MediaStorageKey: "upload:film-restore", MediaMIMEType: "image/png", MediaSHA256: digestHex}}
+	document.Timeline.Tracks[0].Clips = []filmTimelineClip{{ID: "restore-video", Revision: 1, Source: "upload:film-restore-video", Order: 0, Start: 0, End: 1, Volume: 1, Transition: "cut"}}
+	document.Deliverables = []filmDeliverable{{ID: "restored-manifest", Revision: 1, Kind: "manifest", Status: filmStatusApproved, Title: "Restored manifest", MIMEType: "application/json", StorageKey: "upload:film-restore-deliverable", SHA256: deliverableDigest, Bytes: int64(len(deliverableBytes)), IdempotencyKey: "restore-manifest", RequestHash: strings.Repeat("a", 64), CreatedAt: document.CreatedAt}}
+	body, _ := json.Marshal(map[string]any{"revision": 1, "document": document})
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("verified restore rejected: %d %s", response.Code, response.Body.String())
+	}
+	restored := decodeFilmResponse(t, response)
+	if !strings.HasPrefix(restored.Shots[0].ImageStorageKey, "film:media:film-api:") || !strings.HasPrefix(restored.Shots[0].VideoStorageKey, "film:media:film-api:") || !strings.HasPrefix(restored.Assets[0].MediaStorageKey, "film:media:film-api:") || restored.Timeline.Tracks[0].Clips[0].Source != restored.Shots[0].VideoStorageKey || !strings.HasPrefix(restored.Deliverables[0].StorageKey, "film:deliverable:film-api:") {
+		t.Fatalf("restore did not rehydrate protected media references: %#v %#v %#v", restored.Shots[0], restored.Timeline, restored.Deliverables)
+	}
+	bundle := request(t, handler, http.MethodPost, "/api/film/projects/film-api/exports", filmExportBody(t, "asset_bundle", "restored-bundle", restored.Revision))
+	if bundle.Code != http.StatusCreated {
+		t.Fatalf("restored media still depends on old jobs: %d %s", bundle.Code, bundle.Body.String())
+	}
+
+	document.Shots[0].ImageSHA256 = strings.Repeat("0", 64)
+	body, _ = json.Marshal(map[string]any{"revision": decodeFilmResponse(t, bundle).Revision, "document": document})
+	response = request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("wrong digest restore accepted: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFilmRestoreMediaMetadataIsStrictAndReturnsMigratedStorageKeys(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	media := []byte("restore-metadata")
+	digest := sha256Hex(media)
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/upload:restore-metadata", media, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatal(response.Body.String())
+	}
+	document, err := decomposeFilmSource(newFilmDocument("film-api"), "INT. ROOM - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Shots[0].ImageStorageKey = "upload:restore-metadata"
+	document.Shots[0].ImageSHA256 = digest
+	document.Shots[0].ImageObjectVersion = blobContentVersion("image/png", media)
+	document.Shots[0].MediaMIMEType = "image/png"
+	mediaMetadata := []map[string]any{{
+		"storageKey": "upload:restore-metadata", "mimeType": "image/png", "bytes": len(media), "sha256": digest,
+		"objectVersion": document.Shots[0].ImageObjectVersion, "provenance": []map[string]any{{"kind": "shot", "entityId": document.Shots[0].ID, "field": "imageStorageKey"}},
+	}}
+	body, _ := json.Marshal(map[string]any{"revision": 1, "document": document, "media": mediaMetadata})
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("metadata restore: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Meta struct {
+			Rehydration struct {
+				MigratedStorageKeys []string `json:"migratedStorageKeys"`
+			} `json:"rehydration"`
+		} `json:"meta"`
+	}
+	if json.Unmarshal(response.Body.Bytes(), &payload) != nil || len(payload.Meta.Rehydration.MigratedStorageKeys) != 1 || payload.Meta.Rehydration.MigratedStorageKeys[0] != "upload:restore-metadata" {
+		t.Fatalf("restore migration metadata = %s", response.Body.String())
+	}
+
+	badMetadata := append([]map[string]any(nil), mediaMetadata...)
+	badMetadata[0] = map[string]any{
+		"storageKey": "upload:restore-metadata", "mimeType": "image/png", "bytes": len(media) + 1, "sha256": digest,
+		"objectVersion": document.Shots[0].ImageObjectVersion, "provenance": []map[string]any{{"kind": "shot", "entityId": document.Shots[0].ID, "field": "videoStorageKey"}},
+	}
+	body, _ = json.Marshal(map[string]any{"revision": 2, "document": document, "media": badMetadata})
+	bad := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if bad.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatched restore metadata accepted: %d %s", bad.Code, bad.Body.String())
+	}
+}
+
+func TestFilmRestoreMetadataValidatesEverySharedKeyProvenance(t *testing.T) {
+	media := []byte("shared-identity")
+	digest := sha256Hex(media)
+	version := blobContentVersion("image/png", media)
+	document, err := decomposeFilmSource(newFilmDocument("film-api"), "INT. ROOM - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Shots[0].ImageStorageKey = "upload:shared-identity"
+	document.Shots[0].ImageSHA256 = digest
+	document.Shots[0].ImageObjectVersion = version
+	document.Assets = []filmAsset{{
+		ID: "asset-shared", Revision: 1, Kind: "style", Title: "Shared", Status: filmStatusDraft,
+		Description: "Shared media", MediaStorageKey: "upload:shared-identity", MediaMIMEType: "image/png",
+		MediaSHA256: strings.Repeat("0", 64), MediaObjectVersion: version,
+	}}
+	metadata := []filmRestoreMedia{{
+		StorageKey: "upload:shared-identity", MIMEType: "image/png", Bytes: int64(len(media)), SHA256: digest, ObjectVersion: version,
+		Provenance: []filmRestoreMediaProvenance{
+			{Kind: "shot", EntityID: document.Shots[0].ID, Field: "imageStorageKey"},
+			{Kind: "asset", EntityID: "asset-shared", Field: "mediaStorageKey"},
+		},
+	}}
+	if err := validateFilmRestoreMediaMetadata(document, metadata); err == nil {
+		t.Fatal("shared storage key skipped a mismatched provenance identity")
+	}
+}
+
+func TestFilmRestoreRehydratesIndependentTimelineMediaFromStrictMetadata(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	document := newFilmDocument("film-api")
+	tests := []struct {
+		trackIndex int
+		key        string
+		mimeType   string
+		data       []byte
+	}{
+		{trackIndex: 0, key: "upload:timeline-video", mimeType: "video/mp4", data: []byte("timeline-video")},
+		{trackIndex: 2, key: "upload:timeline-music", mimeType: "audio/mpeg", data: []byte("timeline-music")},
+		{trackIndex: 4, key: "upload:timeline-subtitle", mimeType: "application/x-subrip", data: []byte("1\n00:00:00,000 --> 00:00:01,000\nHello\n")},
+	}
+	metadata := make([]filmRestoreMedia, 0, len(tests))
+	for _, test := range tests {
+		if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/"+test.key, test.data, map[string]string{"Content-Type": test.mimeType}); response.Code != http.StatusNoContent {
+			t.Fatalf("seed %s: %d %s", test.key, response.Code, response.Body.String())
+		}
+		clipID := "clip-" + strconv.Itoa(test.trackIndex)
+		document.Timeline.Tracks[test.trackIndex].Clips = []filmTimelineClip{{
+			ID: clipID, Revision: 1, Source: test.key, Order: 0, Start: 0, End: 1, Volume: 1, Transition: "cut",
+		}}
+		metadata = append(metadata, filmRestoreMedia{
+			StorageKey: test.key, MIMEType: test.mimeType, Bytes: int64(len(test.data)), SHA256: sha256Hex(test.data),
+			ObjectVersion: blobContentVersion(test.mimeType, test.data),
+			Provenance:    []filmRestoreMediaProvenance{{Kind: "timeline", EntityID: clipID, Field: "source"}},
+		})
+	}
+	body, _ := json.Marshal(filmRestoreRequest{Revision: 1, Document: document, Media: metadata})
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("timeline restore: %d %s", response.Code, response.Body.String())
+	}
+	restored := decodeFilmResponse(t, response)
+	for _, test := range tests {
+		source := restored.Timeline.Tracks[test.trackIndex].Clips[0].Source
+		if !strings.HasPrefix(source, "film:media:film-api:restore:") {
+			t.Fatalf("track %d source was not rehydrated: %q", test.trackIndex, source)
+		}
+	}
+}
+
+func TestFilmRestoreAllowsOnlyCurrentlyReferencedProtectedMedia(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	restoreImage := func(projectID, sourceKey string, revision int, payload []byte) filmDocument {
+		t.Helper()
+		if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/"+sourceKey, payload, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+			t.Fatalf("seed %s: %d %s", sourceKey, response.Code, response.Body.String())
+		}
+		document, err := decomposeFilmSource(newFilmDocument(projectID), "INT. ROOM - DAY\nAction.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		document.Shots[0].ImageStorageKey = sourceKey
+		document.Shots[0].ImageSHA256 = sha256Hex(payload)
+		document.Shots[0].MediaMIMEType = "image/png"
+		body, _ := json.Marshal(map[string]any{"revision": revision, "document": document})
+		response := request(t, handler, http.MethodPut, "/api/film/projects/"+projectID+"/restore", body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("restore %s: %d %s", projectID, response.Code, response.Body.String())
+		}
+		return decodeFilmResponse(t, response)
+	}
+
+	current := restoreImage("film-api", "upload:protected-current", 1, []byte("current"))
+	body, _ := json.Marshal(map[string]any{"revision": 2, "document": current})
+	rollback := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if rollback.Code != http.StatusOK {
+		t.Fatalf("safe protected rollback rejected: %d %s", rollback.Code, rollback.Body.String())
+	}
+
+	otherProject := []byte(`{"schemaVersion":3,"projectKind":"film","id":"film-other","title":"Other","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
+	if response := request(t, handler, http.MethodPut, "/api/projects/film-other", otherProject); response.Code != http.StatusNoContent {
+		t.Fatal(response.Body.String())
+	}
+	other := restoreImage("film-other", "upload:protected-other", 0, []byte("other"))
+	latest := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api/status", nil))
+	latest.Shots[0].ImageStorageKey = other.Shots[0].ImageStorageKey
+	latest.Shots[0].ImageSHA256 = other.Shots[0].ImageSHA256
+	latest.Shots[0].ImageObjectVersion = other.Shots[0].ImageObjectVersion
+	body, _ = json.Marshal(map[string]any{"revision": 3, "document": latest})
+	injected := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	if injected.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unreferenced protected key injection accepted: %d %s", injected.Code, injected.Body.String())
+	}
+}
+
+func TestFilmRestoreTokenRollsBackAggregateAndProtectedMediaWithCASBinding(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	restore := func(revision int, source string, payload []byte) (filmDocument, string, int) {
+		t.Helper()
+		if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/"+source, payload, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+			t.Fatalf("seed %s: %d %s", source, response.Code, response.Body.String())
+		}
+		document, err := decomposeFilmSource(newFilmDocument("film-api"), "INT. ROOM - DAY\nAction.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		document.Source.Text = source
+		document.Shots[0].ImageStorageKey = source
+		document.Shots[0].ImageSHA256 = sha256Hex(payload)
+		document.Shots[0].MediaMIMEType = "image/png"
+		body, _ := json.Marshal(filmRestoreRequest{Revision: revision, Document: document})
+		response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("restore %s: %d %s", source, response.Code, response.Body.String())
+		}
+		var result struct {
+			Data filmDocument `json:"data"`
+			Meta struct {
+				RecordRevision int `json:"recordRevision"`
+				Rehydration    struct {
+					RestoreToken string `json:"restoreToken"`
+				} `json:"rehydration"`
+			} `json:"meta"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Meta.Rehydration.RestoreToken == "" {
+			t.Fatalf("restore token missing: %v %s", err, response.Body.String())
+		}
+		return result.Data, result.Meta.Rehydration.RestoreToken, result.Meta.RecordRevision
+	}
+
+	first, _, _ := restore(1, "upload:rollback-first", []byte("first"))
+	_, secondToken, secondRecordRevision := restore(2, "upload:rollback-second", []byte("second"))
+	rollbackBody, _ := json.Marshal(map[string]any{"revision": secondRecordRevision, "restoreToken": secondToken})
+	rolledBack := request(t, handler, http.MethodPost, "/api/film/projects/film-api/restore/rollback", rollbackBody)
+	if rolledBack.Code != http.StatusOK {
+		t.Fatalf("rollback: %d %s", rolledBack.Code, rolledBack.Body.String())
+	}
+	result := decodeFilmResponse(t, rolledBack)
+	if result.Source.Text != "upload:rollback-first" || result.Shots[0].ImageStorageKey != first.Shots[0].ImageStorageKey {
+		t.Fatalf("rollback did not restore old aggregate/media: %#v", result)
+	}
+
+	otherProject := bytes.ReplaceAll([]byte(`{"schemaVersion":3,"projectKind":"film","id":"film-api","title":"Film API","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`), []byte("film-api"), []byte("film-other"))
+	if response := request(t, handler, http.MethodPut, "/api/projects/film-other", otherProject); response.Code != http.StatusNoContent {
+		t.Fatal(response.Body.String())
+	}
+	if response := request(t, handler, http.MethodPost, "/api/film/projects/film-other", []byte(`{}`)); response.Code != http.StatusCreated {
+		t.Fatal(response.Body.String())
+	}
+	crossBody, _ := json.Marshal(map[string]any{"revision": 1, "restoreToken": secondToken})
+	cross := request(t, handler, http.MethodPost, "/api/film/projects/film-other/restore/rollback", crossBody)
+	if cross.Code != http.StatusNotFound {
+		t.Fatalf("cross-project restore token accepted: %d %s", cross.Code, cross.Body.String())
+	}
+}
+
+func TestFilmRestoreCASLoserDoesNotDeleteWinnerReferencedMedia(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	media := []byte("restore-winner")
+	digest := sha256Hex(media)
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/upload:restore-winner", media, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatal(response.Body.String())
+	}
+	document, err := decomposeFilmSource(newFilmDocument("film-api"), "INT. ROOM - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Shots[0].ImageStorageKey = "upload:restore-winner"
+	document.Shots[0].ImageSHA256 = digest
+	document.Shots[0].MediaMIMEType = "image/png"
+	body, _ := json.Marshal(map[string]any{"revision": 1, "document": document})
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	backend.casHook = func() {
+		if calls.Add(1) == 1 {
+			close(blocked)
+			<-release
+		}
+	}
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { firstDone <- request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body) }()
+	<-blocked
+	winner := request(t, handler, http.MethodPut, "/api/film/projects/film-api/restore", body)
+	close(release)
+	loser := <-firstDone
+	if winner.Code != http.StatusOK || loser.Code != http.StatusConflict {
+		t.Fatalf("restore race winner=%d %s loser=%d %s", winner.Code, winner.Body.String(), loser.Code, loser.Body.String())
+	}
+	key := restoredFilmMediaKey("film-api", digest, "")
+	if blob := request(t, handler, http.MethodGet, "/api/blobs/"+key, nil); blob.Code != http.StatusOK || !bytes.Equal(blob.Body.Bytes(), media) {
+		t.Fatalf("CAS loser deleted winner media: %d %q", blob.Code, blob.Body.Bytes())
 	}
 }

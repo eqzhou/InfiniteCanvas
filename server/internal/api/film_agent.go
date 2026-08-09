@@ -1,12 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
 )
 
@@ -16,9 +20,60 @@ type filmAgentResourceArguments struct {
 }
 
 type filmAgentStageArguments struct {
-	ProjectID string `json:"projectId"`
-	Stage     string `json:"stage"`
-	Revision  int    `json:"revision"`
+	ProjectID      string                `json:"projectId"`
+	Stage          string                `json:"stage"`
+	Revision       int                   `json:"revision"`
+	ShotIDs        []string              `json:"shotIds,omitempty"`
+	ProviderID     string                `json:"providerId,omitempty"`
+	Model          string                `json:"model,omitempty"`
+	Config         *filmGenerationConfig `json:"config,omitempty"`
+	IdempotencyKey string                `json:"idempotencyKey,omitempty"`
+}
+
+func (s *Server) runFilmGenerationStageForAgent(ctx context.Context, tenantID string, args filmAgentStageArguments) (filmDocument, error) {
+	if strings.TrimSpace(args.ProviderID) == "" || strings.TrimSpace(args.Model) == "" || args.Config == nil || !validFilmIdempotencyKey(args.IdempotencyKey) {
+		return filmDocument{}, badToolRequest("generation stages require providerId, model, config, and a valid idempotencyKey")
+	}
+	input := filmGenerationRunRequest{
+		Revision: args.Revision, ShotIDs: append([]string(nil), args.ShotIDs...), ProviderID: args.ProviderID,
+		Model: args.Model, Config: *args.Config, IdempotencyKey: args.IdempotencyKey,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return filmDocument{}, badToolRequest("generation stage parameters are invalid")
+	}
+	routeContext := chi.NewRouteContext()
+	routeContext.URLParams.Add("projectId", args.ProjectID)
+	routeContext.URLParams.Add("stageId", args.Stage)
+	requestContext := context.WithValue(ctx, chi.RouteCtxKey, routeContext)
+	if user, ok := authUserFrom(requestContext); ok {
+		user.TenantID = tenantID
+		requestContext = context.WithValue(requestContext, authUserKey, user)
+	} else if tenantID != store.DefaultTenantID {
+		requestContext = context.WithValue(requestContext, authUserKey, store.AuthUser{TenantID: tenantID})
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/film/projects/"+args.ProjectID+"/stages/"+args.Stage+"/run", bytes.NewReader(body)).WithContext(requestContext)
+	recorder := httptest.NewRecorder()
+	s.runFilmGenerationStage(recorder, request)
+	response := recorder.Result()
+	defer response.Body.Close()
+	var payload struct {
+		Data  filmDocument `json:"data"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.NewDecoder(response.Body).Decode(&payload) != nil {
+		return filmDocument{}, errors.New("film generation response is invalid")
+	}
+	if response.StatusCode >= http.StatusBadRequest {
+		message := payload.Error.Message
+		if message == "" {
+			message = "film generation stage failed"
+		}
+		return filmDocument{}, &toolError{status: response.StatusCode, message: message}
+	}
+	return payload.Data, nil
 }
 
 func (s *Server) loadFilmForAgent(ctx context.Context, tenantID, projectID string) (store.FilmStore, store.FilmRecord, filmDocument, error) {
@@ -103,6 +158,9 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 		if err := decodeToolArguments(raw, &args); err != nil {
 			return nil, err
 		}
+		if filmStageGenerationKind(args.Stage) != "" {
+			return s.runFilmGenerationStageForAgent(ctx, tenantID, args)
+		}
 		backend, record, document, err := s.loadFilmForAgent(ctx, tenantID, args.ProjectID)
 		if err != nil {
 			return nil, err
@@ -122,7 +180,31 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"document": document, "recordRevision": record.Revision, "mp4Export": false}, nil
+		_, renderAvailable, renderDiagnostic := s.filmFFmpegCapability(ctx)
+		return map[string]any{
+			"document":       document,
+			"recordRevision": record.Revision,
+			"mp4Export":      renderAvailable,
+			"mp4Diagnostic":  renderDiagnostic,
+		}, nil
+	}
+	if tool == "film.check" {
+		_, record, document, err := s.loadFilmForAgent(ctx, tenantID, project.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		report, err := checkFilmDocument(document)
+		if err != nil {
+			return nil, &toolError{status: http.StatusUnprocessableEntity, message: err.Error()}
+		}
+		return map[string]any{"report": report, "recordRevision": record.Revision}, nil
+	}
+	if tool == "film.proposals" {
+		_, record, document, err := s.loadFilmForAgent(ctx, tenantID, project.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"reports": document.QualityReports, "recordRevision": record.Revision}, nil
 	}
 	if tool == "film.validate" {
 		backend, record, document, err := s.loadFilmForAgent(ctx, tenantID, project.ProjectID)

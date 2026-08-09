@@ -9,7 +9,7 @@
     "preview": "vite preview --host 0.0.0.0 --port 5173",
     "typecheck": "tsc --noEmit --pretty false && tsc -p benchmarks/tsconfig.json --pretty false",
     "test": "bun test src benchmarks",
-    "test:coverage": "bun test --coverage src benchmarks",
+    "test:coverage": "node ../scripts/check-web-coverage.mjs",
     "benchmark:indexes": "bun run benchmarks/indexes.bench.ts",
     "benchmark:indexes:assert": "bun run benchmarks/indexes.bench.ts --assert",
     "test:e2e": "playwright test",

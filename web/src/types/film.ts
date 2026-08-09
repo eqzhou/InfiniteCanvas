@@ -49,8 +49,17 @@ export type FilmShot = {
   identityVersionIds: string[];
   styleAssetId?: string;
   imageStorageKey?: string;
+  imageSha256?: string;
+  imageObjectVersion?: string;
+  imageGenerationJobId?: string;
   videoStorageKey?: string;
+  videoSha256?: string;
+  videoObjectVersion?: string;
+  videoGenerationJobId?: string;
   audioStorageKey?: string;
+  audioSha256?: string;
+  audioObjectVersion?: string;
+  audioGenerationJobId?: string;
   subtitle?: string;
   mediaMimeType?: string;
 };
@@ -64,6 +73,9 @@ export type FilmAsset = {
   parentAssetId?: string;
   description: string;
   mediaStorageKey?: string;
+  mediaMimeType?: string;
+  mediaSha256?: string;
+  mediaObjectVersion?: string;
   voice?: string;
   stylePrompt?: string;
   aspectRatio?: string;
@@ -87,6 +99,9 @@ export type FilmTask = {
   createdAt: string;
   updatedAt: string;
   generationJobId?: string;
+  shotId?: string;
+  idempotencyKey?: string;
+  requestHash?: string;
   error?: string;
 };
 
@@ -174,6 +189,8 @@ export type FilmDeliverable = {
   title: string;
   mimeType: string;
   storageKey?: string;
+  sha256?: string;
+  objectVersion?: string;
   content?: string;
   bytes?: number;
   diagnostic?: string;

@@ -21,6 +21,10 @@ for name in OPENBOARD_DATABASE_URL OPENBOARD_REDIS_URL OPENBOARD_MASTER_KEY OPEN
   fi
 done
 
+# This command prints only two safely quoted exports. A missing tool clears
+# both paths and leaves the rest of the build/start flow available.
+eval "$(node scripts/diagnose-media-capabilities.cjs --shell)"
+
 export OPENBOARD_ADDR=127.0.0.1:8790
 export OPENBOARD_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 export OPENBOARD_API_TARGET=http://127.0.0.1:8790

@@ -50,7 +50,7 @@ func validateFilmSource(source filmSource) error {
 	if source.Revision < 0 || len(source.Text) > maxFilmSourceBytes || len(source.OriginalName) > 255 || !validFilmTimestamp(source.ImportedAt) {
 		return errors.New("film source is invalid")
 	}
-	if source.Format != "text" && source.Format != "txt" && source.Format != "markdown" {
+	if source.Format != "text" && source.Format != "txt" && source.Format != "markdown" && source.Format != "docx" && source.Format != "pdf" {
 		return errors.New("film source format is unsupported")
 	}
 	return nil
@@ -164,7 +164,7 @@ func validateFilmTasks(tasks []filmTask) error {
 		if err := addUniqueFilmID(ids, task.ID, "task"); err != nil {
 			return err
 		}
-		if _, exists := filmStageDependencies[task.Stage]; !exists || task.Revision < 1 || !validFilmStatus(task.Status) || !validFilmText(task.Title, 500, true) || math.IsNaN(task.Progress) || math.IsInf(task.Progress, 0) || task.Progress < 0 || task.Progress > 1 || !validFilmTimestamp(task.CreatedAt) || !validFilmTimestamp(task.UpdatedAt) || !validFilmText(task.Error, 2_000, false) || (task.GenerationJobID != "" && !validProjectID(task.GenerationJobID)) {
+		if _, exists := filmStageDependencies[task.Stage]; !exists || task.Revision < 1 || !validFilmStatus(task.Status) || !validFilmText(task.Title, 500, true) || math.IsNaN(task.Progress) || math.IsInf(task.Progress, 0) || task.Progress < 0 || task.Progress > 1 || !validFilmTimestamp(task.CreatedAt) || !validFilmTimestamp(task.UpdatedAt) || !validFilmText(task.Error, 2_000, false) || (task.GenerationJobID != "" && (!validProjectID(task.GenerationJobID) || filmStageGenerationKind(task.Stage) == "" || !validProjectID(task.ShotID) || !validFilmIdempotencyKey(task.IdempotencyKey) || !validFilmRequestHash(task.RequestHash))) || (task.GenerationJobID == "" && (task.ShotID != "" || task.IdempotencyKey != "" || task.RequestHash != "")) {
 			return fmt.Errorf("film task %s is invalid", task.ID)
 		}
 	}
@@ -279,12 +279,11 @@ func validateFilmDeliverables(deliverables []filmDeliverable) error {
 		if err := addUniqueFilmID(ids, deliverable.ID, "deliverable"); err != nil {
 			return err
 		}
-		validKind := deliverable.Kind == "manifest" || deliverable.Kind == "srt"
-		expectedMIME := "application/json"
-		if deliverable.Kind == "srt" {
-			expectedMIME = "application/x-subrip"
-		}
-		if !validKind || deliverable.Revision < 1 || !validFilmStatus(deliverable.Status) || !validFilmText(deliverable.Title, 500, true) || deliverable.MIMEType != expectedMIME || deliverable.StorageKey != "" || len(deliverable.Content) > maxProjectBytes || deliverable.Bytes < 0 || deliverable.Bytes != int64(len(deliverable.Content)) || !validFilmText(deliverable.Diagnostic, 2_000, false) || !validFilmTimestamp(deliverable.CreatedAt) {
+		_, expectedMIME, _, validKind := filmDeliverableSpec(deliverable.Kind)
+		external := deliverable.StorageKey != ""
+		validBytes := deliverable.Bytes > 0 && ((external && deliverable.Content == "") || (!external && deliverable.Bytes == int64(len(deliverable.Content))))
+		validIdempotency := !external || validFilmIdempotencyKey(deliverable.IdempotencyKey) && validFilmRequestHash(deliverable.RequestHash)
+		if !validKind || deliverable.Revision < 1 || !validFilmStatus(deliverable.Status) || !validFilmText(deliverable.Title, 500, true) || deliverable.MIMEType != expectedMIME || !validFilmStorageKey(deliverable.StorageKey) || len(deliverable.Content) > maxProjectBytes || !validBytes || !validIdempotency || !validFilmText(deliverable.Diagnostic, 2_000, false) || !validFilmTimestamp(deliverable.CreatedAt) {
 			return fmt.Errorf("film deliverable %s is invalid", deliverable.ID)
 		}
 	}
@@ -310,6 +309,13 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 	}
 	if err := validateFilmTasks(document.Tasks); err != nil {
 		return err
+	}
+	for _, task := range document.Tasks {
+		if task.ShotID != "" {
+			if _, exists := shots[task.ShotID]; !exists {
+				return fmt.Errorf("film task %s references a missing shot", task.ID)
+			}
+		}
 	}
 	if err := validateFilmQualityReports(document, scenes, shots, assets); err != nil {
 		return err

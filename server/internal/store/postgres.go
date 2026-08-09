@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 14
+const currentSchemaVersion = 17
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -223,7 +223,83 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 15 {
+		if err := migrateV15(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
+	if version < 16 {
+		if err := migrateV16(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
+	if version < 17 {
+		if err := migrateV17(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV17(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 17, `
+ALTER TABLE openboard_film_restore_tokens
+  ADD COLUMN IF NOT EXISTS created_media jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE openboard_workspace_restore_tokens
+  ADD COLUMN IF NOT EXISTS created_media jsonb NOT NULL DEFAULT '[]'::jsonb;
+CREATE TABLE IF NOT EXISTS openboard_film_cleanup_generations (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  generation_id text NOT NULL,
+  documents jsonb NOT NULL DEFAULT '[]'::jsonb,
+  media jsonb NOT NULL DEFAULT '[]'::jsonb,
+  completed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (tenant_id, project_id, generation_id)
+);
+CREATE INDEX IF NOT EXISTS openboard_film_cleanup_pending_idx
+  ON openboard_film_cleanup_generations (tenant_id, project_id, created_at)
+  WHERE completed_at IS NULL;
+`)
+}
+
+func migrateV16(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 16, `
+CREATE TABLE IF NOT EXISTS openboard_workspace_restore_tokens (
+  tenant_id text NOT NULL,
+  token_digest text NOT NULL CHECK (char_length(token_digest) = 64),
+  prior_snapshot jsonb NOT NULL,
+  applied_version text NOT NULL CHECK (char_length(applied_version) = 67),
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (tenant_id, token_digest)
+);
+CREATE INDEX IF NOT EXISTS openboard_workspace_restore_tokens_expiry_idx
+  ON openboard_workspace_restore_tokens (expires_at) WHERE consumed_at IS NULL;
+`)
+}
+
+func migrateV15(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 15, `
+CREATE TABLE IF NOT EXISTS openboard_film_restore_tokens (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  token_digest text NOT NULL CHECK (char_length(token_digest) = 64),
+  prior_exists boolean NOT NULL,
+  prior_document jsonb,
+  applied_revision integer NOT NULL CHECK (applied_revision > 0),
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (tenant_id, project_id, token_digest),
+  FOREIGN KEY (tenant_id, project_id)
+    REFERENCES openboard_projects (tenant_id, id) ON DELETE CASCADE,
+  CHECK ((prior_exists AND prior_document IS NOT NULL) OR (NOT prior_exists AND prior_document IS NULL))
+);
+CREATE INDEX IF NOT EXISTS openboard_film_restore_tokens_expiry_idx
+  ON openboard_film_restore_tokens (expires_at) WHERE consumed_at IS NULL;
+`)
 }
 
 func migrateV14(ctx context.Context, connection *pgxpool.Conn) error {
@@ -857,7 +933,15 @@ func (s *PostgresStore) PutProject(ctx context.Context, tenantID, id string, doc
 	}
 	// A tombstoned row must survive an autosave from a tab that still holds the
 	// pre-delete document; otherwise the delete silently undoes itself.
-	result, err := s.pool.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
 		VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id, id) DO UPDATE SET
 		title=EXCLUDED.title, updated_at=EXCLUDED.updated_at, document=EXCLUDED.document
 		WHERE openboard_projects.deleted_at IS NULL`,
@@ -867,6 +951,9 @@ func (s *PostgresStore) PutProject(ctx context.Context, tenantID, id string, doc
 	}
 	if result.RowsAffected() == 0 {
 		return ErrGone
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
 	}
 	if s.redis != nil {
 		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()
@@ -884,18 +971,26 @@ func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id 
 	if err != nil {
 		return fmt.Errorf("invalid updatedAt: %w", err)
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
 	var result pgconn.CommandTag
 	if expected == nil {
 		// Create-only. A live row or a tombstone both collide; distinguish them so a
 		// migration that hits a deleted project can stop instead of retrying forever.
-		result, err = s.pool.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
+		result, err = tx.Exec(ctx, `INSERT INTO openboard_projects (tenant_id,id,title,updated_at,document)
 			VALUES ($1,$2,$3,$4,$5) ON CONFLICT (tenant_id,id) DO NOTHING`, tenantID, id, metadata.Title, updated, document)
 		if err != nil {
 			return err
 		}
 		if result.RowsAffected() == 0 {
 			var deletedAt *time.Time
-			lookupErr := s.pool.QueryRow(ctx,
+			lookupErr := tx.QueryRow(ctx,
 				`SELECT deleted_at FROM openboard_projects WHERE tenant_id=$1 AND id=$2`,
 				tenantID, id).Scan(&deletedAt)
 			if lookupErr != nil {
@@ -907,7 +1002,7 @@ func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id 
 			return ErrConflict
 		}
 	} else {
-		result, err = s.pool.Exec(ctx, `UPDATE openboard_projects SET title=$4,updated_at=$5,document=$6
+		result, err = tx.Exec(ctx, `UPDATE openboard_projects SET title=$4,updated_at=$5,document=$6
 			WHERE tenant_id=$1 AND id=$2 AND document=$3::jsonb AND deleted_at IS NULL`,
 			tenantID, id, string(expected), metadata.Title, updated, document)
 		if err != nil {
@@ -916,6 +1011,9 @@ func (s *PostgresStore) CompareAndSwapProject(ctx context.Context, tenantID, id 
 		if result.RowsAffected() == 0 {
 			return ErrConflict
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
 	}
 	if s.redis != nil {
 		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()
@@ -932,6 +1030,14 @@ func (s *PostgresStore) DeleteProject(ctx context.Context, tenantID, id string) 
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE openboard_generation_jobs
+		SET deleted_at=COALESCE(deleted_at,clock_timestamp()),result='{}'::jsonb
+		WHERE tenant_id=$1 AND project_id=$2 AND deleted_at IS NULL`, tenantID, id); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `DELETE FROM openboard_film_projects WHERE tenant_id=$1 AND project_id=$2`, tenantID, id); err != nil {
 		return err
 	}
@@ -945,6 +1051,177 @@ func (s *PostgresStore) DeleteProject(ctx context.Context, tenantID, id string) 
 		_ = s.redis.Del(ctx, projectCacheKey(tenantID, id)).Err()
 	}
 	return err
+}
+
+func enqueueFilmCleanupGenerationTx(ctx context.Context, tx pgx.Tx, tenantID, projectID, generationID string, documents []json.RawMessage, media []WorkspaceMedia) error {
+	filtered := make([]WorkspaceMedia, 0, len(media))
+	for _, item := range media {
+		if item.ProjectID == projectID {
+			filtered = append(filtered, item)
+		}
+	}
+	documentsJSON, err := json.Marshal(documents)
+	if err != nil {
+		return err
+	}
+	mediaJSON, err := json.Marshal(filtered)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO openboard_film_cleanup_generations
+		(tenant_id,project_id,generation_id,documents,media) VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (tenant_id,project_id,generation_id) DO NOTHING`, tenantID, projectID, generationID, documentsJSON, mediaJSON)
+	return err
+}
+
+func (s *PostgresStore) DeleteProjectWithFilmCleanup(ctx context.Context, tenantID, projectID, generationID string) error {
+	tenantID = normalizeTenantID(tenantID)
+	if projectID == "" || generationID == "" {
+		return ErrInvalidInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	documents := []json.RawMessage{}
+	media := []WorkspaceMedia{}
+	var current []byte
+	if err := tx.QueryRow(ctx, `SELECT document FROM openboard_film_projects WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID).Scan(&current); err == nil {
+		documents = append(documents, append([]byte(nil), current...))
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT prior_document,created_media FROM openboard_film_restore_tokens
+		WHERE tenant_id=$1 AND project_id=$2 AND consumed_at IS NULL`, tenantID, projectID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var prior []byte
+		var created []byte
+		if err := rows.Scan(&prior, &created); err != nil {
+			rows.Close()
+			return err
+		}
+		if len(prior) > 0 {
+			documents = append(documents, append([]byte(nil), prior...))
+		}
+		var items []WorkspaceMedia
+		if json.Unmarshal(created, &items) != nil {
+			rows.Close()
+			return ErrInvalidInput
+		}
+		media = append(media, items...)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = tx.Query(ctx, `SELECT prior_snapshot,created_media FROM openboard_workspace_restore_tokens
+		WHERE tenant_id=$1 AND consumed_at IS NULL`, tenantID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var priorJSON, createdJSON []byte
+		if err := rows.Scan(&priorJSON, &createdJSON); err != nil {
+			rows.Close()
+			return err
+		}
+		var snapshot WorkspaceSnapshot
+		if json.Unmarshal(priorJSON, &snapshot) != nil {
+			rows.Close()
+			return ErrInvalidInput
+		}
+		for _, film := range snapshot.Films {
+			if film.ProjectID == projectID {
+				documents = append(documents, append([]byte(nil), film.Document...))
+			}
+		}
+		var items []WorkspaceMedia
+		if json.Unmarshal(createdJSON, &items) != nil {
+			rows.Close()
+			return ErrInvalidInput
+		}
+		media = append(media, items...)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if err := enqueueFilmCleanupGenerationTx(ctx, tx, tenantID, projectID, generationID, documents, media); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_film_restore_tokens WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID); err != nil {
+		return err
+	}
+	// A workspace token can resurrect this project, so deleting one project
+	// invalidates tenant workspace rollback tokens after their media history is captured.
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_workspace_restore_tokens WHERE tenant_id=$1`, tenantID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs
+		SET deleted_at=COALESCE(deleted_at,clock_timestamp()),status='deleted',result='{}'::jsonb,
+		lease_owner='',lease_expires_at=NULL WHERE tenant_id=$1 AND project_id=$2 AND deleted_at IS NULL`, tenantID, projectID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_film_projects WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_projects SET deleted_at=COALESCE(deleted_at,clock_timestamp()),document='{}'::jsonb
+		WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL`, tenantID, projectID); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if s.redis != nil {
+		_ = s.redis.Del(ctx, projectCacheKey(tenantID, projectID)).Err()
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListFilmCleanupGenerations(ctx context.Context, tenantID, projectID string) ([]FilmCleanupGeneration, error) {
+	tenantID = normalizeTenantID(tenantID)
+	rows, err := s.pool.Query(ctx, `SELECT generation_id,documents,media FROM openboard_film_cleanup_generations
+		WHERE tenant_id=$1 AND project_id=$2 AND completed_at IS NULL ORDER BY created_at,generation_id`, tenantID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FilmCleanupGeneration{}
+	for rows.Next() {
+		var item FilmCleanupGeneration
+		var documentsJSON, mediaJSON []byte
+		if err := rows.Scan(&item.GenerationID, &documentsJSON, &mediaJSON); err != nil {
+			return nil, err
+		}
+		item.ProjectID = projectID
+		if json.Unmarshal(documentsJSON, &item.Documents) != nil || json.Unmarshal(mediaJSON, &item.Media) != nil {
+			return nil, ErrInvalidInput
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) CompleteFilmCleanupGeneration(ctx context.Context, tenantID, projectID, generationID string) error {
+	tenantID = normalizeTenantID(tenantID)
+	result, err := s.pool.Exec(ctx, `UPDATE openboard_film_cleanup_generations SET completed_at=clock_timestamp()
+		WHERE tenant_id=$1 AND project_id=$2 AND generation_id=$3 AND completed_at IS NULL`, tenantID, projectID, generationID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *PostgresStore) GetFilmProject(ctx context.Context, tenantID, projectID string) (FilmRecord, error) {
@@ -971,7 +1248,15 @@ func (s *PostgresStore) CreateFilmProject(ctx context.Context, tenantID, project
 	}
 	var record FilmRecord
 	var updated time.Time
-	err := s.pool.QueryRow(ctx, `INSERT INTO openboard_film_projects
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return FilmRecord{}, err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO openboard_film_projects
 		(tenant_id, project_id, revision, document) VALUES ($1,$2,1,$3)
 		ON CONFLICT (tenant_id, project_id) DO NOTHING
 		RETURNING project_id, revision, document, updated_at`, tenantID, projectID, document).
@@ -980,6 +1265,9 @@ func (s *PostgresStore) CreateFilmProject(ctx context.Context, tenantID, project
 		return FilmRecord{}, ErrConflict
 	}
 	if err != nil {
+		return FilmRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return FilmRecord{}, err
 	}
 	record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
@@ -999,14 +1287,22 @@ func (s *PostgresStore) CompareAndSwapFilmProject(
 	}
 	var record FilmRecord
 	var updated time.Time
-	err := s.pool.QueryRow(ctx, `UPDATE openboard_film_projects
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return FilmRecord{}, err
+	}
+	err = tx.QueryRow(ctx, `UPDATE openboard_film_projects
 		SET revision=revision+1, document=$4, updated_at=clock_timestamp()
 		WHERE tenant_id=$1 AND project_id=$2 AND revision=$3
 		RETURNING project_id, revision, document, updated_at`, tenantID, projectID, expectedRevision, document).
 		Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var exists bool
-		lookupErr := s.pool.QueryRow(ctx, `SELECT true FROM openboard_film_projects
+		lookupErr := tx.QueryRow(ctx, `SELECT true FROM openboard_film_projects
 			WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID).Scan(&exists)
 		if errors.Is(lookupErr, pgx.ErrNoRows) {
 			return FilmRecord{}, ErrNotFound
@@ -1019,8 +1315,611 @@ func (s *PostgresStore) CompareAndSwapFilmProject(
 	if err != nil {
 		return FilmRecord{}, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return FilmRecord{}, err
+	}
 	record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
 	return record, nil
+}
+
+func (s *PostgresStore) RestoreFilmProject(
+	ctx context.Context,
+	tenantID string,
+	projectID string,
+	expectedRevision int,
+	document []byte,
+	tokenDigest string,
+	expiresAt time.Time,
+	createdMedia []WorkspaceMedia,
+) (FilmRecord, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if expectedRevision < 0 || !json.Valid(document) || len(tokenDigest) != 64 || !expiresAt.After(time.Now()) {
+		return FilmRecord{}, ErrInvalidInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return FilmRecord{}, err
+	}
+	var priorRevision int
+	var priorDocument []byte
+	lookupErr := tx.QueryRow(ctx, `SELECT revision, document FROM openboard_film_projects
+		WHERE tenant_id=$1 AND project_id=$2 FOR UPDATE`, tenantID, projectID).Scan(&priorRevision, &priorDocument)
+	priorExists := lookupErr == nil
+	if lookupErr != nil && !errors.Is(lookupErr, pgx.ErrNoRows) {
+		return FilmRecord{}, lookupErr
+	}
+	if priorExists && priorRevision != expectedRevision || !priorExists && expectedRevision != 0 {
+		if !priorExists {
+			return FilmRecord{}, ErrNotFound
+		}
+		return FilmRecord{}, ErrConflict
+	}
+	var record FilmRecord
+	var updated time.Time
+	if priorExists {
+		err = tx.QueryRow(ctx, `UPDATE openboard_film_projects
+			SET revision=revision+1, document=$4, updated_at=clock_timestamp()
+			WHERE tenant_id=$1 AND project_id=$2 AND revision=$3
+			RETURNING project_id, revision, document, updated_at`, tenantID, projectID, expectedRevision, document).
+			Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
+	} else {
+		err = tx.QueryRow(ctx, `INSERT INTO openboard_film_projects
+			(tenant_id, project_id, revision, document) VALUES ($1,$2,1,$3)
+			RETURNING project_id, revision, document, updated_at`, tenantID, projectID, document).
+			Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
+	}
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	var prior any
+	if priorExists {
+		prior = priorDocument
+	}
+	createdMediaJSON, err := json.Marshal(createdMedia)
+	if err != nil {
+		return FilmRecord{}, ErrInvalidInput
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_restore_tokens
+		(tenant_id,project_id,token_digest,prior_exists,prior_document,applied_revision,expires_at,created_media)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, tenantID, projectID, tokenDigest, priorExists, prior, record.Revision, expiresAt, createdMediaJSON); err != nil {
+		return FilmRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return FilmRecord{}, err
+	}
+	record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+	return record, nil
+}
+
+func (s *PostgresStore) RollbackFilmProject(
+	ctx context.Context,
+	tenantID string,
+	projectID string,
+	expectedRevision int,
+	tokenDigest string,
+	now time.Time,
+) (FilmRecord, bool, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if expectedRevision < 1 || len(tokenDigest) != 64 {
+		return FilmRecord{}, false, ErrInvalidInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return FilmRecord{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return FilmRecord{}, false, err
+	}
+	var priorExists bool
+	var priorDocument []byte
+	var appliedRevision int
+	var createdMediaJSON []byte
+	err = tx.QueryRow(ctx, `SELECT prior_exists, prior_document, applied_revision, created_media
+		FROM openboard_film_restore_tokens
+		WHERE tenant_id=$1 AND project_id=$2 AND token_digest=$3
+		  AND consumed_at IS NULL AND expires_at>$4 FOR UPDATE`, tenantID, projectID, tokenDigest, now).
+		Scan(&priorExists, &priorDocument, &appliedRevision, &createdMediaJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FilmRecord{}, false, ErrNotFound
+	}
+	if err != nil {
+		return FilmRecord{}, false, err
+	}
+	if expectedRevision != appliedRevision {
+		return FilmRecord{}, false, ErrConflict
+	}
+	var record FilmRecord
+	if priorExists {
+		var updated time.Time
+		err = tx.QueryRow(ctx, `UPDATE openboard_film_projects
+			SET revision=revision+1, document=$4, updated_at=clock_timestamp()
+			WHERE tenant_id=$1 AND project_id=$2 AND revision=$3
+			RETURNING project_id, revision, document, updated_at`, tenantID, projectID, expectedRevision, priorDocument).
+			Scan(&record.ProjectID, &record.Revision, &record.Document, &updated)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return FilmRecord{}, false, ErrConflict
+		}
+		if err != nil {
+			return FilmRecord{}, false, err
+		}
+		record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+	} else {
+		result, deleteErr := tx.Exec(ctx, `DELETE FROM openboard_film_projects
+			WHERE tenant_id=$1 AND project_id=$2 AND revision=$3`, tenantID, projectID, expectedRevision)
+		if deleteErr != nil {
+			return FilmRecord{}, false, deleteErr
+		}
+		if result.RowsAffected() != 1 {
+			return FilmRecord{}, false, ErrConflict
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_film_restore_tokens SET consumed_at=$4
+		WHERE tenant_id=$1 AND project_id=$2 AND token_digest=$3`, tenantID, projectID, tokenDigest, now); err != nil {
+		return FilmRecord{}, false, err
+	}
+	var createdMedia []WorkspaceMedia
+	if json.Unmarshal(createdMediaJSON, &createdMedia) != nil {
+		return FilmRecord{}, false, ErrInvalidInput
+	}
+	if len(createdMedia) > 0 {
+		generationID := "restore-" + tokenDigest[:24]
+		if err := enqueueFilmCleanupGenerationTx(ctx, tx, tenantID, projectID, generationID, nil, createdMedia); err != nil {
+			return FilmRecord{}, false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return FilmRecord{}, false, err
+	}
+	return record, priorExists, nil
+}
+
+func loadWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string) (WorkspaceSnapshot, error) {
+	snapshot := WorkspaceSnapshot{Projects: []WorkspaceProject{}, Films: []WorkspaceFilm{}, GenerationJobs: []WorkspaceGenerationJob{}, States: []WorkspaceState{}}
+	rows, err := tx.Query(ctx, `SELECT id, document FROM openboard_projects
+		WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY id`, tenantID)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	for rows.Next() {
+		var item WorkspaceProject
+		if err := rows.Scan(&item.ID, &item.Document); err != nil {
+			rows.Close()
+			return WorkspaceSnapshot{}, err
+		}
+		snapshot.Projects = append(snapshot.Projects, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	rows, err = tx.Query(ctx, `SELECT project_id, revision, document FROM openboard_film_projects
+		WHERE tenant_id=$1 ORDER BY project_id`, tenantID)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item WorkspaceFilm
+		if err := rows.Scan(&item.ProjectID, &item.Revision, &item.Document); err != nil {
+			return WorkspaceSnapshot{}, err
+		}
+		snapshot.Films = append(snapshot.Films, item)
+	}
+	if err := rows.Err(); err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	rows.Close()
+	rows, err = tx.Query(ctx, `SELECT id,COALESCE(project_id,''),kind,status,prompt,provider_id,model,
+		parameters,result,error,created_at,updated_at,lease_owner,lease_expires_at,deleted_at
+		FROM openboard_generation_jobs WHERE tenant_id=$1 ORDER BY id`, tenantID)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	for rows.Next() {
+		var item WorkspaceGenerationJob
+		var created, updated time.Time
+		var leaseExpires, deletedAt *time.Time
+		if err := rows.Scan(&item.Job.ID, &item.Job.ProjectID, &item.Job.Kind, &item.Job.Status, &item.Job.Prompt,
+			&item.Job.ProviderID, &item.Job.Model, &item.Job.Parameters, &item.Job.Result, &item.Job.Error,
+			&created, &updated, &item.Job.LeaseOwner, &leaseExpires, &deletedAt); err != nil {
+			rows.Close()
+			return WorkspaceSnapshot{}, err
+		}
+		item.Job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+		item.Job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+		if leaseExpires != nil {
+			item.Job.LeaseExpiresAt = leaseExpires.UTC().Format(time.RFC3339Nano)
+		}
+		if deletedAt != nil {
+			item.DeletedAt = deletedAt.UTC().Format(time.RFC3339Nano)
+		}
+		snapshot.GenerationJobs = append(snapshot.GenerationJobs, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return WorkspaceSnapshot{}, err
+	}
+	rows.Close()
+	for _, key := range workspaceManagedStateKeys {
+		var value []byte
+		err := tx.QueryRow(ctx, `SELECT value FROM openboard_state WHERE tenant_id=$1 AND key=$2`, tenantID, key).Scan(&value)
+		if errors.Is(err, pgx.ErrNoRows) {
+			snapshot.States = append(snapshot.States, WorkspaceState{Key: key})
+			continue
+		}
+		if err != nil {
+			return WorkspaceSnapshot{}, err
+		}
+		snapshot.States = append(snapshot.States, WorkspaceState{Key: key, Exists: true, Value: value})
+	}
+	return snapshot, nil
+}
+
+var workspaceManagedStateKeys = []string{"assets", "config", "prompts", "workflow-templates", "__encrypted_config_secrets"}
+
+func validateWorkspaceFilmRevisions(current, desired WorkspaceSnapshot) error {
+	revisions := make(map[string]int, len(current.Films))
+	for _, film := range current.Films {
+		revisions[film.ProjectID] = film.Revision
+	}
+	for _, film := range desired.Films {
+		if film.Revision != revisions[film.ProjectID] {
+			return ErrConflict
+		}
+	}
+	return nil
+}
+
+func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, snapshot WorkspaceSnapshot) error {
+	filmRevisions := map[string]int{}
+	rows, err := tx.Query(ctx, `SELECT project_id, revision FROM openboard_film_projects WHERE tenant_id=$1`, tenantID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var projectID string
+		var revision int
+		if err := rows.Scan(&projectID, &revision); err != nil {
+			rows.Close()
+			return err
+		}
+		filmRevisions[projectID] = revision
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	projectIDs := make([]string, 0, len(snapshot.Projects))
+	for _, project := range snapshot.Projects {
+		var metadata struct {
+			Title     string `json:"title"`
+			UpdatedAt string `json:"updatedAt"`
+		}
+		if json.Unmarshal(project.Document, &metadata) != nil {
+			return ErrInvalidInput
+		}
+		updated, err := time.Parse(time.RFC3339Nano, metadata.UpdatedAt)
+		if err != nil {
+			return ErrInvalidInput
+		}
+		projectIDs = append(projectIDs, project.ID)
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_projects
+			(tenant_id,id,title,updated_at,document,deleted_at) VALUES ($1,$2,$3,$4,$5,NULL)
+			ON CONFLICT (tenant_id,id) DO UPDATE SET title=EXCLUDED.title,
+			updated_at=EXCLUDED.updated_at,document=EXCLUDED.document,deleted_at=NULL`,
+			tenantID, project.ID, metadata.Title, updated, project.Document); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_film_projects WHERE tenant_id=$1`, tenantID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_projects
+		SET deleted_at=COALESCE(deleted_at,clock_timestamp()),document='{}'::jsonb
+		WHERE tenant_id=$1 AND deleted_at IS NULL AND NOT (id=ANY($2))`, tenantID, projectIDs); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1`, tenantID); err != nil {
+		return err
+	}
+	for _, item := range snapshot.GenerationJobs {
+		created, err := time.Parse(time.RFC3339Nano, item.Job.CreatedAt)
+		if err != nil {
+			return ErrInvalidInput
+		}
+		updated, err := time.Parse(time.RFC3339Nano, item.Job.UpdatedAt)
+		if err != nil {
+			return ErrInvalidInput
+		}
+		var leaseExpires, deletedAt any
+		if item.Job.LeaseExpiresAt != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, item.Job.LeaseExpiresAt)
+			if err != nil {
+				return ErrInvalidInput
+			}
+			leaseExpires = parsed
+		}
+		if item.DeletedAt != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, item.DeletedAt)
+			if err != nil {
+				return ErrInvalidInput
+			}
+			deletedAt = parsed
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
+			(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,
+			 created_at,updated_at,lease_owner,lease_expires_at,deleted_at)
+			VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			tenantID, item.Job.ID, item.Job.ProjectID, item.Job.Kind, item.Job.Status, item.Job.Prompt,
+			item.Job.ProviderID, item.Job.Model, item.Job.Parameters, item.Job.Result, item.Job.Error,
+			created, updated, item.Job.LeaseOwner, leaseExpires, deletedAt); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_state WHERE tenant_id=$1 AND key=ANY($2)`, tenantID, workspaceManagedStateKeys); err != nil {
+		return err
+	}
+	for _, state := range snapshot.States {
+		if !state.Exists {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_state (tenant_id,key,value,updated_at)
+			VALUES ($1,$2,$3,clock_timestamp())`, tenantID, state.Key, state.Value); err != nil {
+			return err
+		}
+	}
+	for _, film := range snapshot.Films {
+		revision := film.Revision
+		if filmRevisions[film.ProjectID] > revision {
+			revision = filmRevisions[film.ProjectID]
+		}
+		revision++
+		if revision < 1 {
+			revision = 1
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_projects
+			(tenant_id,project_id,revision,document) VALUES ($1,$2,$3,$4)`, tenantID, film.ProjectID, revision, film.Document); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func lockWorkspace(ctx context.Context, tx pgx.Tx, tenantID string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('openboard-workspace:' || $1, 0))`, tenantID)
+	return err
+}
+
+func (s *PostgresStore) WorkspaceVersion(ctx context.Context, tenantID string) (string, error) {
+	tenantID = normalizeTenantID(tenantID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return "", err
+	}
+	snapshot, err := loadWorkspaceSnapshot(ctx, tx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	return ComputeWorkspaceVersion(snapshot)
+}
+
+func (s *PostgresStore) ReplaceWorkspace(ctx context.Context, tenantID, expectedVersion, tokenDigest string, expiresAt time.Time, snapshot WorkspaceSnapshot, createdMedia []WorkspaceMedia) (WorkspaceReplaceResult, error) {
+	tenantID = normalizeTenantID(tenantID)
+	desiredVersion, err := ComputeWorkspaceVersion(snapshot)
+	if err != nil || len(tokenDigest) != 64 || expectedVersion == "" || !expiresAt.After(time.Now()) {
+		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	prior, err := loadWorkspaceSnapshot(ctx, tx, tenantID)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	currentVersion, err := ComputeWorkspaceVersion(prior)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if currentVersion != expectedVersion {
+		return WorkspaceReplaceResult{}, ErrConflict
+	}
+	if err := validateWorkspaceFilmRevisions(prior, snapshot); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	priorJSON, err := json.Marshal(prior)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if err := applyWorkspaceSnapshot(ctx, tx, tenantID, snapshot); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	createdMediaJSON, err := json.Marshal(createdMedia)
+	if err != nil {
+		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO openboard_workspace_restore_tokens
+		(tenant_id,token_digest,prior_snapshot,applied_version,expires_at,created_media) VALUES ($1,$2,$3,$4,$5,$6)`,
+		tenantID, tokenDigest, priorJSON, desiredVersion, expiresAt, createdMediaJSON); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if s.redis != nil {
+		for _, project := range append(prior.Projects, snapshot.Projects...) {
+			_ = s.redis.Del(ctx, projectCacheKey(tenantID, project.ID)).Err()
+		}
+	}
+	return WorkspaceReplaceResult{Version: desiredVersion}, nil
+}
+
+func (s *PostgresStore) ReplaceWorkspaceProject(ctx context.Context, tenantID, projectID, expectedVersion, tokenDigest string, expiresAt time.Time, project WorkspaceProject, film *WorkspaceFilm, createdMedia []WorkspaceMedia) (WorkspaceReplaceResult, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if project.ID != projectID || expectedVersion == "" || len(tokenDigest) != 64 || !expiresAt.After(time.Now()) {
+		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	prior, err := loadWorkspaceSnapshot(ctx, tx, tenantID)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	currentVersion, err := ComputeWorkspaceVersion(prior)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if currentVersion != expectedVersion {
+		return WorkspaceReplaceResult{}, ErrConflict
+	}
+	desired := WorkspaceSnapshot{
+		Projects: append([]WorkspaceProject(nil), prior.Projects...), Films: append([]WorkspaceFilm(nil), prior.Films...),
+		GenerationJobs: append([]WorkspaceGenerationJob(nil), prior.GenerationJobs...), States: append([]WorkspaceState(nil), prior.States...),
+	}
+	replaced := false
+	for index := range desired.Projects {
+		if desired.Projects[index].ID == projectID {
+			desired.Projects[index] = project
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		desired.Projects = append(desired.Projects, project)
+	}
+	nextFilms := make([]WorkspaceFilm, 0, len(desired.Films)+1)
+	for _, current := range desired.Films {
+		if current.ProjectID != projectID {
+			nextFilms = append(nextFilms, current)
+		}
+	}
+	if film != nil {
+		nextFilms = append(nextFilms, *film)
+	}
+	desired.Films = nextFilms
+	if err := validateWorkspaceFilmRevisions(prior, desired); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	desiredVersion, err := ComputeWorkspaceVersion(desired)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	priorJSON, _ := json.Marshal(prior)
+	createdMediaJSON, _ := json.Marshal(createdMedia)
+	if err := applyWorkspaceSnapshot(ctx, tx, tenantID, desired); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO openboard_workspace_restore_tokens
+		(tenant_id,token_digest,prior_snapshot,applied_version,expires_at,created_media)
+		VALUES ($1,$2,$3,$4,$5,$6)`, tenantID, tokenDigest, priorJSON, desiredVersion, expiresAt, createdMediaJSON); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if s.redis != nil {
+		_ = s.redis.Del(ctx, projectCacheKey(tenantID, projectID)).Err()
+	}
+	return WorkspaceReplaceResult{Version: desiredVersion}, nil
+}
+
+func (s *PostgresStore) RollbackWorkspace(ctx context.Context, tenantID, expectedVersion, tokenDigest string, now time.Time) (WorkspaceReplaceResult, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if expectedVersion == "" || len(tokenDigest) != 64 {
+		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	var priorJSON []byte
+	var appliedVersion string
+	var createdMediaJSON []byte
+	err = tx.QueryRow(ctx, `SELECT prior_snapshot,applied_version,created_media FROM openboard_workspace_restore_tokens
+		WHERE tenant_id=$1 AND token_digest=$2 AND consumed_at IS NULL AND expires_at>$3 FOR UPDATE`, tenantID, tokenDigest, now).
+		Scan(&priorJSON, &appliedVersion, &createdMediaJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkspaceReplaceResult{}, ErrNotFound
+	}
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	current, err := loadWorkspaceSnapshot(ctx, tx, tenantID)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	currentVersion, err := ComputeWorkspaceVersion(current)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if currentVersion != expectedVersion || appliedVersion != expectedVersion {
+		return WorkspaceReplaceResult{}, ErrConflict
+	}
+	var prior WorkspaceSnapshot
+	if json.Unmarshal(priorJSON, &prior) != nil {
+		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
+	if err := applyWorkspaceSnapshot(ctx, tx, tenantID, prior); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	version, err := ComputeWorkspaceVersion(prior)
+	if err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_workspace_restore_tokens SET consumed_at=$3
+		WHERE tenant_id=$1 AND token_digest=$2`, tenantID, tokenDigest, now); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	var createdMedia []WorkspaceMedia
+	if json.Unmarshal(createdMediaJSON, &createdMedia) != nil {
+		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
+	cleanupProjects := map[string]struct{}{}
+	for _, media := range createdMedia {
+		cleanupProjects[media.ProjectID] = struct{}{}
+	}
+	for projectID := range cleanupProjects {
+		generationID := "workspace-" + tokenDigest[:24]
+		if err := enqueueFilmCleanupGenerationTx(ctx, tx, tenantID, projectID, generationID, nil, createdMedia); err != nil {
+			return WorkspaceReplaceResult{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return WorkspaceReplaceResult{}, err
+	}
+	if s.redis != nil {
+		for _, project := range append(current.Projects, prior.Projects...) {
+			_ = s.redis.Del(ctx, projectCacheKey(tenantID, project.ID)).Err()
+		}
+	}
+	projectIDs := make([]string, 0, len(cleanupProjects))
+	for projectID := range cleanupProjects {
+		projectIDs = append(projectIDs, projectID)
+	}
+	return WorkspaceReplaceResult{Version: version, CleanupProjectIDs: projectIDs}, nil
 }
 
 func (s *PostgresStore) GetState(ctx context.Context, tenantID, key string) ([]byte, error) {
@@ -1078,15 +1977,34 @@ func (s *PostgresStore) ListStateTenants(ctx context.Context, key string) ([]str
 
 func (s *PostgresStore) PutState(ctx context.Context, tenantID, key string, value []byte) error {
 	tenantID = normalizeTenantID(tenantID)
-	_, err := s.pool.Exec(ctx, `INSERT INTO openboard_state (tenant_id,key,value,updated_at) VALUES ($1,$2,$3,now())
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO openboard_state (tenant_id,key,value,updated_at) VALUES ($1,$2,$3,now())
 		ON CONFLICT (tenant_id, key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, tenantID, key, value)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) CompareAndSwapState(ctx context.Context, tenantID, key string, expected, value []byte) error {
 	tenantID = normalizeTenantID(tenantID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
 	if expected == nil {
-		result, err := s.pool.Exec(ctx, `INSERT INTO openboard_state (tenant_id,key,value,updated_at)
+		result, err := tx.Exec(ctx, `INSERT INTO openboard_state (tenant_id,key,value,updated_at)
 			VALUES ($1,$2,$3,now()) ON CONFLICT (tenant_id,key) DO NOTHING`, tenantID, key, string(value))
 		if err != nil {
 			return err
@@ -1094,9 +2012,9 @@ func (s *PostgresStore) CompareAndSwapState(ctx context.Context, tenantID, key s
 		if result.RowsAffected() == 0 {
 			return ErrConflict
 		}
-		return nil
+		return tx.Commit(ctx)
 	}
-	result, err := s.pool.Exec(ctx, `UPDATE openboard_state SET value=$4, updated_at=now()
+	result, err := tx.Exec(ctx, `UPDATE openboard_state SET value=$4, updated_at=now()
 		WHERE tenant_id=$1 AND key=$2 AND value=$3::jsonb`, tenantID, key, string(expected), string(value))
 	if err != nil {
 		return err
@@ -1104,7 +2022,7 @@ func (s *PostgresStore) CompareAndSwapState(ctx context.Context, tenantID, key s
 	if result.RowsAffected() == 0 {
 		return ErrConflict
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) CompareAndSwapStates(ctx context.Context, tenantID string, mutations []StateMutation) error {
@@ -1114,6 +2032,9 @@ func (s *PostgresStore) CompareAndSwapStates(ctx context.Context, tenantID strin
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
 	for _, mutation := range mutations {
 		var current []byte
 		err := tx.QueryRow(ctx, `SELECT value FROM openboard_state
@@ -1232,7 +2153,7 @@ func (s *PostgresStore) PutGenerationJob(ctx context.Context, tenantID string, j
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
 	result, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
@@ -1272,7 +2193,7 @@ func (s *PostgresStore) CreateGenerationJob(ctx context.Context, tenantID string
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
 	result, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
@@ -1327,7 +2248,7 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
 	inserted, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
@@ -1388,50 +2309,76 @@ func (s *PostgresStore) ClaimServerGenerationJob(ctx context.Context, claim Gene
 	}
 	_ = now
 	_ = leaseUntil
-	row := s.pool.QueryRow(ctx, `WITH candidate AS (
-		SELECT tenant_id, id FROM openboard_generation_jobs
-		WHERE kind=$2 AND parameters->>'executor'=$3
-		  AND (status='queued' OR (status='running' AND (lease_expires_at IS NULL OR lease_expires_at < clock_timestamp())))
-		ORDER BY created_at ASC, id ASC
-		FOR UPDATE SKIP LOCKED LIMIT 1
-	)
-	UPDATE openboard_generation_jobs AS job SET
-		status='running', lease_owner=$1, lease_expires_at=clock_timestamp() + interval '2 minutes', updated_at=clock_timestamp()
-	FROM candidate
-	WHERE job.tenant_id=candidate.tenant_id AND job.id=candidate.id
-	RETURNING job.tenant_id, job.id, COALESCE(job.project_id,''), job.kind, job.status, job.prompt,
-		job.provider_id, job.model, job.parameters, job.result, job.error, job.created_at, job.updated_at,
-		job.lease_owner, job.lease_expires_at`, owner, claim.Kind, claim.Executor)
-	var claimed TenantGenerationJob
-	var created, updated time.Time
-	var leaseExpires *time.Time
-	err := row.Scan(&claimed.TenantID, &claimed.Job.ID, &claimed.Job.ProjectID, &claimed.Job.Kind,
-		&claimed.Job.Status, &claimed.Job.Prompt, &claimed.Job.ProviderID, &claimed.Job.Model,
-		&claimed.Job.Parameters, &claimed.Job.Result, &claimed.Job.Error, &created, &updated,
-		&claimed.Job.LeaseOwner, &leaseExpires)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return TenantGenerationJob{}, ErrNotFound
+	for range 16 {
+		var tenantID, id string
+		err := s.pool.QueryRow(ctx, `SELECT tenant_id,id FROM openboard_generation_jobs
+			WHERE kind=$1 AND parameters->>'executor'=$2 AND deleted_at IS NULL
+			  AND (status='queued' OR (status='running' AND (lease_expires_at IS NULL OR lease_expires_at < clock_timestamp())))
+			ORDER BY created_at,id LIMIT 1`, claim.Kind, claim.Executor).Scan(&tenantID, &id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TenantGenerationJob{}, ErrNotFound
+		}
+		if err != nil {
+			return TenantGenerationJob{}, err
+		}
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return TenantGenerationJob{}, err
+		}
+		if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+			_ = tx.Rollback(ctx)
+			return TenantGenerationJob{}, err
+		}
+		var claimed TenantGenerationJob
+		var created, updated time.Time
+		var leaseExpires *time.Time
+		err = tx.QueryRow(ctx, `UPDATE openboard_generation_jobs SET
+			status='running',lease_owner=$3,lease_expires_at=clock_timestamp()+interval '2 minutes',updated_at=clock_timestamp()
+			WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL AND
+			 (status='queued' OR (status='running' AND (lease_expires_at IS NULL OR lease_expires_at<clock_timestamp())))
+			RETURNING tenant_id,id,COALESCE(project_id,''),kind,status,prompt,provider_id,model,parameters,result,error,
+			created_at,updated_at,lease_owner,lease_expires_at`, tenantID, id, owner).Scan(
+			&claimed.TenantID, &claimed.Job.ID, &claimed.Job.ProjectID, &claimed.Job.Kind, &claimed.Job.Status,
+			&claimed.Job.Prompt, &claimed.Job.ProviderID, &claimed.Job.Model, &claimed.Job.Parameters,
+			&claimed.Job.Result, &claimed.Job.Error, &created, &updated, &claimed.Job.LeaseOwner, &leaseExpires)
+		if errors.Is(err, pgx.ErrNoRows) {
+			_ = tx.Rollback(ctx)
+			continue
+		}
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return TenantGenerationJob{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return TenantGenerationJob{}, err
+		}
+		claimed.Job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+		claimed.Job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+		if leaseExpires != nil {
+			claimed.Job.LeaseExpiresAt = leaseExpires.UTC().Format(time.RFC3339Nano)
+		}
+		return claimed, nil
 	}
-	if err != nil {
-		return TenantGenerationJob{}, err
-	}
-	claimed.Job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
-	claimed.Job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
-	if leaseExpires != nil {
-		claimed.Job.LeaseExpiresAt = leaseExpires.UTC().Format(time.RFC3339Nano)
-	}
-	return claimed, nil
+	return TenantGenerationJob{}, ErrConflict
 }
 
 func (s *PostgresStore) CheckpointServerGenerationJob(ctx context.Context, tenantID, id, owner string, result json.RawMessage, now time.Time) (GenerationJob, error) {
 	tenantID = normalizeTenantID(tenantID)
-	row := s.pool.QueryRow(ctx, `UPDATE openboard_generation_jobs SET result=$4, updated_at=$5
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return GenerationJob{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return GenerationJob{}, err
+	}
+	row := tx.QueryRow(ctx, `UPDATE openboard_generation_jobs SET result=$4, updated_at=$5
 		WHERE tenant_id=$1 AND id=$2 AND lease_owner=$3 AND status='running'
 		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
 		parameters, result, error, created_at, updated_at`, tenantID, id, owner, result, now)
 	var job GenerationJob
 	var created, updated time.Time
-	err := row.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
+	err = row.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
 		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GenerationJob{}, ErrConflict
@@ -1441,6 +2388,9 @@ func (s *PostgresStore) CheckpointServerGenerationJob(ctx context.Context, tenan
 	}
 	job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
 	job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+	if err := tx.Commit(ctx); err != nil {
+		return GenerationJob{}, err
+	}
 	return job, nil
 }
 
@@ -1448,7 +2398,15 @@ func (s *PostgresStore) RenewServerGenerationJobLease(ctx context.Context, tenan
 	tenantID = normalizeTenantID(tenantID)
 	_ = now
 	_ = leaseUntil
-	result, err := s.pool.Exec(ctx, `UPDATE openboard_generation_jobs SET
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs SET
 		lease_expires_at=clock_timestamp() + interval '2 minutes', updated_at=clock_timestamp()
 		WHERE tenant_id=$1 AND id=$2 AND lease_owner=$3 AND status='running'`,
 		tenantID, id, owner)
@@ -1458,7 +2416,7 @@ func (s *PostgresStore) RenewServerGenerationJobLease(ctx context.Context, tenan
 	if result.RowsAffected() == 0 {
 		return ErrConflict
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) CompleteServerGenerationJob(ctx context.Context, tenantID, id, owner, status string, result json.RawMessage, errorMessage string, now time.Time) (GenerationJob, error) {
@@ -1483,6 +2441,9 @@ func (s *PostgresStore) completeServerGenerationJobOnce(ctx context.Context, ten
 		return GenerationJob{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return GenerationJob{}, err
+	}
 	job, err := scanGenerationJob(tx.QueryRow(ctx, `UPDATE openboard_generation_jobs SET
 		status=$4, result=$5, error=$6, updated_at=$7, lease_owner='', lease_expires_at=NULL,
 		parameters=parameters #- '{sharedChannel,secret}'
@@ -1525,6 +2486,9 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 		return GenerationJob{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return GenerationJob{}, err
+	}
 	job, err := scanGenerationJob(tx.QueryRow(ctx, `UPDATE openboard_generation_jobs SET
 		status='cancelled', error='已取消', updated_at=$3, lease_owner='', lease_expires_at=NULL,
 		parameters=parameters #- '{sharedChannel,secret}',
@@ -1601,7 +2565,7 @@ func (s *PostgresStore) DeleteGenerationJob(ctx context.Context, tenantID, id st
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
 	// Soft-delete: hide from history while preserving tombstone for multi-device sync/cleanup.
@@ -1658,7 +2622,7 @@ func (s *PostgresStore) DeleteGenerationJobs(ctx context.Context, tenantID strin
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return 0, err
 	}
 	// Soft-delete selected history rows; cancel any active leases first.
@@ -1698,7 +2662,7 @@ func (s *PostgresStore) deleteGenerationJobsForProjectOnce(ctx context.Context, 
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return 0, err
 	}
 	// Cancel active jobs with the same refund path as explicit cancellation so
@@ -1758,7 +2722,7 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
 	if collision, err := generationRestoreTouchesTombstone(ctx, tx, tenantID, jobs); err != nil {
@@ -1806,7 +2770,7 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
 	rows, err := tx.Query(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,

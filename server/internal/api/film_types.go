@@ -39,36 +39,50 @@ type filmScene struct {
 }
 
 type filmShot struct {
-	ID                 string   `json:"id"`
-	Revision           int      `json:"revision"`
-	SceneID            string   `json:"sceneId"`
-	Order              int      `json:"order"`
-	Title              string   `json:"title"`
-	Description        string   `json:"description"`
-	Status             string   `json:"status"`
-	DurationSeconds    float64  `json:"durationSeconds"`
-	AspectRatio        string   `json:"aspectRatio"`
-	IdentityVersionIDs []string `json:"identityVersionIds"`
-	StyleAssetID       string   `json:"styleAssetId,omitempty"`
-	ImageStorageKey    string   `json:"imageStorageKey,omitempty"`
-	VideoStorageKey    string   `json:"videoStorageKey,omitempty"`
-	AudioStorageKey    string   `json:"audioStorageKey,omitempty"`
-	Subtitle           string   `json:"subtitle,omitempty"`
-	MediaMIMEType      string   `json:"mediaMimeType,omitempty"`
+	ID                   string   `json:"id"`
+	Revision             int      `json:"revision"`
+	SceneID              string   `json:"sceneId"`
+	Order                int      `json:"order"`
+	Title                string   `json:"title"`
+	Description          string   `json:"description"`
+	Status               string   `json:"status"`
+	DurationSeconds      float64  `json:"durationSeconds"`
+	AspectRatio          string   `json:"aspectRatio"`
+	IdentityVersionIDs   []string `json:"identityVersionIds"`
+	StyleAssetID         string   `json:"styleAssetId,omitempty"`
+	ImageStorageKey      string   `json:"imageStorageKey,omitempty"`
+	ImageSHA256          string   `json:"imageSha256,omitempty"`
+	ImageObjectVersion   string   `json:"imageObjectVersion,omitempty"`
+	ImageGenerationJobID string   `json:"imageGenerationJobId,omitempty"`
+	VideoStorageKey      string   `json:"videoStorageKey,omitempty"`
+	VideoSHA256          string   `json:"videoSha256,omitempty"`
+	VideoObjectVersion   string   `json:"videoObjectVersion,omitempty"`
+	VideoGenerationJobID string   `json:"videoGenerationJobId,omitempty"`
+	AudioStorageKey      string   `json:"audioStorageKey,omitempty"`
+	AudioSHA256          string   `json:"audioSha256,omitempty"`
+	AudioObjectVersion   string   `json:"audioObjectVersion,omitempty"`
+	AudioGenerationJobID string   `json:"audioGenerationJobId,omitempty"`
+	Subtitle             string   `json:"subtitle,omitempty"`
+	MediaMIMEType        string   `json:"mediaMimeType,omitempty"`
+	MediaProvenance      string   `json:"mediaProvenance,omitempty"`
 }
 
 type filmAsset struct {
-	ID              string `json:"id"`
-	Revision        int    `json:"revision"`
-	Kind            string `json:"kind"`
-	Title           string `json:"title"`
-	Status          string `json:"status"`
-	ParentAssetID   string `json:"parentAssetId,omitempty"`
-	Description     string `json:"description"`
-	MediaStorageKey string `json:"mediaStorageKey,omitempty"`
-	Voice           string `json:"voice,omitempty"`
-	StylePrompt     string `json:"stylePrompt,omitempty"`
-	AspectRatio     string `json:"aspectRatio,omitempty"`
+	ID                 string `json:"id"`
+	Revision           int    `json:"revision"`
+	Kind               string `json:"kind"`
+	Title              string `json:"title"`
+	Status             string `json:"status"`
+	ParentAssetID      string `json:"parentAssetId,omitempty"`
+	Description        string `json:"description"`
+	MediaStorageKey    string `json:"mediaStorageKey,omitempty"`
+	MediaMIMEType      string `json:"mediaMimeType,omitempty"`
+	MediaSHA256        string `json:"mediaSha256,omitempty"`
+	MediaObjectVersion string `json:"mediaObjectVersion,omitempty"`
+	MediaProvenance    string `json:"mediaProvenance,omitempty"`
+	Voice              string `json:"voice,omitempty"`
+	StylePrompt        string `json:"stylePrompt,omitempty"`
+	AspectRatio        string `json:"aspectRatio,omitempty"`
 }
 
 type filmStage struct {
@@ -83,12 +97,15 @@ type filmTask struct {
 	ID              string  `json:"id"`
 	Revision        int     `json:"revision"`
 	Stage           string  `json:"stage"`
+	ShotID          string  `json:"shotId,omitempty"`
 	Title           string  `json:"title"`
 	Status          string  `json:"status"`
 	Progress        float64 `json:"progress"`
 	CreatedAt       string  `json:"createdAt"`
 	UpdatedAt       string  `json:"updatedAt"`
 	GenerationJobID string  `json:"generationJobId,omitempty"`
+	IdempotencyKey  string  `json:"idempotencyKey,omitempty"`
+	RequestHash     string  `json:"requestHash,omitempty"`
 	Error           string  `json:"error,omitempty"`
 }
 
@@ -155,17 +172,22 @@ type filmTimeline struct {
 }
 
 type filmDeliverable struct {
-	ID         string `json:"id"`
-	Revision   int    `json:"revision"`
-	Kind       string `json:"kind"`
-	Status     string `json:"status"`
-	Title      string `json:"title"`
-	MIMEType   string `json:"mimeType"`
-	StorageKey string `json:"storageKey,omitempty"`
-	Content    string `json:"content,omitempty"`
-	Bytes      int64  `json:"bytes,omitempty"`
-	Diagnostic string `json:"diagnostic,omitempty"`
-	CreatedAt  string `json:"createdAt"`
+	ID             string `json:"id"`
+	Revision       int    `json:"revision"`
+	Kind           string `json:"kind"`
+	Status         string `json:"status"`
+	Title          string `json:"title"`
+	MIMEType       string `json:"mimeType"`
+	StorageKey     string `json:"storageKey,omitempty"`
+	SHA256         string `json:"sha256,omitempty"`
+	ObjectVersion  string `json:"objectVersion,omitempty"`
+	Content        string `json:"content,omitempty"`
+	Bytes          int64  `json:"bytes,omitempty"`
+	Diagnostic     string `json:"diagnostic,omitempty"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	RequestHash    string `json:"requestHash,omitempty"`
+	Provenance     string `json:"provenance,omitempty"`
+	CreatedAt      string `json:"createdAt"`
 }
 
 type filmDocument struct {
@@ -189,8 +211,9 @@ type filmDocument struct {
 }
 
 type filmExportRequest struct {
-	Kind     string `json:"kind"`
-	Revision int    `json:"revision"`
+	Kind           string `json:"kind"`
+	Revision       int    `json:"revision"`
+	IdempotencyKey string `json:"idempotencyKey"`
 }
 
 type filmStatusResponse struct {

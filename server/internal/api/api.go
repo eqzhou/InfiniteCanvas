@@ -89,6 +89,17 @@ type Server struct {
 	processToken            string
 	debugWriter             io.Writer
 	fileManagerLauncher     fileManagerLaunch
+	filmCommandRunner       filmCommandRunner
+	filmProbeRunner         filmProbeRunner
+	filmCapabilityMu        sync.Mutex
+	filmCapabilityCache     filmFFmpegCapabilityCache
+	filmRenderGlobal        chan struct{}
+	filmRenderMu            sync.Mutex
+	filmTenantRenders       map[string]int
+	filmImportGlobal        chan struct{}
+	filmImportMu            sync.Mutex
+	filmTenantImports       map[string]int
+	filmImportStarts        map[string][]time.Time
 }
 
 func Mount(r chi.Router, dataDir string) {
@@ -135,7 +146,11 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/files", s.uploadFile)
 		r.Get("/files/{name}", s.getFile)
 		r.Get("/projects", s.listProjects)
+		r.Put("/projects", s.replaceWorkspace)
+		r.Post("/projects/rollback", s.rollbackWorkspace)
+		r.Post("/projects/import", s.replaceProjectAggregate)
 		r.Put("/projects/{id}", s.putProject)
+		r.Put("/projects/{id}/aggregate", s.replaceProjectAggregate)
 		r.Get("/projects/{id}", s.getProject)
 		r.Delete("/projects/{id}", s.deleteProject)
 		mountFilmRoutes(r, s)
@@ -246,6 +261,13 @@ func NewServer(dataDir string) *Server {
 		imageExecutor:       newOpenAIImageExecutor(),
 		videoExecutor:       newHTTPVideoExecutor(),
 		audioExecutor:       newHTTPAudioExecutor(),
+		filmCommandRunner:   execFilmCommandRunner{},
+		filmProbeRunner:     execFilmProbeRunner{},
+		filmRenderGlobal:    make(chan struct{}, 2),
+		filmTenantRenders:   make(map[string]int),
+		filmImportGlobal:    make(chan struct{}, 4),
+		filmTenantImports:   make(map[string]int),
+		filmImportStarts:    make(map[string][]time.Time),
 		generationCancels:   make(map[string]context.CancelFunc),
 		generationRoot:      generationRoot,
 		stopGeneration:      stopGeneration,
@@ -401,7 +423,11 @@ func MountServer(r chi.Router, s *Server) {
 		r.Post("/files", s.uploadFile)
 		r.Get("/files/{name}", s.getFile)
 		r.Get("/projects", s.listProjects)
+		r.Put("/projects", s.replaceWorkspace)
+		r.Post("/projects/rollback", s.rollbackWorkspace)
+		r.Post("/projects/import", s.replaceProjectAggregate)
 		r.Put("/projects/{id}", s.putProject)
+		r.Put("/projects/{id}/aggregate", s.replaceProjectAggregate)
 		r.Get("/projects/{id}", s.getProject)
 		r.Delete("/projects/{id}", s.deleteProject)
 		mountFilmRoutes(r, s)
@@ -702,6 +728,14 @@ func (s *Server) projectsDir() string {
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
+		if workspace, ok := s.store.(store.WorkspaceStore); ok {
+			version, err := workspace.WorkspaceVersion(r.Context(), tenantIDFrom(r))
+			if err != nil {
+				http.Error(w, "failed to version workspace", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("ETag", `"`+version+`"`)
+		}
 		items, err := s.store.ListProjects(r.Context(), tenantIDFrom(r))
 		if err != nil {
 			http.Error(w, "failed to list projects", http.StatusInternalServerError)
@@ -852,8 +886,6 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	release, err := s.acquireWriteLock()
 	if err != nil {
 		http.Error(w, "project store is busy", http.StatusServiceUnavailable)
@@ -871,12 +903,26 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid tenant id", http.StatusBadRequest)
 			return
 		}
-		if err := s.store.DeleteProject(r.Context(), tenantID, id); err != nil {
+		cleanupBackend, ok := s.store.(store.FilmCleanupStore)
+		if !ok {
+			if _, filmCapable := s.store.(store.FilmStore); filmCapable {
+				http.Error(w, "durable Film cleanup is unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if err := s.store.DeleteProject(r.Context(), tenantID, id); err != nil {
+				http.Error(w, "failed to delete project", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		generationID := "delete-" + randomGenerationOwner()
+		if err := cleanupBackend.DeleteProjectWithFilmCleanup(r.Context(), tenantID, id, generationID); err != nil {
 			http.Error(w, "failed to delete project", http.StatusInternalServerError)
 			return
 		}
-		if _, err := s.store.DeleteGenerationJobsForProject(r.Context(), tenantID, id); err != nil {
-			http.Error(w, "failed to delete project generation jobs", http.StatusInternalServerError)
+		if _, err := s.processFilmCleanupGenerations(r.Context(), tenantID, userIDFrom(r), id); err != nil {
+			http.Error(w, "project deleted; protected media cleanup is pending and can be retried", http.StatusAccepted)
 			return
 		}
 		for _, directory := range []string{
@@ -891,6 +937,8 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := filepath.Join(s.projectsDir(), id+".json")
 	_ = os.Remove(path)
 	w.WriteHeader(http.StatusNoContent)
