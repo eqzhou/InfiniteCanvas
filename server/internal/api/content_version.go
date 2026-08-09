@@ -34,6 +34,10 @@ func parseExpectedVersion(w http.ResponseWriter, r *http.Request) (string, bool,
 		// strictly validated token in the query as a final transport fallback.
 		value = strings.TrimSpace(r.URL.Query().Get("configVersion"))
 	}
+	// Compression proxies commonly weaken a strong upstream ETag while leaving
+	// its opaque content hash unchanged. Accept only that standard wrapper; the
+	// m1 hash format below remains mandatory.
+	value = strings.TrimPrefix(value, "W/")
 	if len(value) >= 3 && value[0] == '"' && value[len(value)-1] == '"' {
 		value = value[1 : len(value)-1]
 		if strings.HasPrefix(value, "m1-") && len(value) == 67 {

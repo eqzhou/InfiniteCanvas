@@ -1408,7 +1408,7 @@ func TestConfigStateAcceptsVersionQueryWhenProxyDropsConditionalHeaders(t *testi
 	read := requestWithHeaders(t, handler, http.MethodGet, "/api/state/config", nil, map[string]string{
 		"Authorization": "Bearer test-token",
 	})
-	version := url.QueryEscape(read.Header().Get("ETag"))
+	version := url.QueryEscape("W/" + read.Header().Get("ETag"))
 	if got := requestWithHeaders(t, handler, http.MethodPut, "/api/state/config?configVersion="+version, updated, map[string]string{
 		"Authorization": "Bearer test-token",
 	}); got.Code != http.StatusNoContent {
