@@ -107,15 +107,19 @@ function normalizeAdminChannel(channel: AdminChannel): Omit<AdminChannel, "secre
     weight: channel.weight,
     timeoutSeconds: channel.timeoutSeconds,
     ...(models.length ? { models } : {}),
-    defaultTextModel: channel.defaultTextModel.trim(),
-    defaultImageModel: channel.defaultImageModel.trim(),
-    defaultVideoModel: channel.defaultVideoModel.trim(),
-    defaultAudioModel: channel.defaultAudioModel.trim(),
+    defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel.trim() : "",
+    defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel.trim() : "",
+    defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel.trim() : "",
+    defaultAudioModel: typeof channel.defaultAudioModel === "string" ? channel.defaultAudioModel.trim() : "",
   };
   if (!channelIdPattern.test(value.id) || !value.name || !channelProtocols.has(value.protocol) ||
       !Number.isSafeInteger(value.weight) || value.weight < 1 || value.weight > 100 ||
       !Number.isSafeInteger(value.timeoutSeconds) || value.timeoutSeconds < 1 || value.timeoutSeconds > 600) {
     throw new Error("共享渠道配置无效");
+  }
+  if (value.enabled && value.allowUserUse && !value.defaultTextModel && !value.defaultImageModel &&
+      !value.defaultVideoModel && !value.defaultAudioModel) {
+    throw new Error("允许用户使用的共享渠道至少配置一个默认模型");
   }
   let parsed: URL;
   try { parsed = new URL(value.baseUrl); } catch { throw new Error("共享渠道地址无效"); }
@@ -308,7 +312,14 @@ export async function deleteAdminStoragePoolProvider(id: string): Promise<void> 
 }
 
 export async function listAdminChannels(): Promise<AdminChannel[]> {
-  return json(await authFetch("admin/channels"));
+  const channels = await json<AdminChannel[]>(await authFetch("admin/channels"));
+  return channels.map((channel) => ({
+    ...channel,
+    defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel : "",
+    defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel : "",
+    defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel : "",
+    defaultAudioModel: typeof channel.defaultAudioModel === "string" ? channel.defaultAudioModel : "",
+  }));
 }
 
 export async function putAdminChannels(channels: AdminChannel[]): Promise<AdminChannel[]> {

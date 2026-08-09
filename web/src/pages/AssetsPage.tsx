@@ -58,7 +58,9 @@ export function AssetsPage() {
   };
 
   const addMedia = async (file: File, assetKind: "image" | "video" | "audio") => {
-    const uploaded = await uploadMedia(file, assetKind === "image" ? "image" : "media");
+    const uploaded = await uploadMedia(file, assetKind === "image" ? "image" : "media", {
+      optimizeImage: assetKind === "image",
+    });
     const t = nowIso();
     const item: AssetItem = {
       id: uid("asset"),
@@ -102,7 +104,9 @@ export function AssetsPage() {
       return;
     }
     const replacement = values.replacement
-      ? await uploadMedia(values.replacement, editing.kind === "image" ? "image" : "media")
+      ? await uploadMedia(values.replacement, editing.kind === "image" ? "image" : "media", {
+          optimizeImage: editing.kind === "image",
+        })
       : null;
     const latestAssets = useBoardStore.getState().assets;
     const nextAssets = latestAssets.map((asset) =>

@@ -21,6 +21,7 @@ import {
   TenantConfigAdminRequiredError,
   SecretAuthRequiredError,
 } from "@/services/server-storage";
+import { selectOptimizedImageUpload } from "@/services/image-upload";
 
 const objectUrls = new Map<string, string>();
 
@@ -336,6 +337,7 @@ export async function uploadMedia(
   kind: "image" | "media" = "image",
   options: {
     requirePersistent?: boolean;
+    optimizeImage?: boolean;
     preflightImage?: (blob: Blob, signal?: AbortSignal) => Promise<{ width: number; height: number }>;
     signal?: AbortSignal;
   } = {},
@@ -388,6 +390,10 @@ export async function uploadMedia(
     if (blob.size > maxBytes) {
       throw new Error(`Media is too large (limit ${maxBytes} bytes)`);
     }
+  }
+
+  if (kind === "image" && options.optimizeImage) {
+    blob = await selectOptimizedImageUpload(blob);
   }
 
   const preflightDimensions = options.preflightImage && (blob.type.startsWith("image/") || kind === "image")

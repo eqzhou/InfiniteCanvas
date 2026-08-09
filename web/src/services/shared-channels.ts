@@ -135,6 +135,7 @@ export function resolveActiveAIChannel(
   if (activeSharedId) {
     const selectedShared = shared.find((channel) => channel.id === activeSharedId);
     if (selectedShared) return sharedChannelAsAI(selectedShared);
+		return undefined;
   }
   return personal.find((channel) => channel.id === activePersonalId) ?? personal[0];
 }

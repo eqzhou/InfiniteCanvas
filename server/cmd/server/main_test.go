@@ -73,7 +73,8 @@ func TestCORSMiddleware(t *testing.T) {
 		allowed := got.Header().Get("Access-Control-Allow-Headers")
 		if got.Code != http.StatusNoContent ||
 			!strings.Contains(allowed, "X-OpenBoard-E2E-Tenant") ||
-			!strings.Contains(allowed, "X-OpenBoard-E2E-Token") {
+			!strings.Contains(allowed, "X-OpenBoard-E2E-Token") ||
+			!strings.Contains(allowed, "X-OpenBoard-Config-Version") {
 			t.Fatalf("status = %d, allow-headers = %q", got.Code, allowed)
 		}
 	})

@@ -185,6 +185,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const imageSizeOptions = imageSizeOptionsFor(imageProvider?.protocol, imageProvider?.model);
   const imageSize = normalizeImageSizeForProvider(config.imageSize);
   const sharedChannelSelected = Boolean(config.activeSharedChannelId);
+	const selectedSharedChannelAvailable = !sharedChannelSelected || sharedChannels.some((item) => item.id === config.activeSharedChannelId);
 
   const updateChannel = (patch: Partial<typeof channel>) => {
     if (sharedChannelSelected) return;
@@ -286,6 +287,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 							setConfig(scope === "shared" ? { ...config, activeChannelId: null, activeSharedChannelId: id } : { ...config, activeChannelId: id, activeSharedChannelId: null });
 						}}
                 >
+					{sharedChannelSelected && !selectedSharedChannelAvailable ? (
+						<option value={`shared:${config.activeSharedChannelId}`}>共享渠道正在加载或已不可用</option>
+					) : null}
                   {config.channels.map((item) => (
 							<option key={item.id} value={`personal:${item.id}`}>{item.name}（个人）</option>
                   ))}
@@ -343,7 +347,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
           <section className="mb-6">
             <SectionTitle title="模型服务" />
-            <div className="overflow-hidden rounded-xl border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
+            {sharedChannelSelected ? (
+              <SharedChannelManagedNotice channelName={selectedSharedChannelAvailable ? channel.name : "共享渠道正在加载或已不可用"} />
+            ) : <div className="overflow-hidden rounded-xl border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
               <div className="hidden grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] gap-2 border-b border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_80%,var(--ob-panel))] px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-[var(--ob-muted)] md:grid">
                 <span>能力</span><span>协议</span><span>服务 URL</span><span>API Key</span><span>模型</span><span />
               </div>
@@ -359,7 +365,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   onChange={(patch) => updateProvider(kind, patch)}
                 />
               ))}
-            </div>
+            </div>}
           </section>
 
           <section className="mb-6 grid gap-5 lg:grid-cols-[1.35fr_1fr]">
@@ -800,6 +806,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+export function SharedChannelManagedNotice({ channelName }: { channelName: string }) {
+  return (
+    <div className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] px-4 py-3 text-sm">
+      <p className="font-medium">{channelName}</p>
+      <p className="mt-1 text-xs text-[var(--ob-muted)]">
+        服务地址、模型和访问密钥均由管理员已配置，选择后可直接使用，无需用户再次填写。
+      </p>
     </div>
   );
 }

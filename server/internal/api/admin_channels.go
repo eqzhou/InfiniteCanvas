@@ -125,6 +125,10 @@ func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string)
 			return adminChannelPublic{}, "invalid channel model"
 		}
 	}
+	if item.Enabled && item.AllowUserUse && item.DefaultTextModel == "" && item.DefaultImageModel == "" &&
+		item.DefaultVideoModel == "" && item.DefaultAudioModel == "" {
+		return adminChannelPublic{}, "shared channel requires a default model"
+	}
 	for _, model := range item.Models {
 		if len(model) > 500 {
 			return adminChannelPublic{}, "invalid channel model"

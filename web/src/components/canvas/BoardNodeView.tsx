@@ -148,7 +148,7 @@ export function BoardNodeView({
     const activeGenerationChannel = config.activeSharedChannelId
       ? generationChannels.find((channel) => channel.id === config.activeSharedChannelId)
       : activeChannel;
-    const imageChannel = configuredGenerationChannel ?? activeGenerationChannel ?? activeChannel;
+    const imageChannel = configuredGenerationChannel ?? activeGenerationChannel;
     const imageProvider = imageChannel ? getProvider(imageChannel, "image") : undefined;
     const imageModel = node.metadata.model || imageProvider?.model || "";
     const videoProvider = imageChannel ? getProvider(imageChannel, "video") : undefined;
@@ -218,7 +218,7 @@ export function BoardNodeView({
             : Settings2;
   const importImageIntoNode = (file: File) => {
     void (async () => {
-      const uploaded = await uploadMedia(file, "image");
+      const uploaded = await uploadMedia(file, "image", { optimizeImage: true });
       const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
       updateNode(node.id, {
         metadata: {

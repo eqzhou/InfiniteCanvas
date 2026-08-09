@@ -78,6 +78,11 @@ describe("shared channel catalog", () => {
 		expect(resolved?.providers?.image.models).toEqual(["shared-model"]);
 	});
 
+	test("never falls back to personal credentials while a selected shared channel is unavailable", () => {
+		const personal = { ...createDefaultChannel(), id: "personal", name: "Personal" };
+		expect(resolveActiveAIChannel([personal], "personal", [], "missing-shared")).toBeUndefined();
+	});
+
   test("personal channel IDs take precedence over ambiguous shared IDs", () => {
     const personal = { ...createDefaultChannel(), id: "same", name: "Personal" };
     const merged = mergeSharedChannelChoices([personal], [{ id: "same", name: "Shared", protocol: "openai" }, { id: "other", name: "Other", protocol: "openai" }]);

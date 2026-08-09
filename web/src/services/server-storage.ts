@@ -88,9 +88,22 @@ export class ConfigPreconditionError extends Error {
 
 let configETag: string | null | undefined;
 const MAX_CONCURRENT_BLOB_UPLOADS = 2;
-const BLOB_UPLOAD_TIMEOUT_MS = 90_000;
+const BLOB_UPLOAD_TIMEOUT_MS = 220_000;
 let activeBlobUploads = 0;
 let blobUploadWaiters: Array<() => void> = [];
+
+function setConfigWriteVersion(headers: Headers): void {
+  if (configETag === undefined) throw new ConfigPreconditionError();
+  if (configETag === null) {
+    headers.set("If-None-Match", "*");
+    return;
+  }
+  headers.set("If-Match", configETag);
+  // Some reverse proxies drop standard conditional request headers. Keep the
+  // same quoted ETag in an application header so optimistic locking remains
+  // enforced instead of turning a valid save into HTTP 428.
+  headers.set("X-OpenBoard-Config-Version", configETag);
+}
 
 export function resetServerStateVersions(): void {
   configETag = undefined;
@@ -194,9 +207,7 @@ export async function saveServerState(
 ): Promise<void> {
   const headers = new Headers({ "Content-Type": "application/json" });
   if (key === "config") {
-    if (configETag === undefined) throw new ConfigPreconditionError();
-    if (configETag === null) headers.set("If-None-Match", "*");
-    else headers.set("If-Match", configETag);
+    setConfigWriteVersion(headers);
   }
   const response = await request(`state/${key}`, {
     method: "PUT",
@@ -217,10 +228,8 @@ export async function saveServerConfigBundle<T>(
   config: AppConfig,
   secrets: T,
 ): Promise<void> {
-  if (configETag === undefined) throw new ConfigPreconditionError();
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (configETag === null) headers.set("If-None-Match", "*");
-  else headers.set("If-Match", configETag);
+  setConfigWriteVersion(headers);
   const response = await request("config", {
     method: "PUT",
     headers,
@@ -245,7 +254,7 @@ export async function loadServerSecrets<T>(): Promise<T | null> {
 
 export async function saveServerSecrets<T>(value: T): Promise<void> {
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (configETag) headers.set("If-Match", configETag);
+  setConfigWriteVersion(headers);
   const response = await request("secrets/config", {
     method: "PUT",
     headers,

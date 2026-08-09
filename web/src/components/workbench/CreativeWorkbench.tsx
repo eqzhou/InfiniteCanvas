@@ -100,7 +100,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	const sharedChannels = useSharedChannels();
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
   const [channelId, setChannelId] = useState(config.activeSharedChannelId ?? config.activeChannelId ?? config.channels[0]?.id ?? "");
-  const channel = channelChoices.find((item) => item.id === channelId) ?? config.channels[0];
+  const channel = channelChoices.find((item) => item.id === channelId) ?? (channelId ? undefined : config.channels[0]);
   const provider = channel ? getProvider(channel, kind) : undefined;
   const [model, setModel] = useState(() => resolvePreferredModel(
     config.preferredModels?.[channelId]?.[kind],

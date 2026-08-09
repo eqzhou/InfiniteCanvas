@@ -6,6 +6,7 @@ import {
   fetchAdminChannelModels,
   getAdminStoragePoolStatus,
   listAdminCreditLogs,
+  listAdminChannels,
   listAdminUsers,
   putAdminChannelSecret,
   putAdminChannels,
@@ -122,6 +123,26 @@ describe("admin client", () => {
       "seedream-4",
     ]);
     expect(cleanAdminChannelModels(undefined)).toEqual([]);
+  });
+
+  test("rejects a user-visible shared channel with no usable default model", async () => {
+    await expect(putAdminChannels([{
+      id: "shared-empty", name: "Empty", baseUrl: "https://api.example.com/v1", protocol: "openai",
+      enabled: true, allowUserUse: true, weight: 1, timeoutSeconds: 60,
+      defaultTextModel: "", defaultImageModel: "", defaultVideoModel: "", defaultAudioModel: "",
+      secretConfigured: true,
+    }])).rejects.toThrow("至少配置一个默认模型");
+  });
+
+  test("normalizes omitted legacy model fields before editing and saving", async () => {
+    globalThis.fetch = mock(async () => new Response(JSON.stringify([{
+      id: "shared-legacy", name: "Legacy", baseUrl: "https://api.example.com/v1", protocol: "openai",
+      enabled: false, allowUserUse: false, weight: 1, timeoutSeconds: 60, secretConfigured: true,
+    }]))) as typeof fetch;
+
+    expect(await listAdminChannels()).toEqual([expect.objectContaining({
+      defaultTextModel: "", defaultImageModel: "", defaultVideoModel: "", defaultAudioModel: "",
+    })]);
   });
 
   test("accepts Azure and Edge shared audio channel protocols", async () => {

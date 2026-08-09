@@ -57,7 +57,9 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
           // Non-panorama or unreadable headers: ordinary image asset.
         }
       }
-      const uploaded = await uploadMedia(file, kind === "image" ? "image" : "media");
+      const uploaded = await uploadMedia(file, kind === "image" ? "image" : "media", {
+        optimizeImage: kind === "image",
+      });
       const t = nowIso();
       const item: AssetItem = {
         id: uid("asset"),

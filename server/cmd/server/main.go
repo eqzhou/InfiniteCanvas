@@ -27,7 +27,8 @@ import (
 
 const (
 	requestHandlingTimeout = 125 * time.Second
-	serverWriteTimeout     = 130 * time.Second
+	serverReadTimeout      = 230 * time.Second
+	serverWriteTimeout     = 240 * time.Second
 )
 
 func main() {
@@ -104,7 +105,7 @@ func main() {
 		Addr:              addr,
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       65 * time.Second,
+		ReadTimeout:       serverReadTimeout,
 		WriteTimeout:      serverWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
@@ -208,7 +209,8 @@ func timeoutRequests(timeout time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		timed := withTimeout(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/runtime/ws" || r.URL.Path == "/api/codex/events" {
+			if r.URL.Path == "/api/runtime/ws" || r.URL.Path == "/api/codex/events" ||
+				strings.HasPrefix(r.URL.Path, "/api/blobs/") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -248,7 +250,7 @@ func cors(origins map[string]struct{}) func(http.Handler) http.Handler {
 			}
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
-				"Content-Type, Authorization, X-OpenBoard-Session, X-OpenBoard-E2E-Tenant, X-OpenBoard-E2E-Token",
+				"Content-Type, Authorization, X-OpenBoard-Session, X-OpenBoard-Config-Version, X-OpenBoard-E2E-Tenant, X-OpenBoard-E2E-Token",
 			)
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
 			if r.Method == http.MethodOptions {

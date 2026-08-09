@@ -25,6 +25,9 @@ func parseExpectedVersion(w http.ResponseWriter, r *http.Request) (string, bool,
 		return "", true, true
 	}
 	value := strings.TrimSpace(r.Header.Get("If-Match"))
+	if value == "" {
+		value = strings.TrimSpace(r.Header.Get("X-OpenBoard-Config-Version"))
+	}
 	if len(value) >= 3 && value[0] == '"' && value[len(value)-1] == '"' {
 		value = value[1 : len(value)-1]
 		if strings.HasPrefix(value, "m1-") && len(value) == 67 {

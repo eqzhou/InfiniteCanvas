@@ -546,6 +546,16 @@ func TestNormalizeAdminChannelCleansModels(t *testing.T) {
 	}
 }
 
+func TestNormalizeAdminChannelRejectsUserVisibleChannelWithoutDefaultModel(t *testing.T) {
+	_, message := normalizeAdminChannel(adminChannelPublic{
+		ID: "shared-empty", Name: "Empty", BaseURL: "https://api.example.com/v1",
+		Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 60,
+	})
+	if message != "shared channel requires a default model" {
+		t.Fatalf("message = %q", message)
+	}
+}
+
 func TestAzureAndKeylessEdgeSharedAudioChannels(t *testing.T) {
 	azure, azureMessage := normalizeAdminChannel(adminChannelPublic{
 		ID: "azure-tts", Name: "Azure Speech", BaseURL: "https://eastus.tts.speech.microsoft.com",

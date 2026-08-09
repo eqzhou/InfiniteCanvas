@@ -1374,6 +1374,27 @@ func TestConfigStateRejectsStaleConditionalWriteWithoutOverwritingCurrentValue(t
 	}
 }
 
+func TestConfigStateAcceptsExplicitVersionHeaderWhenProxyDropsIfMatch(t *testing.T) {
+	handler := persistentHandler(t)
+	original := []byte(`{"theme":"light","channels":[]}`)
+	updated := []byte(`{"theme":"dark","channels":[]}`)
+
+	if got := requestWithHeaders(t, handler, http.MethodPut, "/api/state/config", original, map[string]string{
+		"If-None-Match": "*", "Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("create config = %d %s", got.Code, got.Body.String())
+	}
+	read := requestWithHeaders(t, handler, http.MethodGet, "/api/state/config", nil, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	if got := requestWithHeaders(t, handler, http.MethodPut, "/api/state/config", updated, map[string]string{
+		"X-OpenBoard-Config-Version": read.Header().Get("ETag"),
+		"Authorization":              "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("update config through proxy-safe version header = %d %s", got.Code, got.Body.String())
+	}
+}
+
 func TestConfigStateVersionPreservesLargeIntegerPrecision(t *testing.T) {
 	first := []byte(`{"pluginValue":9007199254740992}`)
 	second := []byte(`{"pluginValue":9007199254740993}`)

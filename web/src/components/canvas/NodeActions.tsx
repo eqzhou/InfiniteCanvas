@@ -138,9 +138,9 @@ export function NodeActions({
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
   const channel = node.metadata.generationChannelId
     ? channelChoices.find((candidate) => candidate.id === node.metadata.generationChannelId)
-    : (config.activeSharedChannelId ? channelChoices.find((candidate) => candidate.id === config.activeSharedChannelId) : undefined) ??
-      config.channels.find((candidate) => candidate.id === config.activeChannelId) ??
-      config.channels[0];
+    : config.activeSharedChannelId
+      ? channelChoices.find((candidate) => candidate.id === config.activeSharedChannelId)
+      : config.channels.find((candidate) => candidate.id === config.activeChannelId) ?? config.channels[0];
   const cameraAvailable = node.type === "image" || node.type === "video" ||
     (node.type === "config" && (node.metadata.generationMode ?? "image") !== "text");
   const promptForGeneration = (prompt: string) => applyCameraPrompt(prompt, node.metadata.cameraPrompt);

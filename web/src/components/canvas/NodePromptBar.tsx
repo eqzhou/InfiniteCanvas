@@ -83,9 +83,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   const channel =
     (config.activeSharedChannelId
       ? channelChoices.find((c) => c.id === config.activeSharedChannelId)
-      : undefined) ??
-    config.channels.find((c) => c.id === config.activeChannelId) ??
-    config.channels[0];
+      : config.channels.find((c) => c.id === config.activeChannelId) ?? config.channels[0]);
   const references = buildPromptReferences(project, node.id);
   const hasImageContent = node.type === "image" && Boolean(node.metadata.content || node.metadata.storageKey);
   const upstream = useMemo(() => {

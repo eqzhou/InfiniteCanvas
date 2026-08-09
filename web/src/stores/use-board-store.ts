@@ -1517,7 +1517,7 @@ export async function attachUploadedImage(
     }
   }
 
-  const uploaded = await uploadMedia(file, "image");
+  const uploaded = await uploadMedia(file, "image", { optimizeImage: true });
   const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
   return useBoardStore.getState().addNode("image", position, {
     metadata: {
