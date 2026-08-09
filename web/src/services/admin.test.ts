@@ -5,12 +5,14 @@ import {
   cleanAdminChannelModels,
   fetchAdminChannelModels,
   getAdminStoragePoolStatus,
+  getAdminTenantQuota,
   listAdminCreditLogs,
   listAdminChannels,
   listAdminUsers,
   putAdminChannelSecret,
   putAdminChannels,
   putAdminModelCosts,
+  putAdminTenantQuota,
   putAdminStoragePool,
   putAdminStoragePoolSecret,
   deleteAdminStoragePoolProvider,
@@ -62,6 +64,20 @@ describe("admin client", () => {
     expect(requests[0]?.init?.method).toBe("POST");
     expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({ delta: 5, reason: "repair", idempotencyKey: "op-1" });
     expect(requests[1]?.init?.method).toBe("PUT");
+    expect(() => putAdminModelCosts({ modelCosts: [], defaultCredits: 0 })).toThrow("默认模型成本必须至少为 1 算力");
+  });
+
+  test("reads and updates a finite team monthly generation allowance", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return new Response(JSON.stringify({ generationThisMonth: 0, generationQuotaMonthly: 0 }));
+    }) as typeof fetch;
+    expect(await getAdminTenantQuota()).toEqual({ generationThisMonth: 0, generationQuotaMonthly: 0 });
+    await putAdminTenantQuota(0);
+    expect(requests[1]?.init?.method).toBe("PUT");
+    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({ generationQuotaMonthly: 0 });
+    expect(() => putAdminTenantQuota(-1)).toThrow("团队月度生成额度必须是非负整数");
   });
 
   test("persists prompt source schedules and triggers the protected due runner", async () => {

@@ -204,11 +204,11 @@ export function formatUsageChip(snapshot: UsageSnapshot): string {
   const plan = snapshot.plan || "free";
   const used = snapshot.generationThisMonth ?? 0;
   const quota = snapshot.generationQuotaMonthly ?? 0;
-  const base = `${plan} · 本月生成 ${used}/${quota}`;
+  const base = `${plan} · 团队本月生成 ${used}/${quota}`;
   // Credits are the balance that actually gates generation (402). Surface them
   // next to the monthly quota so users see a low balance before they click run.
   if (typeof snapshot.credits === "number" && Number.isFinite(snapshot.credits)) {
-    return `${base} · 算力 ${snapshot.credits}`;
+    return `${base} · 个人算力 ${snapshot.credits}`;
   }
   return base;
 }

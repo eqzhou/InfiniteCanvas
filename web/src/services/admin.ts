@@ -29,6 +29,10 @@ export type AdminModelCosts = {
   /** Cost used when a model has no exact entry. */
   defaultCredits: number;
 };
+export type AdminTenantQuota = {
+  generationThisMonth: number;
+  generationQuotaMonthly: number;
+};
 
 export type AdminStoragePoolProviderStatus = {
   id: string;
@@ -185,8 +189,8 @@ export async function adjustAdminCredits(
   userId: string,
   input: { delta: number; reason: string; idempotencyKey: string },
 ): Promise<{ user: AdminUser; log: AdminCreditLog; replayed: boolean }> {
-  if (!Number.isSafeInteger(input.delta) || input.delta === 0) throw new Error("额度变化必须是非零整数");
-  if (!input.reason.trim() || !input.idempotencyKey.trim()) throw new Error("额度调整原因和幂等键不能为空");
+  if (!Number.isSafeInteger(input.delta) || input.delta === 0) throw new Error("算力变化必须是非零整数");
+  if (!input.reason.trim() || !input.idempotencyKey.trim()) throw new Error("算力调整原因和幂等键不能为空");
   return json(await authFetch(`admin/users/${encodeURIComponent(userId)}/credit-adjustments`, {
     method: "POST",
     body: JSON.stringify({ ...input, reason: input.reason.trim(), idempotencyKey: input.idempotencyKey.trim() }),
@@ -214,18 +218,32 @@ export async function getAdminModelCosts(): Promise<AdminModelCosts> {
   return json(await authFetch("admin/models"));
 }
 
+export async function getAdminTenantQuota(): Promise<AdminTenantQuota> {
+  return json(await authFetch("admin/tenant-quota"));
+}
+
+export function putAdminTenantQuota(generationQuotaMonthly: number): Promise<AdminTenantQuota> {
+  if (!Number.isSafeInteger(generationQuotaMonthly) || generationQuotaMonthly < 0) {
+    throw new Error("团队月度生成额度必须是非负整数");
+  }
+  return authFetch("admin/tenant-quota", {
+    method: "PUT",
+    body: JSON.stringify({ generationQuotaMonthly }),
+  }).then(json<AdminTenantQuota>);
+}
+
 export async function putAdminModelCosts(input: AdminModelCosts): Promise<AdminModelCosts> {
   const seen = new Set<string>();
   const modelCosts = input.modelCosts.map((item) => {
     const model = item.model.trim();
     const key = model.toLowerCase();
-    if (!model || seen.has(key) || !Number.isSafeInteger(item.credits) || item.credits < 0) {
+    if (!model || seen.has(key) || !Number.isSafeInteger(item.credits) || item.credits < 1) {
       throw new Error("模型成本配置无效或重复");
     }
     seen.add(key);
     return { model, credits: item.credits };
   });
-  if (!Number.isSafeInteger(input.defaultCredits) || input.defaultCredits < 0) throw new Error("默认模型成本无效");
+  if (!Number.isSafeInteger(input.defaultCredits) || input.defaultCredits < 1) throw new Error("默认模型成本必须至少为 1 算力");
   return json(await authFetch("admin/models", {
     method: "PUT",
     body: JSON.stringify({ modelCosts, defaultCredits: input.defaultCredits }),

@@ -43,6 +43,7 @@ type memoryStore struct {
 	creditAdjustments      map[string]string
 	updateUserErr          error
 	mediaRefs              map[string]store.MediaReference
+	tenants                map[string]store.Tenant
 }
 
 func tenantKey(tenantID, key string) string {
@@ -68,6 +69,7 @@ func newMemoryStore() *memoryStore {
 		creditReserveUsers:   map[string]string{},
 		creditAdjustments:    map[string]string{},
 		mediaRefs:            map[string]store.MediaReference{},
+		tenants:              map[string]store.Tenant{},
 	}
 }
 
@@ -875,16 +877,50 @@ func (*memoryStore) LogoutSession(context.Context, string) error { return nil }
 func (*memoryStore) LookupSession(context.Context, string) (store.AuthUser, error) {
 	return store.AuthUser{}, store.ErrUnauthorized
 }
-func (*memoryStore) GetTenant(context.Context, string) (store.Tenant, error) {
-	return store.Tenant{ID: store.DefaultTenantID, Name: "Local", Plan: "free", StorageQuotaBytes: 1 << 30, GenerationQuotaMonthly: 1000}, nil
+func (m *memoryStore) GetTenant(_ context.Context, tenantID string) (store.Tenant, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if tenant, ok := m.tenants[tenantID]; ok {
+		return tenant, nil
+	}
+	// Most API tests exercise unrelated generation behavior and opt into a
+	// permissive fixture. Quota-specific tests explicitly set this to zero.
+	return store.Tenant{ID: tenantID, Name: "Local", Plan: "free", StorageQuotaBytes: 1 << 30, GenerationQuotaMonthly: 1000}, nil
+}
+func (m *memoryStore) UpdateTenantGenerationQuota(_ context.Context, tenantID string, quota int64) (store.Tenant, error) {
+	if quota < 0 {
+		return store.Tenant{}, store.ErrInvalidInput
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tenant := m.tenants[tenantID]
+	if tenant.ID == "" {
+		tenant = store.Tenant{ID: tenantID, Name: "Local", Plan: "free", StorageQuotaBytes: 1 << 30}
+	}
+	tenant.GenerationQuotaMonthly = quota
+	m.tenants[tenantID] = tenant
+	return tenant, nil
 }
 func (*memoryStore) RecordUsage(context.Context, string, string, string, int, json.RawMessage) error {
 	return nil
 }
-func (*memoryStore) GetUsage(context.Context, string) (store.UsageSummary, error) {
-	return store.UsageSummary{Plan: "free", StorageQuotaBytes: 1 << 30, GenerationQuotaMonthly: 1000}, nil
+func (m *memoryStore) GetUsage(_ context.Context, tenantID string) (store.UsageSummary, error) {
+	tenant, err := m.GetTenant(context.Background(), tenantID)
+	if err != nil {
+		return store.UsageSummary{}, err
+	}
+	return store.UsageSummary{Plan: tenant.Plan, StorageQuotaBytes: tenant.StorageQuotaBytes, GenerationQuotaMonthly: tenant.GenerationQuotaMonthly}, nil
 }
-func (*memoryStore) CheckGenerationQuota(context.Context, string) error     { return nil }
+func (m *memoryStore) CheckGenerationQuota(ctx context.Context, tenantID string) error {
+	usage, err := m.GetUsage(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if usage.GenerationThisMonth >= usage.GenerationQuotaMonthly {
+		return store.ErrQuotaExceeded
+	}
+	return nil
+}
 func (*memoryStore) CheckStorageQuota(context.Context, string, int64) error { return nil }
 
 func (m *memoryStore) ReserveStorageUsage(_ context.Context, _, _ string, bytes int64, meta json.RawMessage) error {
@@ -1019,7 +1055,7 @@ func (m *memoryStore) GetModelCreditConfig(_ context.Context, tenantID string) (
 	defer m.mu.RUnlock()
 	raw, ok := m.state[tenantKey(tenantID, "adminBilling")]
 	if !ok {
-		return store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}}, nil
+		return store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 1}, nil
 	}
 	var config store.ModelCreditConfig
 	if json.Unmarshal(raw, &config) != nil {
@@ -1027,6 +1063,14 @@ func (m *memoryStore) GetModelCreditConfig(_ context.Context, tenantID string) (
 	}
 	if config.ModelCosts == nil {
 		config.ModelCosts = []store.ModelCreditCost{}
+	}
+	if config.DefaultCredits < 1 {
+		config.DefaultCredits = 1
+	}
+	for index := range config.ModelCosts {
+		if config.ModelCosts[index].Credits < 1 {
+			config.ModelCosts[index].Credits = 1
+		}
 	}
 	return config, nil
 }
@@ -1045,7 +1089,7 @@ func (m *memoryStore) GetModelCreditCost(_ context.Context, tenantID, model stri
 	defer m.mu.RUnlock()
 	raw, ok := m.state[tenantKey(tenantID, "adminBilling")]
 	if !ok || len(raw) == 0 {
-		return 0, nil
+		return 1, nil
 	}
 	var cfg struct {
 		ModelCosts     []store.ModelCreditCost `json:"modelCosts"`
@@ -1054,10 +1098,10 @@ func (m *memoryStore) GetModelCreditCost(_ context.Context, tenantID, model stri
 	_ = json.Unmarshal(raw, &cfg)
 	for _, item := range cfg.ModelCosts {
 		if strings.EqualFold(strings.TrimSpace(item.Model), strings.TrimSpace(model)) {
-			return item.Credits, nil
+			return max(item.Credits, 1), nil
 		}
 	}
-	return cfg.DefaultCredits, nil
+	return max(cfg.DefaultCredits, 1), nil
 }
 func (m *memoryStore) ListCreditLogs(_ context.Context, tenantID string, query store.CreditLogQuery) (store.CreditLogPage, error) {
 	m.mu.RLock()

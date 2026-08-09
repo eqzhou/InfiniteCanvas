@@ -124,23 +124,29 @@ func stripGenerationChannelSecret(parameters json.RawMessage) json.RawMessage {
 	if json.Unmarshal(parameters, &root) != nil {
 		return append(json.RawMessage(nil), parameters...)
 	}
+	changed := false
+	if _, ok := root["billingUserId"]; ok {
+		delete(root, "billingUserId")
+		changed = true
+	}
 	rawSnapshot, ok := root["sharedChannel"]
-	if !ok {
+	if ok {
+		var snapshot map[string]json.RawMessage
+		if json.Unmarshal(rawSnapshot, &snapshot) == nil {
+			if _, hasSecret := snapshot["secret"]; hasSecret {
+				delete(snapshot, "secret")
+				cleanSnapshot, err := json.Marshal(snapshot)
+				if err != nil {
+					return append(json.RawMessage(nil), parameters...)
+				}
+				root["sharedChannel"] = cleanSnapshot
+				changed = true
+			}
+		}
+	}
+	if !changed {
 		return append(json.RawMessage(nil), parameters...)
 	}
-	var snapshot map[string]json.RawMessage
-	if json.Unmarshal(rawSnapshot, &snapshot) != nil {
-		return append(json.RawMessage(nil), parameters...)
-	}
-	if _, ok := snapshot["secret"]; !ok {
-		return append(json.RawMessage(nil), parameters...)
-	}
-	delete(snapshot, "secret")
-	cleanSnapshot, err := json.Marshal(snapshot)
-	if err != nil {
-		return append(json.RawMessage(nil), parameters...)
-	}
-	root["sharedChannel"] = cleanSnapshot
 	cleanParameters, err := json.Marshal(root)
 	if err != nil {
 		return append(json.RawMessage(nil), parameters...)

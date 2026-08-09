@@ -78,6 +78,7 @@ func validatePersistedWorkflowJob(job store.GenerationJob) (workflowRunParameter
 		parameters.TemplateID != parameters.TemplateSnapshot.ID ||
 		parameters.TemplateRevision != parameters.TemplateSnapshot.Revision || len(parameters.RequestHash) < 16 ||
 		len(parameters.RequestHash) > 64 || !allLowerHex(parameters.RequestHash) ||
+		len(parameters.BillingUserID) > 128 || strings.TrimSpace(parameters.BillingUserID) != parameters.BillingUserID ||
 		validateWorkflowTemplate(parameters.TemplateSnapshot) != nil {
 		return workflowRunParameters{}, workflowRunResult{}, errors.New("invalid workflow parameters")
 	}
@@ -338,7 +339,11 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 		CreatedAt: now, UpdatedAt: now,
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": child.ID, "kind": child.Kind, "workflowRunId": parent.ID, "workflowStepId": step.ID})
-	if err := s.store.CreateServerGenerationJob(ctx, tenantID, "", child, step.Parameters.Count, meta); errors.Is(err, store.ErrConflict) {
+	billingUserID := strings.TrimSpace(parameters.BillingUserID)
+	if authMode() == "required" && billingUserID == "" {
+		return store.GenerationJob{}, store.ErrUnauthorized
+	}
+	if err := s.store.CreateServerGenerationJob(ctx, tenantID, billingUserID, child, step.Parameters.Count, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(ctx, tenantID, childID)
 		if getErr == nil && isMatchingWorkflowChild(existing, requestHash, parent.ID, step.ID) {
 			return existing, nil

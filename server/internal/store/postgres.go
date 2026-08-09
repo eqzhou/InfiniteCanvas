@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 19
+const currentSchemaVersion = 20
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -94,7 +94,7 @@ const currentSchemaVersion = 19
 const tombstoneRetention = 7 * 24 * time.Hour
 
 const defaultStorageQuotaBytes int64 = 1 << 30
-const defaultGenerationQuotaMonthly int64 = 1000
+const defaultGenerationQuotaMonthly int64 = 0
 
 type PostgresStore struct {
 	pool  *pgxpool.Pool
@@ -248,7 +248,21 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 20 {
+		if err := migrateV20(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV20(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 20, `
+ALTER TABLE openboard_tenants ALTER COLUMN generation_quota_monthly SET DEFAULT 0;
+ALTER TABLE openboard_tenants DROP CONSTRAINT IF EXISTS openboard_tenants_generation_quota_nonnegative;
+ALTER TABLE openboard_tenants
+  ADD CONSTRAINT openboard_tenants_generation_quota_nonnegative CHECK (generation_quota_monthly >= 0);
+`)
 }
 
 func migrateV19(ctx context.Context, connection *pgxpool.Conn) error {
@@ -760,7 +774,7 @@ CREATE TABLE IF NOT EXISTS openboard_tenants (
   name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
   plan text NOT NULL DEFAULT 'free',
   storage_quota_bytes bigint NOT NULL DEFAULT 1073741824,
-  generation_quota_monthly bigint NOT NULL DEFAULT 1000,
+  generation_quota_monthly bigint NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS openboard_users (
@@ -2376,7 +2390,8 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 	if job.Status == "deleted" {
 		return ErrGone
 	}
-	if units < 1 {
+	billableGeneration := generationJobConsumesQuota(job.Kind)
+	if billableGeneration && units < 1 {
 		units = 1
 	}
 	if len(usageMeta) == 0 {
@@ -2410,43 +2425,52 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 	if inserted.RowsAffected() == 0 {
 		return generationJobConflictError(ctx, tx, tenantID, job.ID)
 	}
-	var quota int64
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(
+	if billableGeneration {
+		var quota int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(
 		(SELECT generation_quota_monthly FROM openboard_tenants WHERE id=$1), $2)`,
-		tenantID, defaultGenerationQuotaMonthly).Scan(&quota); err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	var used int64
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(units), 0) FROM openboard_usage_events
-		WHERE tenant_id=$1 AND kind='generation' AND created_at >= $2`, tenantID, monthStart).Scan(&used); err != nil {
-		return err
-	}
-	if quota > 0 && used+int64(units) > quota {
-		return ErrQuotaExceeded
-	}
-	var userArg any
-	if userID != "" {
-		userArg = userID
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO openboard_usage_events (tenant_id,user_id,kind,units,meta)
-		VALUES ($1,$2,'generation',$3,$4)`, tenantID, userArg, units, usageMeta); err != nil {
-		return err
-	}
-	if userID != "" {
-		cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
-		if err != nil {
+			tenantID, defaultGenerationQuotaMonthly).Scan(&quota); err != nil {
 			return err
 		}
-		amount := cost * units
-		if amount > 0 {
+		now := time.Now().UTC()
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		var used int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(units), 0) FROM openboard_usage_events
+		WHERE tenant_id=$1 AND kind='generation' AND created_at >= $2`, tenantID, monthStart).Scan(&used); err != nil {
+			return err
+		}
+		if generationQuotaExceeded(used, units, quota) {
+			return ErrQuotaExceeded
+		}
+		var userArg any
+		if userID != "" {
+			userArg = userID
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_usage_events (tenant_id,user_id,kind,units,meta)
+		VALUES ($1,$2,'generation',$3,$4)`, tenantID, userArg, units, usageMeta); err != nil {
+			return err
+		}
+		if userID != "" {
+			cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
+			if err != nil {
+				return err
+			}
+			amount := cost * units
 			if err := s.reserveCreditsTx(ctx, tx, tenantID, userID, job.ID, job.Model, amount, usageMeta); err != nil {
 				return err
 			}
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func generationJobConsumesQuota(kind string) bool {
+	switch kind {
+	case "image", "video", "audio":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *PostgresStore) ClaimServerGenerationJob(ctx context.Context, claim GenerationClaim, owner string, now, leaseUntil time.Time) (TenantGenerationJob, error) {
@@ -3639,6 +3663,21 @@ FROM openboard_tenants WHERE id=$1`, tenantID).Scan(
 	return t, nil
 }
 
+func (s *PostgresStore) UpdateTenantGenerationQuota(ctx context.Context, tenantID string, quota int64) (Tenant, error) {
+	if quota < 0 {
+		return Tenant{}, ErrInvalidInput
+	}
+	tenantID = normalizeTenantID(tenantID)
+	result, err := s.pool.Exec(ctx, `UPDATE openboard_tenants SET generation_quota_monthly=$2 WHERE id=$1`, tenantID, quota)
+	if err != nil {
+		return Tenant{}, err
+	}
+	if result.RowsAffected() == 0 {
+		return Tenant{}, ErrNotFound
+	}
+	return s.GetTenant(ctx, tenantID)
+}
+
 func (s *PostgresStore) RecordUsage(ctx context.Context, tenantID, userID, kind string, units int, meta json.RawMessage) error {
 	tenantID = normalizeTenantID(tenantID)
 	if units < 1 {
@@ -3702,10 +3741,20 @@ func (s *PostgresStore) CheckGenerationQuota(ctx context.Context, tenantID strin
 	if err != nil {
 		return err
 	}
-	if usage.GenerationQuotaMonthly > 0 && usage.GenerationThisMonth >= usage.GenerationQuotaMonthly {
+	if generationQuotaExceeded(usage.GenerationThisMonth, 1, usage.GenerationQuotaMonthly) {
 		return ErrQuotaExceeded
 	}
 	return nil
+}
+
+func generationQuotaExceeded(used int64, requested int, quota int64) bool {
+	if requested < 1 {
+		requested = 1
+	}
+	if quota < 0 || used >= quota {
+		return true
+	}
+	return int64(requested) > quota-used
 }
 
 func (s *PostgresStore) CheckStorageQuota(ctx context.Context, tenantID string, additionalBytes int64) error {
@@ -3988,7 +4037,7 @@ FROM openboard_users WHERE tenant_id=$1 AND id=$2`, tenantID, userID))
 
 func (s *PostgresStore) GetModelCreditConfig(ctx context.Context, tenantID string) (ModelCreditConfig, error) {
 	tenantID = normalizeTenantID(tenantID)
-	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}}
+	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}, DefaultCredits: 1}
 	raw, err := s.GetState(ctx, tenantID, adminBillingStateKey)
 	if errors.Is(err, ErrNotFound) || len(raw) == 0 {
 		return cfg, nil
@@ -4001,6 +4050,14 @@ func (s *PostgresStore) GetModelCreditConfig(ctx context.Context, tenantID strin
 	}
 	if cfg.ModelCosts == nil {
 		cfg.ModelCosts = []ModelCreditCost{}
+	}
+	if cfg.DefaultCredits < 1 {
+		cfg.DefaultCredits = 1
+	}
+	for index := range cfg.ModelCosts {
+		if cfg.ModelCosts[index].Credits < 1 {
+			cfg.ModelCosts[index].Credits = 1
+		}
 	}
 	return cfg, nil
 }
@@ -4023,14 +4080,8 @@ func (s *PostgresStore) GetModelCreditCost(ctx context.Context, tenantID, model 
 	model = strings.TrimSpace(model)
 	for _, item := range cfg.ModelCosts {
 		if strings.EqualFold(strings.TrimSpace(item.Model), model) {
-			if item.Credits < 0 {
-				return 0, nil
-			}
 			return item.Credits, nil
 		}
-	}
-	if cfg.DefaultCredits < 0 {
-		return 0, nil
 	}
 	return cfg.DefaultCredits, nil
 }
@@ -4039,7 +4090,7 @@ func (s *PostgresStore) modelCreditCostTx(ctx context.Context, tx pgx.Tx, tenant
 	var raw []byte
 	err := tx.QueryRow(ctx, `SELECT value FROM openboard_state WHERE tenant_id=$1 AND key=$2`,
 		normalizeTenantID(tenantID), adminBillingStateKey).Scan(&raw)
-	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}}
+	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}, DefaultCredits: 1}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return 0, err
 	}
@@ -4049,14 +4100,14 @@ func (s *PostgresStore) modelCreditCostTx(ctx context.Context, tx pgx.Tx, tenant
 	model = strings.TrimSpace(model)
 	for _, item := range cfg.ModelCosts {
 		if strings.EqualFold(strings.TrimSpace(item.Model), model) {
-			if item.Credits < 0 {
-				return 0, nil
+			if item.Credits < 1 {
+				return 1, nil
 			}
 			return item.Credits, nil
 		}
 	}
-	if cfg.DefaultCredits < 0 {
-		return 0, nil
+	if cfg.DefaultCredits < 1 {
+		return 1, nil
 	}
 	return cfg.DefaultCredits, nil
 }

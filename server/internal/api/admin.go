@@ -16,14 +16,14 @@ const adminChannelsStateKey = "adminChannels"
 
 // adminChannelPublic is a tenant-shared channel template without secrets.
 type adminChannelPublic struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	BaseURL           string   `json:"baseUrl"`
-	Protocol          string   `json:"protocol"`
-	Enabled           bool     `json:"enabled"`
-	AllowUserUse      bool     `json:"allowUserUse"`
-	Weight            int      `json:"weight"`
-	TimeoutSeconds    int      `json:"timeoutSeconds"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	BaseURL        string `json:"baseUrl"`
+	Protocol       string `json:"protocol"`
+	Enabled        bool   `json:"enabled"`
+	AllowUserUse   bool   `json:"allowUserUse"`
+	Weight         int    `json:"weight"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
 	// Models is the optional per-channel allow list used by shared-auto routing.
 	// Empty means "no model restriction" and only protocol capability applies.
 	Models            []string `json:"models,omitempty"`
@@ -38,6 +38,60 @@ type adminChannelPublic struct {
 var adminIdempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$`)
 
 const maxAdminCreditValue = 1_000_000_000
+
+type adminTenantQuota struct {
+	GenerationThisMonth    int64 `json:"generationThisMonth"`
+	GenerationQuotaMonthly int64 `json:"generationQuotaMonthly"`
+}
+
+func (s *Server) getAdminTenantQuota(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantAdmin(w, r, "admin tenant quota unavailable") {
+		return
+	}
+	usage, err := s.store.GetUsage(r.Context(), tenantIDFrom(r))
+	if err != nil {
+		http.Error(w, "failed to load tenant quota", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, adminTenantQuota{
+		GenerationThisMonth:    usage.GenerationThisMonth,
+		GenerationQuotaMonthly: usage.GenerationQuotaMonthly,
+	})
+}
+
+func (s *Server) putAdminTenantQuota(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantAdmin(w, r, "admin tenant quota unavailable") {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input struct {
+		GenerationQuotaMonthly int64 `json:"generationQuotaMonthly"`
+	}
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.GenerationQuotaMonthly < 0 || input.GenerationQuotaMonthly > maxAdminCreditValue {
+		http.Error(w, "invalid tenant quota", http.StatusBadRequest)
+		return
+	}
+	tenant, err := s.store.UpdateTenantGenerationQuota(r.Context(), tenantIDFrom(r), input.GenerationQuotaMonthly)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to update tenant quota", http.StatusInternalServerError)
+		return
+	}
+	usage, err := s.store.GetUsage(r.Context(), tenant.ID)
+	if err != nil {
+		http.Error(w, "failed to load tenant quota", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, adminTenantQuota{
+		GenerationThisMonth:    usage.GenerationThisMonth,
+		GenerationQuotaMonthly: tenant.GenerationQuotaMonthly,
+	})
+}
 
 // requireTenantAdmin gates tenant-admin mutations.
 // - auth off: require the local process token
@@ -172,7 +226,7 @@ func (s *Server) putAdminChannels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getAdminModels(w http.ResponseWriter, r *http.Request) {
 	// Public price list for billing estimate UI; no secrets.
 	if s.store == nil {
-		writeJSON(w, store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 0})
+		writeJSON(w, store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 1})
 		return
 	}
 	cfg, err := s.store.GetModelCreditConfig(r.Context(), tenantIDFrom(r))
@@ -184,14 +238,14 @@ func (s *Server) getAdminModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func normalizeModelCreditConfig(input store.ModelCreditConfig) (store.ModelCreditConfig, string) {
-	if input.DefaultCredits < 0 || input.DefaultCredits > maxAdminCreditValue || len(input.ModelCosts) > 500 {
+	if input.DefaultCredits < 1 || input.DefaultCredits > maxAdminCreditValue || len(input.ModelCosts) > 500 {
 		return store.ModelCreditConfig{}, "invalid model cost"
 	}
 	seen := make(map[string]struct{}, len(input.ModelCosts))
 	clean := make([]store.ModelCreditCost, 0, len(input.ModelCosts))
 	for _, item := range input.ModelCosts {
 		model := strings.TrimSpace(item.Model)
-		if model == "" || len(model) > 500 || item.Credits < 0 || item.Credits > maxAdminCreditValue {
+		if model == "" || len(model) > 500 || item.Credits < 1 || item.Credits > maxAdminCreditValue {
 			return store.ModelCreditConfig{}, "invalid model cost"
 		}
 		key := strings.ToLower(model)

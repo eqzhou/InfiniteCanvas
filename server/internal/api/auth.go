@@ -458,7 +458,7 @@ func (s *Server) estimateCredits(w http.ResponseWriter, r *http.Request) {
 		"creditsPerUnit": cost,
 		"totalCredits":   total,
 		"balance":        balance,
-		"sufficient":     balance >= int64(total) || cost == 0,
+		"sufficient":     balance >= int64(total),
 	})
 }
 

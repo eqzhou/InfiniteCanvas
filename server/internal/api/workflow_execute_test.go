@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,19 @@ func TestServerWorkflowPersistsEachStepAndImageHistory(t *testing.T) {
 	page, err := backend.ListGenerationJobs(t.Context(), store.DefaultTenantID, store.GenerationJobQuery{Kind: "image", Page: 1, PageSize: 10})
 	if err != nil || len(page.Items) != 2 {
 		t.Fatalf("child image history = %#v, %v", page, err)
+	}
+}
+
+func TestPublicWorkflowJobHidesBillingUserID(t *testing.T) {
+	parameters, err := json.Marshal(workflowRunParameters{
+		Executor: "workflow", BillingUserID: "user-private", RequestHash: "0123456789abcdef",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := publicGenerationJob(store.GenerationJob{Kind: "workflow", Parameters: parameters})
+	if strings.Contains(string(public.Parameters), "user-private") || strings.Contains(string(public.Parameters), "billingUserId") {
+		t.Fatalf("public workflow parameters leaked billing identity: %s", public.Parameters)
 	}
 }
 

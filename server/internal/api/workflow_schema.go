@@ -69,6 +69,7 @@ type workflowTemplate struct {
 
 type workflowRunParameters struct {
 	Executor         string                     `json:"executor"`
+	BillingUserID    string                     `json:"billingUserId,omitempty"`
 	RequestHash      string                     `json:"requestHash"`
 	TemplateID       string                     `json:"templateId"`
 	TemplateRevision int                        `json:"templateRevision"`

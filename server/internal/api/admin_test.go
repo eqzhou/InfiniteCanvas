@@ -17,7 +17,7 @@ func TestTenantAdminAuthOffRequiresProcessToken(t *testing.T) {
 	server.SetProcessToken("test-token")
 	router := chi.NewRouter()
 	MountServer(router, server)
-	body := []byte(`{"modelCosts":[],"defaultCredits":0}`)
+	body := []byte(`{"modelCosts":[],"defaultCredits":1}`)
 
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	anonymous := requestWithHeaders(t, router, http.MethodPut, "/api/admin/models", body, nil)
@@ -76,13 +76,48 @@ func TestAdminModelsPutValidatesAndPersistsTenantCosts(t *testing.T) {
 		t.Fatalf("cost = %d, %v", cost, err)
 	}
 
-	duplicate := request(t, handler, http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[{"model":"Model-X","credits":1},{"model":" model-x ","credits":2}],"defaultCredits":0}`))
+	duplicate := request(t, handler, http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[{"model":"Model-X","credits":1},{"model":" model-x ","credits":2}],"defaultCredits":1}`))
 	if duplicate.Code != http.StatusBadRequest || duplicate.Body.String() != "duplicate model\n" {
 		t.Fatalf("duplicate = %d %q", duplicate.Code, duplicate.Body.String())
 	}
 	negative := request(t, handler, http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[],"defaultCredits":-1}`))
 	if negative.Code != http.StatusBadRequest || negative.Body.String() != "invalid model cost\n" {
 		t.Fatalf("negative = %d %q", negative.Code, negative.Body.String())
+	}
+	zero := request(t, handler, http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[],"defaultCredits":0}`))
+	if zero.Code != http.StatusBadRequest || zero.Body.String() != "invalid model cost\n" {
+		t.Fatalf("zero = %d %q", zero.Code, zero.Body.String())
+	}
+}
+
+func TestAdminTenantGenerationQuotaCanBeReadAndSetToZero(t *testing.T) {
+	backend := newMemoryStore()
+	actor := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active"}
+	seedAdminUser(backend, actor)
+	handler := tenantAdminHandler(t, backend, actor)
+
+	updated := request(t, handler, http.MethodPut, "/api/admin/tenant-quota", []byte(`{"generationQuotaMonthly":0}`))
+	if updated.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", updated.Code, updated.Body.String())
+	}
+	var quota struct {
+		GenerationQuotaMonthly int64 `json:"generationQuotaMonthly"`
+	}
+	if err := json.Unmarshal(updated.Body.Bytes(), &quota); err != nil || quota.GenerationQuotaMonthly != 0 {
+		t.Fatalf("updated quota = %#v, %v", quota, err)
+	}
+
+	listed := request(t, handler, http.MethodGet, "/api/admin/tenant-quota", nil)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("GET = %d %s", listed.Code, listed.Body.String())
+	}
+	if err := json.Unmarshal(listed.Body.Bytes(), &quota); err != nil || quota.GenerationQuotaMonthly != 0 {
+		t.Fatalf("listed quota = %#v, %v", quota, err)
+	}
+
+	negative := request(t, handler, http.MethodPut, "/api/admin/tenant-quota", []byte(`{"generationQuotaMonthly":-1}`))
+	if negative.Code != http.StatusBadRequest {
+		t.Fatalf("negative = %d %s", negative.Code, negative.Body.String())
 	}
 }
 
@@ -187,7 +222,9 @@ func TestAdminMutationsRejectTenantMembers(t *testing.T) {
 		path   string
 		body   []byte
 	}{
-		{http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[],"defaultCredits":0}`)},
+		{http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[],"defaultCredits":1}`)},
+		{http.MethodGet, "/api/admin/tenant-quota", nil},
+		{http.MethodPut, "/api/admin/tenant-quota", []byte(`{"generationQuotaMonthly":1}`)},
 		{http.MethodGet, "/api/admin/credit-logs", nil},
 		{http.MethodPost, "/api/admin/users/member-1/credit-adjustments", []byte(`{"delta":1,"reason":"test","idempotencyKey":"member-adjust-1"}`)},
 	}

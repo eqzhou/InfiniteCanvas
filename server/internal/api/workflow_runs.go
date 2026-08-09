@@ -100,7 +100,7 @@ func (s *Server) createServerWorkflowJob(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	parameters, _ := json.Marshal(workflowRunParameters{
-		Executor: "workflow", RequestHash: requestHash, TemplateID: template.ID,
+		Executor: "workflow", BillingUserID: userIDFrom(r), RequestHash: requestHash, TemplateID: template.ID,
 		TemplateRevision: template.Revision, TemplateSnapshot: template, Values: values,
 	})
 	result, _ := json.Marshal(initialWorkflowRunResult(template))

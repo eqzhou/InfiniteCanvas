@@ -14,7 +14,7 @@ describe("formatUsageChip", () => {
       storageQuotaBytes: 0,
       generationQuotaMonthly: 100,
       plan: "pro",
-    })).toBe("pro · 本月生成 3/100");
+    })).toBe("pro · 团队本月生成 3/100");
   });
 
   test("appends remaining compute credits when present", () => {
@@ -25,7 +25,7 @@ describe("formatUsageChip", () => {
       generationQuotaMonthly: 100,
       plan: "pro",
       credits: 42,
-    })).toBe("pro · 本月生成 3/100 · 算力 42");
+    })).toBe("pro · 团队本月生成 3/100 · 个人算力 42");
   });
 
   test("treats zero credits as a real balance, not as missing", () => {
@@ -36,7 +36,7 @@ describe("formatUsageChip", () => {
       generationQuotaMonthly: 50,
       plan: "free",
       credits: 0,
-    })).toBe("free · 本月生成 0/50 · 算力 0");
+    })).toBe("free · 团队本月生成 0/50 · 个人算力 0");
   });
 });
 

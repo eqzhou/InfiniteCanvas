@@ -468,6 +468,7 @@ type Store interface {
 	LogoutSession(ctx context.Context, sessionToken string) error
 	LookupSession(ctx context.Context, sessionToken string) (AuthUser, error)
 	GetTenant(ctx context.Context, tenantID string) (Tenant, error)
+	UpdateTenantGenerationQuota(ctx context.Context, tenantID string, quota int64) (Tenant, error)
 	RecordUsage(ctx context.Context, tenantID, userID, kind string, units int, meta json.RawMessage) error
 	GetUsage(ctx context.Context, tenantID string) (UsageSummary, error)
 	CheckGenerationQuota(ctx context.Context, tenantID string) error
