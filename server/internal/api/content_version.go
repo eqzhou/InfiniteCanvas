@@ -28,6 +28,12 @@ func parseExpectedVersion(w http.ResponseWriter, r *http.Request) (string, bool,
 	if value == "" {
 		value = strings.TrimSpace(r.Header.Get("X-OpenBoard-Config-Version"))
 	}
+	if value == "" {
+		// A few CDN/reverse-proxy combinations remove conditional and custom
+		// request headers on PUT. The ETag is not secret, so accept the same
+		// strictly validated token in the query as a final transport fallback.
+		value = strings.TrimSpace(r.URL.Query().Get("configVersion"))
+	}
 	if len(value) >= 3 && value[0] == '"' && value[len(value)-1] == '"' {
 		value = value[1 : len(value)-1]
 		if strings.HasPrefix(value, "m1-") && len(value) == 67 {

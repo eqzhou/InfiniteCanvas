@@ -105,6 +105,12 @@ function setConfigWriteVersion(headers: Headers): void {
   headers.set("X-OpenBoard-Config-Version", configETag);
 }
 
+function configWritePath(path: string): string {
+  return typeof configETag === "string"
+    ? `${path}?configVersion=${encodeURIComponent(configETag)}`
+    : path;
+}
+
 export function resetServerStateVersions(): void {
   configETag = undefined;
 }
@@ -209,7 +215,7 @@ export async function saveServerState(
   if (key === "config") {
     setConfigWriteVersion(headers);
   }
-  const response = await request(`state/${key}`, {
+  const response = await request(key === "config" ? configWritePath(`state/${key}`) : `state/${key}`, {
     method: "PUT",
     headers,
     body: JSON.stringify(value),
@@ -230,7 +236,7 @@ export async function saveServerConfigBundle<T>(
 ): Promise<void> {
   const headers = new Headers({ "Content-Type": "application/json" });
   setConfigWriteVersion(headers);
-  const response = await request("config", {
+  const response = await request(configWritePath("config"), {
     method: "PUT",
     headers,
     body: JSON.stringify({ config, secrets }),
@@ -255,7 +261,7 @@ export async function loadServerSecrets<T>(): Promise<T | null> {
 export async function saveServerSecrets<T>(value: T): Promise<void> {
   const headers = new Headers({ "Content-Type": "application/json" });
   setConfigWriteVersion(headers);
-  const response = await request("secrets/config", {
+  const response = await request(configWritePath("secrets/config"), {
     method: "PUT",
     headers,
     body: JSON.stringify(value),

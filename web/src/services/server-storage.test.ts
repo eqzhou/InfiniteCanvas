@@ -396,7 +396,8 @@ describe("config compare-and-swap transport", () => {
       apiKeys: { personal: { image: "sk-private" } },
     });
 
-    expect(calls[1]?.url.endsWith("/api/config")).toBe(true);
+    expect(calls[1]?.url).toContain("/api/config?");
+    expect(calls[1]?.url).toContain(`configVersion=${encodeURIComponent(version)}`);
     expect(new Headers(calls[1]?.init.headers).get("If-Match")).toBe(version);
     expect(new Headers(calls[1]?.init.headers).get("X-OpenBoard-Config-Version")).toBe(version);
     expect(JSON.parse(String(calls[1]?.init.body))).toEqual({

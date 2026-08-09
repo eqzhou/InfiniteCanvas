@@ -1395,6 +1395,27 @@ func TestConfigStateAcceptsExplicitVersionHeaderWhenProxyDropsIfMatch(t *testing
 	}
 }
 
+func TestConfigStateAcceptsVersionQueryWhenProxyDropsConditionalHeaders(t *testing.T) {
+	handler := persistentHandler(t)
+	original := []byte(`{"theme":"light","channels":[]}`)
+	updated := []byte(`{"theme":"dark","channels":[]}`)
+
+	if got := requestWithHeaders(t, handler, http.MethodPut, "/api/state/config", original, map[string]string{
+		"If-None-Match": "*", "Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("create config = %d %s", got.Code, got.Body.String())
+	}
+	read := requestWithHeaders(t, handler, http.MethodGet, "/api/state/config", nil, map[string]string{
+		"Authorization": "Bearer test-token",
+	})
+	version := url.QueryEscape(read.Header().Get("ETag"))
+	if got := requestWithHeaders(t, handler, http.MethodPut, "/api/state/config?configVersion="+version, updated, map[string]string{
+		"Authorization": "Bearer test-token",
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("update config through proxy-safe query version = %d %s", got.Code, got.Body.String())
+	}
+}
+
 func TestConfigStateVersionPreservesLargeIntegerPrecision(t *testing.T) {
 	first := []byte(`{"pluginValue":9007199254740992}`)
 	second := []byte(`{"pluginValue":9007199254740993}`)
