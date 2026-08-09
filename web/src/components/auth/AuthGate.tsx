@@ -24,6 +24,22 @@ import { AuthPanel } from "@/components/auth/AuthPanel";
 
 type AuthStatus = "loading" | "open" | "authenticated" | "login_required";
 
+/**
+ * Authentication and workspace hydration are separate readiness boundaries.
+ * Reveal the authenticated shell first; pages already render their own
+ * workspace loading state while the (potentially large) project catalog loads.
+ */
+export function revealAuthBeforeWorkspaceReady(
+  status: Extract<AuthStatus, "open" | "authenticated">,
+  reveal: (status: Extract<AuthStatus, "open" | "authenticated">) => void,
+  hydrate: () => Promise<void>,
+  reportError: (error: unknown) => void = (error) =>
+    console.error("OpenBoard workspace hydration failed", error),
+): void {
+  reveal(status);
+  void Promise.resolve().then(hydrate).catch(reportError);
+}
+
 type AuthContextValue = {
   status: AuthStatus;
   user: AuthUser | null;
@@ -178,9 +194,8 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
         setUser(result.user);
         readyScopeRef.current = result.user.tenantId;
         setLocalAdmin(false);
-        await loadUsage();
-        await finishReady();
-        if (!cancelled) setStatus("authenticated");
+        revealAuthBeforeWorkspaceReady("authenticated", setStatus, finishReady);
+        void loadUsage();
       } catch (error) {
         if (cancelled) return;
         // Auth-enabled deployments always land on the sign-in wall for 401.
@@ -201,8 +216,7 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
         readyScopeRef.current = "open";
         setLocalAdmin(isAuthDisabledError(error));
         setUsageSnapshot(null);
-        await finishReady();
-        if (!cancelled) setStatus("open");
+        revealAuthBeforeWorkspaceReady("open", setStatus, finishReady);
       }
     })();
 
@@ -218,9 +232,8 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
       setUser(nextUser);
       readyScopeRef.current = nextUser.tenantId;
       setLocalAdmin(false);
-      await loadUsage();
-      await finishReady();
-      setStatus("authenticated");
+      revealAuthBeforeWorkspaceReady("authenticated", setStatus, finishReady);
+      void loadUsage();
     },
     [finishReady, loadUsage, onScopeCredentialsChanged],
   );

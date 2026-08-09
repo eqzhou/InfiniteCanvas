@@ -66,6 +66,12 @@ function stripTransientProjectMedia(value: unknown): unknown {
   return { ...project, nodes, chatSessions };
 }
 
+/** Compare the durable project representation, ignoring per-session display URLs. */
+export function hasPersistedProjectChanges(before: BoardProject, after: BoardProject): boolean {
+  return JSON.stringify(stripTransientProjectMedia(before)) !==
+    JSON.stringify(stripTransientProjectMedia(after));
+}
+
 export class TenantConfigAdminRequiredError extends Error {
   constructor() {
     super("Tenant configuration can only be changed by an owner or admin");
@@ -363,12 +369,20 @@ export async function createServerBlobDisplayUrls(
 ): Promise<Map<string, string>> {
   const keys = Array.from(new Set(storageKeys.map((key) => key.trim()).filter(Boolean)));
   const urls = new Map<string, string>();
-  for (let offset = 0; offset < keys.length; offset += 20) {
-    const batch = keys.slice(offset, offset + 20);
+  const mint = async (batch: string[]): Promise<void> => {
     const response = await request("media/references", {
       method: "POST",
       body: JSON.stringify({ storageKeys: batch, ttlSeconds: 3600 }),
     });
+    // One stale key must not poison the other nineteen valid display URLs.
+    // Bisect only 404 batches; other failures still surface to the caller.
+    if (response.status === 404) {
+      if (batch.length === 1) return;
+      const middle = Math.ceil(batch.length / 2);
+      await mint(batch.slice(0, middle));
+      await mint(batch.slice(middle));
+      return;
+    }
     if (!response.ok) throw new Error(`Blob display URL creation failed: HTTP ${response.status}`);
     const payload = await response.json() as { items?: unknown };
     if (!Array.isArray(payload.items)) throw new Error("Blob display URL response is invalid");
@@ -384,6 +398,9 @@ export async function createServerBlobDisplayUrls(
       }
       urls.set(item.storageKey, `/api/media/references/${encodeURIComponent(item.token)}`);
     }
+  };
+  for (let offset = 0; offset < keys.length; offset += 20) {
+    await mint(keys.slice(offset, offset + 20));
   }
   return urls;
 }

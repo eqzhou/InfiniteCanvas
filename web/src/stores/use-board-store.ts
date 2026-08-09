@@ -47,7 +47,7 @@ import {
   resolveObjectUrl,
 } from "@/services/storage";
 import { replaceCompleteWorkspace } from "@/services/workspace-transactions";
-import { ConfigPreconditionError, SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
+import { ConfigPreconditionError, hasPersistedProjectChanges, SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
 import type { GenerationDefaults } from "@/lib/generation-defaults";
 import { normalizePluginManifests } from "@/lib/plugin-catalog";
@@ -408,29 +408,6 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         const nextConfig = hydratedConfig.audioRoles === undefined
           ? hydratedConfig
           : { ...hydratedConfig, audioRoles: undefined };
-        const [gone] = await Promise.all([
-          saveProjects(nextProjects),
-          saveAssets(assets),
-          savePrompts(personalPrompts),
-        ]);
-        // Retire the legacy copy only after the project document has been
-        // durably saved; otherwise a failed project write could lose the cast.
-        if (hydratedConfig.audioRoles !== undefined) {
-          await saveWorkspaceReplacementConfig(() => saveConfig(nextConfig)).catch((error) => {
-            console.error("Failed to retire legacy global audio roles", error);
-            return false;
-          });
-        }
-        // A tombstone is authoritative. Drop those ids before the first paint so a
-        // tab that still held the pre-delete document does not resurrect them in UI.
-        if (gone.length) {
-          const tombstoned = new Set(gone);
-          nextProjects = nextProjects.filter((project) => !tombstoned.has(project.id));
-          if (activeProjectId && tombstoned.has(activeProjectId)) {
-            activeProjectId = nextProjects[0]?.id ?? null;
-          }
-          for (const id of gone) histories.delete(id);
-        }
         set({
           ready: true,
           projects: nextProjects,
@@ -443,6 +420,34 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           window.dispatchEvent(new CustomEvent("openboard:prompt-source-error", {
             detail: { message: `公共提示词库：${publicCatalog.error}` },
           }));
+        }
+
+        // Rehydration mostly creates temporary display URLs and must not rewrite
+        // every project on every page load. Persist only actual migrations, and
+        // do it after publishing the loaded workspace so failure cannot blank UI.
+        const rawByID = new Map(rawProjects.map((project) => [project.id, project]));
+        const migratedProjects = nextProjects.filter((project) => {
+          const raw = rawByID.get(project.id);
+          return !raw || hasPersistedProjectChanges(raw, project);
+        });
+        const rawAssetsByID = new Map(rawAssets.map((asset) => [asset.id, asset]));
+        const migratedAssets = assets.some((asset) =>
+          rawAssetsByID.get(asset.id)?.storageKey !== asset.storageKey);
+        try {
+          await Promise.all([
+            migratedProjects.length
+              ? projectWrites.writeExact(structuredClone(migratedProjects))
+              : Promise.resolve(),
+            migratedAssets
+              ? assetWrites.writeExact(structuredClone(assets))
+              : Promise.resolve(),
+          ]);
+          // Retire the legacy copy only after its project snapshots are durable.
+          if (hydratedConfig.audioRoles !== undefined) {
+            await saveWorkspaceReplacementConfig(() => saveConfig(nextConfig));
+          }
+        } catch (error) {
+          console.error("OpenBoard startup migration persistence failed", error);
         }
       } catch (err) {
         console.error("OpenBoard hydrate failed", err);

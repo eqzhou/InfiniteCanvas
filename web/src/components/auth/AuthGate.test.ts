@@ -3,11 +3,51 @@ import {
   createScopeReadyCoordinator,
   isGuestIdentity,
   requiresLoginWall,
+  revealAuthBeforeWorkspaceReady,
   shouldOfferLogin,
   transitionWorkspaceIdentity,
 } from "./AuthGate";
 
 describe("AuthGate workspace identity transitions", () => {
+  test("reveals authenticated UI without waiting for workspace hydration", async () => {
+    const events: string[] = [];
+    let finishHydration!: () => void;
+    const hydration = new Promise<void>((resolve) => { finishHydration = resolve; });
+
+    revealAuthBeforeWorkspaceReady(
+      "authenticated",
+      (status) => { events.push(`status:${status}`); },
+      async () => {
+        events.push("hydrate:start");
+        await hydration;
+        events.push("hydrate:done");
+      },
+    );
+
+    expect(events[0]).toBe("status:authenticated");
+    await Promise.resolve();
+    expect(events).toEqual(["status:authenticated", "hydrate:start"]);
+    finishHydration();
+    await hydration;
+    await Promise.resolve();
+    expect(events).toContain("hydrate:done");
+  });
+
+  test("keeps the authenticated UI visible when workspace hydration fails", async () => {
+    const statuses: string[] = [];
+    const errors: unknown[] = [];
+    revealAuthBeforeWorkspaceReady(
+      "authenticated",
+      (status) => { statuses.push(status); },
+      async () => { throw new Error("project save failed"); },
+      (error) => { errors.push(error); },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(statuses).toEqual(["authenticated"]);
+    expect(errors).toHaveLength(1);
+  });
+
   test("flushes the current workspace before credentials change and hydrates the new scope afterwards", async () => {
     const events: string[] = [];
     await transitionWorkspaceIdentity(

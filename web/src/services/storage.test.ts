@@ -5,6 +5,7 @@ import {
   MEDIA_UPLOAD_LIMITS,
   mergeConfigSecrets,
   repairInvalidPanoramaBatches,
+  rehydrateProjects,
   resolveHydratedMediaUrl,
   sanitizeConfigForPersistence,
   uploadMedia,
@@ -131,6 +132,41 @@ describe("retained board media", () => {
       "image:panorama-old",
       "image:reference",
     ]);
+  });
+
+  test("recovers a missing storage object from its embedded image fallback", async () => {
+    const fallback = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const project = {
+      id: "recover-media",
+      title: "recover-media",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+      nodes: [createNode("image", { x: 0, y: 0 }, { metadata: {
+        storageKey: "image:missing",
+        content: fallback,
+      } })],
+      edges: [],
+      chatSessions: [],
+      activeChatId: null,
+      backgroundMode: "dots" as const,
+      viewport: { x: 0, y: 0, k: 1 },
+    };
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.endsWith("/api/media/references")) return new Response("missing", { status: 404 });
+      if (method === "GET" && url.includes("/api/blobs/image%3Amissing")) {
+        return new Response("missing", { status: 404 });
+      }
+      if (method === "PUT" && url.includes("/api/blobs/")) return new Response(null, { status: 204 });
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    const [rehydrated] = await rehydrateProjects([project]);
+    const metadata = rehydrated!.nodes[0]!.metadata;
+    expect(metadata.storageKey).toStartWith("image:");
+    expect(metadata.storageKey).not.toBe("image:missing");
+    expect(metadata.content).not.toBe(fallback);
   });
 });
 

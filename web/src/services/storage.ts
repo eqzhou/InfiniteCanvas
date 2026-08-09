@@ -581,7 +581,8 @@ export async function rehydrateProjects(
     for (const node of project.nodes) {
       let metadata = { ...node.metadata };
       if (metadata.storageKey) {
-        const kind = mediaKindFromKey(metadata.storageKey);
+        const storageKey = metadata.storageKey;
+        const kind = mediaKindFromKey(storageKey);
         if (node.type === "panorama") {
           try {
             const blob = await getBlob(kind, metadata.storageKey);
@@ -606,9 +607,33 @@ export async function rehydrateProjects(
             };
           }
         } else {
-          const url = await resolveHydratedStoredMediaUrl(
-            displayUrls, kind, metadata.storageKey, metadata.content);
-          if (url) metadata = { ...metadata, content: url };
+          let recovered = false;
+          if (!displayUrls.has(storageKey) && metadata.content?.startsWith("data:")) {
+            try {
+              const persisted = await getBlob(kind, storageKey);
+              if (!persisted) {
+                const uploaded = await uploadMedia(metadata.content, kind);
+                metadata = {
+                  ...metadata,
+                  content: uploaded.url,
+                  storageKey: uploaded.storageKey,
+                  naturalWidth: uploaded.width || metadata.naturalWidth,
+                  naturalHeight: uploaded.height || metadata.naturalHeight,
+                  bytes: uploaded.bytes,
+                  mimeType: uploaded.mimeType,
+                };
+                migratedStorageKeys.push(uploaded.storageKey);
+                recovered = true;
+              }
+            } catch {
+              // Keep the embedded fallback usable when recovery is unavailable.
+            }
+          }
+          if (!recovered) {
+            const url = await resolveHydratedStoredMediaUrl(
+              displayUrls, kind, storageKey, metadata.content);
+            if (url) metadata = { ...metadata, content: url };
+          }
         }
       } else if (metadata.content?.startsWith("data:")) {
         try {

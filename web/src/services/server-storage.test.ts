@@ -70,6 +70,22 @@ describe("server project persistence isolation", () => {
     expect(saved?.nodes[0]?.metadata.content).toBeUndefined();
   });
 
+  test("does not mark display-only URL hydration as a project change", async () => {
+    const { hasPersistedProjectChanges } = await import("./server-storage");
+    const raw = projectWithTransientImage();
+    raw.nodes[0]!.metadata.content = undefined;
+    const hydrated = projectWithTransientImage();
+
+    expect(hasPersistedProjectChanges(raw, hydrated)).toBe(false);
+    expect(hasPersistedProjectChanges(raw, {
+      ...hydrated,
+      nodes: hydrated.nodes.map((node) => ({
+        ...node,
+        metadata: { ...node.metadata, storageKey: "image:recovered" },
+      })),
+    })).toBe(true);
+  });
+
   test("saveServerProjects only upserts and never deletes remote projects", async () => {
     const calls: Array<{ method: string; url: string }> = [];
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -247,6 +263,36 @@ describe("server blob display URLs", () => {
     expect(calls[0]?.url.endsWith("/api/media/references")).toBe(true);
     expect(calls[0]?.body).toEqual({ storageKeys: ["image:large"], ttlSeconds: 3600 });
     expect(urls.get("image:large")).toBe("/api/media/references/display-reference");
+  });
+
+  test("isolates a missing blob instead of discarding display URLs for the whole batch", async () => {
+    const calls: string[][] = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { storageKeys: string[] };
+      calls.push(body.storageKeys);
+      if (body.storageKeys.includes("image:missing")) {
+        return new Response("storage key not found", { status: 404 });
+      }
+      return Response.json({
+        items: body.storageKeys.map((storageKey) => ({
+          token: `token-${storageKey.split(":")[1]}`,
+          storageKey,
+          expiresAt: "2026-08-09T13:00:00Z",
+        })),
+      }, { status: 201 });
+    }) as typeof fetch;
+
+    const { createServerBlobDisplayUrls } = await import("./server-storage");
+    const urls = await createServerBlobDisplayUrls([
+      "image:one",
+      "image:missing",
+      "image:two",
+    ]);
+
+    expect(urls.get("image:one")).toBe("/api/media/references/token-one");
+    expect(urls.get("image:two")).toBe("/api/media/references/token-two");
+    expect(urls.has("image:missing")).toBe(false);
+    expect(calls.some((keys) => keys.length === 1 && keys[0] === "image:missing")).toBe(true);
   });
 });
 
