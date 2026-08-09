@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AdminChannel } from "@/services/admin";
 import {
   applyAdminChannelModelSelection,
+  adminChannelSecretBindingIsCurrent,
   buildAdminChannelModelDiff,
   mergeSavedAdminChannels,
   shouldDeleteAdminChannel,
@@ -19,9 +20,55 @@ describe("admin channel persistence state", () => {
     expect(shouldDeleteAdminChannel(new Set(["saved"]), "draft")).toBe(false);
   });
 
-  test("preserves secret presence by channel ID when the server reorders rows", () => {
-    expect(mergeSavedAdminChannels([channel("b", false), channel("a", false)], [channel("a", true), channel("b", false)]))
-      .toEqual([channel("b", false), channel("a", true)]);
+  test("uses the server's authoritative secret presence when rows are saved", () => {
+    expect(mergeSavedAdminChannels([channel("b", false), channel("a", false)]))
+      .toEqual([channel("b", false), channel("a", false)]);
+  });
+
+  test("requires a new channel to be persisted before saving its first secret", () => {
+    const draft = channel("new-channel", false);
+
+    expect(adminChannelSecretBindingIsCurrent(draft, undefined)).toBe(false);
+  });
+
+  test("accepts the binding returned for the persisted destination", () => {
+    const saved = { ...channel("saved-channel", true), secretBindingId: "existing-binding" };
+
+    expect(adminChannelSecretBindingIsCurrent(saved, saved)).toBe(true);
+  });
+
+  test("rejects a stale binding after the channel destination changes", () => {
+    const persisted = { ...channel("saved-channel", true), secretBindingId: "existing-binding" };
+
+    expect(adminChannelSecretBindingIsCurrent(
+      { ...persisted, baseUrl: "https://new.example/v1" },
+      persisted,
+    )).toBe(false);
+    expect(adminChannelSecretBindingIsCurrent(
+      { ...persisted, protocol: "gemini" },
+      persisted,
+    )).toBe(false);
+  });
+
+  test("requires policy and model changes to be saved before writing a secret", () => {
+    const persisted = {
+      ...channel("saved-channel", true),
+      secretBindingId: "existing-binding",
+      models: ["image-v1"],
+    };
+
+    expect(adminChannelSecretBindingIsCurrent(
+      { ...persisted, allowUserUse: false },
+      persisted,
+    )).toBe(false);
+    expect(adminChannelSecretBindingIsCurrent(
+      { ...persisted, enabled: false },
+      persisted,
+    )).toBe(false);
+    expect(adminChannelSecretBindingIsCurrent(
+      { ...persisted, models: ["image-v2"] },
+      persisted,
+    )).toBe(false);
   });
 
   test("classifies fetched models without changing the configured catalog", () => {

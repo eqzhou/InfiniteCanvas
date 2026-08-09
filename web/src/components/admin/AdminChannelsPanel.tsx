@@ -12,6 +12,7 @@ import {
 import { invalidateSharedChannelCatalog } from "@/services/shared-channels";
 import {
   applyAdminChannelModelSelection,
+  adminChannelSecretBindingIsCurrent,
   buildAdminChannelModelDiff,
   mergeSavedAdminChannels,
   shouldDeleteAdminChannel,
@@ -69,12 +70,14 @@ export function AdminChannelsPanel() {
   const [error, setError] = useState("");
   const [modelReviews, setModelReviews] = useState<Record<string, PendingModelReview>>({});
   const persistedIdsRef = useRef(new Set<string>());
+  const persistedChannelsRef = useRef(new Map<string, AdminChannel>());
 
   const load = async () => {
     try {
       setError("");
       const loaded = await listAdminChannels();
       persistedIdsRef.current = new Set(loaded.map((channel) => channel.id));
+      persistedChannelsRef.current = new Map(loaded.map((channel) => [channel.id, channel]));
       setModelReviews({});
       setChannels(loaded);
     } catch (cause) {
@@ -101,6 +104,7 @@ export function AdminChannelsPanel() {
       <div className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface)] p-4 text-sm text-[var(--ob-muted)]">
         此处管理租户共享渠道，与工作区设置中的个人渠道相互独立。启用且允许用户使用的渠道可由服务端执行图片、视频或音频任务；请求渠道 <code>shared-auto</code> 时按权重确定性选择并将具体渠道写入任务快照。填写「可用模型」后，自动路由只会选中列表内包含请求模型的渠道；留空表示不限制。共享密钥只可覆盖写入，不会返回浏览器。模型拉取目前支持 OpenAI/APIMart 兼容接口。
       </div>
+      <fieldset className="contents" disabled={busy !== ""}>
       {channels.map((channel) => (
         <section key={channel.id} className="space-y-3 rounded-xl border border-[var(--ob-line)] p-4">
           <div className="grid gap-3 md:grid-cols-4">
@@ -135,13 +139,13 @@ export function AdminChannelsPanel() {
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={channel.enabled} onChange={(event) => update(channel.id, { enabled: event.target.checked })} />启用</label>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={channel.allowUserUse} onChange={(event) => update(channel.id, { allowUserUse: event.target.checked })} />允许普通用户</label>
             <label className="min-w-60 flex-1 text-sm">API 密钥（{channel.protocol === "edge" ? "Edge 无需密钥" : channel.secretConfigured ? "已配置，可覆盖" : "未配置"}）<input className="ob-field mt-1" type="password" autoComplete="new-password" disabled={channel.protocol === "edge"} value={secrets[channel.id] ?? ""} onChange={(event) => setSecrets((current) => ({ ...current, [channel.id]: event.target.value }))} /></label>
-            <button type="button" className="ob-btn" disabled={busy !== "" || !(secrets[channel.id] ?? "")} onClick={() => void run(`secret:${channel.id}`, async () => {
-				await putAdminChannelSecret(channel.id, secrets[channel.id] ?? "", channel.secretBindingId ?? "");
+            <button type="button" className="ob-btn" title={adminChannelSecretBindingIsCurrent(channel, persistedChannelsRef.current.get(channel.id)) ? undefined : "请先保存渠道配置"} disabled={busy !== "" || !(secrets[channel.id] ?? "") || !adminChannelSecretBindingIsCurrent(channel, persistedChannelsRef.current.get(channel.id))} onClick={() => void run(`secret:${channel.id}`, async () => {
+              await putAdminChannelSecret(channel.id, secrets[channel.id] ?? "", channel.secretBindingId ?? "");
               invalidateSharedChannelCatalog();
               setSecrets((current) => ({ ...current, [channel.id]: "" }));
               setChannels((current) => current.map((item) => item.id === channel.id ? { ...item, secretConfigured: true } : item));
               return "密钥已加密保存";
-            })}>保存密钥</button>
+            })}>{adminChannelSecretBindingIsCurrent(channel, persistedChannelsRef.current.get(channel.id)) ? "保存密钥" : "先保存渠道"}</button>
             <button type="button" className="ob-btn" disabled={busy !== "" || !adminChannelCanTest(channel)} onClick={() => void run(`test:${channel.id}`, async () => {
               const result = await testAdminChannel(channel.id); return `连接成功，发现 ${result.modelCount} 个模型`;
             })}>测试连接</button>
@@ -206,11 +210,13 @@ export function AdminChannelsPanel() {
         <button type="button" className="ob-btn is-primary" disabled={busy !== ""} onClick={() => void run("save", async () => {
           const saved = await putAdminChannels(channels);
           persistedIdsRef.current = new Set(saved.map((channel) => channel.id));
+          persistedChannelsRef.current = new Map(saved.map((channel) => [channel.id, channel]));
           invalidateSharedChannelCatalog();
-          setChannels(mergeSavedAdminChannels(saved, channels));
+          setChannels(mergeSavedAdminChannels(saved));
           return "共享渠道已保存";
         })}>保存全部</button>
       </div>
+      </fieldset>
       {notice ? <p role="status" className="text-sm text-emerald-600">{notice}</p> : null}
       {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
     </div>

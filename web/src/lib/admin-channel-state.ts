@@ -49,11 +49,32 @@ export function shouldDeleteAdminChannel(persistedIds: ReadonlySet<string>, chan
 
 export function mergeSavedAdminChannels(
   saved: readonly AdminChannel[],
-  prior: readonly AdminChannel[],
 ): AdminChannel[] {
-  const secretById = new Map(prior.map((channel) => [channel.id, channel.secretConfigured]));
   return saved.map((channel) => ({
     ...channel,
-    secretConfigured: channel.secretConfigured || secretById.get(channel.id) || false,
+    models: channel.models ? [...channel.models] : undefined,
   }));
+}
+
+export function adminChannelSecretBindingIsCurrent(
+  channel: AdminChannel,
+  persisted: AdminChannel | undefined,
+): boolean {
+  if (!persisted || !channel.secretBindingId?.trim()) return false;
+  const modelsMatch = (channel.models ?? []).length === (persisted.models ?? []).length &&
+    (channel.models ?? []).every((model, index) => model === (persisted.models ?? [])[index]);
+  return channel.id === persisted.id &&
+    channel.name === persisted.name &&
+    channel.protocol === persisted.protocol &&
+    channel.baseUrl === persisted.baseUrl &&
+    channel.enabled === persisted.enabled &&
+    channel.allowUserUse === persisted.allowUserUse &&
+    channel.weight === persisted.weight &&
+    channel.timeoutSeconds === persisted.timeoutSeconds &&
+    modelsMatch &&
+    channel.defaultTextModel === persisted.defaultTextModel &&
+    channel.defaultImageModel === persisted.defaultImageModel &&
+    channel.defaultVideoModel === persisted.defaultVideoModel &&
+    channel.defaultAudioModel === persisted.defaultAudioModel &&
+    channel.secretBindingId.trim() === persisted.secretBindingId?.trim();
 }
