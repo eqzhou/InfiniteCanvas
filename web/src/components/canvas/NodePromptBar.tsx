@@ -35,7 +35,7 @@ import {
   normalizeImageGenerationForProvider,
 } from "@/lib/image-generation";
 import { applyCameraPrompt } from "@/lib/camera-prompt";
-import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
+import { applyServerImagePlaceholders, submitServerImageGeneration } from "@/lib/canvas-server-image";
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import {
   cancelServerGenerationJob,
@@ -272,18 +272,8 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
             throw new Error("当前图片模板不支持透明背景");
           }
           const jobId = uid("job");
-          let placeholdersApplied = false;
-          try {
-            updateActive((current) => applyServerImagePlaceholders(
-              current,
-              node.id,
-              jobId,
-              normalizedGeneration,
-              { replaceExisting: regenerateImageInPlace },
-            ));
-            placeholdersApplied = true;
-            await persistNow();
-            await createServerImageGenerationJob({
+          await submitServerImageGeneration({
+            createJob: () => createServerImageGenerationJob({
               id: jobId,
               projectId: project?.id,
               prompt: requestPrompt,
@@ -296,25 +286,18 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
                 transparentBackground: normalizedGeneration.transparentBackground,
                 referenceStorageKeys,
               },
-            });
-          } catch (error) {
-            if (placeholdersApplied) {
-              updateActive((current) => ({
-                ...current,
-                nodes: current.nodes.map((item) => item.metadata.generationJobId === jobId ? {
-                  ...item,
-                  metadata: {
-                    ...item.metadata,
-                    status: "error" as const,
-                    errorDetails: error instanceof Error ? error.message : String(error),
-                  },
-                } : item),
-              }));
-              await persistNow().catch(() => undefined);
-            }
-            await cancelServerGenerationJob(jobId).catch(() => undefined);
-            throw error;
-          }
+            }),
+            applyPlaceholders: () => updateActive((current) => applyServerImagePlaceholders(
+              current,
+              node.id,
+              jobId,
+              normalizedGeneration,
+              { replaceExisting: regenerateImageInPlace },
+            )),
+            persist: persistNow,
+            cancelJob: () => cancelServerGenerationJob(jobId),
+            onPersistError: (error) => console.error("Image job created but canvas persistence is pending", error),
+          });
           return;
         }
         const urls = await generateImages({

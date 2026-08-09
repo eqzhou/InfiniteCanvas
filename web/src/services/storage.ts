@@ -236,8 +236,9 @@ export async function putBlob(
   _kind: "image" | "media",
   key: string,
   blob: Blob,
+  signal?: AbortSignal,
 ): Promise<void> {
-  return putServerBlob(key, blob);
+  return putServerBlob(key, blob, signal);
 }
 
 export async function getBlob(
@@ -335,7 +336,8 @@ export async function uploadMedia(
   kind: "image" | "media" = "image",
   options: {
     requirePersistent?: boolean;
-    preflightImage?: (blob: Blob) => Promise<{ width: number; height: number }>;
+    preflightImage?: (blob: Blob, signal?: AbortSignal) => Promise<{ width: number; height: number }>;
+    signal?: AbortSignal;
   } = {},
 ): Promise<{
   url: string;
@@ -358,7 +360,7 @@ export async function uploadMedia(
       });
       blob = new Blob([decoded.bytes], { type: decoded.mimeType });
     } else if (input.startsWith("blob:")) {
-      const response = await fetch(input);
+      const response = await fetch(input, { signal: options.signal });
       const remote = await readBoundedResponse(response, {
         maxBytes,
         mimeTypes: kind === "image" ? REMOTE_IMAGE_MIME_TYPES : REMOTE_MEDIA_MIME_TYPES,
@@ -370,6 +372,7 @@ export async function uploadMedia(
         redirect: "error",
         credentials: "omit",
         referrerPolicy: "no-referrer",
+        signal: options.signal,
       });
       if (!res.ok) throw new Error(`Failed to fetch media: ${res.status}`);
       const remote = await readBoundedResponse(res, {
@@ -388,17 +391,12 @@ export async function uploadMedia(
   }
 
   const preflightDimensions = options.preflightImage && (blob.type.startsWith("image/") || kind === "image")
-    ? await options.preflightImage(blob)
+    ? await options.preflightImage(blob, options.signal)
     : undefined;
 
   const storageKey = `${kind}:${createStorageId()}`;
   let url: string | undefined;
-  try {
-    await putBlob(kind, storageKey, blob);
-  } catch (cause) {
-    if (options.requirePersistent) throw cause;
-    url = await blobToDataUrl(blob);
-  }
+  await putBlob(kind, storageKey, blob, options.signal);
   if (!url) {
     try {
       url = URL.createObjectURL(blob);

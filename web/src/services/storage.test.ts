@@ -200,6 +200,13 @@ describe("persisted panorama validation", () => {
 });
 
 describe("remote media upload limits", () => {
+  test("never returns a storage key when persistent upload fails", async () => {
+    globalThis.fetch = mock(async () => new Response("storage unavailable", { status: 500 })) as typeof fetch;
+
+    await expect(uploadMedia(new Blob(["image"], { type: "image/png" }), "image"))
+      .rejects.toThrow("Blob save failed: HTTP 500");
+  });
+
   test("rejects an image whose declared size exceeds the upload limit", async () => {
     globalThis.fetch = mock(async () => new Response("", {
       headers: {

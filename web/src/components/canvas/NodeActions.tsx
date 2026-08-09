@@ -49,7 +49,7 @@ import {
 } from "@/lib/image-generation";
 import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
 import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
-import { applyServerImagePlaceholders } from "@/lib/canvas-server-image";
+import { applyServerImagePlaceholders, submitServerImageGeneration } from "@/lib/canvas-server-image";
 import { resolveConfigPrompt } from "@/lib/config-generation";
 import { placeImageGenerationRun } from "@/lib/image-generation-run";
 import { directorShotGenerationContext } from "@/lib/director-shot-generation";
@@ -174,12 +174,8 @@ export function NodeActions({
 		const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
 		const jobId = uid("job");
 		const source = directorShotGenerationContext(project, rootId)?.source;
-		let placeholdersApplied = false;
-		try {
-			updateActive((current) => applyServerImagePlaceholders(current, rootId, jobId, normalizedGeneration, options));
-			placeholdersApplied = true;
-			await persistNow();
-			return await createServerImageGenerationJob({
+		return submitServerImageGeneration({
+			createJob: () => createServerImageGenerationJob({
 				id: jobId,
 				projectId: project?.id,
 				prompt,
@@ -193,25 +189,12 @@ export function NodeActions({
 					referenceStorageKeys,
 					source,
 				},
-			});
-		} catch (error) {
-			if (placeholdersApplied) {
-				updateActive((current) => ({
-					...current,
-					nodes: current.nodes.map((item) => item.metadata.generationJobId === jobId ? {
-						...item,
-						metadata: {
-							...item.metadata,
-							status: "error" as const,
-							errorDetails: error instanceof Error ? error.message : String(error),
-						},
-					} : item),
-				}));
-				await persistNow().catch(() => undefined);
-			}
-			await cancelServerGenerationJob(jobId).catch(() => undefined);
-			throw error;
-		}
+			}),
+			applyPlaceholders: () => updateActive((current) => applyServerImagePlaceholders(current, rootId, jobId, normalizedGeneration, options)),
+			persist: persistNow,
+			cancelJob: () => cancelServerGenerationJob(jobId),
+			onPersistError: (error) => console.error("Image job created but canvas persistence is pending", error),
+		});
 	};
 	const cancelNodeGeneration = async () => {
 		const jobId = node.metadata.generationJobId;

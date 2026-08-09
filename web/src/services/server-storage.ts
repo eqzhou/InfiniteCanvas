@@ -81,6 +81,10 @@ export class ConfigPreconditionError extends Error {
 }
 
 let configETag: string | null | undefined;
+const MAX_CONCURRENT_BLOB_UPLOADS = 2;
+const BLOB_UPLOAD_TIMEOUT_MS = 90_000;
+let activeBlobUploads = 0;
+let blobUploadWaiters: Array<() => void> = [];
 
 export function resetServerStateVersions(): void {
   configETag = undefined;
@@ -251,13 +255,100 @@ export async function saveServerSecrets<T>(value: T): Promise<void> {
   configETag = nextETag;
 }
 
-export async function putServerBlob(key: string, blob: Blob): Promise<void> {
-  const response = await request(`blobs/${encodeURIComponent(key)}`, {
-    method: "PUT",
-    headers: { "Content-Type": blob.type || "application/octet-stream" },
-    body: blob,
+export function parseRetryAfterMillis(value: string | null, now = Date.now()): number | undefined {
+  if (!value?.trim()) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, 5_000);
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return undefined;
+  return Math.max(0, Math.min(timestamp - now, 5_000));
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(complete, milliseconds);
+    function complete() {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+    function abort() {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    }
+    signal?.addEventListener("abort", abort, { once: true });
   });
-  if (!response.ok) throw new Error(`Blob save failed: HTTP ${response.status}`);
+}
+
+async function acquireBlobUpload(signal: AbortSignal): Promise<() => void> {
+  signal.throwIfAborted();
+  if (activeBlobUploads < MAX_CONCURRENT_BLOB_UPLOADS) {
+    activeBlobUploads += 1;
+    return releaseBlobUpload;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const enter = () => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    };
+    const abort = () => {
+      blobUploadWaiters = blobUploadWaiters.filter((waiter) => waiter !== enter);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    blobUploadWaiters = [...blobUploadWaiters, enter];
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  if (signal.aborted) {
+    releaseBlobUpload();
+    signal.throwIfAborted();
+  }
+  return releaseBlobUpload;
+}
+
+function releaseBlobUpload(): void {
+  const [next, ...remaining] = blobUploadWaiters;
+  blobUploadWaiters = remaining;
+  if (next) {
+    next();
+    return;
+  }
+  activeBlobUploads = Math.max(0, activeBlobUploads - 1);
+}
+
+export async function putServerBlob(key: string, blob: Blob, signal?: AbortSignal): Promise<void> {
+  const retryDelays = [750, 2_000];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error("Blob upload timed out")), BLOB_UPLOAD_TIMEOUT_MS);
+  const forwardAbort = () => controller.abort(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+  signal?.addEventListener("abort", forwardAbort, { once: true });
+  if (signal?.aborted) forwardAbort();
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      controller.signal.throwIfAborted();
+      const release = await acquireBlobUpload(controller.signal);
+      let response: Response;
+      try {
+        response = await request(`blobs/${encodeURIComponent(key)}`, {
+          method: "PUT",
+          headers: { "Content-Type": blob.type || "application/octet-stream" },
+          body: blob,
+          signal: controller.signal,
+        });
+      } finally {
+        release();
+      }
+      if (response.ok) return;
+      if (response.status !== 429 || attempt >= retryDelays.length) {
+        throw new Error(`Blob save failed: HTTP ${response.status}`);
+      }
+      const requestedDelay = parseRetryAfterMillis(response.headers.get("Retry-After")) ?? retryDelays[attempt]!;
+      const jitteredDelay = Math.max(250, Math.round(requestedDelay * (0.8 + Math.random() * 0.4)));
+      await abortableDelay(jitteredDelay, controller.signal);
+    }
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", forwardAbort);
+  }
 }
 
 export async function getServerBlob(key: string): Promise<Blob | undefined> {

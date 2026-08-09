@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createNode, createProject } from "./defaults";
-import { applyServerImagePlaceholders } from "./canvas-server-image";
+import { applyServerImagePlaceholders, submitServerImageGeneration } from "./canvas-server-image";
 import { createImageGenerationMetadata } from "./image-generation";
 import { parseBoardProject } from "./board-document";
 
@@ -15,6 +15,59 @@ const generation = createImageGenerationMetadata({
 });
 
 describe("canvas server image placeholders", () => {
+  test("does not expose recoverable placeholders until the server accepts the job", async () => {
+    const events: string[] = [];
+    await expect(submitServerImageGeneration({
+      createJob: async () => {
+        events.push("create");
+        throw new Error("submission failed");
+      },
+      applyPlaceholders: () => events.push("placeholders"),
+      persist: async () => events.push("persist"),
+      cancelJob: async () => events.push("cancel"),
+    })).rejects.toThrow("submission failed");
+
+    expect(events).toEqual(["create"]);
+  });
+
+  test("persists placeholders only after job creation succeeds", async () => {
+    const events: string[] = [];
+    await submitServerImageGeneration({
+      createJob: async () => { events.push("create"); },
+      applyPlaceholders: () => events.push("placeholders"),
+      persist: async () => events.push("persist"),
+      cancelJob: async () => events.push("cancel"),
+    });
+
+    expect(events).toEqual(["create", "placeholders", "persist"]);
+  });
+
+  test("keeps an accepted job trackable when canvas persistence is temporarily unavailable", async () => {
+    const events: string[] = [];
+    const job = await submitServerImageGeneration({
+      createJob: async () => { events.push("create"); return { id: "job-real" }; },
+      applyPlaceholders: () => events.push("placeholders"),
+      persist: async () => { events.push("persist"); throw new Error("save unavailable"); },
+      cancelJob: async () => events.push("cancel"),
+      onPersistError: () => events.push("persist-error"),
+    });
+
+    expect(job).toEqual({ id: "job-real" });
+    expect(events).toEqual(["create", "placeholders", "persist", "persist-error"]);
+  });
+
+  test("does not hide an accepted job when persistence diagnostics fail", async () => {
+    const job = await submitServerImageGeneration({
+      createJob: async () => ({ id: "job-real" }),
+      applyPlaceholders: () => undefined,
+      persist: async () => { throw new Error("save unavailable"); },
+      cancelJob: async () => undefined,
+      onPersistError: () => { throw new Error("logger unavailable"); },
+    });
+
+    expect(job).toEqual({ id: "job-real" });
+  });
+
   test("uses an empty single image node as its own durable target", () => {
     const root = createNode("image", { x: 10, y: 20 });
     const project = { ...createProject("Board"), nodes: [root] };

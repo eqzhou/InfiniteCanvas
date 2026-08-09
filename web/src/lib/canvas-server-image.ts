@@ -5,6 +5,38 @@ import type { createImageGenerationMetadata } from "@/lib/image-generation";
 
 type ImageGenerationMetadata = ReturnType<typeof createImageGenerationMetadata>;
 
+type ServerImageGenerationStart<T> = {
+  createJob: () => Promise<T>;
+  applyPlaceholders: () => void;
+  persist: () => Promise<void>;
+  cancelJob: () => Promise<unknown>;
+  onPersistError?: (error: unknown) => void;
+};
+
+/**
+ * Keep recoverable canvas placeholders consistent with durable server jobs.
+ * A placeholder is never exposed until the server has accepted its job id.
+ */
+export async function submitServerImageGeneration<T>(input: ServerImageGenerationStart<T>): Promise<T> {
+  const job = await input.createJob();
+  try {
+    input.applyPlaceholders();
+  } catch (error) {
+    await input.cancelJob().catch(() => undefined);
+    throw error;
+  }
+  try {
+    await input.persist();
+  } catch (error) {
+    try {
+      input.onPersistError?.(error);
+    } catch {
+      // Persistence diagnostics must never hide an already accepted job.
+    }
+  }
+  return job;
+}
+
 export function applyServerImagePlaceholders(
   project: BoardProject,
   rootId: string,

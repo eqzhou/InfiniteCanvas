@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { BoardProject } from "@/types/board";
+import { parseRetryAfterMillis } from "./server-storage";
 
 const originalFetch = globalThis.fetch;
 
@@ -156,6 +157,77 @@ describe("server project persistence isolation", () => {
 });
 
 describe("server blob display URLs", () => {
+  test("parses Retry-After without treating a missing header as zero", () => {
+    const now = Date.parse("2026-08-09T12:00:00Z");
+    expect(parseRetryAfterMillis(null, now)).toBeUndefined();
+    expect(parseRetryAfterMillis("invalid", now)).toBeUndefined();
+    expect(parseRetryAfterMillis("2", now)).toBe(2_000);
+    expect(parseRetryAfterMillis("Sun, 09 Aug 2026 12:00:03 GMT", now)).toBe(3_000);
+  });
+
+  test("retries a transient upload concurrency response before succeeding", async () => {
+    let attempts = 0;
+    globalThis.fetch = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response("too many concurrent uploads", {
+          status: 429,
+          headers: { "Retry-After": "0" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    const { putServerBlob } = await import("./server-storage");
+    await putServerBlob("image:retry", new Blob(["image"], { type: "image/png" }));
+
+    expect(attempts).toBe(2);
+  });
+
+  test("does not start or retry an upload after cancellation", async () => {
+    let attempts = 0;
+    globalThis.fetch = mock(async () => {
+      attempts += 1;
+      return new Response("too many concurrent uploads", { status: 429 });
+    }) as typeof fetch;
+    const controller = new AbortController();
+    controller.abort(new Error("upload cancelled"));
+
+    const { putServerBlob } = await import("./server-storage");
+    await expect(putServerBlob(
+      "image:cancelled",
+      new Blob(["image"], { type: "image/png" }),
+      controller.signal,
+    )).rejects.toThrow("upload cancelled");
+    expect(attempts).toBe(0);
+  });
+
+  test("queues a third browser upload instead of exceeding the server concurrency limit", async () => {
+    let active = 0;
+    let maximum = 0;
+    const complete: Array<() => void> = [];
+    globalThis.fetch = mock(async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise<void>((resolve) => complete.push(resolve));
+      active -= 1;
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    const { putServerBlob } = await import("./server-storage");
+    const uploads = ["one", "two", "three"].map((key) =>
+      putServerBlob(`image:${key}`, new Blob([key], { type: "image/png" })));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(active).toBe(2);
+    expect(maximum).toBe(2);
+
+    complete.shift()?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(maximum).toBe(2);
+    complete.splice(0).forEach((resolve) => resolve());
+    await Promise.all(uploads);
+  });
+
   test("mints authenticated short-lived URLs so large images can stream without a JS Blob copy", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
