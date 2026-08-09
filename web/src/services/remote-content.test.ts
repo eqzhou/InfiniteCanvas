@@ -55,6 +55,21 @@ describe("bounded data URLs", () => {
     expect(new TextDecoder().decode(decoded.bytes)).toBe("hello");
   });
 
+  test("decodes large embedded media without a recursive regular-expression overflow", () => {
+    // A legacy canvas contained an 8.8 MB JPEG fallback. Repeated-group regex
+    // validation over its 11.7 million base64 characters overflowed V8's stack
+    // before recovery could upload the missing blob.
+    const encoded = "AQEB".repeat(3_000_000);
+    const decoded = decodeBoundedDataUrl(`data:image/jpeg;base64,${encoded}`, {
+      maxBytes: 10 * 1024 * 1024,
+      mimeTypes: ["image/jpeg"],
+    });
+
+    expect(decoded.bytes.byteLength).toBe(9_000_000);
+    expect(decoded.bytes[0]).toBe(1);
+    expect(decoded.bytes[decoded.bytes.length - 1]).toBe(1);
+  });
+
   test("rejects invalid MIME, malformed base64, and oversized payloads", () => {
     expect(() => decodeBoundedDataUrl("data:image/svg+xml;base64,PHN2Zz4=", {
       maxBytes: 100,
