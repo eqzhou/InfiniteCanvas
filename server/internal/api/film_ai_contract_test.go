@@ -65,10 +65,10 @@ func TestParseFilmAIScriptAcceptsStrictEpisodeContract(t *testing.T) {
 
 func TestParseFilmAIScriptRejectsForgedAndAmbiguousStructure(t *testing.T) {
 	for name, value := range map[string]string{
-		"database id": strings.Replace(validFilmAIScriptJSON, `"summary":`, `"episodeId":"episode-forged","summary":`, 1),
-		"duplicate key": strings.Replace(validFilmAIScriptJSON, `"shots":[{`, `"shots":[{"key":"shot-1","title":"Duplicate","description":"x","durationSeconds":1,"dialogues":[]},{`, 1),
+		"database id":      strings.Replace(validFilmAIScriptJSON, `"summary":`, `"episodeId":"episode-forged","summary":`, 1),
+		"duplicate key":    strings.Replace(validFilmAIScriptJSON, `"shots":[{`, `"shots":[{"key":"shot-1","title":"Duplicate","description":"x","durationSeconds":1,"dialogues":[]},{`, 1),
 		"invalid duration": strings.Replace(validFilmAIScriptJSON, `"durationSeconds":4`, `"durationSeconds":0`, 1),
-		"markdown": "```json\n" + validFilmAIScriptJSON + "\n```",
+		"markdown":         "```json\n" + validFilmAIScriptJSON + "\n```",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseFilmAIScriptCandidate([]byte(value)); err == nil {
@@ -210,6 +210,65 @@ func TestApplyFilmAICandidateVersionsOldStructureAndGeneratesServerIDs(t *testin
 	}
 	if _, err := applyFilmAICandidate(applied, candidate.ID, candidate.Revision, time.Now().UTC().Format(time.RFC3339Nano)); err == nil {
 		t.Fatal("stale candidate revision was applied twice")
+	}
+}
+
+func TestIntegrateAndApplyFilmAIScriptCandidateUsesFrozenEpisode(t *testing.T) {
+	document, err := decomposeFilmSource(newFilmDocument("film-script"), "EPISODE 1\nINT. OLD STATION - NIGHT\nOriginal action.\nEPISODE 2\nEXT. ROAD - DAY\nOther episode.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Stages[0].Status = filmStatusApproved
+	target := document.Episodes[0]
+	_, targetRevision, targetSHA, err := filmScriptTargetSnapshot(document, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	requestHash := strings.Repeat("c", 64)
+	document.Tasks = append(document.Tasks, filmTask{
+		ID: "task-script", Revision: 1, Stage: "script", Title: "AI episode script", Status: filmStatusRunning,
+		CreatedAt: now, UpdatedAt: now, GenerationJobID: "job-script", RequestHash: requestHash,
+		TextSnapshot: &filmTextGenerationSnapshot{
+			SourceRevision: document.Source.Revision, SourceSHA256: filmSourceSHA256(document.Source), ProviderID: "provider-text",
+			Model: "gpt-text", PromptVersion: filmScriptPromptVersion, OutputSchema: filmScriptOutputSchema,
+			TargetEntityID: target.ID, TargetRevision: targetRevision, TargetSHA256: targetSHA, EstimatedGenerations: 1, CreatedAt: now,
+		},
+	})
+	parameters, _ := json.Marshal(persistedTextJobParameters{
+		Executor: serverExecutorMarker, RequestHash: requestHash, Operation: "film_script",
+		PromptVersion: filmScriptPromptVersion, OutputSchema: filmScriptOutputSchema,
+		SourceRevision: document.Source.Revision, SourceSHA256: filmSourceSHA256(document.Source), FilmRevision: document.Revision,
+		TargetEntityID: target.ID, TargetRevision: targetRevision, TargetSHA256: targetSHA,
+		Film: &filmGenerationBinding{ProjectID: document.ProjectID, Stage: "script", TaskID: "task-script", RequestHash: requestHash},
+	})
+	result, _ := json.Marshal(providerTextResult{Text: validFilmAIScriptJSON})
+	job := store.GenerationJob{ID: "job-script", ProjectID: document.ProjectID, Kind: "text", Status: "succeeded", ProviderID: "provider-text", Model: "gpt-text", Parameters: parameters, Result: result}
+
+	ready, err := integrateFilmTextJobResult(document, job, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready.ScriptCandidates) != 1 || ready.ScriptCandidates[0].Status != filmAICandidateReady || len(ready.Episodes) != 2 {
+		t.Fatalf("script candidate overwrote facts before review: %#v", ready)
+	}
+	candidate := ready.ScriptCandidates[0]
+	applied, err := applyFilmAIScriptCandidate(ready, candidate.ID, candidate.Revision, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied.Episodes) != 2 || applied.Episodes[1].ID != document.Episodes[1].ID ||
+		applied.Episodes[0].Synopsis != candidate.Script.Summary || applied.ScriptCandidates[0].Status != filmAICandidateApplied {
+		t.Fatalf("script candidate was not applied to only its frozen episode: %#v", applied)
+	}
+}
+
+func TestFilmAIScriptCandidateBecomesStaleWhenTargetChanges(t *testing.T) {
+	document, job := filmTextCandidateFixture(t)
+	job.Parameters = json.RawMessage(`{"executor":"server","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","operation":"film_script","promptVersion":"film-script-v1","outputSchema":"film-script-v1","sourceRevision":1,"sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","filmRevision":1,"targetEntityId":"missing","targetRevision":1,"targetSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","film":{"projectId":"film-ai","stage":"script","taskId":"task-ai","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
+	job.Result, _ = json.Marshal(providerTextResult{Text: validFilmAIScriptJSON})
+	if _, err := integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano)); err == nil {
+		t.Fatal("script result with unavailable frozen target was accepted")
 	}
 }
 
