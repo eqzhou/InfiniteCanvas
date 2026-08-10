@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
   importFilmManuscriptFile,
+  preflightFilmManuscript,
   resolveFilmStageSelection,
   listFilmGenerationJobs,
   loadFilmCapabilities,
@@ -111,6 +112,20 @@ describe("film client", () => {
     });
 
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/source/import");
+  });
+
+  test("preflights manuscript structure without accepting a film document response", async () => {
+    const fetcher = mock(async (_url: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify({ data: {
+      format: "markdown", bytes: 42, characters: 40, lineCount: 4,
+      episodeCount: 2, sceneCount: 1, summary: "EPISODE 1 INT. ROOM - DAY", warnings: ["部分分集没有场景"],
+    } }), { status: 200 }));
+    globalThis.fetch = fetcher as typeof fetch;
+
+    const result = await preflightFilmManuscript("film-1", { text: "EPISODE 1\nINT. ROOM - DAY", format: "markdown" });
+
+    expect(result).toMatchObject({ episodeCount: 2, sceneCount: 1, warnings: ["部分分集没有场景"] });
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/source/preflight");
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ text: "EPISODE 1\nINT. ROOM - DAY", format: "markdown" });
   });
 
   test("resolves one-based episode positions to explicit shot ids and zero-based shot orders", () => {
