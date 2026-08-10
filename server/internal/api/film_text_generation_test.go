@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
@@ -123,4 +125,61 @@ func containsJSONSecret(value json.RawMessage) bool {
 	}
 	var snapshot map[string]json.RawMessage
 	return json.Unmarshal(root["sharedChannel"], &snapshot) == nil && snapshot["secret"] != nil
+}
+
+func TestFilmAIDecomposeRunCreatesOneIdempotentTextJob(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. STATION - NIGHT\nLin hears a signal."}`))
+	if response.Code != http.StatusOK {
+		t.Fatalf("source: %d %s", response.Code, response.Body.String())
+	}
+	document := decodeFilmResponse(t, response)
+	body, err := json.Marshal(map[string]any{
+		"revision": document.Stages[0].Revision, "mode": "ai", "providerId": "provider-text",
+		"model": "gpt-text", "idempotencyKey": "decompose-pass-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", body)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("AI decompose run: %d %s", first.Code, first.Body.String())
+	}
+	created := decodeFilmResponse(t, first)
+	if created.Stages[0].Status != filmStatusRunning || len(created.Tasks) == 0 {
+		t.Fatalf("stage/task state = %#v %#v", created.Stages[0], created.Tasks)
+	}
+	task := created.Tasks[len(created.Tasks)-1]
+	if task.Stage != "decompose" || task.ShotID != "" || task.GenerationJobID == "" || task.TextSnapshot == nil ||
+		task.TextSnapshot.SourceRevision != document.Source.Revision || task.TextSnapshot.SourceSHA256 == "" ||
+		task.TextSnapshot.Model != "gpt-text" || task.TextSnapshot.PromptVersion != "film-decompose-v1" {
+		t.Fatalf("text task did not freeze its inputs: %#v", task)
+	}
+	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil || job.Kind != "text" || job.Status != "queued" || job.ProjectID != "film-api" {
+		t.Fatalf("text generation job = %#v err=%v", job, err)
+	}
+	if bytes.Contains(job.Parameters, []byte("INT. STATION")) {
+		t.Fatalf("manuscript was duplicated into job parameters: %s", job.Parameters)
+	}
+
+	second := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", body)
+	if second.Code != http.StatusOK {
+		t.Fatalf("idempotent replay: %d %s", second.Code, second.Body.String())
+	}
+	replayed := decodeFilmResponse(t, second)
+	if len(replayed.Tasks) != len(created.Tasks) {
+		t.Fatalf("idempotent replay duplicated tasks: %d -> %d", len(created.Tasks), len(replayed.Tasks))
+	}
+
+	conflictBody := bytes.Replace(body, []byte(`"gpt-text"`), []byte(`"gpt-text-2"`), 1)
+	conflict := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", conflictBody)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("idempotency mismatch accepted: %d %s", conflict.Code, conflict.Body.String())
+	}
+
+	listed := request(t, handler, http.MethodGet, "/api/generation-jobs?kind=text", nil)
+	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(task.GenerationJobID)) {
+		t.Fatalf("text job was hidden from task history: %d %s", listed.Code, listed.Body.String())
+	}
 }
