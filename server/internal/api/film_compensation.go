@@ -102,9 +102,31 @@ func (s *Server) cleanupUnreferencedFilmBlob(parent context.Context, tenantID, u
 		log.Printf("film export compensation could not verify current document: %v", err)
 		return
 	}
+	for _, shot := range document.Shots {
+		if shot.ImageStorageKey == storageKey || shot.FirstFrameStorageKey == storageKey || shot.VideoStorageKey == storageKey || shot.AudioStorageKey == storageKey {
+			return
+		}
+	}
+	for _, asset := range document.Assets {
+		if asset.MediaStorageKey == storageKey {
+			return
+		}
+	}
+	for _, dialogue := range document.Dialogues {
+		if dialogue.AudioStorageKey == storageKey {
+			return
+		}
+	}
 	for _, deliverable := range document.Deliverables {
 		if deliverable.StorageKey == storageKey {
 			return
+		}
+	}
+	for _, track := range document.Timeline.Tracks {
+		for _, clip := range track.Clips {
+			if clip.Source == storageKey {
+				return
+			}
 		}
 	}
 	if err := s.deleteTenantBlob(ctx, tenantID, userID, storageKey); err != nil && !errors.Is(err, store.ErrNotFound) {

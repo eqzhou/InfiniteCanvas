@@ -42,7 +42,7 @@ func createFilmDirectorCapture(t *testing.T, handler http.Handler) directorCaptu
 
 func TestFilmAdoptsVerifiedDirectorCaptureIntoStableMedia(t *testing.T) {
 	_, handler := filmAPIHandler(t)
-	project := []byte(`{"schemaVersion":3,"projectKind":"film","id":"film-api","title":"Film API","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[{"id":"director-main","type":"director","title":"Director","x":0,"y":0,"width":640,"height":480,"metadata":{}}],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
+	project := []byte(`{"schemaVersion":3,"projectKind":"film","id":"film-api","title":"Film API","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[{"id":"director-main","type":"director","title":"Director","position":{"x":0,"y":0},"width":640,"height":480,"metadata":{}}],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
 	if response := request(t, handler, http.MethodPut, "/api/projects/film-api", project); response.Code != http.StatusNoContent {
 		t.Fatalf("seed director node: %d %s", response.Code, response.Body.String())
 	}

@@ -139,6 +139,20 @@ func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[st
 		if shot.Revision < 1 || shot.Order < 0 || shot.Order > maxFilmEntities || !validFilmText(shot.Title, 500, true) || !validFilmText(shot.Description, 100_000, true) || !validFilmStatus(shot.Status) || math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) || shot.DurationSeconds <= 0 || shot.DurationSeconds > 900 || !validFilmText(shot.AspectRatio, 20, true) || len(shot.IdentityVersionIDs) > 100 || !validFilmStorageKey(shot.ImageStorageKey) || !validFilmStorageKey(shot.FirstFrameStorageKey) || !validFilmStorageKey(shot.VideoStorageKey) || !validFilmStorageKey(shot.AudioStorageKey) || !validFilmText(shot.Subtitle, 20_000, false) || (shot.MediaMIMEType != "" && !filmMIMEType.MatchString(shot.MediaMIMEType)) {
 			return nil, nil, nil, nil, fmt.Errorf("film shot %s is invalid", shot.ID)
 		}
+		if source := shot.DirectorSource; source != nil {
+			targetStorageKey := shot.ImageStorageKey
+			if source.TargetField == "first_frame" {
+				targetStorageKey = shot.FirstFrameStorageKey
+			}
+			if source.Revision < 1 || (source.TargetField != "storyboard" && source.TargetField != "first_frame") ||
+				!validProjectID(source.CaptureID) || !boardIDPattern.MatchString(source.DirectorNodeID) || !boardIDPattern.MatchString(source.CameraID) ||
+				!validFilmText(source.CameraName, 100, true) || source.Width < 1 || source.Width > 4096 || source.Height < 1 || source.Height > 4096 ||
+				!strings.HasPrefix(source.StorageKey, "film:media:") || source.StorageKey != targetStorageKey || !validSHA256Hex(source.SHA256) ||
+				!validFilmText(source.ObjectVersion, 512, true) || !validDirectorShotSnapshot(source.Snapshot, source.DirectorNodeID, source.CameraID, source.CameraName) ||
+				!validFilmTimestamp(source.AdoptedAt) {
+				return nil, nil, nil, nil, fmt.Errorf("film shot %s Director source is invalid", shot.ID)
+			}
+		}
 		if _, exists := scenes[shot.SceneID]; !exists {
 			return nil, nil, nil, nil, fmt.Errorf("film shot %s references a missing scene", shot.ID)
 		}
