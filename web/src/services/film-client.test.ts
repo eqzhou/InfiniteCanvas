@@ -19,6 +19,8 @@ import {
   refreshFilmProjection,
   commitFilmProjection,
   adoptFilmCanvasMedia,
+  adoptFilmDirectorCapture,
+  listFilmDirectorCaptures,
   restoreFilmProduction,
   updateFilmAsset,
 } from "./film-client";
@@ -393,6 +395,30 @@ describe("film client", () => {
     });
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/projection/adopt");
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ targetId: "shot-1", sourceNodeId: "node-1", generationJobId: "job-1" });
+  });
+
+  test("lists Director captures and adopts only capture identity plus shot revision", async () => {
+    const film = createFilmDocument("film-director", "2026-08-08T00:00:00.000Z");
+    const requests: Array<{ url: string; body?: unknown }> = [];
+    globalThis.fetch = mock(async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      if (String(url).includes("director-captures?")) return new Response(JSON.stringify([{
+        id: "capture-1", projectId: "film-director", directorNodeId: "director-1", cameraId: "camera-1",
+        cameraName: "Main", createdAt: film.createdAt, width: 1920, height: 1080, bytes: 100, mimeType: "image/png",
+        url: "/api/blobs/director-capture%3Acapture-1", shot: { version: 1 },
+      }]), { status: 200 });
+      return new Response(JSON.stringify({ data: film, meta: { recordRevision: 2 } }), { status: 200 });
+    }) as typeof fetch;
+
+    const captures = await listFilmDirectorCaptures("film-director", ["director-1"]);
+    await adoptFilmDirectorCapture("film-director", { shotId: "shot-1", expectedRevision: 2, captureId: captures[0]!.id, targetField: "first_frame" });
+
+    expect(captures[0]).toMatchObject({ id: "capture-1", directorNodeId: "director-1", cameraName: "Main" });
+    expect(requests[0]?.url).toContain("projectId=film-director");
+    expect(requests[1]).toEqual({
+      url: "/api/film/projects/film-director/director/adopt",
+      body: { shotId: "shot-1", expectedRevision: 2, captureId: "capture-1", targetField: "first_frame" },
+    });
   });
 
   test("restores a film aggregate through the scoped create revision", async () => {
