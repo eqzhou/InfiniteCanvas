@@ -12,7 +12,7 @@ import {
 import { uploadMedia } from "@/services/storage";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
-import { Send } from "lucide-react";
+import { Maximize2, Send } from "lucide-react";
 import { getProvider } from "@/lib/ai-config";
 import {
   canRegenerateImageFromPrompt,
@@ -30,6 +30,7 @@ import {
   type PromptReference,
 } from "@/lib/prompt-references";
 import { PromptChipInput } from "@/components/canvas/PromptChipInput";
+import { TextEntryDialog } from "@/components/canvas/TextEntryDialog";
 import {
   createImageGenerationMetadata,
   normalizeImageGenerationForProvider,
@@ -74,6 +75,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
   const inheritsUpstreamPrompt = imagePromptInheritsFromUpstream(project, node);
   const [text, setText] = useState(() => initialNodePrompt(node, inheritsUpstreamPrompt));
   const [busy, setBusy] = useState(false);
+  const [expandedPrompt, setExpandedPrompt] = useState(false);
   const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const sharedChannels = useSharedChannels();
   const channelChoices = useMemo(
@@ -627,6 +629,7 @@ ${body}` : body;
             onSubmit={() => void send()}
           />
         </div>
+        <button type="button" className="ob-icon-btn h-9 w-9 shrink-0" aria-label="展开编辑长提示词" title="展开编辑长提示词" onClick={() => setExpandedPrompt(true)}><Maximize2 size={14} /></button>
         <button
           type="button"
           className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
@@ -639,6 +642,7 @@ ${body}` : body;
           <Send size={14} />
         </button>
       </div>
+      <TextEntryDialog open={expandedPrompt} title="编辑完整提示词" label="提示词" initialValue={text} placeholder={placeholder} submitLabel="完成编辑" multiline onClose={() => setExpandedPrompt(false)} onValueChange={(value) => { setText(value); if (!(node.type === "image" && inheritsUpstreamPrompt)) updateNode(node.id, { metadata: { prompt: value } }, { history: false }); }} onSubmit={(value) => { setText(value); if (!(node.type === "image" && inheritsUpstreamPrompt)) updateNode(node.id, { metadata: { prompt: value } }); setExpandedPrompt(false); }} />
     </div>
   );
 }

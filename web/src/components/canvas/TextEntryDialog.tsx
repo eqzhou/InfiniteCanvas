@@ -11,6 +11,7 @@ export type TextEntryDialogProps = {
   placeholder?: string;
   submitLabel: string;
   multiline?: boolean;
+  onValueChange?: (value: string) => void;
   onClose: () => void;
   onSubmit: (value: string) => void;
 };
@@ -27,7 +28,7 @@ export function TextEntryDialog(props: TextEntryDialogProps) {
   if (!open) return null;
 
   return createPortal(
-    <TextEntryDialogContent {...props} value={value} onValueChange={setValue} />,
+    <TextEntryDialogContent {...props} value={value} onValueChange={(next) => { setValue(next); props.onValueChange?.(next); }} />,
     document.body,
   );
 }
@@ -61,7 +62,7 @@ export function TextEntryDialogContent({
         role="dialog"
         aria-modal="true"
         aria-labelledby="text-entry-dialog-title"
-        className="ob-dialog max-w-lg p-0"
+        className="ob-dialog max-w-3xl p-0"
         onSubmit={submit}
       >
         <header className="ob-dialog-header px-4 py-3">
@@ -84,7 +85,8 @@ export function TextEntryDialogContent({
             {multiline ? (
               <textarea
                 autoFocus
-                className="ob-field min-h-32 resize-y"
+                aria-label="长提示词编辑器"
+                className="ob-field min-h-[min(55vh,32rem)] resize-y font-mono leading-relaxed"
                 value={value}
                 placeholder={placeholder}
                 onChange={(event) => onValueChange(event.target.value)}
@@ -99,6 +101,7 @@ export function TextEntryDialogContent({
               />
             )}
           </label>
+          {multiline ? <p className="mt-2 text-right text-xs text-[var(--ob-muted)]">{value.length} 字符</p> : null}
         </div>
         <footer className="ob-dialog-footer">
           <button type="button" className="ob-btn" onClick={onClose}>
