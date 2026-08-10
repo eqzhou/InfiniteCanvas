@@ -20,6 +20,7 @@ import {
   commitFilmProjection,
   adoptFilmCanvasMedia,
   adoptFilmDirectorCapture,
+  bindFilmDirectorScene,
   listFilmDirectorCaptures,
   restoreFilmProduction,
   updateFilmAsset,
@@ -412,6 +413,7 @@ describe("film client", () => {
 
     const captures = await listFilmDirectorCaptures("film-director", ["director-1"]);
     await adoptFilmDirectorCapture("film-director", { shotId: "shot-1", expectedRevision: 2, captureId: captures[0]!.id, targetField: "first_frame" });
+    await bindFilmDirectorScene("film-director", { sceneId: "scene-1", expectedRevision: 3, captureId: captures[0]!.id });
 
     expect(captures[0]).toMatchObject({ id: "capture-1", directorNodeId: "director-1", cameraName: "Main" });
     expect(requests[0]?.url).toContain("projectId=film-director");
@@ -419,6 +421,7 @@ describe("film client", () => {
       url: "/api/film/projects/film-director/director/adopt",
       body: { shotId: "shot-1", expectedRevision: 2, captureId: "capture-1", targetField: "first_frame" },
     });
+    expect(requests[2]).toEqual({ url: "/api/film/projects/film-director/director/bind", body: { sceneId: "scene-1", expectedRevision: 3, captureId: "capture-1" } });
   });
 
   test("restores a film aggregate through the scoped create revision", async () => {
