@@ -7,6 +7,7 @@ import {
   cancelFilmGenerationJob,
   commitFilmProjection,
   listFilmGenerationJobs,
+  loadFilmStatus,
   refreshFilmProjection,
   resolveFilmStageSelection,
   retryFilmGenerationJob,
@@ -119,12 +120,17 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
     if ("document" in next) onSynced(next); else updateOne(next);
     await refreshJobs();
   };
+  const cancelOne = async (jobId: string) => {
+    updateOne(await cancelFilmGenerationJob(status.document.projectId, jobId));
+    onSynced(await loadFilmStatus(status.document.projectId));
+    await refreshJobs();
+  };
   const latestGenerationJobIds = new Set<string>();
   const latestTaskScopes = new Set<string>();
   for (let index = status.document.tasks.length - 1; index >= 0; index -= 1) {
     const task = status.document.tasks[index];
-    if (!task.shotId || !task.generationJobId) continue;
-    const scope = `${task.stage}:${task.shotId}`;
+    if (!task.generationJobId) continue;
+    const scope = `${task.stage}:${task.shotId || "text"}`;
     if (latestTaskScopes.has(scope)) continue;
     latestTaskScopes.add(scope);
     latestGenerationJobIds.add(task.generationJobId);
@@ -136,7 +142,7 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
     </div>
     <div className="mt-5 flex items-center gap-2"><h3 className="mr-auto text-sm font-medium">父任务与镜头子任务</h3><button className="ob-btn" disabled={!capabilities.generationJobs && !status.document.tasks.some((task) => task.generationJobId)} onClick={() => void refreshJobs()}><RefreshCw size={14} /> 刷新任务</button></div>
     {jobError ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{jobError}</p> : null}
-    <ul className="mt-2 space-y-2">{jobs.map((job) => <li key={job.id} data-testid={`generation-job-${job.id}`} className={`rounded-lg border border-[var(--ob-line)] p-3 ${job.parentJobId ? "ml-5" : ""}`}><div className="flex flex-wrap items-center gap-2"><strong className="mr-auto text-sm">{job.title}</strong><span className="text-xs">{job.status}</span>{job.shotId && latestGenerationJobIds.has(job.id) && (job.status === "failed" || job.status === "canceled") ? <button className="ob-btn" onClick={() => void retryOne(job.id).catch((cause) => setJobError(String(cause)))}>重试镜头</button> : null}{(job.status === "queued" || job.status === "running") ? <button className="ob-btn" onClick={() => void cancelFilmGenerationJob(status.document.projectId, job.id).then(updateOne).catch((cause) => setJobError(String(cause)))}>取消</button> : null}</div>{job.error ? <p className="text-xs text-[var(--ob-danger)]">{job.error}</p> : null}</li>)}</ul>
+    <ul className="mt-2 space-y-2">{jobs.map((job) => <li key={job.id} data-testid={`generation-job-${job.id}`} className={`rounded-lg border border-[var(--ob-line)] p-3 ${job.parentJobId ? "ml-5" : ""}`}><div className="flex flex-wrap items-center gap-2"><strong className="mr-auto text-sm">{job.title}</strong><span className="text-xs">{job.status}</span>{latestGenerationJobIds.has(job.id) && (job.status === "failed" || job.status === "canceled") ? <button className="ob-btn" onClick={() => void retryOne(job.id).catch((cause) => setJobError(String(cause)))}>{job.shotId ? "重试镜头" : "重试任务"}</button> : null}{(job.status === "queued" || job.status === "running") ? <button className="ob-btn" onClick={() => void cancelOne(job.id).catch((cause) => setJobError(String(cause)))}>取消</button> : null}</div>{job.error ? <p className="text-xs text-[var(--ob-danger)]">{job.error}</p> : null}</li>)}</ul>
     {!jobs.length ? <p className="mt-2 text-sm text-[var(--ob-muted)]">{capabilities.generationJobs ? "暂无 GenerationJob。" : "后端未提供 GenerationJob 查询能力；不会回退到内存 task 冒充任务状态。"}</p> : null}
   </WorkbenchSection>;
 }
