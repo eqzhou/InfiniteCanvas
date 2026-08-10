@@ -456,9 +456,7 @@ func (s *Server) changeFilmStage(w http.ResponseWriter, r *http.Request, action 
 
 func (s *Server) runFilmStage(w http.ResponseWriter, r *http.Request) {
 	switch chi.URLParam(r, "stageId") {
-	case "decompose":
-		s.runFilmTextStage(w, r)
-	case "script":
+	case "decompose", "script":
 		if filmStageRequestUsesAI(r) {
 			s.runFilmTextStage(w, r)
 		} else {

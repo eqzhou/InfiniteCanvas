@@ -35,6 +35,7 @@ func validFilmGenerationMode(mode string) bool {
 
 func capabilityForChannelDefault(channel adminChannelPublic, kind, model string) mediaModelCapability {
 	capability := mediaModelCapability{ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol, Model: model, Kind: kind}
+	registered, registeredOK := resolveProviderModelCapability(channel.Protocol, kind, model)
 	switch kind {
 	case "image":
 		capability.Modes, capability.MaxReferences = []string{"text_to_image", "image_to_image"}, 16
@@ -45,6 +46,21 @@ func capabilityForChannelDefault(channel adminChannelPublic, kind, model string)
 		capability.Modes, capability.MaxReferences = []string{"text_to_video", "image_to_video"}, 8
 	case "audio":
 		capability.Modes, capability.MaxReferences = []string{"text_to_audio"}, 0
+	}
+	if registeredOK {
+		capability.MaxReferences = registered.MaxImageReferences
+		capability.Sizes = append([]string(nil), registered.Sizes...)
+		if registered.MinDuration > 0 && registered.MaxDuration >= registered.MinDuration {
+			capability.Durations = []int{registered.MinDuration, registered.MaxDuration}
+		}
+		if registered.MaxImageReferences == 0 {
+			switch kind {
+			case "image":
+				capability.Modes = []string{"text_to_image"}
+			case "video":
+				capability.Modes = []string{"text_to_video"}
+			}
+		}
 	}
 	return capability
 }

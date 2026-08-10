@@ -7,7 +7,7 @@ function finite(value: number, fallback = 0): number {
 }
 
 function snapToFrame(value: number, frameRate: number): number {
-  const fps = Math.max(1, Math.min(120, Math.round(finite(frameRate, 24))));
+  const fps = Math.max(1, Math.min(60, Math.round(finite(frameRate, 24))));
   return Math.round(finite(value) * fps) / fps;
 }
 
@@ -29,11 +29,11 @@ export function moveTimelineClip(clip: FilmTimelineClip, delta: number, duration
 }
 
 export function resizeTimelineClip(clip: FilmTimelineClip, edge: "start" | "end", time: number, frameRate: number): FilmTimelineClip {
-  const frame = 1 / Math.max(1, Math.min(120, Math.round(finite(frameRate, 24))));
+  const frame = 1 / Math.max(1, Math.min(60, Math.round(finite(frameRate, 24))));
   if (edge === "start") {
     const start = Math.max(0, Math.min(clip.end - frame, snapToFrame(time, frameRate)));
     return { ...clip, revision: clip.revision + 1, start, trimIn: Math.max(0, clip.trimIn + start - clip.start) };
   }
-  const end = Math.max(clip.start + frame, snapToFrame(time, frameRate));
-  return { ...clip, revision: clip.revision + 1, end, trimOut: Math.max(0, clip.trimOut + end - clip.end) };
+  const end = Math.max(clip.start + clip.trimOut + frame, snapToFrame(time, frameRate));
+  return { ...clip, revision: clip.revision + 1, end };
 }

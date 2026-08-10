@@ -85,9 +85,9 @@ export function moveFilmTimelineClip(
 
 export function validateFilmTimelineDraft(timeline: FilmTimeline): string[] {
   const errors: string[] = [];
-  if (!Number.isFinite(timeline.width) || timeline.width < 320 || timeline.width > 7680) errors.push("画面宽度应在 320–7680 之间");
-  if (!Number.isFinite(timeline.height) || timeline.height < 240 || timeline.height > 4320) errors.push("画面高度应在 240–4320 之间");
-  if (!Number.isFinite(timeline.frameRate) || timeline.frameRate < 1 || timeline.frameRate > 120) errors.push("帧率应在 1–120 之间");
+  if (!Number.isFinite(timeline.width) || timeline.width < 320 || timeline.width > 3840) errors.push("画面宽度应在 320–3840 之间");
+  if (!Number.isFinite(timeline.height) || timeline.height < 240 || timeline.height > 2160) errors.push("画面高度应在 240–2160 之间");
+  if (!Number.isFinite(timeline.frameRate) || timeline.frameRate < 1 || timeline.frameRate > 60) errors.push("帧率应在 1–60 之间");
   const requiredKinds = new Set(["video", "dialogue", "music", "sfx", "subtitle"]);
   for (const track of timeline.tracks) {
     requiredKinds.delete(track.kind);

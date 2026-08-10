@@ -66,4 +66,11 @@ describe("film timeline editing", () => {
     expect(errors.join(" ")).toContain("音量");
     expect(errors.join(" ")).toContain("字幕文本");
   });
+
+  test("matches the server's 4K and 60fps render limits", () => {
+    const timeline = defaultFilmTimeline();
+    expect(validateFilmTimelineDraft({ ...timeline, width: 4096 })).toContain("画面宽度应在 320–3840 之间");
+    expect(validateFilmTimelineDraft({ ...timeline, height: 2161 })).toContain("画面高度应在 240–2160 之间");
+    expect(validateFilmTimelineDraft({ ...timeline, frameRate: 61 })).toContain("帧率应在 1–60 之间");
+  });
 });
