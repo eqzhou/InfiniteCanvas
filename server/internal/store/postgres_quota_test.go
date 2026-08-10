@@ -1,6 +1,12 @@
 package store
 
-import "testing"
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
 
 func TestGenerationQuotaHasNoUnlimitedZeroSentinel(t *testing.T) {
 	tests := []struct {
@@ -49,5 +55,36 @@ func TestServerGenerationClaimAcceptsDurableTextWorker(t *testing.T) {
 		if validServerGenerationClaim(claim) {
 			t.Fatalf("invalid claim was accepted: %#v", claim)
 		}
+	}
+}
+
+func TestServerOwnedGenerationJobIncludesDurableTextWorker(t *testing.T) {
+	job := GenerationJob{Kind: "text", Parameters: json.RawMessage(`{"executor":"server"}`)}
+	if !serverOwnedGenerationJob(job) {
+		t.Fatal("text server job is not protected by server-owned job lifecycle operations")
+	}
+}
+
+func TestFilmGenerationBatchRetriesSerializationFailuresAtMostThreeTimes(t *testing.T) {
+	attempts := 0
+	record, err := retryFilmGenerationBatch(func() (FilmRecord, error) {
+		attempts++
+		if attempts < 3 {
+			return FilmRecord{}, &pgconn.PgError{Code: "40001"}
+		}
+		return FilmRecord{ProjectID: "film", Revision: 2}, nil
+	})
+	if err != nil || record.ProjectID != "film" || attempts != 3 {
+		t.Fatalf("serialization retry did not succeed on the third attempt: record=%#v attempts=%d err=%v", record, attempts, err)
+	}
+
+	attempts = 0
+	serializationErr := &pgconn.PgError{Code: "40001"}
+	_, err = retryFilmGenerationBatch(func() (FilmRecord, error) {
+		attempts++
+		return FilmRecord{}, serializationErr
+	})
+	if !errors.Is(err, serializationErr) || attempts != 3 {
+		t.Fatalf("serialization retry exceeded its three-attempt bound: attempts=%d err=%v", attempts, err)
 	}
 }

@@ -194,6 +194,46 @@ func TestCancelServerGenerationJobRollsBackTerminalStateWhenRefundFails(t *testi
 	}
 }
 
+func TestCancelTextServerGenerationJobRefundsAndRemovesCredential(t *testing.T) {
+	backend := openRefundTestStore(t)
+	fixture := seedRefundFixture(t, backend, fmt.Sprintf("cancel-text-%d", time.Now().UnixNano()))
+	if _, err := backend.pool.Exec(t.Context(), `UPDATE openboard_generation_jobs SET kind='text' WHERE tenant_id=$1 AND id=$2`, fixture.tenantID, fixture.jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := backend.CancelServerGenerationJob(t.Context(), fixture.tenantID, fixture.jobID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("cancel text server job: %v", err)
+	}
+	status, credits, refunds := refundState(t, backend, fixture)
+	if job.Kind != "text" || status != "cancelled" || credits != 100 || refunds != 1 {
+		t.Fatalf("text cancellation did not refund exactly once: job=%#v status=%s credits=%d refunds=%d", job, status, credits, refunds)
+	}
+	if generationSecretPresent(t, backend, fixture) {
+		t.Fatal("cancelled text job retained its shared-channel credential")
+	}
+}
+
+func TestWorkspaceGenerationReplacementRejectsActiveTextServerJob(t *testing.T) {
+	backend := openRefundTestStore(t)
+	fixture := seedRefundFixture(t, backend, fmt.Sprintf("protect-text-%d", time.Now().UnixNano()))
+	if _, err := backend.pool.Exec(t.Context(), `UPDATE openboard_generation_jobs SET kind='text' WHERE tenant_id=$1 AND id=$2`, fixture.tenantID, fixture.jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := backend.ReplaceGenerationJobs(t.Context(), fixture.tenantID, nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("replacement did not protect an active text server job: %v", err)
+	}
+	job, err := backend.GetGenerationJob(t.Context(), fixture.tenantID, fixture.jobID)
+	if err != nil {
+		t.Fatalf("load protected text job: %v", err)
+	}
+	version := GenerationJobsVersion([]GenerationJob{job})
+	if err := backend.CompareAndSwapGenerationJobs(t.Context(), fixture.tenantID, version, nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("CAS replacement did not protect an active text server job: %v", err)
+	}
+}
+
 func TestConcurrentCancelAndWorkerFailureRefundExactlyOnce(t *testing.T) {
 	backend := openRefundTestStore(t)
 	for iteration := range 12 {
