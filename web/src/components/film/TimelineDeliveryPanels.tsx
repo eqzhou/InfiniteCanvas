@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Plus, Save, Trash2 } from "lucide-react";
 
 import { addFilmTimelineClip, moveFilmTimelineClip, removeFilmTimelineClip, updateFilmTimelineClip, validateFilmTimelineDraft } from "@/lib/film-timeline";
+import { moveTimelineClip, resizeTimelineClip, timelineDuration, timelineTimeToPercent } from "@/lib/film-timeline-geometry";
 import { filmDeliverableDownloadURL, type FilmStatus } from "@/services/film-client";
 import type { FilmTimeline, FilmTimelineClip, FilmTrackKind } from "@/types/film";
 import { WorkbenchSection } from "./WorkbenchSection";
@@ -13,11 +14,42 @@ export function TimelinePanel({ timeline, mediaSources, dirty, busy, onChange, o
   const addClip = (trackId: string, kind: FilmTrackKind) => onChange(addFilmTimelineClip(timeline, trackId, { source: kind === "subtitle" ? "manual" : `${kind}-source`, start: 0, end: 2, ...(kind === "subtitle" ? { text: "Subtitle" } : {}) }));
   return <WorkbenchSection id="timeline" title="多轨时间线 / Timeline" wide>
     <div className="grid gap-3 sm:grid-cols-3"><NumberField label="宽度" value={timeline.width} onChange={(width) => onChange({ ...timeline, width })} /><NumberField label="高度" value={timeline.height} onChange={(height) => onChange({ ...timeline, height })} /><NumberField label="帧率" value={timeline.frameRate} onChange={(frameRate) => onChange({ ...timeline, frameRate })} /></div>
+    <VisualTimeline timeline={timeline} onChange={onChange} />
     <datalist id="film-media-sources">{mediaSources.map((source) => <option key={`${source.value}:${source.label}`} value={source.value}>{source.label}</option>)}</datalist>
     <div className="mt-4 space-y-3">{timeline.tracks.map((track) => <div key={track.id} data-testid={`timeline-track-${track.kind}`} className="rounded-xl border border-[var(--ob-line)] p-3"><div className="flex items-center"><strong className="mr-auto text-sm">{trackLabels[track.kind]} · {track.title}</strong><button className="ob-btn" aria-label={`添加 ${track.kind} 片段`} onClick={() => addClip(track.id, track.kind)}><Plus size={14} /> 添加片段</button></div><div className="mt-2 space-y-2">{[...track.clips].sort((a, b) => a.order - b.order).map((clip) => <ClipEditor key={clip.id} clip={clip} subtitle={track.kind === "subtitle"} onPatch={(patch) => onChange(updateFilmTimelineClip(timeline, track.id, clip.id, patch))} onMove={(offset) => onChange(moveFilmTimelineClip(timeline, track.id, clip.id, offset))} onRemove={() => onChange(removeFilmTimelineClip(timeline, track.id, clip.id))} />)}</div></div>)}</div>
     {errors.length ? <div role="alert" className="ob-banner mt-3" data-tone="danger"><ul className="list-disc pl-4 text-sm">{errors.slice(0, 8).map((error) => <li key={error}>{error}</li>)}</ul></div> : null}
     <div className="mt-3 flex items-center gap-2"><button type="button" className="ob-btn ob-btn-primary" disabled={busy || !dirty || errors.length > 0} onClick={onSave}><Save size={14} /> 保存时间线</button><span className="text-xs text-[var(--ob-muted)]">{dirty ? "有未保存修改" : "已与服务端同步"}</span></div>
   </WorkbenchSection>;
+}
+
+function VisualTimeline({ timeline, onChange }: { timeline: FilmTimeline; onChange: (timeline: FilmTimeline) => void }) {
+  const duration = timelineDuration(timeline);
+  const [playhead, setPlayhead] = useState(0);
+  const [selected, setSelected] = useState<{ trackId: string; clipId: string } | null>(null);
+  const selectedTrack = timeline.tracks.find((track) => track.id === selected?.trackId);
+  const selectedClip = selectedTrack?.clips.find((clip) => clip.id === selected?.clipId);
+  const replaceGeometry = (clip: FilmTimelineClip) => {
+    if (!selectedTrack || !selectedClip) return;
+    onChange(updateFilmTimelineClip(timeline, selectedTrack.id, selectedClip.id, { start: clip.start, end: clip.end, trimIn: clip.trimIn, trimOut: clip.trimOut }));
+  };
+  const nudge = (frames: number) => selectedClip && replaceGeometry(moveTimelineClip(selectedClip, frames / timeline.frameRate, duration, timeline.frameRate));
+  const trim = (edge: "start" | "end", frames: number) => selectedClip && replaceGeometry(resizeTimelineClip(selectedClip, edge, (edge === "start" ? selectedClip.start : selectedClip.end) + frames / timeline.frameRate, timeline.frameRate));
+  const marks = Array.from({ length: Math.min(13, Math.floor(duration) + 1) }, (_, index) => Math.round(index * duration / Math.min(12, duration)));
+  return <div className="mt-4 overflow-hidden rounded-xl border border-[var(--ob-line)] bg-[var(--ob-canvas)]">
+    <div className="flex items-center gap-3 border-b border-[var(--ob-line)] px-3 py-2"><strong className="text-sm">可视化剪辑台</strong><label className="ml-auto flex items-center gap-2 text-xs">播放头 {playhead.toFixed(2)}s<input aria-label="时间线播放头" className="w-48 accent-[var(--ob-accent)]" type="range" min="0" max={duration} step={1 / timeline.frameRate} value={playhead} onChange={(event) => setPlayhead(Number(event.target.value))} /></label></div>
+    <div className="grid grid-cols-[84px_minmax(640px,1fr)] overflow-x-auto">
+      <div className="border-r border-[var(--ob-line)]" />
+      <div className="relative h-7 border-b border-[var(--ob-line)] text-[10px] text-[var(--ob-muted)]">{marks.map((mark) => <span key={mark} className="absolute top-1" style={{ left: `${timelineTimeToPercent(mark, duration)}%` }}>{mark}s</span>)}<span className="absolute inset-y-0 w-px bg-[var(--ob-accent)]" style={{ left: `${timelineTimeToPercent(playhead, duration)}%` }} /></div>
+      {timeline.tracks.flatMap((track) => [
+        <div key={`${track.id}:label`} className="flex h-12 items-center border-b border-r border-[var(--ob-line)] px-2 text-xs font-medium">{trackLabels[track.kind]}</div>,
+        <div key={`${track.id}:lane`} data-testid={`visual-timeline-track-${track.kind}`} className="relative h-12 border-b border-[var(--ob-line)]" onDoubleClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); setPlayhead(Math.max(0, Math.min(duration, (event.clientX - bounds.left) / bounds.width * duration))); }}>
+          {track.clips.map((clip) => <button key={clip.id} type="button" data-testid={`visual-timeline-clip-${clip.id}`} title={`${clip.source} · ${clip.start.toFixed(2)}–${clip.end.toFixed(2)}s`} className={`absolute top-1 h-10 min-w-4 overflow-hidden rounded border px-2 text-left text-[10px] ${selected?.clipId === clip.id ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]" : "border-[var(--ob-line)] bg-[var(--ob-panel)]"}`} style={{ left: `${timelineTimeToPercent(clip.start, duration)}%`, width: `${Math.max(0.5, timelineTimeToPercent(clip.end - clip.start, duration))}%` }} onClick={() => { setSelected({ trackId: track.id, clipId: clip.id }); setPlayhead(clip.start); }}><span className="block truncate">{clip.source}</span><span className="opacity-70">{(clip.end - clip.start).toFixed(2)}s</span></button>)}
+          <span className="pointer-events-none absolute inset-y-0 w-px bg-[var(--ob-accent)]" style={{ left: `${timelineTimeToPercent(playhead, duration)}%` }} />
+        </div>,
+      ])}
+    </div>
+    <div className="flex min-h-10 flex-wrap items-center gap-2 px-3 py-2 text-xs"><strong className="mr-auto max-w-60 truncate">{selectedClip ? `${selectedClip.source} · ${selectedClip.start.toFixed(2)}–${selectedClip.end.toFixed(2)}s` : "选择片段后可逐帧移动和裁剪"}</strong><button className="ob-btn" disabled={!selectedClip} onClick={() => nudge(-1)}>左移一帧</button><button className="ob-btn" disabled={!selectedClip} onClick={() => nudge(1)}>右移一帧</button><button className="ob-btn" disabled={!selectedClip} onClick={() => trim("start", 1)}>收缩入点一帧</button><button className="ob-btn" disabled={!selectedClip} onClick={() => trim("start", -1)}>扩展入点一帧</button><button className="ob-btn" disabled={!selectedClip} onClick={() => trim("end", -1)}>收缩出点一帧</button><button className="ob-btn" disabled={!selectedClip} onClick={() => trim("end", 1)}>扩展出点一帧</button></div>
+  </div>;
 }
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) { return <label className="text-xs">{label}<input className="ob-input mt-1 w-full" type="number" value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>; }
