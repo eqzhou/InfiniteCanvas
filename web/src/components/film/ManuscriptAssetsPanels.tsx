@@ -3,24 +3,41 @@ import { FileUp, Plus, Save, Send, Sparkles } from "lucide-react";
 
 import { preflightFilmImport } from "@/lib/film-import";
 import { filmEditorKey } from "@/lib/film-drafts";
-import type { FilmCapabilities, FilmStatus } from "@/services/film-client";
+import type { FilmCapabilities, FilmManuscriptPreflight, FilmStatus } from "@/services/film-client";
 import type { FilmAsset, FilmAssetKind, FilmDocument } from "@/types/film";
 import { WorkbenchSection } from "./WorkbenchSection";
 
-export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDraft, onImportText, onImportFile }: {
+export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDraft, onPreflight, onImportText, onImportFile }: {
   document: FilmDocument; capabilities: FilmCapabilities; manuscript: string; busy: boolean;
   onDraft: (text: string) => void;
+  onPreflight: (text: string, format: "text" | "txt" | "markdown") => Promise<FilmManuscriptPreflight>;
   onImportText: (text: string, format: "text" | "txt" | "markdown", originalName?: string) => Promise<boolean>;
   onImportFile: (file: File, format: "docx" | "pdf") => Promise<boolean>;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [parseState, setParseState] = useState<"idle" | "parsing" | "error">("idle");
   const [fileError, setFileError] = useState("");
+  const [preflight, setPreflight] = useState<FilmManuscriptPreflight | null>(null);
+  const [preflightName, setPreflightName] = useState<string | undefined>();
   const formats = [
     ["txt", "TXT", capabilities.plainTextImport], ["md", "MD", capabilities.markdownImport],
     ["docx", "DOCX", capabilities.docxImport], ["pdf", "PDF", capabilities.pdfImport],
   ] as const;
   const accept = useMemo(() => formats.filter(([, , enabled]) => enabled).map(([extension]) => `.${extension}`).join(","), [capabilities]);
+  const previewText = async (text: string, format: "text" | "txt" | "markdown", originalName?: string) => {
+    setFileError("");
+    setParseState("parsing");
+    try {
+      setPreflight(await onPreflight(text, format));
+      setPreflightName(originalName);
+      setParseState("idle");
+    } catch (cause) {
+      setPreflight(null);
+      setPreflightName(undefined);
+      setFileError(cause instanceof Error ? cause.message : String(cause));
+      setParseState("error");
+    }
+  };
   const chooseFile = async (file: File) => {
     setFileError("");
     setParseState("parsing");
@@ -31,7 +48,8 @@ export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDr
         const text = await file.text();
         if (!text.trim()) throw new Error("剧本文件没有可导入的文本");
         onDraft(text);
-        ok = await onImportText(text, result.format, file.name);
+        await previewText(text, result.format, file.name);
+        ok = true;
       } else {
         ok = await onImportFile(file, result.format);
       }
@@ -43,18 +61,25 @@ export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDr
   };
   return <WorkbenchSection id="manuscript" title="原稿导入 / Manuscript">
     <label className="block text-sm font-medium" htmlFor="film-manuscript">粘贴剧本原稿</label>
-    <textarea id="film-manuscript" className="ob-input mt-2 min-h-52 w-full resize-y font-mono text-sm" value={manuscript} onChange={(event) => onDraft(event.target.value)} placeholder="EPISODE 1&#10;INT. STUDIO - DAY&#10;A slate snaps shut." />
+    <textarea id="film-manuscript" className="ob-input mt-2 min-h-52 w-full resize-y font-mono text-sm" value={manuscript} onChange={(event) => { setPreflight(null); setPreflightName(undefined); onDraft(event.target.value); }} placeholder="EPISODE 1&#10;INT. STUDIO - DAY&#10;A slate snaps shut." />
     <div className="mt-2 flex flex-wrap gap-1" aria-label="可用导入格式">
       {formats.map(([id, label, enabled]) => <span key={id} data-testid={`film-format-${id}`} aria-disabled={!enabled} className={`rounded-full border px-2 py-1 text-xs ${enabled ? "border-[var(--ob-line)]" : "opacity-40"}`}>{label}</span>)}
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
-      <button type="button" className="ob-btn ob-btn-primary" disabled={busy || !manuscript.trim()} onClick={() => void onImportText(manuscript, "text")}><Send size={14} /> 导入并拆解</button>
+      <button type="button" className="ob-btn ob-btn-primary" disabled={busy || parseState === "parsing" || !manuscript.trim()} onClick={() => void previewText(manuscript, "text")}><Send size={14} /> 预检原稿</button>
       <button type="button" className="ob-btn" disabled={busy || !accept} onClick={() => fileRef.current?.click()}><FileUp size={14} /> 选择 TXT / MD / DOCX / PDF</button>
       <input data-testid="film-manuscript-file" ref={fileRef} type="file" className="hidden" accept={accept} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void chooseFile(file); event.currentTarget.value = ""; }} />
     </div>
     {parseState === "parsing" ? <p role="status" className="mt-2 text-sm text-[var(--ob-muted)]">文件上传中，正在解析…</p> : null}
     {fileError ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{fileError}</p> : null}
-    <p className="mt-2 text-xs text-[var(--ob-muted)]">客户端预检上限 50 MiB；扫描型 PDF 若无文本，请先 OCR 后再导入。当前源修订 r{document.source.revision}</p>
+    {preflight ? <div className="mt-3 rounded-lg border border-[var(--ob-line)] p-3" role="status">
+      <div className="flex flex-wrap gap-2 text-xs"><strong>预检完成</strong><span>{preflight.episodeCount} 集</span><span>{preflight.sceneCount} 场</span><span>{preflight.characters} 字符</span><span>{preflight.lineCount} 行</span></div>
+      <p className="mt-2 text-sm text-[var(--ob-muted)]">{preflight.summary}</p>
+      {preflight.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-500">{warning}</p>)}
+      <button type="button" className="ob-btn mt-3" disabled={busy} onClick={() => void onImportText(manuscript, preflight.format, preflightName)}>采用确定性拆解</button>
+      <p className="mt-2 text-xs text-[var(--ob-muted)]">确认导入后，也可以在 AI 故事拆解区生成另一份待审候选。</p>
+    </div> : null}
+    <p className="mt-2 text-xs text-[var(--ob-muted)]">预检不会写入影视事实。客户端文件上限 50 MiB；扫描型 PDF 若无文本，请先 OCR 后再导入。当前源修订 r{document.source.revision}</p>
   </WorkbenchSection>;
 }
 

@@ -26,6 +26,7 @@ import {
   importFilmManuscript,
   importFilmManuscriptFile,
   loadFilmStatus,
+  preflightFilmManuscript,
   requestFilmAIDecomposition,
   requestFilmExport,
   restoreFilmEntityVersion,
@@ -178,7 +179,7 @@ export function FilmWorkbenchPage() {
     <header className="sticky top-0 z-20 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 backdrop-blur-md"><div className="mx-auto flex max-w-7xl items-center gap-3"><Link to="/" className="ob-btn">返回画布</Link><Clapperboard size={20} className="text-[var(--ob-accent)]" /><div className="min-w-0 flex-1"><h1 className="truncate font-semibold">{project.title}</h1><p className="text-xs text-[var(--ob-muted)]">Film Production Mode · 修订 {document?.revision ?? "—"}</p></div><button className="ob-btn" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={14} /> 刷新</button></div><nav aria-label="影片工作台分区" className="mx-auto mt-3 flex max-w-7xl gap-1 overflow-x-auto">{navigation.map(([id, label]) => <a key={id} href={`#${id}`} className="ob-tab shrink-0 text-xs">{label}</a>)}</nav></header>
     <main className="mx-auto grid max-w-7xl gap-4 p-4 pb-16 lg:grid-cols-2">{error ? <div role="alert" className="ob-banner lg:col-span-2" data-tone="danger"><AlertCircle size={16} />{error}</div> : null}{notice ? <div role="status" className="ob-banner lg:col-span-2" data-tone="success"><Check size={16} />{notice}</div> : null}
       {!status || !document ? <div role="status" className="ob-card p-8 lg:col-span-2">正在加载影片制作数据…</div> : <>
-        <ManuscriptPanel document={document} capabilities={status.capabilities} manuscript={manuscript} busy={!!busy} onDraft={setDraft} onImportText={(text, format, originalName) => run("导入原稿", () => importFilmManuscript(projectId, { revision: document.source.revision, text, format, originalName }), { clearManuscript: true, notice: "原稿已导入，拆解产物等待审核" })} onImportFile={(file, format) => run("解析原稿", () => importFilmManuscriptFile(projectId, { revision: document.source.revision, file, format }), { clearManuscript: true, notice: "文件解析完成，拆解产物等待审核" })} />
+        <ManuscriptPanel document={document} capabilities={status.capabilities} manuscript={manuscript} busy={!!busy} onDraft={setDraft} onPreflight={(text, format) => preflightFilmManuscript(projectId, { text, format })} onImportText={(text, format, originalName) => run("导入原稿", () => importFilmManuscript(projectId, { revision: document.source.revision, text, format, originalName }), { clearManuscript: true, notice: "原稿已导入，确定性拆解产物等待审核" })} onImportFile={(file, format) => run("解析原稿", () => importFilmManuscriptFile(projectId, { revision: document.source.revision, file, format }), { clearManuscript: true, notice: "文件解析完成，拆解产物等待审核" })} />
         <AIDecompositionPanel document={document} busy={!!busy} channels={textChannels} channelId={textChannelId} model={textModel} onChannel={(channelId) => {
           setTextChannelId(channelId);
           setTextModel(textChannels.find((channel) => channel.id === channelId)?.models[0] ?? "");
