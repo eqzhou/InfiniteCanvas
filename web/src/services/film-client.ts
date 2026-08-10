@@ -85,6 +85,17 @@ export type FilmGenerationConfig = Partial<{
   referenceStorageKeys: string[]; voice: string; format: string; speed: number; instructions: string;
 }>;
 
+export type FilmManuscriptPreflight = {
+  format: "text" | "txt" | "markdown";
+  bytes: number;
+  characters: number;
+  lineCount: number;
+  episodeCount: number;
+  sceneCount: number;
+  summary: string;
+  warnings: string[];
+};
+
 export type FilmProjectionPlan = {
   projectId: string;
   recordRevision: number;
@@ -211,6 +222,25 @@ export function importFilmManuscript(
   input: { revision: number; text: string; format: "text" | "txt" | "markdown"; originalName?: string },
 ): Promise<FilmStatus> {
   return requestFilm(projectId, "/source/text", { method: "PUT", body: JSON.stringify(input) });
+}
+
+export async function preflightFilmManuscript(
+  projectId: string,
+  input: { text: string; format: "text" | "txt" | "markdown" },
+): Promise<FilmManuscriptPreflight> {
+  const response = await authFetch(filmPath(projectId, "/source/preflight"), {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  const payload = await response.json().catch(() => null) as { data?: Partial<FilmManuscriptPreflight>; error?: { message?: string } } | null;
+  if (!response.ok) throw new FilmAPIError(response.status, "source_preflight_failed", payload?.error?.message ?? "Manuscript preflight failed");
+  const value = payload?.data;
+  if (!value || !["text", "txt", "markdown"].includes(value.format ?? "") ||
+    ![value.bytes, value.characters, value.lineCount, value.episodeCount, value.sceneCount].every((item) => Number.isSafeInteger(item) && Number(item) >= 0) ||
+    typeof value.summary !== "string" || !Array.isArray(value.warnings) || !value.warnings.every((warning) => typeof warning === "string")) {
+    throw new Error("Film manuscript preflight response is invalid");
+  }
+  return value as FilmManuscriptPreflight;
 }
 
 export function importFilmManuscriptFile(
