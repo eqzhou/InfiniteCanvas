@@ -146,6 +146,36 @@ func TestSyncFilmTextJobCandidatePersistsReviewState(t *testing.T) {
 	}
 }
 
+func TestApplyFilmAICandidateVersionsOldStructureAndGeneratesServerIDs(t *testing.T) {
+	document, job := filmTextCandidateFixture(t)
+	ready, err := integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := ready.AICandidates[0]
+	oldEpisodes := append([]filmEpisode(nil), ready.Episodes...)
+	applied, err := applyFilmAICandidate(ready, candidate.ID, candidate.Revision, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied.StructureVersions) != 1 || !reflect.DeepEqual(applied.StructureVersions[0].Episodes, oldEpisodes) {
+		t.Fatalf("old story structure was not versioned: %#v", applied.StructureVersions)
+	}
+	if len(applied.Episodes) != 1 || applied.Episodes[0].Title != "The signal" || applied.Episodes[0].ID == "episode-1" ||
+		len(applied.Scenes) != 1 || applied.Scenes[0].EpisodeID != applied.Episodes[0].ID || applied.Scenes[0].ID == "scene-1" ||
+		len(applied.Shots) != 1 || applied.Shots[0].SceneID != applied.Scenes[0].ID || applied.Shots[0].ID == "shot-1" ||
+		len(applied.Dialogues) != 1 || applied.Dialogues[0].ShotID != applied.Shots[0].ID {
+		t.Fatalf("candidate was not converted to server-owned facts: %#v", applied)
+	}
+	if applied.AICandidates[0].Status != filmAICandidateApplied || applied.AICandidates[0].AppliedAt == "" ||
+		applied.Stages[0].Status != filmStatusNeedsReview {
+		t.Fatalf("candidate apply state = %#v stage=%#v", applied.AICandidates[0], applied.Stages[0])
+	}
+	if _, err := applyFilmAICandidate(applied, candidate.ID, candidate.Revision, time.Now().UTC().Format(time.RFC3339Nano)); err == nil {
+		t.Fatal("stale candidate revision was applied twice")
+	}
+}
+
 func TestParseFilmAIDecompositionRejectsUntrustedStructure(t *testing.T) {
 	tests := map[string]string{
 		"unknown database field": strings.Replace(validFilmAIDecompositionJSON, `"summary":`, `"storageKey":"film:forged","summary":`, 1),
