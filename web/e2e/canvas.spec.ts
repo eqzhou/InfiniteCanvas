@@ -218,11 +218,24 @@ async function openCodexPanel(page: Page) {
   }
 }
 
+async function openMobileNavigation(page: Page) {
+  const trigger = page.getByRole("button", { name: "打开导航菜单" });
+  await trigger.click();
+  const navigation = page.getByRole("navigation", { name: "移动端导航" });
+  await expect(navigation).toBeVisible();
+  return navigation;
+}
+
 async function openLocalAgentPanel(page: Page) {
   const desktopButton = page.getByRole("group", { name: "全局工具" })
     .getByRole("button", { name: "画布 Agent", exact: true });
   if (await desktopButton.isVisible().catch(() => false)) {
     await desktopButton.click();
+  } else if (await page.getByRole("button", { name: "打开导航菜单" }).isVisible().catch(() => false)) {
+    const navigation = await openMobileNavigation(page);
+    await navigation.getByRole("button", { name: "画布 Agent", exact: true }).click();
+  } else if (await page.locator("header").getByRole("button", { name: "画布 Agent", exact: true }).isVisible().catch(() => false)) {
+    await page.locator("header").getByRole("button", { name: "画布 Agent", exact: true }).click();
   } else {
     await page.getByTitle("更多").click();
     await page.getByRole("menu", { name: "更多操作" })
@@ -254,6 +267,11 @@ async function downloadActiveProjectBundle(page: Page) {
   const desktopButton = page.getByTitle("导出当前画布包");
   if (await desktopButton.isVisible().catch(() => false)) {
     await desktopButton.click();
+    return;
+  }
+  if (await page.getByRole("button", { name: "打开导航菜单" }).isVisible().catch(() => false)) {
+    const navigation = await openMobileNavigation(page);
+    await navigation.getByRole("button", { name: "导出当前画布" }).click();
     return;
   }
   await page.getByTitle("更多").click();
@@ -5003,31 +5021,53 @@ test("mobile asset and prompt pages keep primary actions usable", async ({ page 
 test("mobile canvas Agent can be opened and closed without hiding the canvas", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFreshBoard(page);
-  await page.getByRole("button", { name: "画布 Agent" }).last().click();
+  const navigation = await openMobileNavigation(page);
+  await navigation.getByRole("button", { name: "画布 Agent", exact: true }).click();
   await expect(page.getByRole("complementary", { name: "画布 Agent" })).toBeVisible();
   await page.getByTitle("关闭画布 Agent").click();
   await expect(page.getByTestId("canvas-surface")).toBeVisible();
   await expect(page.getByRole("complementary", { name: "画布 Agent" })).toHaveCount(0);
 });
 
-test("compact navigation keeps secondary actions reachable", async ({ page }) => {
+test("mobile navigation keeps secondary actions reachable and restores focus", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFreshBoard(page);
 
-  await page.getByTitle("更多").click();
-  const menu = page.getByRole("menu", { name: "更多操作" });
-  await expect(menu.getByRole("menuitem", { name: "画布 Agent" })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "快捷键" })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "切换主题" })).toBeVisible();
-  const versionItem = menu.getByTitle("查看版本更新");
+  const trigger = page.getByRole("button", { name: "打开导航菜单" });
+  const navigation = await openMobileNavigation(page);
+  const drawer = page.locator(".ob-mobile-nav-panel");
+  await expect(drawer).toHaveAttribute("aria-hidden", "false");
+  await expect(navigation.getByRole("button", { name: "关闭导航菜单" })).toBeFocused();
+  await expect(navigation.getByRole("button", { name: "画布 Agent", exact: true })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "快捷键" })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "切换主题" })).toBeVisible();
+  const versionItem = navigation.getByTitle("查看版本更新");
   await expect(versionItem).toBeVisible();
-  await expect(versionItem).toHaveAttribute("role", "menuitem");
 
   const wasDark = await page.locator("html").evaluate((element) => element.classList.contains("dark"));
-  await menu.getByRole("menuitem", { name: "切换主题" }).click();
+  await navigation.getByRole("button", { name: "切换主题" }).click();
   await expect.poll(() => page.locator("html").evaluate((element) => element.classList.contains("dark")))
     .toBe(!wasDark);
-  await expect(menu).toHaveCount(0);
+  await expect(drawer).toHaveAttribute("aria-hidden", "true");
+  await expect(trigger).toBeFocused();
+});
+
+test("mobile version dialog escapes the transformed navigation drawer", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFreshBoard(page);
+
+  const navigation = await openMobileNavigation(page);
+  await navigation.getByTitle("查看版本更新").click();
+  const dialog = page.getByRole("dialog", { name: "版本更新" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "关闭版本说明" })).toBeFocused();
+  const overlayBox = await dialog.locator("xpath=..").boundingBox();
+  expect(overlayBox).not.toBeNull();
+  expect(overlayBox!.x).toBeLessThanOrEqual(1);
+  expect(overlayBox!.width).toBeGreaterThanOrEqual(388);
+  await dialog.getByRole("button", { name: "关闭版本说明" }).click();
+  await expect(page.locator(".ob-mobile-nav-panel")).toHaveAttribute("aria-hidden", "true");
+  await expect(page.getByRole("button", { name: "打开导航菜单" })).toBeFocused();
 });
 
 test("mobile canvas controls stay compact and do not overlap", async ({ page }) => {

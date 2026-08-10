@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import core from "./pm2-env-core.cjs";
 
-const { DEPLOYMENT_ENV_KEYS, missingRequiredKeys, resolveDeploymentEnv } = core;
+const {
+  DEPLOYMENT_ENV_KEYS,
+  hasUnsafeSecretFilePermissions,
+  missingRequiredKeys,
+  resolveDeploymentEnv,
+  resolveWebEnv,
+} = core;
 const root = "/srv/openboard";
 
 test(".env wins over an inherited shell variable", () => {
@@ -104,6 +110,40 @@ test("only allowlisted deployment settings are passed through", () => {
   assert.equal(resolved.OPENBOARD_UNKNOWN_SETTING, undefined);
   assert.equal(resolved.NODE_OPTIONS, undefined);
   assert.equal(resolved.PATH, undefined);
+});
+
+test("the web process receives only its proxy and process-owned environment", () => {
+  const deployment = resolveDeploymentEnv(
+    {
+      OPENBOARD_API_TARGET: "http://127.0.0.1:8790",
+      OPENBOARD_TOKEN: "proxy-token",
+      OPENBOARD_DATABASE_URL: "postgres://secret",
+      OPENBOARD_REDIS_URL: "redis://secret",
+      OPENBOARD_MASTER_KEY: "master-secret",
+      OPENBOARD_S3_SECRET_ACCESS_KEY: "object-secret",
+    },
+    {},
+    { root },
+  );
+
+  const resolved = resolveWebEnv(deployment);
+
+  assert.equal(resolved.OPENBOARD_API_TARGET, "http://127.0.0.1:8790");
+  assert.equal(resolved.OPENBOARD_TOKEN, "proxy-token");
+  assert.equal(resolved.OPENBOARD_WEB_OUT_DIR, "dist-local");
+  assert.equal(resolved.FORCE_COLOR, "0");
+  assert.equal(resolved.OPENBOARD_DATABASE_URL, "");
+  assert.equal(resolved.OPENBOARD_REDIS_URL, "");
+  assert.equal(resolved.OPENBOARD_MASTER_KEY, "");
+  assert.equal(resolved.OPENBOARD_S3_SECRET_ACCESS_KEY, "");
+});
+
+test("PM2 rejects group-readable or world-readable secret files on POSIX", () => {
+  assert.equal(hasUnsafeSecretFilePermissions(0o100600, "darwin"), false);
+  assert.equal(hasUnsafeSecretFilePermissions(0o100640, "linux"), true);
+  assert.equal(hasUnsafeSecretFilePermissions(0o100644, "linux"), true);
+  assert.equal(hasUnsafeSecretFilePermissions(0o100666, "linux"), true);
+  assert.equal(hasUnsafeSecretFilePermissions(0o100644, "win32"), false);
 });
 
 test("the PM2 allowlist includes both bounded media executables", () => {

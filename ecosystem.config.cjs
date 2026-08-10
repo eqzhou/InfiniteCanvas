@@ -13,7 +13,12 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
-const { missingRequiredKeys, resolveDeploymentEnv } = require("./scripts/pm2-env-core.cjs");
+const {
+  hasUnsafeSecretFilePermissions,
+  missingRequiredKeys,
+  resolveDeploymentEnv,
+  resolveWebEnv,
+} = require("./scripts/pm2-env-core.cjs");
 const { diagnoseMediaCapabilities } = require("./scripts/media-capability-core.cjs");
 
 const root = __dirname;
@@ -39,7 +44,11 @@ function loadEnvFile(filePath) {
   return env;
 }
 
-const fileEnv = loadEnvFile(path.join(root, ".env"));
+const envPath = path.join(root, ".env");
+if (fs.existsSync(envPath) && hasUnsafeSecretFilePermissions(fs.statSync(envPath).mode)) {
+  throw new Error(`${envPath} contains deployment secrets and must have mode 600 (run: chmod 600 .env)`);
+}
+const fileEnv = loadEnvFile(envPath);
 const required = [
   "OPENBOARD_TOKEN",
   "OPENBOARD_DATABASE_URL",
@@ -48,12 +57,13 @@ const required = [
 ];
 const missing = missingRequiredKeys(fileEnv, process.env, required);
 if (missing.length) {
-  throw new Error(`${missing.join(", ")} is required in ${path.join(root, ".env")}`);
+  throw new Error(`${missing.join(", ")} is required in ${envPath}`);
 }
 
 const media = diagnoseMediaCapabilities(fileEnv, process.env);
 console.warn(`[openboard] ${media.diagnostic}`);
-const sharedEnv = resolveDeploymentEnv(fileEnv, process.env, { root, overrides: media.env });
+const apiEnv = resolveDeploymentEnv(fileEnv, process.env, { root, overrides: media.env });
+const webEnv = resolveWebEnv(apiEnv);
 
 module.exports = {
   apps: [
@@ -68,7 +78,7 @@ module.exports = {
       max_restarts: 20,
       min_uptime: "5s",
       time: true,
-      env: sharedEnv,
+      env: apiEnv,
     },
     {
       name: "openboard-web",
@@ -82,7 +92,7 @@ module.exports = {
       max_restarts: 20,
       min_uptime: "5s",
       time: true,
-      env: sharedEnv,
+      env: webEnv,
     },
   ],
 };

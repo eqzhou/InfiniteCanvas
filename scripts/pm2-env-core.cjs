@@ -60,6 +60,12 @@ const PROCESS_OWNED = Object.freeze({
   all_proxy: "",
 });
 
+/** Values required by the Vite preview process at runtime. */
+const WEB_ENV_KEYS = Object.freeze([
+  "OPENBOARD_API_TARGET",
+  "OPENBOARD_TOKEN",
+]);
+
 /** Applied only when neither `.env` nor the shell defines the key. */
 const FALLBACKS = Object.freeze({
   OPENBOARD_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173",
@@ -96,4 +102,37 @@ function resolveDeploymentEnv(fileEnv, processEnv, { root, overrides = {} }) {
   return { ...resolved, ...overrides, ...PROCESS_OWNED };
 }
 
-module.exports = { DEPLOYMENT_ENV_KEYS, FALLBACKS, PROCESS_OWNED, missingRequiredKeys, resolveDeploymentEnv };
+/**
+ * Reduces the API deployment environment to the Vite preview boundary.
+ *
+ * Server-only variables are explicitly blanked instead of merely omitted so a
+ * PM2 reload cannot retain sensitive values inherited by an older process.
+ * Neither the source object nor the shared constants are mutated.
+ */
+function resolveWebEnv(deploymentEnv) {
+  const resolved = {};
+  for (const key of DEPLOYMENT_ENV_KEYS) {
+    resolved[key] = WEB_ENV_KEYS.includes(key) ? (deploymentEnv[key] ?? "") : "";
+  }
+  for (const key of Object.keys(PROCESS_OWNED)) {
+    resolved[key] = deploymentEnv[key] ?? PROCESS_OWNED[key];
+  }
+  return resolved;
+}
+
+/** PM2 secret files must not be readable by the group or other users on POSIX. */
+function hasUnsafeSecretFilePermissions(mode, platform = process.platform) {
+  if (platform === "win32") return false;
+  return (mode & 0o077) !== 0;
+}
+
+module.exports = {
+  DEPLOYMENT_ENV_KEYS,
+  FALLBACKS,
+  PROCESS_OWNED,
+  WEB_ENV_KEYS,
+  hasUnsafeSecretFilePermissions,
+  missingRequiredKeys,
+  resolveDeploymentEnv,
+  resolveWebEnv,
+};

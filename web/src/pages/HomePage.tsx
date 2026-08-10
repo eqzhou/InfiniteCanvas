@@ -77,6 +77,9 @@ export function HomePage() {
   const [panelWidth, setPanelWidth] = useState(config.canvasPanelWidth ?? 256);
   const panelCollapsed = config.canvasPanelCollapsed === true;
   const panelTab = config.canvasPanelTab ?? "projects";
+  const panelActionClass = panelWidth < 300
+    ? "ob-icon-btn ob-panel-compact-action shrink-0"
+    : "ob-icon-btn h-8 w-8 shrink-0";
   const captureOwnerScope = useMemo(
     () => getDirectorCaptureOwnerScope(auth?.user),
     [auth?.user?.id, auth?.user?.tenantId],
@@ -246,7 +249,7 @@ export function HomePage() {
         className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-elev-1)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
         style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
-        <div className="flex min-h-12 min-w-0 items-center gap-px overflow-hidden border-b border-[var(--ob-line)] px-1 py-2">
+        <div className="ob-toolbar-scroll flex min-h-12 min-w-0 items-center gap-px overflow-x-auto border-b border-[var(--ob-line)] px-1 py-2">
           {panelWidth >= 300 ? (
             <strong className="mr-auto truncate text-sm">工作区</strong>
           ) : (
@@ -254,7 +257,7 @@ export function HomePage() {
           )}
           <button
             type="button"
-            className="ob-icon-btn h-8 w-8 shrink-0 md:hidden"
+            className={`${panelActionClass} ob-panel-mobile-only`}
             aria-label="关闭项目侧栏"
             title="关闭项目侧栏"
             onClick={() => setProjectsOpen(false)}
@@ -263,7 +266,7 @@ export function HomePage() {
           </button>
           <button
             type="button"
-            className="ob-icon-btn hidden h-8 w-8 shrink-0 md:grid"
+            className={`${panelActionClass} ob-panel-desktop-only`}
             title="收起侧栏"
             onClick={() => updatePanelConfig({ canvasPanelCollapsed: true })}
           >
@@ -273,7 +276,7 @@ export function HomePage() {
             <>
               <button
                 type="button"
-                className="ob-icon-btn h-8 w-8 shrink-0"
+                className={panelActionClass}
                 title="新建"
                 onClick={() => setCreateOpen(true)}
               >
@@ -281,7 +284,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="ob-icon-btn h-8 w-8 shrink-0"
+                className={panelActionClass}
                 aria-label="管理当前画布配音角色"
                 title="当前画布配音角色"
                 disabled={!activeProject}
@@ -291,7 +294,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="ob-icon-btn h-8 w-8 shrink-0"
+                className={panelActionClass}
                 title="导入 JSON"
                 onClick={() => fileRef.current?.click()}
               >
@@ -299,7 +302,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="ob-icon-btn h-8 w-8 shrink-0"
+                className={panelActionClass}
                 title="导出当前"
                 onClick={() => {
                   const p = exportActiveProject();
@@ -317,7 +320,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="ob-icon-btn h-8 w-8 shrink-0"
+                className={panelActionClass}
                 title="导出完整包"
                 onClick={() => {
                   void (async () => {
@@ -341,7 +344,7 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                className="ob-icon-btn h-8 w-8 shrink-0 !text-[var(--ob-danger)]"
+                className={`${panelActionClass} !text-[var(--ob-danger)]`}
                 title="删除勾选"
                 disabled={!checked.length}
                 onClick={() => {
@@ -414,7 +417,7 @@ export function HomePage() {
             }}
           />
         </div>
-        <div role="tablist" aria-label="工作区视图" className="relative grid grid-cols-4 border-b border-[var(--ob-line)] px-2 pt-1">
+        <div role="tablist" aria-label="工作区视图" className="ob-toolbar-scroll relative flex min-w-0 gap-0 overflow-x-auto border-b border-[var(--ob-line)] px-2 pt-1">
           {([
             ["projects", "项目"],
             ["elements", "元素"],
@@ -426,7 +429,7 @@ export function HomePage() {
               type="button"
               role="tab"
               aria-selected={panelTab === value}
-              className={`ob-tab relative z-[1] rounded-lg text-sm border-b-0 ${
+              className={`ob-tab relative z-[1] shrink-0 whitespace-nowrap rounded-lg border-b-0 px-2 text-sm ${
                 panelTab === value ? "" : ""
               }`}
               onClick={() => changePanelTab(value)}
@@ -434,15 +437,6 @@ export function HomePage() {
               {label}
             </button>
           ))}
-          <span
-            aria-hidden
-            className="pointer-events-none absolute bottom-0 left-2 h-0.5 w-[calc((100%_-_1rem)/4)] bg-[var(--ob-accent)] transition-transform duration-200 ease-out"
-            style={{
-              transform: `translateX(${
-                ({ projects: 0, elements: 1, assets: 2, prompts: 3 } as const)[panelTab] * 100
-              }%)`,
-            }}
-          />
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-2">
           {panelTab === "projects" ? (

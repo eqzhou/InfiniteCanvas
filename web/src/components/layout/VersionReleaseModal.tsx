@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { APP_VERSION } from "@/constant/env";
 import {
   isNewerVersion,
@@ -21,9 +22,13 @@ function tagClass(type: string): string {
 
 export function VersionReleaseModal({
   menuItem = false,
+  menuItemRole = menuItem,
+  onOpen,
   onClose,
 }: {
   menuItem?: boolean;
+  menuItemRole?: boolean;
+  onOpen?: () => void;
   onClose?: () => void;
 } = {}) {
   const bundled = useMemo(localReleases, []);
@@ -31,6 +36,8 @@ export function VersionReleaseModal({
   const [latestVersion, setLatestVersion] = useState(APP_VERSION);
   const [releases, setReleases] = useState<ReleaseInfo[]>(bundled);
   const [checking, setChecking] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const hasNew = isNewerVersion(latestVersion, APP_VERSION);
   const close = () => {
     setOpen(false);
@@ -57,17 +64,29 @@ export function VersionReleaseModal({
     void checkLatest(false);
   }, [checkLatest]);
 
+  useEffect(() => {
+    if (!open) return;
+    const trigger = triggerRef.current;
+    const focusFrame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      if (trigger && !trigger.closest("[inert]") && document.contains(trigger)) trigger.focus();
+    };
+  }, [open]);
+
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
-        role={menuItem ? "menuitem" : undefined}
+        role={menuItem && menuItemRole ? "menuitem" : undefined}
         className={menuItem
           ? "relative flex w-full items-center rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
           : "relative rounded-md px-2 py-1 text-xs font-medium text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]"}
         title="查看版本更新"
         onClick={() => {
           setOpen(true);
+          onOpen?.();
           void checkLatest(true);
         }}
       >
@@ -76,8 +95,8 @@ export function VersionReleaseModal({
           <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />
         ) : null}
       </button>
-      {open ? (
-        <div className="ob-overlay z-[130] p-3" role="presentation">
+      {open && typeof document !== "undefined" ? createPortal(
+        <div className="ob-overlay ob-release-overlay p-3" role="presentation">
           <section
             role="dialog"
             aria-modal="true"
@@ -90,6 +109,7 @@ export function VersionReleaseModal({
                 <h2 id="version-release-title" className="text-base font-semibold tracking-tight">版本更新</h2>
               </div>
               <button
+                ref={closeButtonRef}
                 type="button"
                 className="ob-icon-btn ml-auto"
                 aria-label="关闭版本说明"
@@ -157,7 +177,8 @@ export function VersionReleaseModal({
               ) : null}
             </div>
           </section>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </>
   );
