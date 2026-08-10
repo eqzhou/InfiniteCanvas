@@ -112,6 +112,40 @@ func TestIntegrateFilmTextResultMarksChangedSourceAsStale(t *testing.T) {
 	}
 }
 
+func TestSyncFilmTextJobCandidatePersistsReviewState(t *testing.T) {
+	document, job := filmTextCandidateFixture(t)
+	backend := newFilmMemoryStore()
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.CreateFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, raw); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	if err := server.syncFilmTextJobCandidate(t.Context(), store.DefaultTenantID, job); err != nil {
+		t.Fatal(err)
+	}
+	record, err := backend.GetFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := decodeFilmDocument(record.Document)
+	if err != nil || len(stored.AICandidates) != 1 || stored.AICandidates[0].Status != filmAICandidateReady ||
+		stored.Tasks[len(stored.Tasks)-1].Status != filmStatusNeedsReview {
+		t.Fatalf("persisted candidate = %#v err=%v", stored, err)
+	}
+	if err := server.syncFilmTextJobCandidate(t.Context(), store.DefaultTenantID, job); err != nil {
+		t.Fatal(err)
+	}
+	record, _ = backend.GetFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID)
+	stored, _ = decodeFilmDocument(record.Document)
+	if len(stored.AICandidates) != 1 {
+		t.Fatalf("worker retry duplicated candidate: %#v", stored.AICandidates)
+	}
+}
+
 func TestParseFilmAIDecompositionRejectsUntrustedStructure(t *testing.T) {
 	tests := map[string]string{
 		"unknown database field": strings.Replace(validFilmAIDecompositionJSON, `"summary":`, `"storageKey":"film:forged","summary":`, 1),
