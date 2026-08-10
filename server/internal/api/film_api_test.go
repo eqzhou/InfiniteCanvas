@@ -410,10 +410,16 @@ func (m *filmMemoryStore) CreateFilmGenerationBatch(
 	document []byte,
 	reservations []store.FilmGenerationReservation,
 ) (store.FilmRecord, error) {
-	m.filmMu.Lock()
-	defer m.filmMu.Unlock()
+	if m.casHook != nil {
+		m.casHook()
+	}
+	if m.casErr != nil {
+		return store.FilmRecord{}, m.casErr
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
 	key := tenantKey(tenantID, projectID)
 	record, exists := m.films[key]
 	if !exists {
