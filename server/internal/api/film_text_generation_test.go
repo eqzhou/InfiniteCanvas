@@ -271,3 +271,37 @@ func TestSyncFilmGenerationJobMaterializesCompletedTextCandidate(t *testing.T) {
 		t.Fatalf("completed text job was not materialized as a review candidate: %#v", synced)
 	}
 }
+
+func TestFilmAIScriptRunFreezesOneEpisodeAndQueuesTextJob(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	imported := decodeFilmResponse(t, request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"EPISODE 1\nINT. STATION - NIGHT\nLin hears a signal."}`)))
+	approveBody, _ := json.Marshal(map[string]any{"revision": imported.Stages[0].Revision})
+	approved := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/approve", approveBody))
+	episode := approved.Episodes[0]
+	scriptStage, _ := func() (filmStage, bool) {
+		for _, stage := range approved.Stages {
+			if stage.ID == "script" {
+				return stage, true
+			}
+		}
+		return filmStage{}, false
+	}()
+	body, _ := json.Marshal(map[string]any{
+		"revision": scriptStage.Revision, "mode": "ai", "providerId": "provider-text", "model": "gpt-text",
+		"episodeId": episode.ID, "idempotencyKey": "script-pass-1",
+	})
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/script/run", body)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("AI script run: %d %s", response.Code, response.Body.String())
+	}
+	created := decodeFilmResponse(t, response)
+	task := created.Tasks[len(created.Tasks)-1]
+	if task.Stage != "script" || task.TextSnapshot == nil || task.TextSnapshot.TargetEntityID != episode.ID ||
+		task.TextSnapshot.TargetRevision != episode.Revision || task.TextSnapshot.TargetSHA256 == "" {
+		t.Fatalf("script task did not freeze target episode: %#v", task)
+	}
+	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil || job.Kind != "text" || job.Status != "queued" || bytes.Contains([]byte(job.Prompt), []byte(episode.ID)) {
+		t.Fatalf("script text job was not safely queued: %#v err=%v", job, err)
+	}
+}
