@@ -74,6 +74,7 @@ export function BoardCanvas() {
   const connectingFrom = useBoardStore((s) => s.connectingFrom);
   const showMinimap = useBoardStore((s) => s.showMinimap);
   const panelCollapsed = useBoardStore((s) => s.config.canvasPanelCollapsed === true);
+  const interactionTool = useBoardStore((s) => s.config.canvasInteractionTool ?? "select");
   const setViewport = useBoardStore((s) => s.setViewport);
   const commitViewportRun = useBoardStore((s) => s.commitViewportRun);
   const setSelected = useBoardStore((s) => s.setSelected);
@@ -450,17 +451,14 @@ export function BoardCanvas() {
     if (e.button !== 0) return;
     const p = localPoint(e);
     captureCanvasPointer(e.pointerId);
-    if (spaceDown || e.altKey) {
+    const reverseTool = spaceDown || e.ctrlKey;
+    const shouldPan = interactionTool === "pan" ? !reverseTool : reverseTool || e.altKey;
+    if (shouldPan) {
       setDrag({
         kind: "pan",
         start: p,
         origin: { ...project.viewport },
       });
-      return;
-    }
-    if (e.metaKey || e.ctrlKey) {
-      setConnectingFrom(null);
-      setDrag({ kind: "marquee", start: p, current: p });
       return;
     }
     setConnectingFrom(null);
@@ -937,6 +935,12 @@ export function BoardCanvas() {
                   captureCanvasPointer(client.pointerId);
                 }
                 const p = localPoint(client);
+                const reverseTool = spaceDown || ("ctrlKey" in client && client.ctrlKey);
+                const shouldPan = interactionTool === "pan" ? !reverseTool : reverseTool;
+                if (shouldPan) {
+                  setDrag({ kind: "pan", start: p, origin: { ...project.viewport } });
+                  return;
+                }
                 const currentSelectedIds = useBoardStore.getState().selectedIds;
                 const selectedForDrag = currentSelectedIds.includes(node.id)
                   ? currentSelectedIds

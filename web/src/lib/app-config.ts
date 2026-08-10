@@ -67,6 +67,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
       ? Math.min(420, Math.max(240, Math.round(rawPanelWidth)))
       : 256,
     canvasPanelCollapsed: config.canvasPanelCollapsed === true,
+    canvasInteractionTool: config.canvasInteractionTool === "pan" ? "pan" : "select",
     canvasPanelTab: rawPanelTab === "elements" || rawPanelTab === "assets" || rawPanelTab === "prompts"
       ? rawPanelTab
       : "projects",

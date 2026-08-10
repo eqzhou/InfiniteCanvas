@@ -456,6 +456,7 @@ export type AppConfig = {
   canvasPanelWidth?: number;
   canvasPanelCollapsed?: boolean;
   canvasPanelTab?: "projects" | "elements" | "assets" | "prompts";
+  canvasInteractionTool?: "select" | "pan";
   imageToolbar?: import("@/lib/image-toolbar-preferences").ImageToolbarPreferences;
   generationDefaults?: import("@/lib/generation-defaults").GenerationDefaults;
   /** @deprecated Legacy global roles are migrated into pre-existing projects. */

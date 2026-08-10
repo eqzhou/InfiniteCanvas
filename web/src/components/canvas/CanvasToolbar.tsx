@@ -9,8 +9,10 @@ import {
   Grid3X3,
   Globe2,
   ImagePlus,
+  Hand,
   Map,
   Music2,
+  MousePointer2,
   Redo2,
   Settings2,
   Type,
@@ -46,6 +48,8 @@ export function CanvasToolbar({
   const setBackground = useBoardStore((s) => s.setBackground);
   const showMinimap = useBoardStore((s) => s.showMinimap);
   const setShowMinimap = useBoardStore((s) => s.setShowMinimap);
+  const config = useBoardStore((s) => s.config);
+  const setConfig = useBoardStore((s) => s.setConfig);
 
   return (
     <div
@@ -56,6 +60,9 @@ export function CanvasToolbar({
         reservePanelToggle ? "pl-14" : "pl-14 sm:pl-3",
       )}
     >
+      <Tool label="选择工具" onClick={() => setConfig({ ...config, canvasInteractionTool: "select" })} active={(config.canvasInteractionTool ?? "select") === "select"}><MousePointer2 size={16} /></Tool>
+      <Tool label="移动画布" onClick={() => setConfig({ ...config, canvasInteractionTool: "pan" })} active={config.canvasInteractionTool === "pan"}><Hand size={16} /></Tool>
+      <div className="mx-1 h-5 w-px shrink-0 bg-[var(--ob-line)]" />
       <Tool label="文本" onClick={() => onAdd("text")}>
         <Type size={16} />
       </Tool>
