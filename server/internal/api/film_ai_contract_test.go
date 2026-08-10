@@ -39,6 +39,7 @@ func TestParseFilmAIDecompositionAcceptsStrictNestedContract(t *testing.T) {
 func TestParseFilmAIDecompositionRejectsUntrustedStructure(t *testing.T) {
 	tests := map[string]string{
 		"unknown database field": strings.Replace(validFilmAIDecompositionJSON, `"summary":`, `"storageKey":"film:forged","summary":`, 1),
+		"duplicate json field":   strings.Replace(validFilmAIDecompositionJSON, `"summary":`, `"summary":"shadow","summary":`, 1),
 		"trailing json":          validFilmAIDecompositionJSON + `{}`,
 		"duplicate shot key": strings.Replace(validFilmAIDecompositionJSON,
 			`"shots":[{`, `"shots":[{"key":"shot-1","title":"Duplicate","description":"x","durationSeconds":1,"dialogues":[]},{`, 1),
