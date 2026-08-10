@@ -70,6 +70,7 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 	r.Get("/film/capabilities", server.getFilmCapabilities)
 	r.Route("/film/projects/{projectId}", func(r chi.Router) {
 		r.Get("/status", server.getFilmStatus)
+		r.Post("/source/preflight", server.preflightFilmSource)
 		r.Put("/source/text", server.putFilmSource)
 		r.Post("/source/import", server.importFilmSource)
 		r.Post("/episodes", server.createFilmEpisode)
