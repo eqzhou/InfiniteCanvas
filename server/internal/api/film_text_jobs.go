@@ -143,14 +143,6 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": jobID, "projectId": document.ProjectID, "stage": stage})
-	if err := s.store.CreateServerGenerationJob(r.Context(), tenantIDFrom(r), userIDFrom(r), job, 1, meta); err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			writeFilmError(w, http.StatusConflict, "generation_job_conflict", "generation job id belongs to another request")
-		} else {
-			writeFilmOperationError(w, filmGenerationStoreError(err))
-		}
-		return
-	}
 	next := cloneFilmDocument(document)
 	next.Tasks = append(next.Tasks, filmTask{
 		ID: taskID, Revision: 1, Stage: stage, Title: "AI story decomposition", Status: filmStatusRunning,
@@ -168,14 +160,30 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 	next.Revision++
 	next.UpdatedAt = now
 	if err := validateFilmAggregateLimits(next); err != nil {
-		_ = s.store.DeleteGenerationJob(r.Context(), tenantIDFrom(r), jobID)
 		writeFilmOperationError(w, err)
 		return
 	}
 	raw, err := json.Marshal(next)
 	if err != nil || len(raw) > maxProjectBytes {
-		_ = s.store.DeleteGenerationJob(r.Context(), tenantIDFrom(r), jobID)
 		writeFilmError(w, http.StatusUnprocessableEntity, "film_document_too_large", "Film production exceeds its storage limit")
+		return
+	}
+	tenantID, userID := tenantIDFrom(r), userIDFrom(r)
+	if atomicBackend, ok := s.store.(store.FilmGenerationBatchStore); ok {
+		updated, err := atomicBackend.CreateFilmGenerationBatch(
+			r.Context(), tenantID, userID, record.ProjectID, record.Revision, raw,
+			[]store.FilmGenerationReservation{{Job: job, Units: 1, UsageMeta: meta}},
+		)
+		if err != nil {
+			writeFilmTextBatchError(w, err)
+			return
+		}
+		s.notifyGenerationWorkers()
+		s.writeFilmDocument(w, r, http.StatusAccepted, updated, next)
+		return
+	}
+	if err := s.store.CreateServerGenerationJob(r.Context(), tenantID, userID, job, 1, meta); err != nil {
+		writeFilmTextBatchError(w, err)
 		return
 	}
 	updated, err := backend.CompareAndSwapFilmProject(r.Context(), tenantIDFrom(r), record.ProjectID, record.Revision, raw)
@@ -190,4 +198,12 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.notifyGenerationWorkers()
 	s.writeFilmDocument(w, r, http.StatusAccepted, updated, next)
+}
+
+func writeFilmTextBatchError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrConflict) {
+		writeFilmError(w, http.StatusConflict, "revision_conflict", "Film production or generation job changed; reload before retrying")
+		return
+	}
+	writeFilmOperationError(w, filmGenerationStoreError(err))
 }
