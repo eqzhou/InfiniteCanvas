@@ -121,7 +121,12 @@ func (s *Server) adoptFilmDirectorCapture(w http.ResponseWriter, r *http.Request
 	} else {
 		shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = storageKey, digest, version, ""
 	}
-	shot.DirectorSource = &filmDirectorSource{Revision: 1, TargetField: input.TargetField, CaptureID: capture.ID, DirectorNodeID: capture.DirectorNodeID, CameraID: capture.CameraID, CameraName: capture.CameraName, Width: capture.Width, Height: capture.Height, StorageKey: storageKey, SHA256: digest, ObjectVersion: version, Snapshot: append(json.RawMessage(nil), capture.Shot...), AdoptedAt: now}
+	directorSource := &filmDirectorSource{Revision: 1, TargetField: input.TargetField, CaptureID: capture.ID, DirectorNodeID: capture.DirectorNodeID, CameraID: capture.CameraID, CameraName: capture.CameraName, Width: capture.Width, Height: capture.Height, StorageKey: storageKey, SHA256: digest, ObjectVersion: version, Snapshot: append(json.RawMessage(nil), capture.Shot...), AdoptedAt: now}
+	if input.TargetField == "storyboard" {
+		shot.StoryboardDirectorSource = directorSource
+	} else {
+		shot.FirstFrameDirectorSource = directorSource
+	}
 	shot.MediaMIMEType, shot.MediaProvenance, shot.Status = "image/png", "director:"+capture.ID, filmStatusNeedsReview
 	shot.Revision++
 	next.Shots[shotIndex] = shot

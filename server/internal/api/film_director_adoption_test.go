@@ -55,7 +55,7 @@ func TestFilmAdoptsVerifiedDirectorCaptureIntoStableMedia(t *testing.T) {
 		t.Fatalf("adopt director capture: %d %s", response.Code, response.Body.String())
 	}
 	adopted := decodeFilmResponse(t, response).Shots[0]
-	if adopted.DirectorSource == nil || adopted.DirectorSource.CaptureID != capture.ID || adopted.DirectorSource.DirectorNodeID != "director-main" ||
+	if adopted.StoryboardDirectorSource == nil || adopted.StoryboardDirectorSource.CaptureID != capture.ID || adopted.StoryboardDirectorSource.DirectorNodeID != "director-main" ||
 		adopted.ImageStorageKey == "" || adopted.ImageStorageKey == "director-capture:"+capture.ID || adopted.ImageSHA256 == "" || adopted.ImageObjectVersion == "" {
 		t.Fatalf("director provenance was not frozen into Film: %#v", adopted)
 	}

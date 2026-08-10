@@ -69,7 +69,8 @@ type filmShot struct {
 	Subtitle                  string              `json:"subtitle,omitempty"`
 	MediaMIMEType             string              `json:"mediaMimeType,omitempty"`
 	MediaProvenance           string              `json:"mediaProvenance,omitempty"`
-	DirectorSource            *filmDirectorSource `json:"directorSource,omitempty"`
+	StoryboardDirectorSource  *filmDirectorSource `json:"storyboardDirectorSource,omitempty"`
+	FirstFrameDirectorSource  *filmDirectorSource `json:"firstFrameDirectorSource,omitempty"`
 }
 
 type filmDirectorSource struct {
@@ -225,18 +226,19 @@ type filmStructureVersion struct {
 // GenerationJob. Assets remain embedded here even when their editable records
 // are changed later, so an approved result can be reproduced and audited.
 type filmGenerationSnapshot struct {
-	ShotRevision         int                  `json:"shotRevision"`
-	Prompt               string               `json:"prompt"`
-	ProviderID           string               `json:"providerId"`
-	Model                string               `json:"model"`
-	Config               filmGenerationConfig `json:"config"`
-	IdentityVersions     []filmAsset          `json:"identityVersions"`
-	StyleVersion         *filmAsset           `json:"styleVersion,omitempty"`
-	DirectorSource       *filmDirectorSource  `json:"directorSource,omitempty"`
-	ReferenceStorageKeys []string             `json:"referenceStorageKeys"`
-	EstimatedGenerations int                  `json:"estimatedGenerations"`
-	EstimatedCredits     int                  `json:"estimatedCredits,omitempty"`
-	CreatedAt            string               `json:"createdAt"`
+	ShotRevision             int                  `json:"shotRevision"`
+	Prompt                   string               `json:"prompt"`
+	ProviderID               string               `json:"providerId"`
+	Model                    string               `json:"model"`
+	Config                   filmGenerationConfig `json:"config"`
+	IdentityVersions         []filmAsset          `json:"identityVersions"`
+	StyleVersion             *filmAsset           `json:"styleVersion,omitempty"`
+	StoryboardDirectorSource *filmDirectorSource  `json:"storyboardDirectorSource,omitempty"`
+	FirstFrameDirectorSource *filmDirectorSource  `json:"firstFrameDirectorSource,omitempty"`
+	ReferenceStorageKeys     []string             `json:"referenceStorageKeys"`
+	EstimatedGenerations     int                  `json:"estimatedGenerations"`
+	EstimatedCredits         int                  `json:"estimatedCredits,omitempty"`
+	CreatedAt                string               `json:"createdAt"`
 }
 
 type filmQualityIssue struct {
