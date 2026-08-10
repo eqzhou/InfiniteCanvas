@@ -56,6 +56,7 @@ type Server struct {
 	tenantBlobStores        map[string]tenantBlobStoreCacheEntry
 	secrets                 cipher.AEAD
 	imageExecutor           imageExecutor
+	textExecutor            textExecutor
 	videoExecutor           videoExecutor
 	audioExecutor           audioExecutor
 	promptCatalogFetcher    promptCatalogFetchFunc
@@ -269,6 +270,7 @@ func NewServer(dataDir string) *Server {
 			"http://127.0.0.1:5173": {},
 		},
 		imageExecutor:       newOpenAIImageExecutor(),
+		textExecutor:        providerTextExecutor{},
 		videoExecutor:       newHTTPVideoExecutor(),
 		audioExecutor:       newHTTPAudioExecutor(),
 		filmCommandRunner:   execFilmCommandRunner{},

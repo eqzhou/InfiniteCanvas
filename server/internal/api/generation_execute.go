@@ -608,20 +608,35 @@ func (s *Server) notifyGenerationWorkers() {
 
 func (s *Server) generationWorkerLoop() {
 	defer s.generationWorkerWG.Done()
+	kinds := []string{"text", "image"}
+	nextKind := 0
 	for {
-		now := time.Now().UTC()
-		attempt := randomGenerationOwner()
-		claimed, err := s.store.ClaimServerGenerationJob(s.generationRoot,
-			store.GenerationClaim{Kind: "image", Executor: serverExecutorMarker},
-			attempt, now, now.Add(generationLeaseDuration))
-		if err == nil {
-			s.generationWG.Add(1)
-			s.executeClaimedImageJob(claimed)
-			s.generationWG.Done()
-			continue
+		claimedWork := false
+		for offset := range kinds {
+			kindIndex := (nextKind + offset) % len(kinds)
+			now := time.Now().UTC()
+			attempt := randomGenerationOwner()
+			claimed, err := s.store.ClaimServerGenerationJob(s.generationRoot,
+				store.GenerationClaim{Kind: kinds[kindIndex], Executor: serverExecutorMarker},
+				attempt, now, now.Add(generationLeaseDuration))
+			if err == nil {
+				nextKind = (kindIndex + 1) % len(kinds)
+				s.generationWG.Add(1)
+				if claimed.Job.Kind == "text" {
+					s.executeClaimedTextJob(claimed)
+				} else {
+					s.executeClaimedImageJob(claimed)
+				}
+				s.generationWG.Done()
+				claimedWork = true
+				break
+			}
+			if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, context.Canceled) {
+				// A later polling pass retries transient database failures.
+			}
 		}
-		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, context.Canceled) {
-			// A later polling pass retries transient database failures.
+		if claimedWork {
+			continue
 		}
 		select {
 		case <-s.generationRoot.Done():

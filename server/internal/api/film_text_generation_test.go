@@ -59,6 +59,7 @@ func TestTextGenerationJobsAreServerManaged(t *testing.T) {
 }
 
 func TestTextWorkerUsesFrozenChannelAndPersistsProviderResult(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	backend := newMemoryStore()
 	server := NewServerWithStore(t.TempDir(), backend)
 	t.Cleanup(server.Close)
