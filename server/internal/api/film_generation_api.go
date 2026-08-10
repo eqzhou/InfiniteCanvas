@@ -219,7 +219,14 @@ func retryFilmJobClone(job store.GenerationJob, task filmTask, projectID string,
 		return store.GenerationJob{}, filmTask{}, err
 	}
 	binding := &filmGenerationBinding{ProjectID: projectID, Stage: task.Stage, ShotID: task.ShotID, TaskID: newTaskID, RequestHash: requestHash}
-	if job.Kind == "image" {
+	if job.Kind == "text" {
+		var parameters persistedTextJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil || validatePersistedTextJob(job, parameters) != nil || parameters.Film == nil {
+			return store.GenerationJob{}, filmTask{}, errors.New("text generation retry parameters are invalid")
+		}
+		parameters.RequestHash, parameters.Film = requestHash, binding
+		job.Parameters, _ = json.Marshal(parameters)
+	} else if job.Kind == "image" {
 		var parameters persistedImageJobParameters
 		if json.Unmarshal(job.Parameters, &parameters) != nil {
 			return store.GenerationJob{}, filmTask{}, errors.New("generation retry parameters are invalid")
@@ -239,7 +246,7 @@ func retryFilmJobClone(job store.GenerationJob, task filmTask, projectID string,
 	retryTask := filmTask{
 		ID: newTaskID, Revision: 1, Stage: task.Stage, ShotID: task.ShotID, Title: task.Title,
 		Status: filmStatusRunning, CreatedAt: now, UpdatedAt: now, GenerationJobID: newJobID,
-		IdempotencyKey: "retry:" + job.ID, RequestHash: requestHash, Snapshot: task.Snapshot,
+		IdempotencyKey: "retry:" + job.ID, RequestHash: requestHash, Snapshot: task.Snapshot, TextSnapshot: task.TextSnapshot,
 	}
 	return job, retryTask, nil
 }
@@ -273,6 +280,24 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		writeFilmOperationError(w, err)
 		return
+	}
+	if retryJob.Kind == "text" {
+		selectedProviderID, channelSnapshot, snapshotErr := s.snapshotGenerationChannel(r.Context(), tenantIDFrom(r), "text", retryJob.ID, retryJob.ProviderID, retryJob.Model)
+		if snapshotErr != nil {
+			writeFilmOperationError(w, snapshotErr)
+			return
+		}
+		var parameters persistedTextJobParameters
+		if json.Unmarshal(retryJob.Parameters, &parameters) != nil {
+			writeFilmError(w, http.StatusUnprocessableEntity, "generation_retry_invalid", "text generation retry snapshot is invalid")
+			return
+		}
+		parameters.SharedChannel = channelSnapshot
+		retryJob.ProviderID = selectedProviderID
+		if channelSnapshot != nil && channelSnapshot.Model != "" {
+			retryJob.Model = channelSnapshot.Model
+		}
+		retryJob.Parameters, _ = json.Marshal(parameters)
 	}
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), retryJob.ID); getErr == nil {
 		retryJob = existing
