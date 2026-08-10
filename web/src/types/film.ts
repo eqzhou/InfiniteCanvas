@@ -36,6 +36,22 @@ export type FilmScene = {
   status: FilmEntityStatus;
 };
 
+export type FilmDirectorSource = {
+  revision: number;
+  targetField: "storyboard" | "first_frame";
+  captureId: string;
+  directorNodeId: string;
+  cameraId: string;
+  cameraName: string;
+  width: number;
+  height: number;
+  storageKey: string;
+  sha256: string;
+  objectVersion: string;
+  snapshot: unknown;
+  adoptedAt: string;
+};
+
 export type FilmShot = {
   id: string;
   revision: number;
@@ -66,6 +82,8 @@ export type FilmShot = {
   audioGenerationJobId?: string;
   subtitle?: string;
   mediaMimeType?: string;
+  storyboardDirectorSource?: FilmDirectorSource;
+  firstFrameDirectorSource?: FilmDirectorSource;
 };
 
 export type FilmDialogue = {
@@ -205,6 +223,8 @@ export type FilmGenerationSnapshot = {
   config: Record<string, unknown>;
   identityVersions: FilmAsset[];
   styleVersion?: FilmAsset;
+  storyboardDirectorSource?: FilmDirectorSource;
+  firstFrameDirectorSource?: FilmDirectorSource;
   referenceStorageKeys: string[];
   estimatedGenerations: number;
   estimatedCredits?: number;

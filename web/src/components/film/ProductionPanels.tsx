@@ -7,6 +7,7 @@ import {
   cancelFilmGenerationJob,
   commitFilmProjection,
   listFilmGenerationJobs,
+  listFilmDirectorCaptures,
   loadFilmStatus,
   refreshFilmProjection,
   resolveFilmStageSelection,
@@ -14,6 +15,8 @@ import {
   waitForFilmGenerationStage,
   type FilmGenerationJob,
   type FilmCanvasAdoptionRequest,
+  type FilmDirectorAdoptionInput,
+  type FilmDirectorCapture,
   type FilmProjectionPlan,
   type FilmStageRunRequest,
   type FilmStatus,
@@ -147,19 +150,24 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
   </WorkbenchSection>;
 }
 
-export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanvas, onCommitCanvas, onAdopt }: {
+export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanvas, onCommitCanvas, onAdopt, onAdoptDirector }: {
   project: BoardProject; status: FilmStatus; busy: boolean;
   onStatus: (label: string, operation: () => Promise<FilmStatus>) => void;
   onRefreshCanvas: () => Promise<void>;
   onCommitCanvas: (diffs: FilmProjectionDiff[]) => Promise<void>;
   onAdopt: (input: FilmCanvasAdoptionRequest) => Promise<void>;
+  onAdoptDirector: (input: FilmDirectorAdoptionInput) => Promise<void>;
 }) {
   const [plan, setPlan] = useState<FilmProjectionPlan | null>(null);
   const [error, setError] = useState("");
   const [candidateId, setCandidateId] = useState("");
   const [target, setTarget] = useState("");
+  const [directorCaptures, setDirectorCaptures] = useState<FilmDirectorCapture[]>([]);
+  const [directorCaptureId, setDirectorCaptureId] = useState("");
+  const [directorTarget, setDirectorTarget] = useState("");
   const diffs = buildFilmProjectionDiffs(project, status.document);
   const candidates = project.nodes.filter((node) => ["image", "video", "audio"].includes(node.type) && node.metadata.storageKey);
+  const directorNodes = project.nodes.filter((node) => node.type === "director");
   const targets = [
     ...status.document.shots.flatMap((shot) => ([
       { key: `shot:${shot.id}:image`, label: `${shot.title} · 分镜`, revision: shot.revision },
@@ -177,6 +185,17 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
     if (targetType === "shot" && node.type !== (targetField === "first_frame" ? "image" : targetField)) throw new Error("候选媒体类型与镜头目标不匹配");
     await onAdopt({ targetType, targetId, targetField, expectedRevision: selected.revision, sourceNodeId: node.id, storageKey: node.metadata.storageKey, ...(node.metadata.generationJobId ? { generationJobId: node.metadata.generationJobId } : {}) });
   };
+  const loadDirectorCaptures = async () => {
+    const captures = await listFilmDirectorCaptures(project.id, directorNodes.map((node) => node.id));
+    setDirectorCaptures(captures);
+    setDirectorCaptureId((current) => captures.some((capture) => capture.id === current) ? current : captures[0]?.id ?? "");
+  };
+  const adoptDirector = async () => {
+    const [shotId, targetField] = directorTarget.split(":") as [string, FilmDirectorAdoptionInput["targetField"]];
+    const shot = status.document.shots.find((item) => item.id === shotId);
+    if (!shot || !directorCaptures.some((capture) => capture.id === directorCaptureId) || !["storyboard", "first_frame"].includes(targetField)) throw new Error("请选择 Director 拍摄版本和镜头目标");
+    await onAdoptDirector({ shotId, expectedRevision: shot.revision, captureId: directorCaptureId, targetField });
+  };
   return <WorkbenchSection id="projection" title="画布投影同步 / Projection">
     <div className="flex flex-wrap gap-2">
       <button className="ob-btn ob-btn-primary" disabled={busy} onClick={() => void onRefreshCanvas().catch((cause) => setError(String(cause)))}><RefreshCw size={14} /> 刷新到真实画布</button>
@@ -189,6 +208,15 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
       <select aria-label="采用目标" className="ob-input" value={target} onChange={(event) => setTarget(event.target.value)}><option value="">选择镜头或资产目标</option>{targets.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select>
       <button className="ob-btn" disabled={busy || !candidateId || !target} onClick={() => void adopt().catch((cause) => setError(String(cause)))}>采用并记录来源</button>
     </div>
+    {directorNodes.length ? <div className="mt-4 rounded-xl border border-[var(--ob-line)] p-3">
+      <div className="flex flex-wrap items-center gap-2"><strong className="mr-auto text-sm">Director 正式构图</strong><button className="ob-btn" disabled={busy} onClick={() => void loadDirectorCaptures().catch((cause) => setError(String(cause)))}><RefreshCw size={14} /> 加载 Director 拍摄版本</button></div>
+      <p className="mt-1 text-xs text-[var(--ob-muted)]">服务端会验证拍摄版本属于当前影视项目，并复制为稳定媒体；临时拍摄记录删除后不会影响正式镜头。</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+        <select aria-label="Director 拍摄版本" className="ob-input" value={directorCaptureId} onChange={(event) => setDirectorCaptureId(event.target.value)}><option value="">选择已验证的拍摄版本</option>{directorCaptures.map((capture) => <option key={capture.id} value={capture.id}>{capture.cameraName} · {capture.width}×{capture.height} · {new Date(capture.createdAt).toLocaleString()}</option>)}</select>
+        <select aria-label="Director 采用目标" className="ob-input" value={directorTarget} onChange={(event) => setDirectorTarget(event.target.value)}><option value="">选择镜头目标</option>{status.document.shots.flatMap((shot) => [<option key={`${shot.id}:storyboard`} value={`${shot.id}:storyboard`}>{shot.title} · 分镜</option>, <option key={`${shot.id}:first_frame`} value={`${shot.id}:first_frame`}>{shot.title} · 首帧</option>])}</select>
+        <button className="ob-btn" disabled={busy || !directorCaptureId || !directorTarget} onClick={() => void adoptDirector().catch((cause) => setError(String(cause)))}>采用为分镜或首帧</button>
+      </div>
+    </div> : null}
     {error ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{error}</p> : null}
     {diffs.length ? <ul className="mt-3 space-y-2">{diffs.map((diff) => <li key={diff.projectionKey} className="rounded-lg border border-[var(--ob-line)] p-2 text-xs"><strong>{diff.projectionKey}</strong><div className="mt-1 grid gap-1 sm:grid-cols-2"><span className="text-[var(--ob-muted)]">原：{diff.before.title} · {diff.before.content}</span><span>新：{diff.after.title} · {diff.after.content}</span></div></li>)}</ul> : null}
     <div className="mt-3 space-y-2">{plan?.targets.map((target) => <form key={`${target.projectionKey}:${target.revision}`} className="rounded-lg border border-[var(--ob-line)] p-2" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onStatus("提交投影", () => commitFilmProjection(project.id, { projectionKey: target.projectionKey, expectedRevision: target.revision, fields: { title: String(form.get("title") ?? ""), content: String(form.get("content") ?? "") } })); }}><input name="title" aria-label={`${target.projectionKey} 投影标题`} className="ob-input w-full" defaultValue={target.title} /><textarea name="content" aria-label={`${target.projectionKey} 投影内容`} className="ob-input mt-1 w-full" defaultValue={target.content} /><button className="ob-btn mt-1"><Save size={14} /> 提交投影修改</button></form>)}</div>
