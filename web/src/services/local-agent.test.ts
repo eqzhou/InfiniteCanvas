@@ -337,6 +337,7 @@ describe("local agent connection", () => {
         permissionMode: "read-only",
         model: "gpt-5.6-terra",
         effort: "medium",
+        contextReferences: [{ kind: "skill", id: "review-code", label: "Review code" }, { kind: "node", id: "node-1", label: "产品主图" }],
       },
     );
     await interruptCodexTurn(connection, session.id, fetcher);
@@ -365,6 +366,7 @@ describe("local agent connection", () => {
       permissionMode: "read-only",
       model: "gpt-5.6-terra",
       effort: "medium",
+      contextReferences: [{ kind: "skill", id: "review-code", label: "Review code" }, { kind: "node", id: "node-1", label: "产品主图" }],
     });
 
     expect(JSON.parse(String(requests[7].init?.body))).toEqual({ sessionId: "session-1", id: 7, approve: true });
