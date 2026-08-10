@@ -132,15 +132,18 @@ export type FilmTask = {
 };
 
 export type FilmTextGenerationSnapshot = {
-	sourceRevision: number;
-	sourceSha256: string;
-	providerId: string;
-	model: string;
-	promptVersion: string;
-	outputSchema: string;
-	estimatedGenerations: number;
-	estimatedCredits?: number;
-	createdAt: string;
+  sourceRevision: number;
+  sourceSha256: string;
+  providerId: string;
+  model: string;
+  promptVersion: string;
+  outputSchema: string;
+  targetEntityId?: string;
+  targetRevision?: number;
+  targetSha256?: string;
+  estimatedGenerations: number;
+  estimatedCredits?: number;
+  createdAt: string;
 };
 
 export type FilmAIDialogue = { kind: "dialogue" | "narration"; characterKey: string; text: string };
@@ -169,6 +172,29 @@ export type FilmAICandidate = {
 	decomposition: FilmAIDecomposition;
 	createdAt: string;
 	appliedAt?: string;
+};
+
+export type FilmAIScriptDialogue = { kind: "dialogue" | "narration"; speaker: string; text: string };
+export type FilmAIScriptShot = { key: string; title: string; description: string; durationSeconds: number; dialogues: FilmAIScriptDialogue[] };
+export type FilmAIScriptScene = { key: string; heading: string; synopsis: string; shots: FilmAIScriptShot[] };
+export type FilmAIScript = { summary: string; scenes: FilmAIScriptScene[] };
+export type FilmAIScriptCandidate = {
+  id: string;
+  revision: number;
+  stage: "script";
+  status: "ready" | "stale" | "rejected" | "applied";
+  sourceRevision: number;
+  sourceSha256: string;
+  filmRevision: number;
+  targetEpisodeId: string;
+  targetRevision: number;
+  targetSha256: string;
+  taskId: string;
+  generationJobId: string;
+  requestHash: string;
+  script: FilmAIScript;
+  createdAt: string;
+  appliedAt?: string;
 };
 
 export type FilmGenerationSnapshot = {
@@ -330,7 +356,8 @@ export type FilmDocument = {
   assets: FilmAsset[];
   stages: FilmStage[];
   tasks: FilmTask[];
-	aiCandidates?: FilmAICandidate[];
+  aiCandidates?: FilmAICandidate[];
+  scriptCandidates?: FilmAIScriptCandidate[];
   qualityReports: FilmQualityReport[];
   timeline: FilmTimeline;
   deliverables: FilmDeliverable[];

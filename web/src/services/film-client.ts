@@ -391,6 +391,32 @@ export function applyFilmAICandidate(projectId: string, candidateId: string, rev
 	});
 }
 
+export function requestFilmAIScript(
+  projectId: string,
+  input: { revision: number; episodeId: string; providerId: string; model: string; idempotencyKey: string },
+): Promise<FilmStatus> {
+  return requestFilm(projectId, "/stages/script/run", {
+    method: "POST",
+    headers: { "Idempotency-Key": input.idempotencyKey },
+    body: JSON.stringify({
+      revision: input.revision,
+      mode: "ai",
+      episodeId: input.episodeId,
+      providerId: input.providerId,
+      model: input.model,
+      idempotencyKey: input.idempotencyKey,
+    }),
+  });
+}
+
+export function applyFilmAIScriptCandidate(projectId: string, candidateId: string, revision: number): Promise<FilmStatus> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(candidateId)) throw new Error("Invalid AI script candidate id");
+  return requestFilm(projectId, `/ai-script-candidates/${encodeURIComponent(candidateId)}/apply`, {
+    method: "POST",
+    body: JSON.stringify({ revision }),
+  });
+}
+
 const FILM_GENERATION_CONFIG_KEYS = new Set([
   "size", "quality", "ratio", "resolution", "seconds", "generateAudio", "watermark",
   "negativePrompt", "referenceStorageKeys", "voice", "format", "speed", "instructions",
