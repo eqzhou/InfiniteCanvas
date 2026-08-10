@@ -8,6 +8,8 @@ import {
   loadFilmStatus,
   normalizeFilmCapabilities,
   requestFilmStageRun,
+  requestFilmAIDecomposition,
+  applyFilmAICandidate,
   requestFilmExport,
   retryFilmGenerationJob,
   waitForFilmGenerationStage,
@@ -151,6 +153,29 @@ describe("film client", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/stages/video/run");
     expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("film-video-0001");
     expect(JSON.parse(String(init?.body))).toEqual({ revision: 1, shotIds: ["shot-3", "shot-8"], providerId: "studio-provider", model: "video-v2", config: { resolution: "1080p" }, idempotencyKey: "film-video-0001" });
+  });
+
+  test("sends strict AI decomposition and candidate apply contracts", async () => {
+    const film = createFilmDocument("film-ai", "2026-08-08T00:00:00.000Z");
+    const requests: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ data: film, meta: { recordRevision: 2 } }), { status: 202 });
+    }) as typeof fetch;
+
+    await requestFilmAIDecomposition("film-ai", {
+      revision: 3, providerId: "shared-text", model: "gpt-text", idempotencyKey: "decompose-1",
+    });
+    await applyFilmAICandidate("film-ai", "candidate-1", 4);
+
+    expect(requests[0]).toEqual({
+      url: "/api/film/projects/film-ai/stages/decompose/run",
+      body: { revision: 3, mode: "ai", providerId: "shared-text", model: "gpt-text", idempotencyKey: "decompose-1" },
+    });
+    expect(requests[1]).toEqual({
+      url: "/api/film/projects/film-ai/ai-candidates/candidate-1/apply",
+      body: { revision: 4 },
+    });
   });
 
   test("sends a stable idempotency key for every export kind", async () => {

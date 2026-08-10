@@ -22,6 +22,15 @@ describe("shared channel catalog", () => {
     expect(isServerManagedChannel(channel, "image")).toBe(true);
   });
 
+  test("enables server-managed text only when the admin configured a text model", () => {
+    const channel = sharedChannelAsAI({
+      id: "shared-text", name: "Shared text", protocol: "openai", defaultTextModel: "gpt-text",
+    });
+    expect(channel.defaultTextModel).toBe("gpt-text");
+    expect(channel.providers?.text).toMatchObject({ model: "gpt-text", protocol: "openai" });
+    expect(isServerManagedChannel(channel, "text")).toBe(true);
+  });
+
   test("allows keyless Edge audio and server-managed audio generation", () => {
     const personal = createDefaultChannel();
     const keylessEdge = {
