@@ -79,6 +79,27 @@ describe("estimateCredits", () => {
     await estimateCredits("m", 0);
     expect(url).toContain("units=1");
   });
+
+  test("sends the shared media capability identity for a catalog-backed estimate", async () => {
+    let url = "";
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      url = String(input);
+      return new Response(JSON.stringify({
+        model: "gpt-image-1", units: 1, creditsPerUnit: 3, totalCredits: 3, balance: 10, sufficient: true,
+        capabilityVersion: "a".repeat(64), generationMode: "image_to_image",
+      }));
+    }) as typeof fetch;
+
+    const estimate = await estimateCredits("gpt-image-1", 1, {
+      providerId: "shared-image", kind: "image", mode: "image_to_image",
+    });
+
+    expect(url).toContain("providerId=shared-image");
+    expect(url).toContain("kind=image");
+    expect(url).toContain("mode=image_to_image");
+    expect(estimate.capabilityVersion).toBe("a".repeat(64));
+    expect(estimate.generationMode).toBe("image_to_image");
+  });
 });
 
 describe("formatEstimateSuffix", () => {

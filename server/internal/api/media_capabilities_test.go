@@ -120,3 +120,34 @@ func TestSharedVideoAndAudioJobsFreezeCatalogResolution(t *testing.T) {
 		}
 	}
 }
+
+func TestBillingEstimateUsesTheSameSharedMediaCatalogVersion(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	channels, _ := json.Marshal([]adminChannelPublic{{
+		ID: "billing-image", Name: "Billing image", BaseURL: "https://shared.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultImageModel: "gpt-image-1", Models: []string{"gpt-image-1"},
+	}})
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "billing-image", "sk-private"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	estimate := request(t, router, http.MethodGet, "/api/billing/estimate?model=gpt-image-1&units=2&providerId=billing-image&kind=image&mode=text_to_image", nil)
+	if estimate.Code != http.StatusOK || !bytes.Contains(estimate.Body.Bytes(), []byte(`"generationMode":"text_to_image"`)) {
+		t.Fatalf("estimate: %d %s", estimate.Code, estimate.Body.String())
+	}
+	var payload map[string]any
+	if json.Unmarshal(estimate.Body.Bytes(), &payload) != nil {
+		t.Fatalf("estimate JSON is invalid: %s", estimate.Body.String())
+	}
+	capabilityVersion, versionOK := payload["capabilityVersion"].(string)
+	if !versionOK || len(capabilityVersion) != 64 {
+		t.Fatalf("estimate did not freeze capability version: %s", estimate.Body.String())
+	}
+	rejected := request(t, router, http.MethodGet, "/api/billing/estimate?model=unlisted&units=1&providerId=billing-image&kind=image&mode=text_to_image", nil)
+	if rejected.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unlisted estimate accepted: %d %s", rejected.Code, rejected.Body.String())
+	}
+}
