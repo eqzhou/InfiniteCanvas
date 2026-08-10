@@ -8,6 +8,7 @@ export type SharedChannel = {
   id: string;
   name: string;
   protocol: Exclude<AiProtocol, "ark" | "template">;
+  defaultTextModel?: string;
   defaultImageModel?: string;
   defaultVideoModel?: string;
   defaultAudioModel?: string;
@@ -43,10 +44,10 @@ export function sharedChannelAsAI(channel: SharedChannel): AiChannel {
   });
   return {
     id: channel.id, name: channel.name, baseUrl: managedBaseUrl, apiKey: managedCredential,
-    defaultTextModel: "", defaultImageModel: channel.defaultImageModel ?? "",
+		defaultTextModel: channel.defaultTextModel ?? "", defaultImageModel: channel.defaultImageModel ?? "",
     defaultVideoModel: channel.defaultVideoModel ?? "", defaultAudioModel: channel.defaultAudioModel ?? "",
     providers: {
-      text: { baseUrl: "", apiKey: "", model: "", protocol: "openai", ...(models.length ? { models: [...models] } : {}) },
+			text: endpoint(channel.defaultTextModel),
       image: endpoint(channel.defaultImageModel), video: endpoint(channel.defaultVideoModel),
       audio: endpoint(channel.defaultAudioModel),
     },

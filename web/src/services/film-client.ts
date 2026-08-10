@@ -336,6 +336,31 @@ export function requestFilmStageRun(
   });
 }
 
+export function requestFilmAIDecomposition(
+	projectId: string,
+	input: { revision: number; providerId: string; model: string; idempotencyKey: string },
+): Promise<FilmStatus> {
+	return requestFilm(projectId, "/stages/decompose/run", {
+		method: "POST",
+		headers: { "Idempotency-Key": input.idempotencyKey },
+		body: JSON.stringify({
+			revision: input.revision,
+			mode: "ai",
+			providerId: input.providerId,
+			model: input.model,
+			idempotencyKey: input.idempotencyKey,
+		}),
+	});
+}
+
+export function applyFilmAICandidate(projectId: string, candidateId: string, revision: number): Promise<FilmStatus> {
+	if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(candidateId)) throw new Error("Invalid AI candidate id");
+	return requestFilm(projectId, `/ai-candidates/${encodeURIComponent(candidateId)}/apply`, {
+		method: "POST",
+		body: JSON.stringify({ revision }),
+	});
+}
+
 const FILM_GENERATION_CONFIG_KEYS = new Set([
   "size", "quality", "ratio", "resolution", "seconds", "generateAudio", "watermark",
   "negativePrompt", "referenceStorageKeys", "voice", "format", "speed", "instructions",

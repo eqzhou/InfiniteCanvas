@@ -128,6 +128,47 @@ export type FilmTask = {
   requestHash?: string;
   error?: string;
   snapshot?: FilmGenerationSnapshot;
+	textSnapshot?: FilmTextGenerationSnapshot;
+};
+
+export type FilmTextGenerationSnapshot = {
+	sourceRevision: number;
+	sourceSha256: string;
+	providerId: string;
+	model: string;
+	promptVersion: string;
+	outputSchema: string;
+	estimatedGenerations: number;
+	estimatedCredits?: number;
+	createdAt: string;
+};
+
+export type FilmAIDialogue = { kind: "dialogue" | "narration"; characterKey: string; text: string };
+export type FilmAIShot = { key: string; title: string; description: string; durationSeconds: number; dialogues: FilmAIDialogue[] };
+export type FilmAIScene = { key: string; heading: string; synopsis: string; locationKey: string; shots: FilmAIShot[] };
+export type FilmAIEpisode = { key: string; title: string; synopsis: string; scenes: FilmAIScene[] };
+export type FilmAIDecomposition = {
+	summary: string;
+	theme: string;
+	characters: Array<{ key: string; name: string; description: string }>;
+	locations: Array<{ key: string; name: string; description: string }>;
+	timeline: string[];
+	episodes: FilmAIEpisode[];
+};
+export type FilmAICandidate = {
+	id: string;
+	revision: number;
+	stage: "decompose";
+	status: "ready" | "stale" | "rejected" | "applied";
+	sourceRevision: number;
+	sourceSha256: string;
+	filmRevision: number;
+	taskId: string;
+	generationJobId: string;
+	requestHash: string;
+	decomposition: FilmAIDecomposition;
+	createdAt: string;
+	appliedAt?: string;
 };
 
 export type FilmGenerationSnapshot = {
@@ -289,6 +330,7 @@ export type FilmDocument = {
   assets: FilmAsset[];
   stages: FilmStage[];
   tasks: FilmTask[];
+	aiCandidates?: FilmAICandidate[];
   qualityReports: FilmQualityReport[];
   timeline: FilmTimeline;
   deliverables: FilmDeliverable[];
