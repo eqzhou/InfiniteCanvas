@@ -2,10 +2,13 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 func TestMediaCapabilityCatalogDerivesOnlyEnabledSharedChannelDefaults(t *testing.T) {
@@ -43,5 +46,43 @@ func TestFilmGenerationSnapshotFreezesMediaCapabilityResolution(t *testing.T) {
 	snapshot := buildFilmGenerationSnapshotWithCapability(document, shot, "shared-main", "image-main", filmGenerationConfig{}, document.CreatedAt, strings.Repeat("a", 64), "image_to_image")
 	if snapshot.CapabilityVersion == "" || snapshot.GenerationMode != "image_to_image" {
 		t.Fatalf("media capability resolution was not frozen: %#v", snapshot)
+	}
+}
+
+func TestSharedImageJobFreezesCatalogVersionAndRejectsUnlistedModels(t *testing.T) {
+	_, backend, router := imageExecutionHandler(t, newScriptedImageExecutor())
+	channels, _ := json.Marshal([]adminChannelPublic{{
+		ID: "shared-image", Name: "Shared image", BaseURL: "https://shared.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultImageModel: "gpt-image-1", Models: []string{"gpt-image-1"},
+	}})
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-image", "sk-private"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	body := func(id, model string) []byte {
+		value, _ := json.Marshal(map[string]any{
+			"id": id, "projectId": "board-1", "prompt": "a tiger", "providerId": "shared-image", "model": model,
+			"parameters": map[string]any{"size": "1024x1024", "quality": "high", "count": 1, "referenceStorageKeys": []string{}},
+		})
+		return value
+	}
+	created := request(t, router, http.MethodPost, "/api/generation-jobs/image", body("shared-catalog-ok", "gpt-image-1"))
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	job, err := backend.GetGenerationJob(context.Background(), store.DefaultTenantID, "shared-catalog-ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parameters persistedImageJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil || len(parameters.CapabilityVersion) != 64 || parameters.GenerationMode != "text_to_image" {
+		t.Fatalf("catalog resolution was not frozen: %s", job.Parameters)
+	}
+	rejected := request(t, router, http.MethodPost, "/api/generation-jobs/image", body("shared-catalog-bad", "unlisted-image"))
+	if rejected.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unlisted shared model accepted: %d %s", rejected.Code, rejected.Body.String())
 	}
 }
