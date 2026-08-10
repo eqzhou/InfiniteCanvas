@@ -170,6 +170,14 @@ test("runs a scoped generation pass and retries one failed shot job", async ({ p
   let runBody: Record<string, unknown> | undefined;
 
   await page.route(`**/api/film/projects/${projectId}/status`, (route) => route.fulfill({ json: capable }));
+  await page.route("**/api/media-capabilities", (route) => route.fulfill({ json: {
+    version: "a".repeat(64),
+    models: [{
+      channelId: "studio-provider", channelName: "Studio Provider", protocol: "openai-video",
+      model: "video-v2", kind: "video", modes: ["text_to_video", "image_to_video"],
+      sizes: ["16:9"], durations: [5, 10], maxReferences: 1,
+    }],
+  } }));
   await page.route(`**/api/film/projects/${projectId}/stages/video/run`, async (route) => {
     runBody = route.request().postDataJSON();
     await route.fulfill({ status: 202, json: capable });
@@ -192,11 +200,9 @@ test("runs a scoped generation pass and retries one failed shot job", async ({ p
   await page.reload();
 
   await page.getByLabel("运行阶段").selectOption("video");
-  await page.getByLabel("Provider").fill("studio-provider");
-  await page.getByLabel("Model").fill("video-v2");
+  await page.getByLabel("媒体模型能力").selectOption("studio-provider:video-v2");
   await page.getByLabel("幂等键").fill("video-pass-0001");
-  await expect(page.getByLabel("Provider")).toHaveValue("studio-provider");
-  await expect(page.getByLabel("Model")).toHaveValue("video-v2");
+  await expect(page.getByLabel("媒体模型能力")).toHaveValue("studio-provider:video-v2");
   const startGeneration = page.getByRole("button", { name: "开始生成" });
   await expect(startGeneration).toBeEnabled();
   await startGeneration.click();

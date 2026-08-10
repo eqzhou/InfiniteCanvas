@@ -72,7 +72,7 @@ export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDr
     </div>
     {parseState === "parsing" ? <p role="status" className="mt-2 text-sm text-[var(--ob-muted)]">文件上传中，正在解析…</p> : null}
     {fileError ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{fileError}</p> : null}
-    {preflight ? <div className="mt-3 rounded-lg border border-[var(--ob-line)] p-3" role="status">
+    {preflight ? <div className="mt-3 rounded-lg border border-[var(--ob-line)] p-3" role="region" aria-label="原稿预检结果">
       <div className="flex flex-wrap gap-2 text-xs"><strong>预检完成</strong><span>{preflight.episodeCount} 集</span><span>{preflight.sceneCount} 场</span><span>{preflight.characters} 字符</span><span>{preflight.lineCount} 行</span></div>
       <p className="mt-2 text-sm text-[var(--ob-muted)]">{preflight.summary}</p>
       {preflight.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-500">{warning}</p>)}
