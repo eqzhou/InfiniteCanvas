@@ -27,7 +27,7 @@ func (s *Server) validateFilmDocumentWithMedia(ctx context.Context, tenantID str
 	for _, issue := range report.Issues {
 		seen[issue.ID] = struct{}{}
 	}
-	appendCorrupt := func(shot filmShot, key, mimePrefix, digest, version string) error {
+	appendCorrupt := func(targetType, targetID, message, key, mimePrefix, digest, version string, repairShot *filmShot) error {
 		if key == "" {
 			return nil
 		}
@@ -59,7 +59,7 @@ func (s *Server) validateFilmDocumentWithMedia(ctx context.Context, tenantID str
 		if readErr == nil {
 			return nil
 		}
-		issue := newFilmIssue("media_corrupt", "shot", shot.ID, "Shot media is unavailable or failed integrity verification.", "error")
+		issue := newFilmIssue("media_corrupt", targetType, targetID, message, "error")
 		if _, duplicate := seen[issue.ID]; duplicate {
 			return nil
 		}
@@ -68,13 +68,26 @@ func (s *Server) validateFilmDocumentWithMedia(ctx context.Context, tenantID str
 		}
 		report.Issues = append(report.Issues, issue)
 		seen[issue.ID] = struct{}{}
-		if repair, ok := filmShotRepair(issue, shot); ok {
+		if repairShot != nil {
+			repair, ok := filmShotRepair(issue, *repairShot)
+			if !ok {
+				return nil
+			}
 			if len(report.Repairs) >= maxFilmRepairProposals {
 				return errFilmRepairLimit
 			}
 			report.Repairs = append(report.Repairs, repair)
 		}
 		return nil
+	}
+	for _, scene := range document.Scenes {
+		if scene.DirectorSource == nil {
+			continue
+		}
+		source := scene.DirectorSource
+		if err := appendCorrupt("scene", scene.ID, "Formal Director scene media is unavailable or failed integrity verification.", source.StorageKey, "image/", source.SHA256, source.ObjectVersion, nil); err != nil {
+			return filmQualityReport{}, err
+		}
 	}
 	for _, shot := range document.Shots {
 		for _, media := range []struct{ key, prefix, digest, version string }{
@@ -83,7 +96,7 @@ func (s *Server) validateFilmDocumentWithMedia(ctx context.Context, tenantID str
 			{shot.AudioStorageKey, "audio/", shot.AudioSHA256, shot.AudioObjectVersion},
 			{shot.VideoStorageKey, "video/", shot.VideoSHA256, shot.VideoObjectVersion},
 		} {
-			if err := appendCorrupt(shot, media.key, media.prefix, media.digest, media.version); err != nil {
+			if err := appendCorrupt("shot", shot.ID, "Shot media is unavailable or failed integrity verification.", media.key, media.prefix, media.digest, media.version, &shot); err != nil {
 				return filmQualityReport{}, err
 			}
 		}
