@@ -79,19 +79,23 @@ func TestFilmDirectorAdoptionRejectsUnknownCapture(t *testing.T) {
 
 func TestFilmGenerationSnapshotFreezesDirectorSource(t *testing.T) {
 	document := newFilmDocument("film-director-snapshot")
-	director := &filmDirectorSource{
+	storyboard := &filmDirectorSource{
 		Revision: 1, TargetField: "storyboard", CaptureID: "capture-main", DirectorNodeID: "director-main",
 		CameraID: "camera-main", CameraName: "Main", Width: 1920, Height: 1080,
 		StorageKey: "film:media:director:stable", SHA256: strings.Repeat("a", 64), ObjectVersion: "version-1",
 		Snapshot: json.RawMessage(`{"version":1}`), AdoptedAt: document.CreatedAt,
 	}
-	shot := filmShot{ID: "shot-main", Revision: 2, Description: "Frame", DirectorSource: director}
+	firstFrame := *storyboard
+	firstFrame.TargetField, firstFrame.CaptureID, firstFrame.StorageKey = "first_frame", "capture-first", "film:media:director:first"
+	shot := filmShot{ID: "shot-main", Revision: 2, Description: "Frame", StoryboardDirectorSource: storyboard, FirstFrameDirectorSource: &firstFrame}
 	snapshot := buildFilmGenerationSnapshot(document, shot, "provider", "model", filmGenerationConfig{}, document.CreatedAt)
-	if snapshot.DirectorSource == nil || snapshot.DirectorSource.CaptureID != "capture-main" {
+	if snapshot.StoryboardDirectorSource == nil || snapshot.StoryboardDirectorSource.CaptureID != "capture-main" ||
+		snapshot.FirstFrameDirectorSource == nil || snapshot.FirstFrameDirectorSource.CaptureID != "capture-first" {
 		t.Fatalf("Director source was not frozen into generation snapshot: %#v", snapshot)
 	}
-	shot.DirectorSource.CameraName = "Changed"
-	if snapshot.DirectorSource.CameraName != "Main" {
+	shot.StoryboardDirectorSource.CameraName = "Changed"
+	shot.FirstFrameDirectorSource.CameraName = "Changed first"
+	if snapshot.StoryboardDirectorSource.CameraName != "Main" || snapshot.FirstFrameDirectorSource.CameraName != "Main" {
 		t.Fatal("generation snapshot retained a mutable Director source pointer")
 	}
 }
