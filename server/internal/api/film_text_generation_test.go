@@ -239,3 +239,35 @@ func TestFilmAICandidateMustBeAppliedBeforeStageApproval(t *testing.T) {
 		t.Fatalf("applied candidate could not be approved: %d %s", approved.Code, approved.Body.String())
 	}
 }
+
+func TestSyncFilmGenerationJobMaterializesCompletedTextCandidate(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. STATION - NIGHT\nLin hears a signal."}`))
+	document := decodeFilmResponse(t, response)
+	body, _ := json.Marshal(map[string]any{
+		"revision": document.Stages[0].Revision, "mode": "ai", "providerId": "provider-text",
+		"model": "gpt-text", "idempotencyKey": "manual-sync-pass-1",
+	})
+	created := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", body))
+	task := created.Tasks[len(created.Tasks)-1]
+	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Status = "succeeded"
+	job.Result, _ = json.Marshal(providerTextResult{Text: validFilmAIDecompositionJSON})
+	if err := backend.PutGenerationJob(t.Context(), store.DefaultTenantID, job); err != nil {
+		t.Fatal(err)
+	}
+
+	syncBody, _ := json.Marshal(map[string]any{"revision": created.Revision})
+	syncedResponse := request(t, handler, http.MethodPost, "/api/film/projects/film-api/generation-jobs/"+job.ID+"/sync", syncBody)
+	if syncedResponse.Code != http.StatusOK {
+		t.Fatalf("sync completed text job: %d %s", syncedResponse.Code, syncedResponse.Body.String())
+	}
+	synced := decodeFilmResponse(t, syncedResponse)
+	if len(synced.AICandidates) != 1 || synced.AICandidates[0].GenerationJobID != job.ID ||
+		synced.Tasks[len(synced.Tasks)-1].Status != filmStatusNeedsReview {
+		t.Fatalf("completed text job was not materialized as a review candidate: %#v", synced)
+	}
+}
