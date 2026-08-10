@@ -248,6 +248,8 @@ type persistedImageJobParameters struct {
 	WorkflowStepID        string                     `json:"workflowStepId,omitempty"`
 	SharedChannel         *generationChannelSnapshot `json:"sharedChannel,omitempty"`
 	Film                  *filmGenerationBinding     `json:"film,omitempty"`
+	CapabilityVersion     string                     `json:"capabilityVersion,omitempty"`
+	GenerationMode        string                     `json:"generationMode,omitempty"`
 }
 
 type storedImageProvider struct {
@@ -366,6 +368,18 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	capabilityVersion, generationMode := "", ""
+	if sharedSnapshot != nil {
+		generationMode = "text_to_image"
+		if len(input.Parameters.ReferenceStorageKeys) > 0 {
+			generationMode = "image_to_image"
+		}
+		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "image", input.Model, generationMode)
+		if err != nil {
+			http.Error(w, "shared image capability is unavailable", http.StatusUnprocessableEntity)
+			return
+		}
+	}
 	parameters, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, RequestHash: requestHash,
 		Size: input.Parameters.Size, Quality: input.Parameters.Quality, Count: input.Parameters.Count,
@@ -374,6 +388,8 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		ReferenceStorageKeys:  append([]string(nil), input.Parameters.ReferenceStorageKeys...),
 		Source:                input.Parameters.Source,
 		SharedChannel:         sharedSnapshot,
+		CapabilityVersion:     capabilityVersion,
+		GenerationMode:        generationMode,
 	})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job := store.GenerationJob{

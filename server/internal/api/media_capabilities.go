@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 )
@@ -80,6 +81,27 @@ func (s *Server) buildMediaCapabilityCatalog(ctx context.Context, tenantID strin
 		return models[i].Model < models[j].Model
 	})
 	return mediaCapabilityCatalog{Version: adminConfigRevision(models), Models: models}, nil
+}
+
+func (s *Server) verifySharedMediaCapability(ctx context.Context, tenantID, channelID, kind, model, mode string) (string, error) {
+	if !validFilmGenerationMode(mode) {
+		return "", errors.New("invalid media generation mode")
+	}
+	catalog, err := s.buildMediaCapabilityCatalog(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	for _, capability := range catalog.Models {
+		if capability.ChannelID != channelID || capability.Kind != kind || capability.Model != model {
+			continue
+		}
+		for _, supported := range capability.Modes {
+			if supported == mode {
+				return catalog.Version, nil
+			}
+		}
+	}
+	return "", errors.New("shared media capability is not listed")
 }
 
 func (s *Server) getMediaCapabilities(w http.ResponseWriter, r *http.Request) {

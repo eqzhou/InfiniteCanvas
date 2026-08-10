@@ -169,6 +169,8 @@ type persistedMediaJobParameters struct {
 	Instructions         string                     `json:"instructions,omitempty"`
 	SharedChannel        *generationChannelSnapshot `json:"sharedChannel,omitempty"`
 	Film                 *filmGenerationBinding     `json:"film,omitempty"`
+	CapabilityVersion    string                     `json:"capabilityVersion,omitempty"`
+	GenerationMode       string                     `json:"generationMode,omitempty"`
 }
 
 type serverMediaJobResult struct {
@@ -225,6 +227,18 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "video references are invalid or exceed limits", http.StatusBadRequest)
 		return
 	}
+	capabilityVersion, generationMode := "", ""
+	if sharedSnapshot != nil {
+		generationMode = "text_to_video"
+		if len(input.Parameters.ReferenceStorageKeys) > 0 || len(input.Parameters.Elements) > 0 {
+			generationMode = "image_to_video"
+		}
+		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "video", input.Model, generationMode)
+		if err != nil {
+			http.Error(w, "shared video capability is unavailable", http.StatusUnprocessableEntity)
+			return
+		}
+	}
 	parameters, _ := json.Marshal(persistedMediaJobParameters{
 		Executor: serverExecutorMarker, RequestHash: hash, Size: input.Parameters.Size, Seconds: input.Parameters.Seconds,
 		Ratio: input.Parameters.Ratio, Resolution: input.Parameters.Resolution,
@@ -236,6 +250,8 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 		Elements:             cloneVideoGenerationElements(input.Parameters.Elements),
 		ReferenceStorageKeys: append([]string(nil), input.Parameters.ReferenceStorageKeys...),
 		SharedChannel:        sharedSnapshot,
+		CapabilityVersion:    capabilityVersion,
+		GenerationMode:       generationMode,
 	})
 	s.createServerMediaJob(w, r, store.GenerationJob{
 		ID: input.ID, ProjectID: input.ProjectID, Kind: "video", Status: "queued",
@@ -279,11 +295,21 @@ func (s *Server) createServerAudioJob(w http.ResponseWriter, r *http.Request) {
 	if sharedSnapshot != nil {
 		input.Model = sharedSnapshot.Model
 	}
+	capabilityVersion, generationMode := "", ""
+	if sharedSnapshot != nil {
+		generationMode = "text_to_audio"
+		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "audio", input.Model, generationMode)
+		if err != nil {
+			http.Error(w, "shared audio capability is unavailable", http.StatusUnprocessableEntity)
+			return
+		}
+	}
 	parameters, _ := json.Marshal(persistedMediaJobParameters{
 		Executor: serverExecutorMarker, RequestHash: hash,
 		Voice: input.Parameters.Voice, Format: input.Parameters.Format,
 		Speed: input.Parameters.Speed, Instructions: input.Parameters.Instructions,
-		SharedChannel: sharedSnapshot,
+		SharedChannel:     sharedSnapshot,
+		CapabilityVersion: capabilityVersion, GenerationMode: generationMode,
 	})
 	s.createServerMediaJob(w, r, store.GenerationJob{
 		ID: input.ID, ProjectID: input.ProjectID, Kind: "audio", Status: "queued",

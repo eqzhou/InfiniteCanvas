@@ -86,3 +86,37 @@ func TestSharedImageJobFreezesCatalogVersionAndRejectsUnlistedModels(t *testing.
 		t.Fatalf("unlisted shared model accepted: %d %s", rejected.Code, rejected.Body.String())
 	}
 }
+
+func TestSharedVideoAndAudioJobsFreezeCatalogResolution(t *testing.T) {
+	backend := newMemoryStore()
+	_, router := mediaExecutionServer(t, backend, newScriptedVideoExecutor(nil), newScriptedAudioExecutor())
+	channels, _ := json.Marshal([]adminChannelPublic{{
+		ID: "shared-media", Name: "Shared media", BaseURL: "https://shared.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultVideoModel: "video-main", DefaultAudioModel: "audio-main", Models: []string{"video-main", "audio-main"},
+	}})
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-media", "sk-private"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	video := request(t, router, http.MethodPost, "/api/generation-jobs/video", []byte(`{"id":"shared-video","projectId":"board-1","prompt":"a tiger","providerId":"shared-media","model":"video-main","parameters":{"seconds":5,"ratio":"16:9","resolution":"720p","referenceStorageKeys":[]}}`))
+	if video.Code != http.StatusAccepted {
+		t.Fatalf("video: %d %s", video.Code, video.Body.String())
+	}
+	audio := request(t, router, http.MethodPost, "/api/generation-jobs/audio", []byte(`{"id":"shared-audio","projectId":"board-1","prompt":"hello","providerId":"shared-media","model":"audio-main","parameters":{"voice":"alloy","format":"mp3"}}`))
+	if audio.Code != http.StatusAccepted {
+		t.Fatalf("audio: %d %s", audio.Code, audio.Body.String())
+	}
+	for id, expectedMode := range map[string]string{"shared-video": "text_to_video", "shared-audio": "text_to_audio"} {
+		job, err := backend.GetGenerationJob(context.Background(), store.DefaultTenantID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parameters persistedMediaJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil || len(parameters.CapabilityVersion) != 64 || parameters.GenerationMode != expectedMode {
+			t.Fatalf("%s catalog resolution was not frozen: %s", id, job.Parameters)
+		}
+	}
+}
