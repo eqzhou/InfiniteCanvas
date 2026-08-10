@@ -362,8 +362,9 @@ func integrateFilmTextJobResult(document filmDocument, job store.GenerationJob, 
 	}
 	var parameters persistedTextJobParameters
 	if json.Unmarshal(job.Parameters, &parameters) != nil || validatePersistedTextJob(job, parameters) != nil ||
-		parameters.Film == nil || parameters.Film.ProjectID != document.ProjectID || parameters.Film.Stage != "decompose" ||
-		parameters.Film.RequestHash != parameters.RequestHash {
+		parameters.Film == nil || parameters.Film.ProjectID != document.ProjectID ||
+		(parameters.Operation == "film_decompose" && parameters.Film.Stage != "decompose") ||
+		(parameters.Operation == "film_script" && parameters.Film.Stage != "script") || parameters.Film.RequestHash != parameters.RequestHash {
 		return filmDocument{}, errors.New("film text generation binding is invalid")
 	}
 	taskIndex := -1
@@ -376,9 +377,20 @@ func integrateFilmTextJobResult(document filmDocument, job store.GenerationJob, 
 	if taskIndex < 0 || document.Tasks[taskIndex].TextSnapshot == nil {
 		return filmDocument{}, errors.New("film text generation task is unavailable")
 	}
+	taskSnapshot := document.Tasks[taskIndex].TextSnapshot
+	if document.Tasks[taskIndex].Stage != parameters.Film.Stage || taskSnapshot.SourceRevision != parameters.SourceRevision ||
+		taskSnapshot.SourceSHA256 != parameters.SourceSHA256 || taskSnapshot.PromptVersion != parameters.PromptVersion ||
+		taskSnapshot.OutputSchema != parameters.OutputSchema ||
+		(parameters.Operation == "film_script" && (taskSnapshot.TargetEntityID != parameters.TargetEntityID ||
+			taskSnapshot.TargetRevision != parameters.TargetRevision || taskSnapshot.TargetSHA256 != parameters.TargetSHA256)) {
+		return filmDocument{}, errors.New("film text generation task snapshot is invalid")
+	}
 	var result providerTextResult
 	if json.Unmarshal(job.Result, &result) != nil {
 		return filmDocument{}, errors.New("film text generation result is invalid")
+	}
+	if parameters.Operation == "film_script" {
+		return integrateFilmScriptJobResult(document, job, parameters, taskIndex, result.Text, now)
 	}
 	decomposition, err := parseFilmAIDecompositionCandidate([]byte(result.Text))
 	if err != nil {

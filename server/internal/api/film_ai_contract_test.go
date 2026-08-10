@@ -265,10 +265,19 @@ func TestIntegrateAndApplyFilmAIScriptCandidateUsesFrozenEpisode(t *testing.T) {
 
 func TestFilmAIScriptCandidateBecomesStaleWhenTargetChanges(t *testing.T) {
 	document, job := filmTextCandidateFixture(t)
+	document.Tasks[len(document.Tasks)-1].Stage = "script"
+	document.Tasks[len(document.Tasks)-1].TextSnapshot = &filmTextGenerationSnapshot{
+		SourceRevision: 1, SourceSHA256: strings.Repeat("a", 64), ProviderID: "provider-text", Model: "gpt-text",
+		PromptVersion: filmScriptPromptVersion, OutputSchema: filmScriptOutputSchema, TargetEntityID: "missing",
+		TargetRevision: 1, TargetSHA256: strings.Repeat("b", 64), EstimatedGenerations: 1,
+		CreatedAt: document.Tasks[len(document.Tasks)-1].CreatedAt,
+	}
 	job.Parameters = json.RawMessage(`{"executor":"server","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","operation":"film_script","promptVersion":"film-script-v1","outputSchema":"film-script-v1","sourceRevision":1,"sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","filmRevision":1,"targetEntityId":"missing","targetRevision":1,"targetSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","film":{"projectId":"film-ai","stage":"script","taskId":"task-ai","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
 	job.Result, _ = json.Marshal(providerTextResult{Text: validFilmAIScriptJSON})
-	if _, err := integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano)); err == nil {
-		t.Fatal("script result with unavailable frozen target was accepted")
+	stale, err := integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil || len(stale.ScriptCandidates) != 1 || stale.ScriptCandidates[0].Status != filmAICandidateStale ||
+		stale.Tasks[len(stale.Tasks)-1].Status != filmStatusFailed {
+		t.Fatalf("script result with unavailable frozen target was not isolated as stale: %#v err=%v", stale, err)
 	}
 }
 

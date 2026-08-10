@@ -259,6 +259,39 @@ func validateFilmAICandidates(candidates []filmAICandidate, tasks []filmTask) er
 	return nil
 }
 
+func validateFilmAIScriptCandidates(candidates []filmAIScriptCandidate, tasks []filmTask) error {
+	if len(candidates) > 100 {
+		return errors.New("film AI script candidate retention limit reached")
+	}
+	taskIDs := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		taskIDs[task.ID] = struct{}{}
+	}
+	ids := make(map[string]struct{}, len(candidates))
+	jobs := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if err := addUniqueFilmID(ids, candidate.ID, "AI script candidate"); err != nil {
+			return err
+		}
+		if _, duplicate := jobs[candidate.GenerationJobID]; duplicate {
+			return errors.New("film AI script candidate generation jobs must be unique")
+		}
+		jobs[candidate.GenerationJobID] = struct{}{}
+		_, taskExists := taskIDs[candidate.TaskID]
+		validStatus := candidate.Status == filmAICandidateReady || candidate.Status == filmAICandidateStale ||
+			candidate.Status == filmAICandidateRejected || candidate.Status == filmAICandidateApplied
+		if candidate.Revision < 1 || candidate.Stage != "script" || !validStatus || candidate.SourceRevision < 1 ||
+			!validFilmRequestHash(candidate.SourceSHA256) || candidate.FilmRevision < 1 || !validProjectID(candidate.TargetEpisodeID) ||
+			candidate.TargetRevision < 1 || !validFilmRequestHash(candidate.TargetSHA256) || !taskExists ||
+			!validProjectID(candidate.GenerationJobID) || !validFilmRequestHash(candidate.RequestHash) ||
+			!validFilmTimestamp(candidate.CreatedAt) || (candidate.AppliedAt != "" && !validFilmTimestamp(candidate.AppliedAt)) ||
+			validateFilmAIScript(candidate.Script) != nil {
+			return fmt.Errorf("film AI script candidate %s is invalid", candidate.ID)
+		}
+	}
+	return nil
+}
+
 func validateFilmStructureVersions(versions []filmStructureVersion) error {
 	if len(versions) > 100 {
 		return errors.New("film structure version retention limit reached")
@@ -470,6 +503,9 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 		return err
 	}
 	if err := validateFilmAICandidates(document.AICandidates, document.Tasks); err != nil {
+		return err
+	}
+	if err := validateFilmAIScriptCandidates(document.ScriptCandidates, document.Tasks); err != nil {
 		return err
 	}
 	if err := validateFilmStructureVersions(document.StructureVersions); err != nil {

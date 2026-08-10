@@ -173,6 +173,25 @@ type filmAICandidate struct {
 	AppliedAt       string              `json:"appliedAt,omitempty"`
 }
 
+type filmAIScriptCandidate struct {
+	ID              string       `json:"id"`
+	Revision        int          `json:"revision"`
+	Stage           string       `json:"stage"`
+	Status          string       `json:"status"`
+	SourceRevision  int          `json:"sourceRevision"`
+	SourceSHA256    string       `json:"sourceSha256"`
+	FilmRevision    int          `json:"filmRevision"`
+	TargetEpisodeID string       `json:"targetEpisodeId"`
+	TargetRevision  int          `json:"targetRevision"`
+	TargetSHA256    string       `json:"targetSha256"`
+	TaskID          string       `json:"taskId"`
+	GenerationJobID string       `json:"generationJobId"`
+	RequestHash     string       `json:"requestHash"`
+	Script          filmAIScript `json:"script"`
+	CreatedAt       string       `json:"createdAt"`
+	AppliedAt       string       `json:"appliedAt,omitempty"`
+}
+
 type filmStructureVersion struct {
 	ID          string         `json:"id"`
 	Revision    int            `json:"revision"`
@@ -317,28 +336,29 @@ type filmMediaAdoption struct {
 }
 
 type filmDocument struct {
-	SchemaVersion      int                    `json:"schemaVersion"`
-	ProjectID          string                 `json:"projectId"`
-	Revision           int                    `json:"revision"`
-	CreatedAt          string                 `json:"createdAt"`
-	UpdatedAt          string                 `json:"updatedAt"`
-	AspectRatio        string                 `json:"aspectRatio"`
-	Source             filmSource             `json:"source"`
-	Episodes           []filmEpisode          `json:"episodes"`
-	Scenes             []filmScene            `json:"scenes"`
-	Shots              []filmShot             `json:"shots"`
-	Dialogues          []filmDialogue         `json:"dialogues,omitempty"`
-	Assets             []filmAsset            `json:"assets"`
-	Stages             []filmStage            `json:"stages"`
-	Tasks              []filmTask             `json:"tasks"`
-	AICandidates       []filmAICandidate      `json:"aiCandidates,omitempty"`
-	StructureVersions  []filmStructureVersion `json:"structureVersions,omitempty"`
-	QualityReports     []filmQualityReport    `json:"qualityReports"`
-	Timeline           filmTimeline           `json:"timeline"`
-	Deliverables       []filmDeliverable      `json:"deliverables"`
-	Adoptions          []filmMediaAdoption    `json:"adoptions,omitempty"`
-	Versions           []filmEntityVersion    `json:"versions,omitempty"`
-	ProjectionRevision int                    `json:"projectionRevision"`
+	SchemaVersion      int                     `json:"schemaVersion"`
+	ProjectID          string                  `json:"projectId"`
+	Revision           int                     `json:"revision"`
+	CreatedAt          string                  `json:"createdAt"`
+	UpdatedAt          string                  `json:"updatedAt"`
+	AspectRatio        string                  `json:"aspectRatio"`
+	Source             filmSource              `json:"source"`
+	Episodes           []filmEpisode           `json:"episodes"`
+	Scenes             []filmScene             `json:"scenes"`
+	Shots              []filmShot              `json:"shots"`
+	Dialogues          []filmDialogue          `json:"dialogues,omitempty"`
+	Assets             []filmAsset             `json:"assets"`
+	Stages             []filmStage             `json:"stages"`
+	Tasks              []filmTask              `json:"tasks"`
+	AICandidates       []filmAICandidate       `json:"aiCandidates,omitempty"`
+	ScriptCandidates   []filmAIScriptCandidate `json:"scriptCandidates,omitempty"`
+	StructureVersions  []filmStructureVersion  `json:"structureVersions,omitempty"`
+	QualityReports     []filmQualityReport     `json:"qualityReports"`
+	Timeline           filmTimeline            `json:"timeline"`
+	Deliverables       []filmDeliverable       `json:"deliverables"`
+	Adoptions          []filmMediaAdoption     `json:"adoptions,omitempty"`
+	Versions           []filmEntityVersion     `json:"versions,omitempty"`
+	ProjectionRevision int                     `json:"projectionRevision"`
 }
 
 type filmExportRequest struct {

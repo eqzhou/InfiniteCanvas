@@ -536,7 +536,7 @@ func validateFilmAggregateLimits(document filmDocument) error {
 	if entityCount > maxFilmEntities {
 		return errors.New("film aggregate entity limit reached")
 	}
-	if len(document.Tasks) > 1_000 || len(document.AICandidates) > 100 || len(document.StructureVersions) > 100 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 {
+	if len(document.Tasks) > 1_000 || len(document.AICandidates) > 100 || len(document.ScriptCandidates) > 100 || len(document.StructureVersions) > 100 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 {
 		return errors.New("film aggregate retention limit reached")
 	}
 	issues, repairs := 0, 0
@@ -669,6 +669,13 @@ func updateFilmStage(document filmDocument, stageID, action string, expectedRevi
 			for _, candidate := range document.AICandidates {
 				if candidate.Stage == stageID && candidate.Status == filmAICandidateReady {
 					return filmDocument{}, errors.New("AI decomposition candidate must be applied before approval")
+				}
+			}
+		}
+		if stageID == "script" {
+			for _, candidate := range document.ScriptCandidates {
+				if candidate.Status == filmAICandidateReady {
+					return filmDocument{}, errors.New("AI script candidate must be applied before approval")
 				}
 			}
 		}
