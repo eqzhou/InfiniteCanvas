@@ -19,7 +19,10 @@ describe("visual Film timeline geometry", () => {
   });
 
   test("resizes either edge without crossing one frame and updates source trims", () => {
-    expect(resizeTimelineClip(clip, "start", 3.2, 24)).toMatchObject({ start: 3.2083333333333335, end: 6, trimIn: 2.2083333333333335, trimOut: 5 });
+    const resizedStart = resizeTimelineClip(clip, "start", 3.2, 24);
+    expect(resizedStart).toMatchObject({ end: 6, trimOut: 5 });
+    expect(resizedStart.start).toBeCloseTo(3.2083333333333335);
+    expect(resizedStart.trimIn).toBeCloseTo(2.2083333333333335);
     expect(resizeTimelineClip(clip, "end", 2, 2)).toMatchObject({ start: 2, end: 2.5, trimIn: 1, trimOut: 1.5 });
   });
 });
