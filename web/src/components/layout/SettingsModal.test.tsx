@@ -2,10 +2,28 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   SharedChannelManagedNotice,
+  UsageOverview,
   settingsHorizontalScrollTarget,
   settingsScrollTarget,
   settingsSectionsFor,
 } from "./SettingsModal";
+
+describe("UsageOverview", () => {
+  test("separates team generations, personal credits, and server media storage", () => {
+    const html = renderToStaticMarkup(<UsageOverview snapshot={{
+      plan: "free", generationThisMonth: 2, generationQuotaMonthly: 0, credits: 0,
+      storageBytes: 1_572_864, storageQuotaBytes: 10_485_760,
+    }} onRefresh={() => {}} />);
+
+    expect(html).toContain("团队月生成额度（次数）");
+    expect(html).toContain("2 / 0");
+    expect(html).toContain("个人算力余额（credits）");
+    expect(html).toContain(">0<");
+    expect(html).toContain("服务端媒体存储");
+    expect(html).toContain("1.5 MB / 10 MB");
+    expect(html).not.toContain("无限");
+  });
+});
 
 describe("SharedChannelManagedNotice", () => {
   test("explains that shared channel credentials are managed by admins without rendering a key field", () => {
@@ -25,6 +43,7 @@ describe("settings section navigation", () => {
 
     expect(memberSections.map((section) => section.id)).toEqual([
       "channel",
+      "usage",
       "model",
       "generation",
       "defaults",
@@ -35,6 +54,7 @@ describe("settings section navigation", () => {
     ]);
     expect(adminSections.map((section) => section.id)).toEqual([
       "channel",
+      "usage",
       "model",
       "generation",
       "defaults",
