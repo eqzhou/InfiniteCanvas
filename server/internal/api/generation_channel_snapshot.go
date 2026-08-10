@@ -192,6 +192,8 @@ func (s *Server) snapshotGenerationChannel(ctx context.Context, tenantID, kind, 
 	model := strings.TrimSpace(requestedModel)
 	if model == "" {
 		switch kind {
+		case "text":
+			model = channel.DefaultTextModel
 		case "image":
 			model = channel.DefaultImageModel
 		case "video":

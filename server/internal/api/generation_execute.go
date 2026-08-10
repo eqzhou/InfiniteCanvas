@@ -581,7 +581,7 @@ func isServerGenerationJob(job store.GenerationJob) bool {
 	if json.Unmarshal(job.Parameters, &parameters) != nil {
 		return false
 	}
-	return ((job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && parameters.Executor == serverExecutorMarker) ||
+	return ((job.Kind == "text" || job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && parameters.Executor == serverExecutorMarker) ||
 		(job.Kind == "workflow" && parameters.Executor == "workflow") ||
 		(job.Kind == "export" && parameters.Executor == filmExportExecutorMarker)
 }

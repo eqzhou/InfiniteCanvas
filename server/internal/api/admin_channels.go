@@ -43,6 +43,7 @@ type sharedChannelPublic struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name"`
 	Protocol          string   `json:"protocol"`
+	DefaultTextModel  string   `json:"defaultTextModel,omitempty"`
 	DefaultImageModel string   `json:"defaultImageModel,omitempty"`
 	DefaultVideoModel string   `json:"defaultVideoModel,omitempty"`
 	DefaultAudioModel string   `json:"defaultAudioModel,omitempty"`
@@ -73,6 +74,7 @@ func (s *Server) getSharedChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		result = append(result, sharedChannelPublic{
 			ID: channel.ID, Name: channel.Name, Protocol: channel.Protocol,
+			DefaultTextModel:  channel.DefaultTextModel,
 			DefaultImageModel: channel.DefaultImageModel, DefaultVideoModel: channel.DefaultVideoModel,
 			DefaultAudioModel: channel.DefaultAudioModel, Models: append([]string(nil), channel.Models...),
 		})
@@ -243,6 +245,8 @@ func sharedChannelSupports(channel adminChannelPublic, kind, requestedModel stri
 	model := strings.TrimSpace(requestedModel)
 	if model == "" {
 		switch kind {
+		case "text":
+			model = channel.DefaultTextModel
 		case "image":
 			model = channel.DefaultImageModel
 		case "video":
@@ -262,6 +266,8 @@ func sharedChannelSupports(channel adminChannelPublic, kind, requestedModel stri
 		return false
 	}
 	switch kind {
+	case "text":
+		return channel.Protocol == "openai" || channel.Protocol == "gemini"
 	case "image":
 		return channel.Protocol == "openai" || channel.Protocol == "gemini" || channel.Protocol == "apimart" || channel.Protocol == "kie"
 	case "video":
@@ -327,6 +333,7 @@ func (s *Server) snapshotSharedProviderID(ctx context.Context, tenantID, kind, j
 func sharedChannelStoredValue(channel adminChannelPublic) storedImageChannel {
 	providers := map[string]storedImageProvider{}
 	for kind, model := range map[string]string{
+		"text":  channel.DefaultTextModel,
 		"image": channel.DefaultImageModel,
 		"video": channel.DefaultVideoModel,
 		"audio": channel.DefaultAudioModel,
@@ -337,6 +344,7 @@ func sharedChannelStoredValue(channel adminChannelPublic) storedImageChannel {
 	}
 	return storedImageChannel{
 		ID: channel.ID, BaseURL: channel.BaseURL, TimeoutSeconds: channel.TimeoutSeconds,
+		DefaultTextModel:  channel.DefaultTextModel,
 		DefaultImageModel: channel.DefaultImageModel, DefaultVideoModel: channel.DefaultVideoModel,
 		DefaultAudioModel: channel.DefaultAudioModel, Providers: providers,
 	}
