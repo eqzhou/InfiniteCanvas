@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { AIDecompositionPanel, ManuscriptPanel } from "./ManuscriptAssetsPanels";
+import { AIDecompositionPanel, AIScriptPanel, ManuscriptPanel } from "./ManuscriptAssetsPanels";
 import { createFilmDocument } from "@/lib/film-document";
 
 describe("AI decomposition panel", () => {
@@ -63,5 +63,38 @@ describe("manuscript preflight", () => {
     expect(html).toContain("预检原稿");
     expect(html).toContain("预检不会写入影视事实");
     expect(html).not.toContain("导入并拆解");
+  });
+});
+
+describe("AI episode script panel", () => {
+  test("shows per-episode generation and review-gated script candidates", () => {
+    const document = createFilmDocument("film-script", "2026-08-08T00:00:00.000Z");
+    document.episodes = [{ id: "episode-1", revision: 2, order: 0, title: "Signal", synopsis: "", status: "draft" }];
+    document.scriptCandidates = [{
+      id: "script-candidate-1", revision: 1, stage: "script", status: "ready",
+      sourceRevision: 1, sourceSha256: "a".repeat(64), filmRevision: 3,
+      targetEpisodeId: "episode-1", targetRevision: 2, targetSha256: "b".repeat(64),
+      taskId: "task-script", generationJobId: "job-script", requestHash: "c".repeat(64),
+      script: { summary: "Lin follows the signal.", scenes: [{ key: "scene-1", heading: "INT. STATION - NIGHT", synopsis: "", shots: [] }] },
+      createdAt: document.createdAt,
+    }];
+    const html = renderToStaticMarkup(<AIScriptPanel
+      document={document}
+      busy={false}
+      channels={[{ id: "shared-text", name: "Production text", models: ["gpt-text"] }]}
+      channelId="shared-text"
+      model="gpt-text"
+      episodeId="episode-1"
+      onChannel={() => {}}
+      onModel={() => {}}
+      onEpisode={() => {}}
+      onRun={() => {}}
+      onApply={() => {}}
+    />);
+
+    expect(html).toContain("AI 分集剧本");
+    expect(html).toContain("Signal");
+    expect(html).toContain("Lin follows the signal.");
+    expect(html).toContain("采用这版剧本");
   });
 });
