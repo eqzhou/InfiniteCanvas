@@ -488,6 +488,19 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		writeFilmError(w, http.StatusUnprocessableEntity, "generation_request_invalid", "film generation request is invalid")
 		return
 	}
+	checkedModels := map[string]bool{}
+	requireAllowedModel := func(model string) bool {
+		model = strings.TrimSpace(model)
+		if allowed, checked := checkedModels[model]; checked {
+			return allowed
+		}
+		allowed := s.requireAllowedModel(w, r, model)
+		checkedModels[model] = allowed
+		return allowed
+	}
+	if !requireAllowedModel(input.Model) {
+		return
+	}
 	if err := validateFilmGenerationConfig(stage, input.Config); err != nil {
 		writeFilmOperationError(w, err)
 		return
@@ -536,6 +549,9 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	providerID, model := s.filmGenerationProvider(r.Context(), tenantID, stage, input.ProviderID, input.Model)
+	if !requireAllowedModel(model) {
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	next := cloneFilmDocument(document)
 	createdJobs := make([]string, 0, len(shots))
@@ -571,6 +587,10 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		selectedModel := model
 		if snapshot != nil {
 			selectedModel = snapshot.Model
+		}
+		if !requireAllowedModel(selectedModel) {
+			s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
+			return
 		}
 		capabilityVersion, generationMode := "", ""
 		if snapshot != nil {

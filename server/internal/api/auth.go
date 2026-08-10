@@ -455,6 +455,10 @@ func (s *Server) estimateCredits(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid media capability estimate", http.StatusBadRequest)
 			return
 		}
+		if _, authenticated := authUserFrom(r.Context()); !authenticated && !s.authorizeProcessToken(r) {
+			http.Error(w, "login required", http.StatusUnauthorized)
+			return
+		}
 		var err error
 		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantIDFrom(r), providerID, kind, model, mode)
 		if err != nil {

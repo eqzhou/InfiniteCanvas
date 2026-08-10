@@ -85,6 +85,9 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 		writeFilmError(w, http.StatusUnprocessableEntity, "text_generation_request_invalid", "AI film text generation request is invalid")
 		return
 	}
+	if !s.requireAllowedModel(w, r, input.Model) {
+		return
+	}
 	backend, record, document, ok := s.loadFilmProduction(w, r, true)
 	if !ok {
 		return
@@ -148,6 +151,9 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 	}
 	if channelSnapshot != nil && strings.TrimSpace(channelSnapshot.Model) != "" {
 		input.Model = channelSnapshot.Model
+	}
+	if !s.requireAllowedModel(w, r, input.Model) {
+		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	sourceSHA := filmSourceSHA256(document.Source)
