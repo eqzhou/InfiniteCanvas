@@ -84,6 +84,13 @@ func filmStageGenerationKind(stage string) string {
 	}
 }
 
+func filmTaskGenerationKind(stage string) string {
+	if stage == "decompose" || stage == "script" {
+		return "text"
+	}
+	return filmStageGenerationKind(stage)
+}
+
 func selectFilmGenerationShots(document filmDocument, input filmGenerationRunRequest) ([]filmShot, error) {
 	if len(input.ShotIDs) > 1_000 || len(input.ShotIDs) > 0 && (input.ShotRange != nil || input.EpisodeRange != nil) {
 		return nil, errors.New("choose either shotIds or production ranges within the shot limit")

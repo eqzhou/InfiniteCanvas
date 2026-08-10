@@ -118,20 +118,33 @@ type filmStage struct {
 }
 
 type filmTask struct {
-	ID              string                  `json:"id"`
-	Revision        int                     `json:"revision"`
-	Stage           string                  `json:"stage"`
-	ShotID          string                  `json:"shotId,omitempty"`
-	Title           string                  `json:"title"`
-	Status          string                  `json:"status"`
-	Progress        float64                 `json:"progress"`
-	CreatedAt       string                  `json:"createdAt"`
-	UpdatedAt       string                  `json:"updatedAt"`
-	GenerationJobID string                  `json:"generationJobId,omitempty"`
-	IdempotencyKey  string                  `json:"idempotencyKey,omitempty"`
-	RequestHash     string                  `json:"requestHash,omitempty"`
-	Error           string                  `json:"error,omitempty"`
-	Snapshot        *filmGenerationSnapshot `json:"snapshot,omitempty"`
+	ID              string                      `json:"id"`
+	Revision        int                         `json:"revision"`
+	Stage           string                      `json:"stage"`
+	ShotID          string                      `json:"shotId,omitempty"`
+	Title           string                      `json:"title"`
+	Status          string                      `json:"status"`
+	Progress        float64                     `json:"progress"`
+	CreatedAt       string                      `json:"createdAt"`
+	UpdatedAt       string                      `json:"updatedAt"`
+	GenerationJobID string                      `json:"generationJobId,omitempty"`
+	IdempotencyKey  string                      `json:"idempotencyKey,omitempty"`
+	RequestHash     string                      `json:"requestHash,omitempty"`
+	Error           string                      `json:"error,omitempty"`
+	Snapshot        *filmGenerationSnapshot     `json:"snapshot,omitempty"`
+	TextSnapshot    *filmTextGenerationSnapshot `json:"textSnapshot,omitempty"`
+}
+
+type filmTextGenerationSnapshot struct {
+	SourceRevision       int    `json:"sourceRevision"`
+	SourceSHA256         string `json:"sourceSha256"`
+	ProviderID           string `json:"providerId"`
+	Model                string `json:"model"`
+	PromptVersion        string `json:"promptVersion"`
+	OutputSchema         string `json:"outputSchema"`
+	EstimatedGenerations int    `json:"estimatedGenerations"`
+	EstimatedCredits     int    `json:"estimatedCredits,omitempty"`
+	CreatedAt            string `json:"createdAt"`
 }
 
 // filmGenerationSnapshot freezes every Film-domain input used to create a

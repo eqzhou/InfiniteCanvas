@@ -17,7 +17,7 @@ const maxGenerationJobBytes = 1 << 20
 const maxGenerationRestoreBytes = 32 << 20
 const maxGenerationRestoreItems = 10_000
 
-var generationKinds = map[string]bool{"image": true, "video": true, "audio": true, "workflow": true, "export": true}
+var generationKinds = map[string]bool{"text": true, "image": true, "video": true, "audio": true, "workflow": true, "export": true}
 var generationStatuses = map[string]bool{
 	"queued": true, "running": true, "succeeded": true, "failed": true, "cancelled": true, "deleted": true,
 }

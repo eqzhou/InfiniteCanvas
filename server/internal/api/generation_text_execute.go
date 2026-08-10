@@ -12,13 +12,17 @@ import (
 )
 
 type persistedTextJobParameters struct {
-	Executor      string                     `json:"executor"`
-	RequestHash   string                     `json:"requestHash"`
-	Operation     string                     `json:"operation"`
-	PromptVersion string                     `json:"promptVersion"`
-	OutputSchema  string                     `json:"outputSchema"`
-	SharedChannel *generationChannelSnapshot `json:"sharedChannel,omitempty"`
-	Film          *filmGenerationBinding     `json:"film,omitempty"`
+	Executor       string                     `json:"executor"`
+	RequestHash    string                     `json:"requestHash"`
+	Operation      string                     `json:"operation"`
+	PromptVersion  string                     `json:"promptVersion"`
+	OutputSchema   string                     `json:"outputSchema"`
+	SystemPrompt   string                     `json:"systemPrompt"`
+	SourceRevision int                        `json:"sourceRevision"`
+	SourceSHA256   string                     `json:"sourceSha256"`
+	FilmRevision   int                        `json:"filmRevision"`
+	SharedChannel  *generationChannelSnapshot `json:"sharedChannel,omitempty"`
+	Film           *filmGenerationBinding     `json:"film,omitempty"`
 }
 
 type textExecutor interface {
@@ -38,11 +42,15 @@ func (providerTextExecutor) Generate(
 func validatePersistedTextJob(job store.GenerationJob, parameters persistedTextJobParameters) error {
 	if job.Kind != "text" || parameters.Executor != serverExecutorMarker ||
 		strings.TrimSpace(parameters.RequestHash) == "" || len(parameters.RequestHash) > 128 ||
-		len(parameters.Operation) > 100 || len(parameters.PromptVersion) > 100 || len(parameters.OutputSchema) > 100 {
+		len(parameters.Operation) > 100 || len(parameters.PromptVersion) > 100 || len(parameters.OutputSchema) > 100 ||
+		len(parameters.SystemPrompt) > maxProviderTextSystemRunes {
 		return errors.New("invalid server text job parameters")
 	}
 	if parameters.Operation != "film_decompose" && parameters.Operation != "film_script" {
 		return errors.New("unsupported server text operation")
+	}
+	if parameters.SourceRevision < 0 || (parameters.SourceRevision > 0 && !validFilmRequestHash(parameters.SourceSHA256)) || parameters.FilmRevision < 0 {
+		return errors.New("invalid server text source snapshot")
 	}
 	return nil
 }
@@ -118,6 +126,9 @@ func (s *Server) resolveTextGenerationRequest(
 			Protocol: provider.Protocol, SystemPrompt: config.SystemPrompt, Timeout: timeout,
 		}
 		request.SystemPrompt = config.SystemPrompt
+	}
+	if strings.TrimSpace(parameters.SystemPrompt) != "" {
+		request.SystemPrompt = parameters.SystemPrompt
 	}
 	if err := validateProviderTextRequest(request); err != nil {
 		return providerModelConnection{}, providerTextRequest{}, err

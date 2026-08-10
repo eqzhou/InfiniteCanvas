@@ -450,6 +450,8 @@ func (s *Server) changeFilmStage(w http.ResponseWriter, r *http.Request, action 
 
 func (s *Server) runFilmStage(w http.ResponseWriter, r *http.Request) {
 	switch chi.URLParam(r, "stageId") {
+	case "decompose":
+		s.runFilmTextStage(w, r)
 	case "storyboard", "first_frame", "audio", "video":
 		s.runFilmGenerationStage(w, r)
 	default:

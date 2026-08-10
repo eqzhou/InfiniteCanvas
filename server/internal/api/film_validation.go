@@ -195,7 +195,10 @@ func validateFilmTasks(tasks []filmTask) error {
 		if err := addUniqueFilmID(ids, task.ID, "task"); err != nil {
 			return err
 		}
-		if _, exists := filmStageDependencies[task.Stage]; !exists || task.Revision < 1 || !validFilmStatus(task.Status) || !validFilmText(task.Title, 500, true) || math.IsNaN(task.Progress) || math.IsInf(task.Progress, 0) || task.Progress < 0 || task.Progress > 1 || !validFilmTimestamp(task.CreatedAt) || !validFilmTimestamp(task.UpdatedAt) || !validFilmText(task.Error, 2_000, false) || (task.GenerationJobID != "" && (!validProjectID(task.GenerationJobID) || filmStageGenerationKind(task.Stage) == "" || !validProjectID(task.ShotID) || !validFilmIdempotencyKey(task.IdempotencyKey) || !validFilmRequestHash(task.RequestHash))) || (task.GenerationJobID == "" && (task.ShotID != "" || task.IdempotencyKey != "" || task.RequestHash != "")) {
+		generationKind := filmTaskGenerationKind(task.Stage)
+		projectLevelTextTask := generationKind == "text" && task.ShotID == "" && task.TextSnapshot != nil && task.Snapshot == nil
+		shotMediaTask := generationKind != "" && generationKind != "text" && validProjectID(task.ShotID) && task.Snapshot != nil && task.TextSnapshot == nil
+		if _, exists := filmStageDependencies[task.Stage]; !exists || task.Revision < 1 || !validFilmStatus(task.Status) || !validFilmText(task.Title, 500, true) || math.IsNaN(task.Progress) || math.IsInf(task.Progress, 0) || task.Progress < 0 || task.Progress > 1 || !validFilmTimestamp(task.CreatedAt) || !validFilmTimestamp(task.UpdatedAt) || !validFilmText(task.Error, 2_000, false) || (task.GenerationJobID != "" && (!validProjectID(task.GenerationJobID) || (!projectLevelTextTask && !shotMediaTask) || !validFilmIdempotencyKey(task.IdempotencyKey) || !validFilmRequestHash(task.RequestHash))) || (task.GenerationJobID == "" && (task.ShotID != "" || task.IdempotencyKey != "" || task.RequestHash != "" || task.Snapshot != nil || task.TextSnapshot != nil)) {
 			return fmt.Errorf("film task %s is invalid", task.ID)
 		}
 		if task.Snapshot != nil {
@@ -206,6 +209,15 @@ func validateFilmTasks(tasks []filmTask) error {
 				snapshot.EstimatedGenerations != 1 || snapshot.EstimatedCredits < 0 || !validFilmTimestamp(snapshot.CreatedAt) ||
 				validateFilmGenerationConfig(task.Stage, snapshot.Config) != nil {
 				return fmt.Errorf("film task %s generation snapshot is invalid", task.ID)
+			}
+		}
+		if task.TextSnapshot != nil {
+			snapshot := task.TextSnapshot
+			if snapshot.SourceRevision < 1 || !validFilmRequestHash(snapshot.SourceSHA256) ||
+				!validFilmText(snapshot.ProviderID, 500, true) || !validFilmText(snapshot.Model, 500, true) ||
+				!validFilmText(snapshot.PromptVersion, 100, true) || !validFilmText(snapshot.OutputSchema, 100, true) ||
+				snapshot.EstimatedGenerations != 1 || snapshot.EstimatedCredits < 0 || !validFilmTimestamp(snapshot.CreatedAt) {
+				return fmt.Errorf("film task %s text snapshot is invalid", task.ID)
 			}
 		}
 	}
