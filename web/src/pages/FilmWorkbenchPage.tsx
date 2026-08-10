@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Check, Clapperboard, RefreshCw } from "lucide-react";
-import { Link, Navigate, useParams } from "react-router";
+import { Link, Navigate, useNavigate, useParams } from "react-router";
 
 import { AgentPanel, EpisodesPanel, ProductionPanel, ProjectionPanel } from "@/components/film/ProductionPanels";
 import { AIDecompositionPanel, AIScriptPanel, AssetsPanel, ManuscriptPanel } from "@/components/film/ManuscriptAssetsPanels";
 import { DeliveryPanel, TimelinePanel } from "@/components/film/TimelineDeliveryPanels";
 import { WorkbenchSection } from "@/components/film/WorkbenchSection";
 import { isFilmNavigationAway, resolvePendingFilmResponse, shouldConfirmFilmLeave, type VersionedFilmDraftState } from "@/lib/film-drafts";
-import { refreshFilmProjection as refreshManagedFilmProjection, type FilmProjectionDiff } from "@/lib/film-document";
+import { ensureFilmSceneDirectorNode, refreshFilmProjection as refreshManagedFilmProjection, type FilmProjectionDiff } from "@/lib/film-document";
 import { useSharedChannels } from "@/services/shared-channels";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
@@ -56,6 +56,7 @@ function friendlyError(cause: unknown): string {
 
 export function FilmWorkbenchPage() {
   const { projectId = "" } = useParams();
+  const navigate = useNavigate();
   const project = useBoardStore((state) => state.projects.find((candidate) => candidate.id === projectId));
   const config = useBoardStore((state) => state.config);
   const sharedChannels = useSharedChannels();
@@ -184,6 +185,25 @@ export function FilmWorkbenchPage() {
 
   const setDraft = (text: string) => { draftRef.current = { ...draftRef.current, manuscript: text, manuscriptDirty: true, manuscriptVersion: draftRef.current.manuscriptVersion + 1 }; setManuscript(text); setManuscriptDirty(true); };
   const updateTimeline = (timeline: FilmTimeline) => { const current = statusRef.current; if (!current) return; const next = { ...current, document: { ...current.document, timeline } }; statusRef.current = next; setStatus(next); draftRef.current = { ...draftRef.current, timelineDirty: true, timelineVersion: draftRef.current.timelineVersion + 1 }; setTimelineDirty(true); };
+  const openSceneDirector = (sceneId: string) => {
+    const scene = statusRef.current?.document.scenes.find((item) => item.id === sceneId);
+    if (!scene || !project) return;
+    const store = useBoardStore.getState();
+    store.setActiveProject(project.id);
+    let nodeId = "";
+    let position = { x: 0, y: 0 };
+    store.updateActive((current) => {
+      const result = ensureFilmSceneDirectorNode(current, scene);
+      const node = result.project.nodes.find((item) => item.id === result.nodeId);
+      nodeId = result.nodeId;
+      position = node?.position ?? position;
+      return result.project;
+    });
+    if (!nodeId) return;
+    store.setSelected([nodeId]);
+    store.setViewport({ x: 180 - position.x * 0.8, y: 140 - position.y * 0.8, k: 0.8 }, false);
+    navigate("/");
+  };
 
   return <div className="h-full overflow-auto bg-[var(--ob-canvas)]" data-testid="film-workbench">
     <header className="sticky top-0 z-20 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 backdrop-blur-md"><div className="mx-auto flex max-w-7xl items-center gap-3"><Link to="/" className="ob-btn">返回画布</Link><Clapperboard size={20} className="text-[var(--ob-accent)]" /><div className="min-w-0 flex-1"><h1 className="truncate font-semibold">{project.title}</h1><p className="text-xs text-[var(--ob-muted)]">Film Production Mode · 修订 {document?.revision ?? "—"}</p></div><button className="ob-btn" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={14} /> 刷新</button></div><nav aria-label="影片工作台分区" className="mx-auto mt-3 flex max-w-7xl gap-1 overflow-x-auto">{navigation.map(([id, label]) => <a key={id} href={`#${id}`} className="ob-tab shrink-0 text-xs">{label}</a>)}</nav></header>
@@ -230,7 +250,7 @@ export function FilmWorkbenchPage() {
         <AssetsPanel status={status} busy={!!busy} onCreate={(input) => void run("创建资产", () => createFilmAsset(projectId, input))} onSave={(asset: FilmAsset, patch) => void run("保存资产", () => updateFilmAsset(projectId, asset.id, { revision: asset.revision, kind: patch.kind as FilmAssetKind | undefined, title: patch.title, description: patch.description, parentAssetId: patch.parentAssetId, voice: patch.voice, stylePrompt: patch.stylePrompt, aspectRatio: patch.aspectRatio, ageStage: patch.ageStage, costume: patch.costume, storyPeriod: patch.storyPeriod, isDefault: patch.isDefault }))} />
         <EpisodesPanel status={status} busy={!!busy} onSaveEpisode={(id, revision, title) => void run("保存集", () => updateFilmEpisode(projectId, id, { revision, title }))} onSaveShot={(shot: FilmShot, patch) => void run("保存镜头", () => updateFilmShot(projectId, shot.id, { revision: shot.revision, description: patch.description, durationSeconds: patch.durationSeconds, styleAssetId: patch.styleAssetId, identityVersionIds: patch.identityVersionIds }))} onCreateDialogue={(shotId, kind, text) => void run("创建对白", () => createFilmDialogue(projectId, { shotId, kind, text }))} onSaveDialogue={(dialogue, patch) => void run("保存对白", () => updateFilmDialogue(projectId, dialogue.id, { revision: dialogue.revision, kind: patch.kind, text: patch.text, characterAssetId: patch.characterAssetId, voiceAssetId: patch.voiceAssetId }))} onDeleteDialogue={(dialogue) => void run("删除对白", () => deleteFilmDialogue(projectId, dialogue.id, dialogue.revision))} />
         <ProductionPanel status={status} busy={!!busy} onLegacyStage={(stage, action) => void run(action === "run" ? "提交审核" : action === "approve" ? "批准阶段" : "退回阶段", () => changeFilmStage(projectId, stage.id, action, stage.revision), { notice: action === "run" ? "产物已提交审核；这不代表生成完成" : undefined })} onRun={(stage: FilmStageKind, request: FilmStageRunRequest) => run("开始生成", () => requestFilmStageRun(projectId, stage, request), { notice: "生成任务已入队，请以 GenerationJob 状态为准" })} onSynced={(next) => applyStatus(next, {})} />
-        <ProjectionPanel project={project} status={status} busy={!!busy} onStatus={(label, operation) => void run(label, operation)} onRefreshCanvas={refreshCanvasProjection} onCommitCanvas={commitCanvasProjection} onAdopt={async (input) => { const ok = await run("采用画布候选", () => adoptFilmCanvasMedia(projectId, input), { notice: "候选媒体已采用并记录画布、任务、模型和媒体版本来源" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onAdoptDirector={async (input) => { const ok = await run("采用 Director 拍摄版本", () => adoptFilmDirectorCapture(projectId, input), { notice: "Director 构图已验证并冻结为正式镜头媒体版本" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onBindDirectorScene={async (input) => { const ok = await run("绑定 Director 场景版本", () => bindFilmDirectorScene(projectId, input), { notice: "Director 场景、机位和角色站位快照已冻结" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} />
+        <ProjectionPanel project={project} status={status} busy={!!busy} onStatus={(label, operation) => void run(label, operation)} onRefreshCanvas={refreshCanvasProjection} onCommitCanvas={commitCanvasProjection} onAdopt={async (input) => { const ok = await run("采用画布候选", () => adoptFilmCanvasMedia(projectId, input), { notice: "候选媒体已采用并记录画布、任务、模型和媒体版本来源" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onAdoptDirector={async (input) => { const ok = await run("采用 Director 拍摄版本", () => adoptFilmDirectorCapture(projectId, input), { notice: "Director 构图已验证并冻结为正式镜头媒体版本" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onBindDirectorScene={async (input) => { const ok = await run("绑定 Director 场景版本", () => bindFilmDirectorScene(projectId, input), { notice: "Director 场景、机位和角色站位快照已冻结" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onOpenDirector={openSceneDirector} />
         <TimelinePanel timeline={document.timeline} mediaSources={[...document.shots.filter((shot) => shot.videoStorageKey || shot.audioStorageKey).map((shot) => ({ value: `shot:${shot.id}`, label: `${shot.title}（镜头媒体）` })), ...document.assets.filter((asset) => asset.mediaStorageKey).map((asset) => ({ value: asset.mediaStorageKey!, label: `${asset.title}（${asset.kind}）` }))]} dirty={timelineDirty} busy={!!busy} onChange={updateTimeline} onSave={() => void run("保存时间线", () => saveFilmTimeline(projectId, document.timeline), { clearTimeline: true, notice: "时间线已保存" })} />
         <WorkbenchSection id="quality" title="质量检查 / Quality"><button className="ob-btn ob-btn-primary" onClick={() => void run("质量检查", () => validateFilm(projectId))}>运行检查</button>{latestReport ? <><p className="mt-3 text-sm">{latestReport.issues.length} 个问题，{latestReport.repairs.length} 个修复建议</p>{latestReport.repairs.slice(0, 10).map((repair) => <div key={repair.id} className="mt-2 flex items-center gap-2 text-sm"><span className="flex-1">{repair.summary}<small className="ml-2 text-[var(--ob-muted)]">影响 {repair.affectedTargets?.length ?? 1} 项 · 预计 {repair.estimatedGenerations ?? 0} 次生成 / {repair.estimatedCredits ?? 0} credits</small></span><button className="ob-btn" onClick={() => void run("批准并应用修复", () => applyFilmRepair(projectId, repair.id, repair.expectedRevision))}>批准并应用</button></div>)}</> : <p className="mt-2 text-sm text-[var(--ob-muted)]">检查不自动修改制作数据。</p>}<div className="mt-4 border-t border-[var(--ob-line)] pt-3"><h3 className="text-sm font-medium">可恢复实体版本</h3>{(document.versions ?? []).slice(-10).reverse().map((version) => { const current = document.shots.find((shot) => shot.id === version.entityId); return <div key={version.id} className="mt-2 flex items-center gap-2 text-xs"><span className="mr-auto">{version.entityType}:{version.entityId} · r{version.revision} · {version.reason}</span><button className="ob-btn" disabled={!current} onClick={() => current && void run("恢复历史版本", () => restoreFilmEntityVersion(projectId, version.id, current.revision))}>恢复</button></div>; })}</div></WorkbenchSection>
         <DeliveryPanel status={status} busy={!!busy} onExport={(kind) => void run("请求导出", () => requestFilmExport(projectId, kind, document.revision), { notice: "导出请求已提交，请刷新查看异步状态" })} onCancel={(jobId) => void run("取消导出", () => cancelFilmExport(projectId, jobId), { notice: "导出取消请求已提交" })} onRefresh={() => void refresh()} />

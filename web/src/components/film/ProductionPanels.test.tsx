@@ -36,7 +36,7 @@ describe("Film Director projection workflow", () => {
 
     expect(html).toContain("Director 正式构图");
     expect(html).toContain("加载 Director 拍摄版本");
-    expect(html).toContain("采用为分镜或首帧");
+    expect(html).toContain("采用为场景 / 分镜 / 首帧");
   });
 });
 

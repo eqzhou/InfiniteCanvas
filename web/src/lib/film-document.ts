@@ -352,6 +352,53 @@ export type FilmProjectionDiff = {
   after: { title: string; content: string };
 };
 
+export type FilmSceneDirectorNodeResult = {
+  project: BoardProject;
+  nodeId: string;
+  created: boolean;
+};
+
+export function ensureFilmSceneDirectorNode(project: BoardProject, scene: FilmScene): FilmSceneDirectorNodeResult {
+  const projectionKey = `director:${scene.id}`;
+  const existing = project.nodes.find((node) => node.metadata.filmProjectionKey === projectionKey);
+  if (existing) {
+    const defaults = createNode("director", existing.position);
+    return {
+      project: {
+        ...project,
+        nodes: project.nodes.map((node) => node.id === existing.id ? {
+          ...node,
+          type: "director",
+          metadata: {
+            ...defaults.metadata,
+            ...node.metadata,
+            filmProjectionKey: projectionKey,
+            filmProjectionRevision: scene.revision,
+            filmProjectionArchived: false,
+          },
+        } : node),
+      },
+      nodeId: existing.id,
+      created: false,
+    };
+  }
+  const sceneNode = project.nodes.find((node) => node.metadata.filmProjectionKey === `scene:${scene.id}`);
+  const fallbackX = project.nodes.reduce((maximum, node) => Math.max(maximum, node.position.x + node.width), 0) + 80;
+  const position = sceneNode
+    ? { x: sceneNode.position.x + sceneNode.width + 80, y: sceneNode.position.y }
+    : { x: fallbackX, y: 0 };
+  const node = createNode("director", position, {
+    id: stableId("filmnode", project.id, projectionKey),
+    title: `Director · ${scene.heading}`,
+    metadata: {
+      filmProjectionKey: projectionKey,
+      filmProjectionRevision: scene.revision,
+      filmProjectionArchived: false,
+    },
+  });
+  return { project: { ...project, nodes: [...project.nodes, node] }, nodeId: node.id, created: true };
+}
+
 function projectionTargets(document: FilmDocument): ProjectionTarget[] {
   return [
     ...document.episodes.map((episode) => ({

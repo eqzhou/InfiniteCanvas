@@ -166,7 +166,7 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
   </WorkbenchSection>;
 }
 
-export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanvas, onCommitCanvas, onAdopt, onAdoptDirector, onBindDirectorScene }: {
+export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanvas, onCommitCanvas, onAdopt, onAdoptDirector, onBindDirectorScene, onOpenDirector }: {
   project: BoardProject; status: FilmStatus; busy: boolean;
   onStatus: (label: string, operation: () => Promise<FilmStatus>) => void;
   onRefreshCanvas: () => Promise<void>;
@@ -174,6 +174,7 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
   onAdopt: (input: FilmCanvasAdoptionRequest) => Promise<void>;
   onAdoptDirector: (input: FilmDirectorAdoptionInput) => Promise<void>;
   onBindDirectorScene: (input: FilmDirectorSceneBindingInput) => Promise<void>;
+  onOpenDirector: (sceneId: string) => void;
 }) {
   const [plan, setPlan] = useState<FilmProjectionPlan | null>(null);
   const [error, setError] = useState("");
@@ -182,6 +183,7 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
   const [directorCaptures, setDirectorCaptures] = useState<FilmDirectorCapture[]>([]);
   const [directorCaptureId, setDirectorCaptureId] = useState("");
   const [directorTarget, setDirectorTarget] = useState("");
+  const [directorSceneId, setDirectorSceneId] = useState(status.document.scenes[0]?.id ?? "");
   const diffs = buildFilmProjectionDiffs(project, status.document);
   const candidates = project.nodes.filter((node) => ["image", "video", "audio"].includes(node.type) && node.metadata.storageKey);
   const directorNodes = project.nodes.filter((node) => node.type === "director");
@@ -232,13 +234,21 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
       <select aria-label="采用目标" className="ob-input" value={target} onChange={(event) => setTarget(event.target.value)}><option value="">选择镜头或资产目标</option>{targets.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select>
       <button className="ob-btn" disabled={busy || !candidateId || !target} onClick={() => void adopt().catch((cause) => setError(String(cause)))}>采用并记录来源</button>
     </div>
+    <div className="mt-4 rounded-xl border border-[var(--ob-line)] p-3">
+      <strong className="text-sm">场景 Director 工作区</strong>
+      <p className="mt-1 text-xs text-[var(--ob-muted)]">按需创建一个受管 Director 节点，重复打开会定位原节点，并保留机位、角色站位和画布布局。</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+        <select aria-label="Director 场景" className="ob-input" value={status.document.scenes.some((scene) => scene.id === directorSceneId) ? directorSceneId : status.document.scenes[0]?.id ?? ""} onChange={(event) => setDirectorSceneId(event.target.value)}><option value="">选择影视场景</option>{status.document.scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.heading}</option>)}</select>
+        <button className="ob-btn" disabled={busy || !status.document.scenes.length} onClick={() => onOpenDirector(status.document.scenes.some((scene) => scene.id === directorSceneId) ? directorSceneId : status.document.scenes[0]?.id ?? "")}>创建 / 定位 Director</button>
+      </div>
+    </div>
     {directorNodes.length ? <div className="mt-4 rounded-xl border border-[var(--ob-line)] p-3">
       <div className="flex flex-wrap items-center gap-2"><strong className="mr-auto text-sm">Director 正式构图</strong><button className="ob-btn" disabled={busy} onClick={() => void loadDirectorCaptures().catch((cause) => setError(String(cause)))}><RefreshCw size={14} /> 加载 Director 拍摄版本</button></div>
       <p className="mt-1 text-xs text-[var(--ob-muted)]">服务端会验证拍摄版本属于当前影视项目，并复制为稳定媒体；临时拍摄记录删除后不会影响正式镜头。</p>
       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <select aria-label="Director 拍摄版本" className="ob-input" value={directorCaptureId} onChange={(event) => setDirectorCaptureId(event.target.value)}><option value="">选择已验证的拍摄版本</option>{directorCaptures.map((capture) => <option key={capture.id} value={capture.id}>{capture.cameraName} · {capture.width}×{capture.height} · {new Date(capture.createdAt).toLocaleString()}</option>)}</select>
         <select aria-label="Director 采用目标" className="ob-input" value={directorTarget} onChange={(event) => setDirectorTarget(event.target.value)}><option value="">选择场景或镜头目标</option>{status.document.scenes.map((scene) => <option key={`scene:${scene.id}`} value={`scene:${scene.id}:scene`}>{scene.heading} · 正式场景版本</option>)}{status.document.shots.flatMap((shot) => [<option key={`${shot.id}:storyboard`} value={`shot:${shot.id}:storyboard`}>{shot.title} · 分镜</option>, <option key={`${shot.id}:first_frame`} value={`shot:${shot.id}:first_frame`}>{shot.title} · 首帧</option>])}</select>
-        <button className="ob-btn" disabled={busy || !directorCaptureId || !directorTarget} onClick={() => void adoptDirector().catch((cause) => setError(String(cause)))}>采用为分镜或首帧</button>
+        <button className="ob-btn" disabled={busy || !directorCaptureId || !directorTarget} onClick={() => void adoptDirector().catch((cause) => setError(String(cause)))}>采用为场景 / 分镜 / 首帧</button>
       </div>
     </div> : null}
     {error ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{error}</p> : null}
