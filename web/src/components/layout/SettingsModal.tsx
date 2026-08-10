@@ -7,6 +7,7 @@ import {
   getSitePolicy,
   updateSitePolicy,
   type SitePolicy,
+  type UsageSnapshot,
 } from "@/services/auth-session";
 import { createDefaultChannel } from "@/lib/defaults";
 import { listModels } from "@/services/ai-client";
@@ -91,6 +92,7 @@ export type SettingsSectionDefinition = Readonly<{
 
 const MEMBER_SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = Object.freeze([
   { id: "channel", label: "渠道", icon: Radio },
+  { id: "usage", label: "用量", icon: Database },
   { id: "model", label: "模型服务", icon: Server },
   { id: "generation", label: "生成偏好", icon: Palette },
   { id: "defaults", label: "生成默认值", icon: Sliders },
@@ -109,10 +111,35 @@ const SITE_POLICY_SECTION: SettingsSectionDefinition = Object.freeze({
 export function settingsSectionsFor(canManageSitePolicy: boolean): readonly SettingsSectionDefinition[] {
   if (!canManageSitePolicy) return [...MEMBER_SETTINGS_SECTIONS];
   return [
-    ...MEMBER_SETTINGS_SECTIONS.slice(0, 4),
+    ...MEMBER_SETTINGS_SECTIONS.slice(0, 5),
     SITE_POLICY_SECTION,
-    ...MEMBER_SETTINGS_SECTIONS.slice(4),
+    ...MEMBER_SETTINGS_SECTIONS.slice(5),
   ];
+}
+
+function formatUsageBytes(bytes: number): string {
+  const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (safe < 1024) return `${Math.round(safe)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = safe / 1024;
+  let unit = units[0]!;
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index]!;
+  }
+  return `${Number(value.toFixed(1))} ${unit}`;
+}
+
+export function UsageOverview({ snapshot, onRefresh }: { snapshot: UsageSnapshot | null; onRefresh: () => void }) {
+  if (!snapshot) {
+    return <div className="rounded-xl border border-[var(--ob-line)] p-4"><p className="text-sm text-[var(--ob-muted)]">服务端用量暂不可用。</p><button type="button" className="ob-btn mt-3" onClick={onRefresh}><RefreshCw size={14} /> 重新获取</button></div>;
+  }
+  const cards = [
+    { label: "团队月生成额度（次数）", value: `${snapshot.generationThisMonth} / ${snapshot.generationQuotaMonthly}`, note: "团队成员共享的月度生成次数上限" },
+    { label: "个人算力余额（credits）", value: String(snapshot.credits ?? 0), note: "每次生成按模型计费并从个人余额扣除" },
+    { label: "服务端媒体存储", value: `${formatUsageBytes(snapshot.storageBytes)} / ${formatUsageBytes(snapshot.storageQuotaBytes)}`, note: "服务器保存的图片、音频、视频和交付物" },
+  ];
+  return <div><div className="grid gap-3 md:grid-cols-3">{cards.map((card) => <div key={card.label} className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3"><p className="text-xs text-[var(--ob-muted)]">{card.label}</p><p className="mt-1 text-lg font-semibold tabular-nums">{card.value}</p><p className="mt-1 text-xs text-[var(--ob-muted)]">{card.note}</p></div>)}</div><div className="mt-3 flex flex-wrap items-center gap-2"><span className="ob-chip">套餐 {snapshot.plan || "free"}</span><button type="button" className="ob-btn" onClick={onRefresh}><RefreshCw size={14} /> 刷新服务端用量</button></div><p className="mt-2 text-xs text-[var(--ob-muted)]">团队生成次数、个人算力和媒体存储是三项独立限制；显示为 0 即当前额度为 0。</p></div>;
 }
 
 export function settingsScrollTarget(
@@ -552,6 +579,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <Plus size={17} />
               </button>
             </div>
+          </section>
+
+          <section className="ob-settings-section mb-5" data-section-id="usage">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><Database size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">服务端用量</div>
+                <div className="ob-settings-section-desc">分别查看团队次数、个人算力和媒体存储</div>
+              </div>
+            </div>
+            <UsageOverview snapshot={auth?.usageSnapshot ?? null} onRefresh={() => { void auth?.refreshUsage(); }} />
           </section>
 
           <section className="ob-settings-section mb-5" data-section-id="model">
