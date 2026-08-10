@@ -2466,17 +2466,21 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 
 func generationJobConsumesQuota(kind string) bool {
 	switch kind {
-	case "image", "video", "audio":
+	case "text", "image", "video", "audio":
 		return true
 	default:
 		return false
 	}
 }
 
+func validServerGenerationClaim(claim GenerationClaim) bool {
+	return ((claim.Kind == "text" || claim.Kind == "image" || claim.Kind == "video" || claim.Kind == "audio") && claim.Executor == "server") ||
+		(claim.Kind == "workflow" && claim.Executor == "workflow") ||
+		(claim.Kind == "export" && claim.Executor == "film-export")
+}
+
 func (s *PostgresStore) ClaimServerGenerationJob(ctx context.Context, claim GenerationClaim, owner string, now, leaseUntil time.Time) (TenantGenerationJob, error) {
-	if ((claim.Kind != "image" && claim.Kind != "video" && claim.Kind != "audio") || claim.Executor != "server") &&
-		(claim.Kind != "workflow" || claim.Executor != "workflow") &&
-		(claim.Kind != "export" || claim.Executor != "film-export") {
+	if !validServerGenerationClaim(claim) {
 		return TenantGenerationJob{}, errors.New("invalid generation claim")
 	}
 	_ = now
