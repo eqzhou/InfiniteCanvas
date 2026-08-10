@@ -17,15 +17,17 @@ export type MediaCapabilityCatalog = { version: string; models: MediaCapability[
 
 const modes = new Set<MediaGenerationMode>(["text_to_image", "image_to_image", "text_to_video", "image_to_video", "text_to_audio"]);
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
+const modelPattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const sizePattern = /^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|auto)$/;
 
 function parseCapability(value: unknown): MediaCapability | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Partial<MediaCapability>;
   const kind = item.kind;
-  if (!idPattern.test(item.channelId ?? "") || typeof item.channelName !== "string" || !item.channelName.trim() || typeof item.protocol !== "string" || !idPattern.test(item.model ?? "") || (kind !== "image" && kind !== "video" && kind !== "audio") || !Array.isArray(item.modes) || !item.modes.length || !item.modes.every((mode) => modes.has(mode)) || !Number.isInteger(item.maxReferences) || item.maxReferences! < 0 || item.maxReferences! > 16) return null;
+  if (!idPattern.test(item.channelId ?? "") || typeof item.channelName !== "string" || !item.channelName.trim() || item.channelName.length > 200 || typeof item.protocol !== "string" || !idPattern.test(item.protocol) || !modelPattern.test(item.model ?? "") || (kind !== "image" && kind !== "video" && kind !== "audio") || !Array.isArray(item.modes) || !item.modes.length || !item.modes.every((mode) => modes.has(mode)) || !Number.isInteger(item.maxReferences) || item.maxReferences! < 0 || item.maxReferences! > 16) return null;
   const sizes = item.sizes ?? [];
   const durations = item.durations ?? [];
-  if (!Array.isArray(sizes) || !sizes.every((size) => typeof size === "string" && /^\d{2,5}x\d{2,5}$/.test(size)) || !Array.isArray(durations) || !durations.every((duration) => Number.isInteger(duration) && duration > 0 && duration <= 900)) return null;
+  if (!Array.isArray(sizes) || !sizes.every((size) => typeof size === "string" && sizePattern.test(size)) || !Array.isArray(durations) || !durations.every((duration) => Number.isInteger(duration) && duration > 0 && duration <= 900)) return null;
   return { channelId: item.channelId!, channelName: item.channelName, protocol: item.protocol, model: item.model!, kind, modes: [...new Set(item.modes)], sizes: [...new Set(sizes)], durations: [...new Set(durations)], maxReferences: item.maxReferences! };
 }
 
