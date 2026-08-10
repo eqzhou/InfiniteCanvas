@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -33,5 +34,14 @@ func TestMediaCapabilityCatalogDerivesOnlyEnabledSharedChannelDefaults(t *testin
 	}
 	if catalog.Models[0].ChannelID != "media-main" || catalog.Models[0].Modes[0] == "" || catalog.Models[0].Protocol != "openai" {
 		t.Fatalf("incomplete catalog: %#v", catalog.Models)
+	}
+}
+
+func TestFilmGenerationSnapshotFreezesMediaCapabilityResolution(t *testing.T) {
+	document := newFilmDocument("film-capability-snapshot")
+	shot := filmShot{ID: "shot-main", Revision: 2, Description: "Frame"}
+	snapshot := buildFilmGenerationSnapshotWithCapability(document, shot, "shared-main", "image-main", filmGenerationConfig{}, document.CreatedAt, strings.Repeat("a", 64), "image_to_image")
+	if snapshot.CapabilityVersion == "" || snapshot.GenerationMode != "image_to_image" {
+		t.Fatalf("media capability resolution was not frozen: %#v", snapshot)
 	}
 }
