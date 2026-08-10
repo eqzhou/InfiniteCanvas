@@ -175,6 +175,24 @@ func (s *Server) syncFilmGenerationJob(w http.ResponseWriter, r *http.Request) {
 		writeFilmError(w, http.StatusNotFound, "generation_job_not_found", "generation job is unavailable")
 		return
 	}
+	if job.Kind == "text" && job.Status == "succeeded" {
+		if err := s.syncFilmTextJobCandidate(r.Context(), tenantIDFrom(r), job); err != nil {
+			writeFilmOperationError(w, err)
+			return
+		}
+		updated, err := backend.GetFilmProject(r.Context(), tenantIDFrom(r), record.ProjectID)
+		if err != nil {
+			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "film production could not be synchronized")
+			return
+		}
+		next, err := decodeFilmDocument(updated.Document)
+		if err != nil {
+			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "film production could not be synchronized")
+			return
+		}
+		s.writeFilmDocument(w, r, http.StatusOK, updated, next)
+		return
+	}
 	next := cloneFilmDocument(document)
 	if err := setFilmTaskFromJob(s, r, &next, taskIndex, task, job); err != nil {
 		writeFilmOperationError(w, err)
