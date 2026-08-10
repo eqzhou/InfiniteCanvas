@@ -17,6 +17,7 @@ export type CodexHistoryMessage = {
   role: "user" | "assistant";
   text: string;
   createdAt: string;
+  contextReferences?: Array<{ kind: "skill" | "node"; id: string; label: string }>;
 };
 
 export type CodexHistoryEvent = {

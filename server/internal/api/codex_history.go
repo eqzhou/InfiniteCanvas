@@ -27,10 +27,35 @@ const (
 )
 
 type codexHistoryMessage struct {
-	ID        string `json:"id"`
-	Role      string `json:"role"`
-	Text      string `json:"text"`
-	CreatedAt string `json:"createdAt"`
+	ID                string                  `json:"id"`
+	Role              string                  `json:"role"`
+	Text              string                  `json:"text"`
+	CreatedAt         string                  `json:"createdAt"`
+	ContextReferences []codexContextReference `json:"contextReferences,omitempty"`
+}
+
+type codexContextReference struct {
+	Kind  string `json:"kind"`
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+func validCodexContextReferences(references []codexContextReference) bool {
+	if len(references) > 20 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(references))
+	for _, reference := range references {
+		if (reference.Kind != "skill" && reference.Kind != "node") || !projectIDPattern.MatchString(reference.ID) || strings.TrimSpace(reference.Label) == "" || len(reference.Label) > 200 {
+			return false
+		}
+		key := reference.Kind + ":" + reference.ID
+		if _, exists := seen[key]; exists {
+			return false
+		}
+		seen[key] = struct{}{}
+	}
+	return true
 }
 
 type codexHistorySummary struct {
@@ -151,7 +176,7 @@ func validateCodexHistoryRecord(record codexHistoryRecord) error {
 		return errors.New("invalid Codex history record")
 	}
 	for _, message := range record.Messages {
-		if !projectIDPattern.MatchString(message.ID) || (message.Role != "user" && message.Role != "assistant") || len(message.Text) > maxCodexHistoryText || len(message.CreatedAt) > 128 {
+		if !projectIDPattern.MatchString(message.ID) || (message.Role != "user" && message.Role != "assistant") || len(message.Text) > maxCodexHistoryText || len(message.CreatedAt) > 128 || !validCodexContextReferences(message.ContextReferences) {
 			return errors.New("invalid Codex history message")
 		}
 	}
@@ -200,6 +225,9 @@ func (s *codexHistoryStore) put(scope agentScope, record codexHistoryRecord) err
 func cloneCodexHistoryRecord(record codexHistoryRecord) codexHistoryRecord {
 	clone := record
 	clone.Messages = append([]codexHistoryMessage(nil), record.Messages...)
+	for index := range clone.Messages {
+		clone.Messages[index].ContextReferences = append([]codexContextReference(nil), clone.Messages[index].ContextReferences...)
+	}
 	clone.Events = append([]codexEvent(nil), record.Events...)
 	return clone
 }
@@ -373,12 +401,13 @@ func applyCodexHistoryEvent(record *codexHistoryRecord, event codexEvent) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if event.Method == "openboard/user_message" {
 		var data struct {
-			ID   string `json:"id"`
-			Text string `json:"text"`
+			ID                string                  `json:"id"`
+			Text              string                  `json:"text"`
+			ContextReferences []codexContextReference `json:"contextReferences"`
 		}
 		if jsonBytes, err := json.Marshal(event.Data); err == nil && json.Unmarshal(jsonBytes, &data) == nil {
 			text := strings.TrimSpace(data.Text)
-			if data.ID != "" && text != "" && len(text) <= maxCodexHistoryText {
+			if data.ID != "" && text != "" && len(text) <= maxCodexHistoryText && validCodexContextReferences(data.ContextReferences) {
 				duplicate := false
 				for _, message := range record.Messages {
 					if message.ID == data.ID && message.Role == "user" {
@@ -387,7 +416,7 @@ func applyCodexHistoryEvent(record *codexHistoryRecord, event codexEvent) {
 					}
 				}
 				if !duplicate {
-					record.Messages = appendBoundedHistoryMessage(record.Messages, codexHistoryMessage{ID: data.ID, Role: "user", Text: text, CreatedAt: now})
+					record.Messages = appendBoundedHistoryMessage(record.Messages, codexHistoryMessage{ID: data.ID, Role: "user", Text: text, CreatedAt: now, ContextReferences: append([]codexContextReference(nil), data.ContextReferences...)})
 				}
 				if record.Title == "" || record.Title == "新对话" {
 					record.Title = truncateHistoryTitle(text)

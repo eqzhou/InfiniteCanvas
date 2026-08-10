@@ -157,6 +157,7 @@ function isBoundedCodexEvent(value: unknown): value is CodexEvent {
 }
 
 export type CodexPermissionMode = "read-only" | "workspace-auto" | "full-access";
+export type CodexContextReference = { kind: "skill" | "node"; id: string; label: string };
 export type SendCodexMessageOptions = {
   attachmentIds?: string[];
   clientId?: string;
@@ -164,6 +165,7 @@ export type SendCodexMessageOptions = {
   permissionMode?: CodexPermissionMode;
   model?: string;
   effort?: string;
+  contextReferences?: CodexContextReference[];
 };
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -398,7 +400,7 @@ function validateCodexHistoryRecord(value: unknown): CodexHistoryRecord {
         CODEX_ID_PATTERN.test((message as CodexHistoryMessage).id) &&
         ((message as CodexHistoryMessage).role === "user" || (message as CodexHistoryMessage).role === "assistant") &&
         typeof (message as CodexHistoryMessage).text === "string" && (message as CodexHistoryMessage).text.length <= 100_000 &&
-        typeof (message as CodexHistoryMessage).createdAt === "string") ||
+        typeof (message as CodexHistoryMessage).createdAt === "string" && (((message as CodexHistoryMessage).contextReferences === undefined) || (Array.isArray((message as CodexHistoryMessage).contextReferences) && (message as CodexHistoryMessage).contextReferences!.length <= 20))) ||
       !Array.isArray(record.events) || record.events.length > 2_048 ||
       !record.events.every(isBoundedCodexEvent)) {
     throw new Error("Agent returned an invalid Codex history transcript");
@@ -815,9 +817,11 @@ export async function sendCodexMessage(
     permissionMode = "workspace-auto",
     model = "",
     effort = "",
+    contextReferences = [],
   } = options;
   if (model) validateCodexPickerValue(model, "model selection");
   if (effort) validateCodexPickerValue(effort, "reasoning effort");
+  if (contextReferences.length > 20 || contextReferences.some((reference) => (reference.kind !== "skill" && reference.kind !== "node") || !/^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(reference.id) || !reference.label.trim() || reference.label.length > 200)) throw new Error("Invalid Codex context references");
   const response = await agentFetch(connection, "api/codex/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -830,6 +834,7 @@ export async function sendCodexMessage(
       permissionMode,
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
+      ...(contextReferences.length ? { contextReferences } : {}),
     }),
   }, fetcher);
   if (!response.ok) throw new Error(`Codex message failed: HTTP ${response.status}`);
