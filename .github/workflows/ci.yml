@@ -235,7 +235,7 @@ jobs:
           docker compose exec -T openboard sh -c '
             test "$OPENBOARD_FFMPEG_PATH" = /usr/bin/ffmpeg
             test "$OPENBOARD_FFPROBE_PATH" = /usr/bin/ffprobe
-            test "$(apk info -v ffmpeg)" = ffmpeg-8.0.1-r1
+            apk list --installed ffmpeg 2>/dev/null | grep -q '^ffmpeg-8\.0\.1-r1 '
             "$OPENBOARD_FFMPEG_PATH" -hide_banner -version >/dev/null
             "$OPENBOARD_FFPROBE_PATH" -hide_banner -version >/dev/null
           '
