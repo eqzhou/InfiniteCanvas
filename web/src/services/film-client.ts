@@ -109,6 +109,28 @@ export type FilmProjectionPlan = {
   }>;
 };
 
+export type FilmDirectorCapture = {
+  id: string;
+  projectId: string;
+  directorNodeId: string;
+  cameraId: string;
+  cameraName: string;
+  createdAt: string;
+  width: number;
+  height: number;
+  bytes: number;
+  mimeType: "image/png";
+  url: string;
+  shot?: unknown;
+};
+
+export type FilmDirectorAdoptionInput = {
+  shotId: string;
+  expectedRevision: number;
+  captureId: string;
+  targetField: "storyboard" | "first_frame";
+};
+
 type RawFilmCapabilities = Omit<Partial<Omit<FilmCapabilities, "agentOperations">>, "generationStages"> & {
   agentOperations?: unknown;
   importMaxBytes?: unknown;
@@ -202,6 +224,42 @@ async function requestFilm(projectId: string, suffix: string, init?: RequestInit
 
 export function loadFilmStatus(projectId: string): Promise<FilmStatus> {
   return requestFilm(projectId, "/status");
+}
+
+function readDirectorCapture(value: unknown, projectId: string, directorNodeId: string): FilmDirectorCapture | null {
+  if (!value || typeof value !== "object") return null;
+  const capture = value as Partial<FilmDirectorCapture>;
+  if (
+    typeof capture.id !== "string" || capture.projectId !== projectId || capture.directorNodeId !== directorNodeId ||
+    typeof capture.cameraId !== "string" || typeof capture.cameraName !== "string" || typeof capture.createdAt !== "string" ||
+    typeof capture.width !== "number" || capture.width <= 0 || typeof capture.height !== "number" || capture.height <= 0 ||
+    typeof capture.bytes !== "number" || capture.bytes <= 0 || capture.mimeType !== "image/png" ||
+    typeof capture.url !== "string" || !capture.url.startsWith("/api/blobs/")
+  ) return null;
+  return { ...capture, mimeType: "image/png" } as FilmDirectorCapture;
+}
+
+export async function listFilmDirectorCaptures(projectId: string, directorNodeIds: string[]): Promise<FilmDirectorCapture[]> {
+  filmPath(projectId);
+  const nodeIds = [...new Set(directorNodeIds)].filter((id) => /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(id)).slice(0, 100);
+  const captureLists = await Promise.all(nodeIds.map(async (directorNodeId) => {
+    const params = new URLSearchParams({ projectId, directorNodeId });
+    const response = await authFetch(`director-captures?${params}`);
+    if (!response.ok) throw new Error(`Director captures are unavailable: HTTP ${response.status}`);
+    const values = await response.json().catch(() => null) as unknown;
+    if (!Array.isArray(values)) throw new Error("Director capture response is invalid");
+    return values.map((value) => readDirectorCapture(value, projectId, directorNodeId)).filter((value): value is FilmDirectorCapture => value !== null);
+  }));
+  return captureLists.flat().sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 300);
+}
+
+export function adoptFilmDirectorCapture(projectId: string, input: FilmDirectorAdoptionInput): Promise<FilmStatus> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(input.shotId) || !/^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(input.captureId)) {
+    throw new Error("Invalid Film Director adoption identity");
+  }
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("Invalid shot revision");
+  if (input.targetField !== "storyboard" && input.targetField !== "first_frame") throw new Error("Invalid Director adoption target");
+  return requestFilm(projectId, "/director/adopt", { method: "POST", body: JSON.stringify(input) });
 }
 
 export async function loadFilmCapabilities(): Promise<FilmCapabilities> {
