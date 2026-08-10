@@ -156,6 +156,10 @@ implementation evidence.
 - [verified] Bounded text/Markdown, DOCX OOXML and PDF text-layer import. Scanned
   or textless PDFs fail with an OCR-required diagnostic; no server-side OCR or
   arbitrary document execution is implied.
+- [verified] Text/Markdown imports use a read-only preflight before deterministic
+  adoption. AI decomposition and per-episode scripts execute as persistent text
+  GenerationJobs, freeze source/model/prompt revisions, validate bounded JSON and
+  remain immutable review candidates until explicitly adopted.
 - [verified] Shot/dialogue/asset/task editing, identity age/costume/period/default
   variants, immutable generation-input snapshots, scoped storyboard/first-frame/
   audio/video generation, parent/child job state, failed-shot retry, five-track
@@ -164,6 +168,17 @@ implementation evidence.
   projection keys; user nodes/layout survive refresh, approved canvas media can
   be adopted with blob integrity, GenerationJob and prompt/model provenance, and
   white-listed edits use entity revisions on commit.
+- [verified] Film scenes can create or locate managed Director nodes on demand;
+  adopted formal captures are server-validated, copied into stable Film storage
+  and preserve scene/camera/capture/object-version provenance through quality,
+  manifest and restore paths.
+- [verified] A versioned tenant-visible media catalog is derived from enabled
+  administrator channels without credentials. Generation, cost estimates and
+  task snapshots share its resolved model/mode version and fail closed on unknown
+  capabilities.
+- [verified] The five-track timeline adds scale, playhead, drag/resize, snapping,
+  keyboard adjustment and a horizontally scrollable mobile presentation while
+  retaining precise forms, immutable drafts and revision-conflict handling.
 - [verified] Manifest, SRT and asset-bundle exports do not depend on FFmpeg or
   real Provider credentials. MP4 is independently capability-gated by probed
   absolute FFmpeg/FFprobe paths and bounded render timeout/storage. All four
