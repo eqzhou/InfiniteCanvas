@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Plus, Save, Trash2 } from "lucide-react";
 
 import { addFilmTimelineClip, moveFilmTimelineClip, removeFilmTimelineClip, updateFilmTimelineClip, validateFilmTimelineDraft } from "@/lib/film-timeline";
@@ -26,6 +26,7 @@ function VisualTimeline({ timeline, onChange }: { timeline: FilmTimeline; onChan
   const duration = timelineDuration(timeline);
   const [playhead, setPlayhead] = useState(0);
   const [selected, setSelected] = useState<{ trackId: string; clipId: string } | null>(null);
+  const drag = useRef<{ clientX: number; width: number; trackId: string; clip: FilmTimelineClip; mode: "move" | "start" | "end" } | null>(null);
   const selectedTrack = timeline.tracks.find((track) => track.id === selected?.trackId);
   const selectedClip = selectedTrack?.clips.find((clip) => clip.id === selected?.clipId);
   const replaceGeometry = (clip: FilmTimelineClip) => {
@@ -34,6 +35,20 @@ function VisualTimeline({ timeline, onChange }: { timeline: FilmTimeline; onChan
   };
   const nudge = (frames: number) => selectedClip && replaceGeometry(moveTimelineClip(selectedClip, frames / timeline.frameRate, duration, timeline.frameRate));
   const trim = (edge: "start" | "end", frames: number) => selectedClip && replaceGeometry(resizeTimelineClip(selectedClip, edge, (edge === "start" ? selectedClip.start : selectedClip.end) + frames / timeline.frameRate, timeline.frameRate));
+  const beginDrag = (clientX: number, width: number, trackId: string, clip: FilmTimelineClip, mode: "move" | "start" | "end") => {
+    drag.current = { clientX, width: Math.max(1, width), trackId, clip, mode };
+    setSelected({ trackId, clipId: clip.id });
+  };
+  const finishDrag = (clientX: number) => {
+    const active = drag.current;
+    drag.current = null;
+    if (!active) return;
+    const seconds = (clientX - active.clientX) / active.width * duration;
+    const changed = active.mode === "move"
+      ? moveTimelineClip(active.clip, seconds, duration, timeline.frameRate)
+      : resizeTimelineClip(active.clip, active.mode, (active.mode === "start" ? active.clip.start : active.clip.end) + seconds, timeline.frameRate);
+    onChange(updateFilmTimelineClip(timeline, active.trackId, active.clip.id, { start: changed.start, end: changed.end, trimIn: changed.trimIn, trimOut: changed.trimOut }));
+  };
   const marks = Array.from({ length: Math.min(13, Math.floor(duration) + 1) }, (_, index) => Math.round(index * duration / Math.min(12, duration)));
   return <div className="mt-4 overflow-hidden rounded-xl border border-[var(--ob-line)] bg-[var(--ob-canvas)]">
     <div className="flex items-center gap-3 border-b border-[var(--ob-line)] px-3 py-2"><strong className="text-sm">可视化剪辑台</strong><label className="ml-auto flex items-center gap-2 text-xs">播放头 {playhead.toFixed(2)}s<input aria-label="时间线播放头" className="w-48 accent-[var(--ob-accent)]" type="range" min="0" max={duration} step={1 / timeline.frameRate} value={playhead} onChange={(event) => setPlayhead(Number(event.target.value))} /></label></div>
@@ -42,8 +57,8 @@ function VisualTimeline({ timeline, onChange }: { timeline: FilmTimeline; onChan
       <div className="relative h-7 border-b border-[var(--ob-line)] text-[10px] text-[var(--ob-muted)]">{marks.map((mark) => <span key={mark} className="absolute top-1" style={{ left: `${timelineTimeToPercent(mark, duration)}%` }}>{mark}s</span>)}<span className="absolute inset-y-0 w-px bg-[var(--ob-accent)]" style={{ left: `${timelineTimeToPercent(playhead, duration)}%` }} /></div>
       {timeline.tracks.flatMap((track) => [
         <div key={`${track.id}:label`} className="flex h-12 items-center border-b border-r border-[var(--ob-line)] px-2 text-xs font-medium">{trackLabels[track.kind]}</div>,
-        <div key={`${track.id}:lane`} data-testid={`visual-timeline-track-${track.kind}`} className="relative h-12 border-b border-[var(--ob-line)]" onDoubleClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); setPlayhead(Math.max(0, Math.min(duration, (event.clientX - bounds.left) / bounds.width * duration))); }}>
-          {track.clips.map((clip) => <button key={clip.id} type="button" data-testid={`visual-timeline-clip-${clip.id}`} title={`${clip.source} · ${clip.start.toFixed(2)}–${clip.end.toFixed(2)}s`} className={`absolute top-1 h-10 min-w-4 overflow-hidden rounded border px-2 text-left text-[10px] ${selected?.clipId === clip.id ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]" : "border-[var(--ob-line)] bg-[var(--ob-panel)]"}`} style={{ left: `${timelineTimeToPercent(clip.start, duration)}%`, width: `${Math.max(0.5, timelineTimeToPercent(clip.end - clip.start, duration))}%` }} onClick={() => { setSelected({ trackId: track.id, clipId: clip.id }); setPlayhead(clip.start); }}><span className="block truncate">{clip.source}</span><span className="opacity-70">{(clip.end - clip.start).toFixed(2)}s</span></button>)}
+        <div key={`${track.id}:lane`} data-timeline-lane="true" data-testid={`visual-timeline-track-${track.kind}`} className="relative h-12 border-b border-[var(--ob-line)]" onDoubleClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); setPlayhead(Math.max(0, Math.min(duration, (event.clientX - bounds.left) / bounds.width * duration))); }}>
+          {track.clips.map((clip) => <div key={clip.id} role="button" tabIndex={0} draggable data-testid={`visual-timeline-clip-${clip.id}`} title={`${clip.source} · ${clip.start.toFixed(2)}–${clip.end.toFixed(2)}s`} className={`absolute top-1 h-10 min-w-4 cursor-grab overflow-hidden rounded border px-2 text-left text-[10px] ${selected?.clipId === clip.id ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]" : "border-[var(--ob-line)] bg-[var(--ob-panel)]"}`} style={{ left: `${timelineTimeToPercent(clip.start, duration)}%`, width: `${Math.max(0.5, timelineTimeToPercent(clip.end - clip.start, duration))}%` }} onClick={() => { setSelected({ trackId: track.id, clipId: clip.id }); setPlayhead(clip.start); }} onKeyDown={(event) => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); setSelected({ trackId: track.id, clipId: clip.id }); const changed = moveTimelineClip(clip, (event.key === "ArrowLeft" ? -1 : 1) / timeline.frameRate, duration, timeline.frameRate); onChange(updateFilmTimelineClip(timeline, track.id, clip.id, { start: changed.start, end: changed.end })); } }} onDragStart={(event) => beginDrag(event.clientX, event.currentTarget.parentElement?.getBoundingClientRect().width ?? 1, track.id, clip, "move")} onDragEnd={(event) => finishDrag(event.clientX)}><span aria-label="拖动片段入点" draggable className="absolute inset-y-0 left-0 w-2 cursor-ew-resize bg-[var(--ob-accent)]/40" onDragStart={(event) => { event.stopPropagation(); beginDrag(event.clientX, event.currentTarget.parentElement?.parentElement?.getBoundingClientRect().width ?? 1, track.id, clip, "start"); }} onDragEnd={(event) => { event.stopPropagation(); finishDrag(event.clientX); }} /><span className="block truncate">{clip.source}</span><span className="opacity-70">{(clip.end - clip.start).toFixed(2)}s</span><span aria-label="拖动片段出点" draggable className="absolute inset-y-0 right-0 w-2 cursor-ew-resize bg-[var(--ob-accent)]/40" onDragStart={(event) => { event.stopPropagation(); beginDrag(event.clientX, event.currentTarget.parentElement?.parentElement?.getBoundingClientRect().width ?? 1, track.id, clip, "end"); }} onDragEnd={(event) => { event.stopPropagation(); finishDrag(event.clientX); }} /></div>)}
           <span className="pointer-events-none absolute inset-y-0 w-px bg-[var(--ob-accent)]" style={{ left: `${timelineTimeToPercent(playhead, duration)}%` }} />
         </div>,
       ])}
