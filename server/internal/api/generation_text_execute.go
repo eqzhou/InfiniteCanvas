@@ -160,12 +160,18 @@ func (s *Server) executeClaimedTextJob(claimed store.TenantGenerationJob) {
 		}
 		finishCtx, finishCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer finishCancel()
-		if _, err := s.store.CompleteServerGenerationJob(
+		completed, err := s.store.CompleteServerGenerationJob(
 			finishCtx, tenantID, job.ID, job.LeaseOwner, status, result, message, time.Now().UTC(),
-		); err != nil {
+		)
+		if err != nil {
 			return
 		}
 		s.recordAICallLog(finishCtx, tenantID, job, status, time.Since(startedAt).Milliseconds(), message, auditRequest, result)
+		if status == "succeeded" {
+			if err := s.syncFilmTextJobCandidate(finishCtx, tenantID, completed); err != nil {
+				log.Printf("server text job %s/%s candidate sync failed: %v", tenantID, job.ID, err)
+			}
+		}
 	}
 
 	connection, request, err := s.resolveTextGenerationRequest(ctx, tenantID, job)
@@ -178,6 +184,17 @@ func (s *Server) executeClaimedTextJob(claimed store.TenantGenerationJob) {
 	if err != nil {
 		finish("failed", nil, "文本生成失败，请稍后重试", providerTextAuditPayload(request, connection.Protocol))
 		return
+	}
+	var parameters persistedTextJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil {
+		finish("failed", nil, "文本生成任务快照无效", providerTextAuditPayload(request, connection.Protocol))
+		return
+	}
+	if parameters.Operation == "film_decompose" {
+		if _, err := parseFilmAIDecompositionCandidate([]byte(text)); err != nil {
+			finish("failed", nil, "文本生成结果不符合影视拆解合同", providerTextAuditPayload(request, connection.Protocol))
+			return
+		}
 	}
 	result, err := json.Marshal(providerTextResult{Text: text})
 	if err != nil || len(result) > maxProviderTextResponseBytes {

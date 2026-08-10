@@ -100,12 +100,13 @@ func TestTextWorkerUsesFrozenChannelAndPersistsProviderResult(t *testing.T) {
 	if err := backend.CreateGenerationJob(t.Context(), store.DefaultTenantID, job); err != nil {
 		t.Fatal(err)
 	}
-	executor := &recordingTextExecutor{result: `{"summary":"candidate"}`}
+	executor := &recordingTextExecutor{result: validFilmAIDecompositionJSON}
 	server.textExecutor = executor
 	server.executeClaimedTextJob(store.TenantGenerationJob{TenantID: store.DefaultTenantID, Job: job})
 
 	stored, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, job.ID)
-	if err != nil || stored.Status != "succeeded" || string(stored.Result) != `{"text":"{\"summary\":\"candidate\"}"}` {
+	expectedResult, _ := json.Marshal(providerTextResult{Text: validFilmAIDecompositionJSON})
+	if err != nil || stored.Status != "succeeded" || string(stored.Result) != string(expectedResult) {
 		t.Fatalf("completed text job = %#v, err=%v", stored, err)
 	}
 	if executor.connection.APIKey != "sk-frozen" || executor.connection.BaseURL != channel.BaseURL ||
