@@ -77,6 +77,25 @@ func TestFilmDirectorAdoptionRejectsUnknownCapture(t *testing.T) {
 	}
 }
 
+func TestFilmBindsVerifiedDirectorSceneVersion(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	project := []byte(`{"schemaVersion":3,"projectKind":"film","id":"film-api","title":"Film API","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[{"id":"director-main","type":"director","title":"Director","position":{"x":0,"y":0},"width":640,"height":480,"metadata":{}}],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
+	if response := request(t, handler, http.MethodPut, "/api/projects/film-api", project); response.Code != http.StatusNoContent {
+		t.Fatalf("seed director node: %d", response.Code)
+	}
+	document := decodeFilmResponse(t, request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. SET - DAY\nA performer enters."}`)))
+	capture := createFilmDirectorCapture(t, handler)
+	body, _ := json.Marshal(map[string]any{"sceneId": document.Scenes[0].ID, "expectedRevision": document.Scenes[0].Revision, "captureId": capture.ID})
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/director/bind", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("bind Director scene: %d %s", response.Code, response.Body.String())
+	}
+	bound := decodeFilmResponse(t, response).Scenes[0]
+	if bound.DirectorSource == nil || bound.DirectorSource.TargetField != "scene" || bound.DirectorSource.CaptureID != capture.ID || bound.Revision != document.Scenes[0].Revision+1 {
+		t.Fatalf("scene source was not frozen: %#v", bound)
+	}
+}
+
 func TestFilmGenerationSnapshotFreezesDirectorSource(t *testing.T) {
 	document := newFilmDocument("film-director-snapshot")
 	storyboard := &filmDirectorSource{
