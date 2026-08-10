@@ -35,4 +35,6 @@ test("CI makes coverage, film Chromium, deployment, and container capability che
   assert.match(workflow, /audit:licenses/);
   assert.match(workflow, /audit:cleanroom/);
   assert.match(workflow, /OPENBOARD_FFPROBE_PATH/);
+  assert.match(workflow, /apk list --installed ffmpeg/);
+  assert.doesNotMatch(workflow, /apk info -v ffmpeg/);
 });
