@@ -34,6 +34,7 @@ export type FilmScene = {
   heading: string;
   synopsis: string;
   status: FilmEntityStatus;
+  directorSource?: FilmDirectorSource;
 };
 
 export type FilmDirectorSource = {

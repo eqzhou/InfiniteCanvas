@@ -17,6 +17,7 @@ import {
   type FilmCanvasAdoptionRequest,
   type FilmDirectorAdoptionInput,
   type FilmDirectorCapture,
+  type FilmDirectorSceneBindingInput,
   type FilmProjectionPlan,
   type FilmStageRunRequest,
   type FilmStatus,
@@ -165,13 +166,14 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
   </WorkbenchSection>;
 }
 
-export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanvas, onCommitCanvas, onAdopt, onAdoptDirector }: {
+export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanvas, onCommitCanvas, onAdopt, onAdoptDirector, onBindDirectorScene }: {
   project: BoardProject; status: FilmStatus; busy: boolean;
   onStatus: (label: string, operation: () => Promise<FilmStatus>) => void;
   onRefreshCanvas: () => Promise<void>;
   onCommitCanvas: (diffs: FilmProjectionDiff[]) => Promise<void>;
   onAdopt: (input: FilmCanvasAdoptionRequest) => Promise<void>;
   onAdoptDirector: (input: FilmDirectorAdoptionInput) => Promise<void>;
+  onBindDirectorScene: (input: FilmDirectorSceneBindingInput) => Promise<void>;
 }) {
   const [plan, setPlan] = useState<FilmProjectionPlan | null>(null);
   const [error, setError] = useState("");
@@ -206,9 +208,16 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
     setDirectorCaptureId((current) => captures.some((capture) => capture.id === current) ? current : captures[0]?.id ?? "");
   };
   const adoptDirector = async () => {
-    const [shotId, targetField] = directorTarget.split(":") as [string, FilmDirectorAdoptionInput["targetField"]];
+    const [targetType, targetId, targetField] = directorTarget.split(":") as ["shot" | "scene", string, FilmDirectorAdoptionInput["targetField"] | "scene"];
+    if (targetType === "scene") {
+      const scene = status.document.scenes.find((item) => item.id === targetId);
+      if (!scene || !directorCaptures.some((capture) => capture.id === directorCaptureId)) throw new Error("请选择 Director 拍摄版本和场景目标");
+      await onBindDirectorScene({ sceneId: scene.id, expectedRevision: scene.revision, captureId: directorCaptureId });
+      return;
+    }
+    const shotId = targetId;
     const shot = status.document.shots.find((item) => item.id === shotId);
-    if (!shot || !directorCaptures.some((capture) => capture.id === directorCaptureId) || !["storyboard", "first_frame"].includes(targetField)) throw new Error("请选择 Director 拍摄版本和镜头目标");
+    if (!shot || !directorCaptures.some((capture) => capture.id === directorCaptureId) || (targetField !== "storyboard" && targetField !== "first_frame")) throw new Error("请选择 Director 拍摄版本和镜头目标");
     await onAdoptDirector({ shotId, expectedRevision: shot.revision, captureId: directorCaptureId, targetField });
   };
   return <WorkbenchSection id="projection" title="画布投影同步 / Projection">
@@ -228,7 +237,7 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
       <p className="mt-1 text-xs text-[var(--ob-muted)]">服务端会验证拍摄版本属于当前影视项目，并复制为稳定媒体；临时拍摄记录删除后不会影响正式镜头。</p>
       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <select aria-label="Director 拍摄版本" className="ob-input" value={directorCaptureId} onChange={(event) => setDirectorCaptureId(event.target.value)}><option value="">选择已验证的拍摄版本</option>{directorCaptures.map((capture) => <option key={capture.id} value={capture.id}>{capture.cameraName} · {capture.width}×{capture.height} · {new Date(capture.createdAt).toLocaleString()}</option>)}</select>
-        <select aria-label="Director 采用目标" className="ob-input" value={directorTarget} onChange={(event) => setDirectorTarget(event.target.value)}><option value="">选择镜头目标</option>{status.document.shots.flatMap((shot) => [<option key={`${shot.id}:storyboard`} value={`${shot.id}:storyboard`}>{shot.title} · 分镜</option>, <option key={`${shot.id}:first_frame`} value={`${shot.id}:first_frame`}>{shot.title} · 首帧</option>])}</select>
+        <select aria-label="Director 采用目标" className="ob-input" value={directorTarget} onChange={(event) => setDirectorTarget(event.target.value)}><option value="">选择场景或镜头目标</option>{status.document.scenes.map((scene) => <option key={`scene:${scene.id}`} value={`scene:${scene.id}:scene`}>{scene.heading} · 正式场景版本</option>)}{status.document.shots.flatMap((shot) => [<option key={`${shot.id}:storyboard`} value={`shot:${shot.id}:storyboard`}>{shot.title} · 分镜</option>, <option key={`${shot.id}:first_frame`} value={`shot:${shot.id}:first_frame`}>{shot.title} · 首帧</option>])}</select>
         <button className="ob-btn" disabled={busy || !directorCaptureId || !directorTarget} onClick={() => void adoptDirector().catch((cause) => setError(String(cause)))}>采用为分镜或首帧</button>
       </div>
     </div> : null}

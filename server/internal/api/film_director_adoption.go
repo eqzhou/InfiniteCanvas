@@ -16,6 +16,12 @@ type filmDirectorAdoptionRequest struct {
 	TargetField      string `json:"targetField"`
 }
 
+type filmDirectorSceneBindingRequest struct {
+	SceneID          string `json:"sceneId"`
+	ExpectedRevision int    `json:"expectedRevision"`
+	CaptureID        string `json:"captureId"`
+}
+
 func projectContainsDirectorNode(raw []byte, nodeID string) bool {
 	var project struct {
 		Nodes []struct {
@@ -152,6 +158,115 @@ func (s *Server) adoptFilmDirectorCapture(w http.ResponseWriter, r *http.Request
 			writeFilmError(w, http.StatusConflict, "revision_conflict", "Film production changed; reload before retrying")
 		} else {
 			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film Director adoption could not be saved")
+		}
+		return
+	}
+	committed = true
+	s.writeFilmDocument(w, r, http.StatusOK, updated, next)
+}
+
+func (s *Server) bindFilmDirectorScene(w http.ResponseWriter, r *http.Request) {
+	var input filmDirectorSceneBindingRequest
+	if err := decodeFilmRequest(w, r, 16<<10, &input); err != nil || !validProjectID(input.SceneID) || input.ExpectedRevision < 1 || !validProjectID(input.CaptureID) {
+		writeFilmError(w, http.StatusBadRequest, "director_binding_invalid", "Director scene binding request is invalid")
+		return
+	}
+	backend, record, document, ok := s.loadFilmProduction(w, r, false)
+	if !ok {
+		return
+	}
+	sceneIndex := -1
+	for index, scene := range document.Scenes {
+		if scene.ID == input.SceneID {
+			sceneIndex = index
+			if scene.Revision != input.ExpectedRevision {
+				writeFilmError(w, http.StatusConflict, "revision_conflict", "film scene revision conflict")
+				return
+			}
+			break
+		}
+	}
+	if sceneIndex < 0 {
+		writeFilmError(w, http.StatusNotFound, "scene_not_found", "film scene is unavailable")
+		return
+	}
+	_, captures, err := s.readDirectorCaptureDocument(r)
+	if err != nil {
+		writeFilmError(w, http.StatusInternalServerError, "director_capture_unavailable", "Director capture catalog is unavailable")
+		return
+	}
+	var capture directorCaptureRecord
+	for _, candidate := range captures.Items {
+		if candidate.ID == input.CaptureID && candidate.ProjectID == document.ProjectID && candidate.OrphanedAt == "" {
+			capture = candidate
+			break
+		}
+	}
+	if capture.ID == "" || len(capture.Shot) == 0 {
+		writeFilmError(w, http.StatusNotFound, "director_capture_not_found", "Director capture is unavailable for this Film project")
+		return
+	}
+	project, err := s.store.GetProject(r.Context(), tenantIDFrom(r), document.ProjectID)
+	if err != nil || !projectContainsDirectorNode(project, capture.DirectorNodeID) {
+		writeFilmError(w, http.StatusUnprocessableEntity, "director_source_invalid", "Director source node is unavailable in this Film project")
+		return
+	}
+	source, err := s.readTenantBlob(r.Context(), tenantIDFrom(r), capture.StorageKey, maxDirectorCaptureBytes)
+	if err != nil || source.Metadata.ContentType != "image/png" || len(source.Data) != capture.Bytes || validateDirectorCapturePNG(source.Data, capture.Width, capture.Height) != nil {
+		writeFilmError(w, http.StatusUnprocessableEntity, "director_media_invalid", "Director capture media is unavailable or invalid")
+		return
+	}
+	digest := sha256Hex(source.Data)
+	storageKey := "film:media:director:" + stableFilmID(document.ProjectID, input.SceneID, "scene", input.CaptureID, input.ExpectedRevision, digest)
+	created := false
+	if err := s.storeTenantBlobConditional(r.Context(), tenantIDFrom(r), userIDFrom(r), storageKey, "image/png", source.Data, blobVersionAbsent); err == nil {
+		created = true
+	} else if !errors.Is(err, store.ErrConflict) {
+		writeFilmOperationError(w, err)
+		return
+	}
+	committed := false
+	defer func() {
+		if created && !committed {
+			s.cleanupUnreferencedFilmBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), document.ProjectID, storageKey)
+		}
+	}()
+	stable, err := s.readTenantBlob(r.Context(), tenantIDFrom(r), storageKey, maxDirectorCaptureBytes)
+	if err != nil || stable.Metadata.ContentType != "image/png" || sha256Hex(stable.Data) != digest {
+		writeFilmError(w, http.StatusInternalServerError, "director_copy_invalid", "Stable Film Director media could not be verified")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	next := cloneFilmDocument(document)
+	scene := next.Scenes[sceneIndex]
+	sceneSnapshot, _ := json.Marshal(scene)
+	next.Versions = append(next.Versions, filmEntityVersion{ID: stableFilmID("version", "scene", scene.ID, scene.Revision, input.CaptureID), EntityType: "scene", EntityID: scene.ID, Revision: scene.Revision, Snapshot: sceneSnapshot, Reason: "director:" + input.CaptureID, CreatedAt: now})
+	version := blobIdentityVersion(stable)
+	scene.DirectorSource = &filmDirectorSource{Revision: 1, TargetField: "scene", CaptureID: capture.ID, DirectorNodeID: capture.DirectorNodeID, CameraID: capture.CameraID, CameraName: capture.CameraName, Width: capture.Width, Height: capture.Height, StorageKey: storageKey, SHA256: digest, ObjectVersion: version, Snapshot: append(json.RawMessage(nil), capture.Shot...), AdoptedAt: now}
+	scene.Revision++
+	scene.Status = filmStatusNeedsReview
+	next.Scenes[sceneIndex] = scene
+	next.Revision++
+	next.UpdatedAt = now
+	if _, _, _, _, err := validateFilmEntities(next); err != nil {
+		writeFilmOperationError(w, err)
+		return
+	}
+	if err := validateFilmAggregateLimits(next); err != nil {
+		writeFilmOperationError(w, err)
+		return
+	}
+	raw, err := json.Marshal(next)
+	if err != nil || len(raw) > maxProjectBytes {
+		writeFilmError(w, http.StatusUnprocessableEntity, "film_document_too_large", "Film production exceeds its storage limit")
+		return
+	}
+	updated, err := backend.CompareAndSwapFilmProject(r.Context(), tenantIDFrom(r), record.ProjectID, record.Revision, raw)
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			writeFilmError(w, http.StatusConflict, "revision_conflict", "Film production changed; reload before retrying")
+		} else {
+			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film Director binding could not be saved")
 		}
 		return
 	}

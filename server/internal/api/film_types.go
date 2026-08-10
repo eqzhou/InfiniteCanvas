@@ -29,13 +29,14 @@ type filmEpisode struct {
 }
 
 type filmScene struct {
-	ID        string `json:"id"`
-	Revision  int    `json:"revision"`
-	EpisodeID string `json:"episodeId"`
-	Order     int    `json:"order"`
-	Heading   string `json:"heading"`
-	Synopsis  string `json:"synopsis"`
-	Status    string `json:"status"`
+	ID             string              `json:"id"`
+	Revision       int                 `json:"revision"`
+	EpisodeID      string              `json:"episodeId"`
+	Order          int                 `json:"order"`
+	Heading        string              `json:"heading"`
+	Synopsis       string              `json:"synopsis"`
+	Status         string              `json:"status"`
+	DirectorSource *filmDirectorSource `json:"directorSource,omitempty"`
 }
 
 type filmShot struct {

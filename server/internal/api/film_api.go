@@ -106,6 +106,7 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/projection/commit", server.commitFilmProjectionEntity)
 		r.Post("/projection/adopt", server.adoptFilmCanvasMedia)
 		r.Post("/director/adopt", server.adoptFilmDirectorCapture)
+		r.Post("/director/bind", server.bindFilmDirectorScene)
 		r.Get("/timeline", server.getFilmTimeline)
 		r.Put("/timeline", server.putFilmTimeline)
 		r.Post("/exports", server.createFilmExport)

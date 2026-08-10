@@ -130,6 +130,7 @@ export type FilmDirectorAdoptionInput = {
   captureId: string;
   targetField: "storyboard" | "first_frame";
 };
+export type FilmDirectorSceneBindingInput = { sceneId: string; expectedRevision: number; captureId: string };
 
 type RawFilmCapabilities = Omit<Partial<Omit<FilmCapabilities, "agentOperations">>, "generationStages"> & {
   agentOperations?: unknown;
@@ -260,6 +261,11 @@ export function adoptFilmDirectorCapture(projectId: string, input: FilmDirectorA
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("Invalid shot revision");
   if (input.targetField !== "storyboard" && input.targetField !== "first_frame") throw new Error("Invalid Director adoption target");
   return requestFilm(projectId, "/director/adopt", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function bindFilmDirectorScene(projectId: string, input: FilmDirectorSceneBindingInput): Promise<FilmStatus> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(input.sceneId) || !/^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(input.captureId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("Invalid Film Director scene binding");
+  return requestFilm(projectId, "/director/bind", { method: "POST", body: JSON.stringify(input) });
 }
 
 export async function loadFilmCapabilities(): Promise<FilmCapabilities> {

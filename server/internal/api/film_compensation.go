@@ -107,6 +107,11 @@ func (s *Server) cleanupUnreferencedFilmBlob(parent context.Context, tenantID, u
 			return
 		}
 	}
+	for _, scene := range document.Scenes {
+		if scene.DirectorSource != nil && scene.DirectorSource.StorageKey == storageKey {
+			return
+		}
+	}
 	for _, asset := range document.Assets {
 		if asset.MediaStorageKey == storageKey {
 			return

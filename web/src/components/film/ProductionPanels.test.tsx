@@ -17,7 +17,7 @@ describe("Film Director projection workflow", () => {
       document, recordRevision: 1,
       capabilities: { available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: true, fileUploadImport: true, maxImportBytes: 1, stageGeneration: true, generationJobs: true, generationStages: [], assetBundleExport: true, mp4Export: false, mp4Diagnostic: "", agentOperations: [] },
     };
-    const html = renderToStaticMarkup(<ProjectionPanel project={project} status={status} busy={false} onStatus={() => {}} onRefreshCanvas={async () => {}} onCommitCanvas={async () => {}} onAdopt={async () => {}} onAdoptDirector={async () => {}} />);
+    const html = renderToStaticMarkup(<ProjectionPanel project={project} status={status} busy={false} onStatus={() => {}} onRefreshCanvas={async () => {}} onCommitCanvas={async () => {}} onAdopt={async () => {}} onAdoptDirector={async () => {}} onBindDirectorScene={async () => {}} />);
 
     expect(html).toContain("Director 正式构图");
     expect(html).toContain("加载 Director 拍摄版本");

@@ -37,7 +37,7 @@ func validFilmStorageKey(value string) bool {
 }
 
 func validFilmDirectorSource(source *filmDirectorSource, targetStorageKey string) bool {
-	return source != nil && source.Revision >= 1 && (source.TargetField == "storyboard" || source.TargetField == "first_frame") &&
+	return source != nil && source.Revision >= 1 && (source.TargetField == "storyboard" || source.TargetField == "first_frame" || source.TargetField == "scene") &&
 		validProjectID(source.CaptureID) && boardIDPattern.MatchString(source.DirectorNodeID) && boardIDPattern.MatchString(source.CameraID) &&
 		validFilmText(source.CameraName, 100, true) && source.Width >= 1 && source.Width <= 4096 && source.Height >= 1 && source.Height <= 4096 &&
 		strings.HasPrefix(source.StorageKey, "film:media:") && source.StorageKey == targetStorageKey && validSHA256Hex(source.SHA256) &&
@@ -107,6 +107,9 @@ func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[st
 		}
 		if scene.Revision < 1 || scene.Order < 0 || scene.Order > maxFilmEntities || !validFilmText(scene.Heading, 500, true) || !validFilmText(scene.Synopsis, 20_000, false) || !validFilmStatus(scene.Status) {
 			return nil, nil, nil, nil, fmt.Errorf("film scene %s is invalid", scene.ID)
+		}
+		if scene.DirectorSource != nil && (scene.DirectorSource.TargetField != "scene" || !validFilmDirectorSource(scene.DirectorSource, scene.DirectorSource.StorageKey)) {
+			return nil, nil, nil, nil, fmt.Errorf("film scene %s Director source is invalid", scene.ID)
 		}
 		if _, exists := episodes[scene.EpisodeID]; !exists {
 			return nil, nil, nil, nil, fmt.Errorf("film scene %s references a missing episode", scene.ID)
