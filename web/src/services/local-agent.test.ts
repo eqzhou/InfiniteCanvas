@@ -117,6 +117,24 @@ describe("Codex history and file-manager APIs", () => {
       async () => response,
     )).rejects.toThrow("invalid Codex history transcript");
   });
+
+  test("rejects malformed structured references restored from Codex history", async () => {
+    const response = new Response(JSON.stringify({
+      id: "history-one", profile: "default", threadId: "thread-one", title: "检查画布",
+      createdAt: "2026-07-31T00:00:00Z", updatedAt: "2026-07-31T00:00:01Z",
+      messageCount: 1, status: "completed", events: [], messages: [{
+        id: "user-one", role: "user", text: "检查画布", createdAt: "2026-07-31T00:00:00Z",
+        contextReferences: [{ kind: "node", id: "../outside", label: "越界节点" }],
+      }],
+    }), { headers: { "content-type": "application/json" } });
+
+    await expect(getCodexHistory(
+      { baseUrl: "http://localhost:5173", token: ["history", "fixture"].join("-") },
+      "history-one",
+      "default",
+      async () => response,
+    )).rejects.toThrow("invalid Codex history transcript");
+  });
 });
 
 describe("local agent connection", () => {
