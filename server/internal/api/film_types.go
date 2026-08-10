@@ -142,6 +142,9 @@ type filmTextGenerationSnapshot struct {
 	Model                string `json:"model"`
 	PromptVersion        string `json:"promptVersion"`
 	OutputSchema         string `json:"outputSchema"`
+	TargetEntityID       string `json:"targetEntityId,omitempty"`
+	TargetRevision       int    `json:"targetRevision,omitempty"`
+	TargetSHA256         string `json:"targetSha256,omitempty"`
 	EstimatedGenerations int    `json:"estimatedGenerations"`
 	EstimatedCredits     int    `json:"estimatedCredits,omitempty"`
 	CreatedAt            string `json:"createdAt"`

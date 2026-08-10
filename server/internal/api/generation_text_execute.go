@@ -21,6 +21,9 @@ type persistedTextJobParameters struct {
 	SourceRevision int                        `json:"sourceRevision"`
 	SourceSHA256   string                     `json:"sourceSha256"`
 	FilmRevision   int                        `json:"filmRevision"`
+	TargetEntityID string                     `json:"targetEntityId,omitempty"`
+	TargetRevision int                        `json:"targetRevision,omitempty"`
+	TargetSHA256   string                     `json:"targetSha256,omitempty"`
 	SharedChannel  *generationChannelSnapshot `json:"sharedChannel,omitempty"`
 	Film           *filmGenerationBinding     `json:"film,omitempty"`
 }
@@ -51,6 +54,9 @@ func validatePersistedTextJob(job store.GenerationJob, parameters persistedTextJ
 	}
 	if parameters.SourceRevision < 0 || (parameters.SourceRevision > 0 && !validFilmRequestHash(parameters.SourceSHA256)) || parameters.FilmRevision < 0 {
 		return errors.New("invalid server text source snapshot")
+	}
+	if parameters.Operation == "film_script" && (!validProjectID(parameters.TargetEntityID) || parameters.TargetRevision < 1 || !validFilmRequestHash(parameters.TargetSHA256)) {
+		return errors.New("invalid server text target snapshot")
 	}
 	return nil
 }
@@ -193,6 +199,11 @@ func (s *Server) executeClaimedTextJob(claimed store.TenantGenerationJob) {
 	if parameters.Operation == "film_decompose" {
 		if _, err := parseFilmAIDecompositionCandidate([]byte(text)); err != nil {
 			finish("failed", nil, "文本生成结果不符合影视拆解合同", providerTextAuditPayload(request, connection.Protocol))
+			return
+		}
+	} else if parameters.Operation == "film_script" {
+		if _, err := parseFilmAIScriptCandidate([]byte(text)); err != nil {
+			finish("failed", nil, "文本生成结果不符合分集剧本合同", providerTextAuditPayload(request, connection.Protocol))
 			return
 		}
 	}

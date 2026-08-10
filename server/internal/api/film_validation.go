@@ -219,6 +219,9 @@ func validateFilmTasks(tasks []filmTask) error {
 				snapshot.EstimatedGenerations != 1 || snapshot.EstimatedCredits < 0 || !validFilmTimestamp(snapshot.CreatedAt) {
 				return fmt.Errorf("film task %s text snapshot is invalid", task.ID)
 			}
+			if task.Stage == "script" && (!validProjectID(snapshot.TargetEntityID) || snapshot.TargetRevision < 1 || !validFilmRequestHash(snapshot.TargetSHA256)) {
+				return fmt.Errorf("film task %s text target snapshot is invalid", task.ID)
+			}
 		}
 	}
 	return nil

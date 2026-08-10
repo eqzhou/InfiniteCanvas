@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -454,11 +455,32 @@ func (s *Server) runFilmStage(w http.ResponseWriter, r *http.Request) {
 	switch chi.URLParam(r, "stageId") {
 	case "decompose":
 		s.runFilmTextStage(w, r)
+	case "script":
+		if filmStageRequestUsesAI(r) {
+			s.runFilmTextStage(w, r)
+		} else {
+			s.changeFilmStage(w, r, "run")
+		}
 	case "storyboard", "first_frame", "audio", "video":
 		s.runFilmGenerationStage(w, r)
 	default:
 		s.changeFilmStage(w, r, "run")
 	}
+}
+
+func filmStageRequestUsesAI(r *http.Request) bool {
+	if r.Body == nil {
+		return false
+	}
+	value, err := io.ReadAll(io.LimitReader(r.Body, (64<<10)+1))
+	r.Body = io.NopCloser(bytes.NewReader(value))
+	if err != nil || len(value) > 64<<10 {
+		return false
+	}
+	var envelope struct {
+		Mode string `json:"mode"`
+	}
+	return json.Unmarshal(value, &envelope) == nil && strings.TrimSpace(envelope.Mode) == "ai"
 }
 func (s *Server) approveFilmStage(w http.ResponseWriter, r *http.Request) {
 	s.changeFilmStage(w, r, "approve")
