@@ -7,6 +7,21 @@ import type { FilmStatus } from "@/services/film-client";
 import { ProductionPanel, ProjectionPanel } from "./ProductionPanels";
 
 describe("Film Director projection workflow", () => {
+  test("offers an on-demand Director node for every Film scene", () => {
+    const project = createProject("Film", "film");
+    const document = createFilmDocument(project.id, "2026-08-08T00:00:00.000Z");
+    document.scenes = [{ id: "scene-1", revision: 1, episodeId: "episode-1", order: 0, heading: "INT. ROOM", synopsis: "Action", status: "draft" }];
+    const status: FilmStatus = {
+      document, recordRevision: 1,
+      capabilities: { available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: true, fileUploadImport: true, maxImportBytes: 1, stageGeneration: true, generationJobs: true, generationStages: [], assetBundleExport: true, mp4Export: false, mp4Diagnostic: "", agentOperations: [] },
+    };
+
+    const html = renderToStaticMarkup(<ProjectionPanel project={project} status={status} busy={false} onStatus={() => {}} onRefreshCanvas={async () => {}} onCommitCanvas={async () => {}} onAdopt={async () => {}} onAdoptDirector={async () => {}} onBindDirectorScene={async () => {}} onOpenDirector={() => {}} />);
+
+    expect(html).toContain("创建 / 定位 Director");
+    expect(html).toContain("INT. ROOM");
+  });
+
   test("offers verified Director captures only when the Film canvas has a Director node", () => {
     const project = createProject("Film", "film");
     project.id = "film-director";
@@ -17,7 +32,7 @@ describe("Film Director projection workflow", () => {
       document, recordRevision: 1,
       capabilities: { available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: true, fileUploadImport: true, maxImportBytes: 1, stageGeneration: true, generationJobs: true, generationStages: [], assetBundleExport: true, mp4Export: false, mp4Diagnostic: "", agentOperations: [] },
     };
-    const html = renderToStaticMarkup(<ProjectionPanel project={project} status={status} busy={false} onStatus={() => {}} onRefreshCanvas={async () => {}} onCommitCanvas={async () => {}} onAdopt={async () => {}} onAdoptDirector={async () => {}} onBindDirectorScene={async () => {}} />);
+    const html = renderToStaticMarkup(<ProjectionPanel project={project} status={status} busy={false} onStatus={() => {}} onRefreshCanvas={async () => {}} onCommitCanvas={async () => {}} onAdopt={async () => {}} onAdoptDirector={async () => {}} onBindDirectorScene={async () => {}} onOpenDirector={() => {}} />);
 
     expect(html).toContain("Director 正式构图");
     expect(html).toContain("加载 Director 拍摄版本");
