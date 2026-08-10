@@ -58,7 +58,9 @@ test("creates a film, imports a manuscript, approves decomposition, validates, a
     "INT. OBSERVATORY - NIGHT",
     "Mira opens the brass dome. The telescope turns toward a green comet.",
   ].join("\n"));
-  await page.getByRole("button", { name: "导入并拆解" }).click();
+  await page.getByRole("button", { name: "预检原稿" }).click();
+  await expect(page.getByRole("region", { name: "原稿预检结果" })).toContainText("预检完成");
+  await page.getByRole("button", { name: "采用确定性拆解" }).click();
 
   const decompose = page.getByTestId("film-stage-decompose");
   await expect(decompose).toContainText("needs_review");
@@ -137,7 +139,9 @@ test("preflights imports, edits a multitrack timeline, and surfaces revision con
 test("runs a scoped generation pass and retries one failed shot job", async ({ page }) => {
   await createFilmProject(page);
   await page.getByLabel("粘贴剧本原稿").fill("EPISODE 1\nINT. STAGE - NIGHT\nA camera rolls.");
-  await page.getByRole("button", { name: "导入并拆解" }).click();
+  await page.getByRole("button", { name: "预检原稿" }).click();
+  await expect(page.getByRole("region", { name: "原稿预检结果" })).toContainText("预检完成");
+  await page.getByRole("button", { name: "采用确定性拆解" }).click();
   await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
   const projectId = page.url().split("/").pop()!;
   const response = await page.evaluate(async (id) => (await fetch(`/api/film/projects/${id}/status`)).json(), projectId);
