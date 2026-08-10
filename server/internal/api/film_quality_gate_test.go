@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -81,4 +82,27 @@ func TestFilmQualityStopsWhenOneObjectExceedsRemainingBudget(t *testing.T) {
 	if !errors.Is(err, errFilmQualityMedia) || objects.gets != 1 {
 		t.Fatalf("quality budget err=%v gets=%d", err, objects.gets)
 	}
+}
+
+func TestFilmQualityChecksFormalDirectorSceneMedia(t *testing.T) {
+	server := NewServer(t.TempDir())
+	t.Cleanup(server.Close)
+	document := newFilmDocument("quality-director")
+	document.Episodes = []filmEpisode{{ID: "episode", Revision: 1, Title: "Episode", Status: filmStatusDraft}}
+	document.Scenes = []filmScene{{
+		ID: "scene", Revision: 1, EpisodeID: "episode", Heading: "INT. ROOM", Status: filmStatusDraft,
+		DirectorSource: &filmDirectorSource{StorageKey: "film:media:quality-director:missing-director", SHA256: strings.Repeat("a", 64), ObjectVersion: "missing-v1"},
+	}}
+	document.Shots = []filmShot{{ID: "shot", Revision: 1, SceneID: "scene", Title: "Shot", Description: "Action", Status: filmStatusDraft, DurationSeconds: 1, AspectRatio: "16:9"}}
+
+	report, err := server.validateFilmDocumentWithMedia(t.Context(), "tenant", document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range report.Issues {
+		if issue.Code == "media_corrupt" && issue.TargetType == "scene" && issue.TargetID == "scene" {
+			return
+		}
+	}
+	t.Fatalf("missing Director scene media issue: %#v", report.Issues)
 }
