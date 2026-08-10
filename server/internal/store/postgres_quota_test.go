@@ -25,7 +25,7 @@ func TestGenerationQuotaHasNoUnlimitedZeroSentinel(t *testing.T) {
 }
 
 func TestOnlyProviderGenerationConsumesQuotaAndCredits(t *testing.T) {
-	for _, kind := range []string{"image", "video", "audio"} {
+	for _, kind := range []string{"text", "image", "video", "audio"} {
 		if !generationJobConsumesQuota(kind) {
 			t.Fatalf("%s should consume generation quota", kind)
 		}
@@ -33,6 +33,21 @@ func TestOnlyProviderGenerationConsumesQuotaAndCredits(t *testing.T) {
 	for _, kind := range []string{"export", "workflow"} {
 		if generationJobConsumesQuota(kind) {
 			t.Fatalf("%s should not consume model generation quota", kind)
+		}
+	}
+}
+
+func TestServerGenerationClaimAcceptsDurableTextWorker(t *testing.T) {
+	if !validServerGenerationClaim(GenerationClaim{Kind: "text", Executor: "server"}) {
+		t.Fatal("text server worker claim was rejected")
+	}
+	for _, claim := range []GenerationClaim{
+		{Kind: "text", Executor: "workflow"},
+		{Kind: "workflow", Executor: "server"},
+		{Kind: "unknown", Executor: "server"},
+	} {
+		if validServerGenerationClaim(claim) {
+			t.Fatalf("invalid claim was accepted: %#v", claim)
 		}
 	}
 }
