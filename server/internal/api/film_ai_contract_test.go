@@ -30,6 +30,17 @@ const validFilmAIDecompositionJSON = `{
   }]
 }`
 
+const validFilmAIScriptJSON = `{
+  "summary":"Lin follows the signal into the station.",
+  "scenes":[{
+    "key":"scene-1","heading":"INT. OLD STATION - NIGHT","synopsis":"Lin enters the terminal.",
+    "shots":[{
+      "key":"shot-1","title":"Arrival","description":"Lin crosses the empty hall.","durationSeconds":4,
+      "dialogues":[{"kind":"dialogue","speaker":"Lin","text":"Is anyone here?"}]
+    }]
+  }]
+}`
+
 func TestParseFilmAIDecompositionAcceptsStrictNestedContract(t *testing.T) {
 	candidate, err := parseFilmAIDecompositionCandidate([]byte(validFilmAIDecompositionJSON))
 	if err != nil {
@@ -38,6 +49,32 @@ func TestParseFilmAIDecompositionAcceptsStrictNestedContract(t *testing.T) {
 	if candidate.Summary == "" || len(candidate.Characters) != 1 || len(candidate.Episodes) != 1 ||
 		len(candidate.Episodes[0].Scenes) != 1 || len(candidate.Episodes[0].Scenes[0].Shots) != 1 {
 		t.Fatalf("candidate was not decoded completely: %#v", candidate)
+	}
+}
+
+func TestParseFilmAIScriptAcceptsStrictEpisodeContract(t *testing.T) {
+	script, err := parseFilmAIScriptCandidate([]byte(validFilmAIScriptJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script.Summary == "" || len(script.Scenes) != 1 || len(script.Scenes[0].Shots) != 1 ||
+		len(script.Scenes[0].Shots[0].Dialogues) != 1 {
+		t.Fatalf("script candidate was not decoded completely: %#v", script)
+	}
+}
+
+func TestParseFilmAIScriptRejectsForgedAndAmbiguousStructure(t *testing.T) {
+	for name, value := range map[string]string{
+		"database id": strings.Replace(validFilmAIScriptJSON, `"summary":`, `"episodeId":"episode-forged","summary":`, 1),
+		"duplicate key": strings.Replace(validFilmAIScriptJSON, `"shots":[{`, `"shots":[{"key":"shot-1","title":"Duplicate","description":"x","durationSeconds":1,"dialogues":[]},{`, 1),
+		"invalid duration": strings.Replace(validFilmAIScriptJSON, `"durationSeconds":4`, `"durationSeconds":0`, 1),
+		"markdown": "```json\n" + validFilmAIScriptJSON + "\n```",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseFilmAIScriptCandidate([]byte(value)); err == nil {
+				t.Fatal("unsafe script candidate was accepted")
+			}
+		})
 	}
 }
 
