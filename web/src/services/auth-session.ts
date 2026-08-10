@@ -178,18 +178,32 @@ export type CreditEstimate = {
   totalCredits: number;
   balance: number;
   sufficient: boolean;
+  capabilityVersion?: string;
+  generationMode?: "text_to_image" | "image_to_image" | "text_to_video" | "image_to_video" | "text_to_audio";
+};
+
+export type MediaEstimateContext = {
+  providerId: string;
+  kind: "image" | "video" | "audio";
+  mode: NonNullable<CreditEstimate["generationMode"]>;
 };
 
 /**
  * Pre-flight cost for a generation. Mirrors GET /api/billing/estimate so the
  * generate button can show "预计消耗 N 算力" before the request is submitted.
  */
-export async function estimateCredits(model: string, units = 1): Promise<CreditEstimate> {
+export async function estimateCredits(model: string, units = 1, media?: MediaEstimateContext): Promise<CreditEstimate> {
   const cleanModel = model.trim();
   const cleanUnits = Number.isSafeInteger(units) && units >= 1 && units <= 100 ? units : 1;
   const params = new URLSearchParams();
   if (cleanModel) params.set("model", cleanModel);
   params.set("units", String(cleanUnits));
+  if (media) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(media.providerId)) throw new Error("Invalid estimate provider");
+    params.set("providerId", media.providerId);
+    params.set("kind", media.kind);
+    params.set("mode", media.mode);
+  }
   return parseJSON(await authFetch(`billing/estimate?${params.toString()}`));
 }
 

@@ -135,7 +135,7 @@ func TestBillingEstimateUsesTheSameSharedMediaCatalogVersion(t *testing.T) {
 		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
 	}
 	estimate := request(t, router, http.MethodGet, "/api/billing/estimate?model=gpt-image-1&units=2&providerId=billing-image&kind=image&mode=text_to_image", nil)
-	if estimate.Code != http.StatusOK || !bytes.Contains(estimate.Body.Bytes(), []byte(`"generationMode":"text_to_image"`)) {
+	if estimate.Code != http.StatusOK {
 		t.Fatalf("estimate: %d %s", estimate.Code, estimate.Body.String())
 	}
 	var payload map[string]any
@@ -143,7 +143,7 @@ func TestBillingEstimateUsesTheSameSharedMediaCatalogVersion(t *testing.T) {
 		t.Fatalf("estimate JSON is invalid: %s", estimate.Body.String())
 	}
 	capabilityVersion, versionOK := payload["capabilityVersion"].(string)
-	if !versionOK || len(capabilityVersion) != 64 {
+	if !versionOK || len(capabilityVersion) != 64 || payload["generationMode"] != "text_to_image" {
 		t.Fatalf("estimate did not freeze capability version: %s", estimate.Body.String())
 	}
 	rejected := request(t, router, http.MethodGet, "/api/billing/estimate?model=unlisted&units=1&providerId=billing-image&kind=image&mode=text_to_image", nil)

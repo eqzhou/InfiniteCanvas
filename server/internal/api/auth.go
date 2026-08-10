@@ -433,6 +433,10 @@ func (s *Server) estimateCredits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	if len(model) > 500 {
+		http.Error(w, "invalid model", http.StatusBadRequest)
+		return
+	}
 	units := 1
 	if raw := strings.TrimSpace(r.URL.Query().Get("units")); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -441,6 +445,22 @@ func (s *Server) estimateCredits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		units = n
+	}
+	providerID := strings.TrimSpace(r.URL.Query().Get("providerId"))
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	mode := strings.TrimSpace(r.URL.Query().Get("mode"))
+	capabilityVersion := ""
+	if providerID != "" || kind != "" || mode != "" {
+		if !validProjectID(providerID) || (kind != "image" && kind != "video" && kind != "audio") || !validFilmGenerationMode(mode) || model == "" {
+			http.Error(w, "invalid media capability estimate", http.StatusBadRequest)
+			return
+		}
+		var err error
+		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantIDFrom(r), providerID, kind, model, mode)
+		if err != nil {
+			http.Error(w, "shared media capability is unavailable", http.StatusUnprocessableEntity)
+			return
+		}
 	}
 	cost, err := s.store.GetModelCreditCost(r.Context(), tenantIDFrom(r), model)
 	if err != nil {
@@ -452,14 +472,19 @@ func (s *Server) estimateCredits(w http.ResponseWriter, r *http.Request) {
 		balance = user.Credits
 	}
 	total := cost * units
-	writeJSON(w, map[string]any{
+	response := map[string]any{
 		"model":          model,
 		"units":          units,
 		"creditsPerUnit": cost,
 		"totalCredits":   total,
 		"balance":        balance,
 		"sufficient":     balance >= int64(total),
-	})
+	}
+	if capabilityVersion != "" {
+		response["capabilityVersion"] = capabilityVersion
+		response["generationMode"] = mode
+	}
+	writeJSON(w, response)
 }
 
 // The OAuth start endpoint is unauthenticated by necessity, so pending states

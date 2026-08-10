@@ -175,6 +175,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		["doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"].includes(model) &&
 		(references.length > 0 || selectedAssetIds.length > 0);
   const estimateUnits = kind === "image" ? Math.max(1, Math.min(100, count || 1)) : 1;
+  const sharedChannelSelected = sharedChannels.some((candidate) => candidate.id === channelId);
+  const estimateGenerationMode = kind === "image"
+    ? (references.length > 0 || selectedAssetIds.length > 0 ? "image_to_image" : "text_to_image")
+    : (references.length > 0 || selectedAssetIds.length > 0 || klingOptions.elements.length > 0 ? "image_to_video" : "text_to_video");
   const preferredModel = config.preferredModels?.[channelId]?.[kind];
 
   useEffect(() => {
@@ -244,7 +248,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       return;
     }
     const timer = window.setTimeout(() => {
-      void estimateCredits(requestedModel, estimateUnits)
+      void estimateCredits(requestedModel, estimateUnits, sharedChannelSelected ? {
+        providerId: channelId,
+        kind,
+        mode: estimateGenerationMode,
+      } : undefined)
         .then((estimate) => {
           if (!cancelled) setCreditEstimate(estimate);
         })
@@ -256,7 +264,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [estimateUnits, model]);
+  }, [channelId, estimateGenerationMode, estimateUnits, kind, model, sharedChannelSelected]);
 
   /**
    * Puts a past record back on the form so it can be adjusted before running
