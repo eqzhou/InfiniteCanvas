@@ -305,3 +305,22 @@ func TestFilmAIScriptRunFreezesOneEpisodeAndQueuesTextJob(t *testing.T) {
 		t.Fatalf("script text job was not safely queued: %#v err=%v", job, err)
 	}
 }
+
+func TestRetryFilmTextJobPreservesFrozenContractAndRebindsTask(t *testing.T) {
+	document, job := filmTextCandidateFixture(t)
+	task := document.Tasks[len(document.Tasks)-1]
+	job.Status = "failed"
+	job.Error = "provider failed"
+	retryJob, retryTask, err := retryFilmJobClone(job, task, document.ProjectID, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parameters persistedTextJobParameters
+	if json.Unmarshal(retryJob.Parameters, &parameters) != nil || parameters.Operation != "film_decompose" ||
+		parameters.Film == nil || parameters.Film.TaskID != retryTask.ID || parameters.Film.RequestHash != retryTask.RequestHash {
+		t.Fatalf("text retry did not preserve and rebind its frozen contract: job=%#v task=%#v", retryJob, retryTask)
+	}
+	if retryJob.Kind != "text" || retryJob.Status != "queued" || retryTask.TextSnapshot == nil || retryTask.Snapshot != nil {
+		t.Fatalf("text retry was converted into a media task: job=%#v task=%#v", retryJob, retryTask)
+	}
+}
