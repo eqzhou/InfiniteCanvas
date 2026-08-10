@@ -352,9 +352,15 @@ func buildFilmGenerationSnapshot(document filmDocument, shot filmShot, providerI
 	if strings.TrimSpace(shot.Subtitle) != "" && config.Format != "" {
 		prompt = strings.TrimSpace(shot.Subtitle)
 	}
+	var directorSource *filmDirectorSource
+	if shot.DirectorSource != nil {
+		copy := *shot.DirectorSource
+		copy.Snapshot = append(json.RawMessage(nil), shot.DirectorSource.Snapshot...)
+		directorSource = &copy
+	}
 	return &filmGenerationSnapshot{
 		ShotRevision: shot.Revision, Prompt: prompt, ProviderID: providerID, Model: model,
-		Config: config, IdentityVersions: identities, StyleVersion: style,
+		Config: config, IdentityVersions: identities, StyleVersion: style, DirectorSource: directorSource,
 		ReferenceStorageKeys: append([]string(nil), config.ReferenceStorageKeys...),
 		EstimatedGenerations: 1, EstimatedCredits: 1, CreatedAt: now,
 	}

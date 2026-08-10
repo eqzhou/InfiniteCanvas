@@ -232,6 +232,7 @@ type filmGenerationSnapshot struct {
 	Config               filmGenerationConfig `json:"config"`
 	IdentityVersions     []filmAsset          `json:"identityVersions"`
 	StyleVersion         *filmAsset           `json:"styleVersion,omitempty"`
+	DirectorSource       *filmDirectorSource  `json:"directorSource,omitempty"`
 	ReferenceStorageKeys []string             `json:"referenceStorageKeys"`
 	EstimatedGenerations int                  `json:"estimatedGenerations"`
 	EstimatedCredits     int                  `json:"estimatedCredits,omitempty"`

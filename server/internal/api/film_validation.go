@@ -36,6 +36,15 @@ func validFilmStorageKey(value string) bool {
 	return len(value) <= 512 && !strings.ContainsAny(value, "\x00\r\n")
 }
 
+func validFilmDirectorSource(source *filmDirectorSource, targetStorageKey string) bool {
+	return source != nil && source.Revision >= 1 && (source.TargetField == "storyboard" || source.TargetField == "first_frame") &&
+		validProjectID(source.CaptureID) && boardIDPattern.MatchString(source.DirectorNodeID) && boardIDPattern.MatchString(source.CameraID) &&
+		validFilmText(source.CameraName, 100, true) && source.Width >= 1 && source.Width <= 4096 && source.Height >= 1 && source.Height <= 4096 &&
+		strings.HasPrefix(source.StorageKey, "film:media:") && source.StorageKey == targetStorageKey && validSHA256Hex(source.SHA256) &&
+		validFilmText(source.ObjectVersion, 512, true) && validDirectorShotSnapshot(source.Snapshot, source.DirectorNodeID, source.CameraID, source.CameraName) &&
+		validFilmTimestamp(source.AdoptedAt)
+}
+
 func addUniqueFilmID(ids map[string]struct{}, id, kind string) error {
 	if !validProjectID(id) {
 		return fmt.Errorf("film %s id is invalid", kind)
@@ -144,12 +153,7 @@ func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[st
 			if source.TargetField == "first_frame" {
 				targetStorageKey = shot.FirstFrameStorageKey
 			}
-			if source.Revision < 1 || (source.TargetField != "storyboard" && source.TargetField != "first_frame") ||
-				!validProjectID(source.CaptureID) || !boardIDPattern.MatchString(source.DirectorNodeID) || !boardIDPattern.MatchString(source.CameraID) ||
-				!validFilmText(source.CameraName, 100, true) || source.Width < 1 || source.Width > 4096 || source.Height < 1 || source.Height > 4096 ||
-				!strings.HasPrefix(source.StorageKey, "film:media:") || source.StorageKey != targetStorageKey || !validSHA256Hex(source.SHA256) ||
-				!validFilmText(source.ObjectVersion, 512, true) || !validDirectorShotSnapshot(source.Snapshot, source.DirectorNodeID, source.CameraID, source.CameraName) ||
-				!validFilmTimestamp(source.AdoptedAt) {
+			if !validFilmDirectorSource(source, targetStorageKey) {
 				return nil, nil, nil, nil, fmt.Errorf("film shot %s Director source is invalid", shot.ID)
 			}
 		}
@@ -223,6 +227,9 @@ func validateFilmTasks(tasks []filmTask) error {
 				snapshot.EstimatedGenerations != 1 || snapshot.EstimatedCredits < 0 || !validFilmTimestamp(snapshot.CreatedAt) ||
 				validateFilmGenerationConfig(task.Stage, snapshot.Config) != nil {
 				return fmt.Errorf("film task %s generation snapshot is invalid", task.ID)
+			}
+			if snapshot.DirectorSource != nil && !validFilmDirectorSource(snapshot.DirectorSource, snapshot.DirectorSource.StorageKey) {
+				return fmt.Errorf("film task %s Director snapshot is invalid", task.ID)
 			}
 		}
 		if task.TextSnapshot != nil {
