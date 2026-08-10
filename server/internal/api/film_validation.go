@@ -224,6 +224,38 @@ func validateFilmTasks(tasks []filmTask) error {
 	return nil
 }
 
+func validateFilmAICandidates(candidates []filmAICandidate, tasks []filmTask) error {
+	if len(candidates) > 100 {
+		return errors.New("film AI candidate retention limit reached")
+	}
+	taskIDs := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		taskIDs[task.ID] = struct{}{}
+	}
+	ids := make(map[string]struct{}, len(candidates))
+	jobs := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if err := addUniqueFilmID(ids, candidate.ID, "AI candidate"); err != nil {
+			return err
+		}
+		if _, duplicate := jobs[candidate.GenerationJobID]; duplicate {
+			return errors.New("film AI candidate generation jobs must be unique")
+		}
+		jobs[candidate.GenerationJobID] = struct{}{}
+		_, taskExists := taskIDs[candidate.TaskID]
+		validStatus := candidate.Status == filmAICandidateReady || candidate.Status == filmAICandidateStale ||
+			candidate.Status == filmAICandidateRejected || candidate.Status == filmAICandidateApplied
+		if candidate.Revision < 1 || candidate.Stage != "decompose" || !validStatus || candidate.SourceRevision < 1 ||
+			!validFilmRequestHash(candidate.SourceSHA256) || candidate.FilmRevision < 1 || !taskExists ||
+			!validProjectID(candidate.GenerationJobID) || !validFilmRequestHash(candidate.RequestHash) ||
+			!validFilmTimestamp(candidate.CreatedAt) || (candidate.AppliedAt != "" && !validFilmTimestamp(candidate.AppliedAt)) ||
+			validateFilmAIDecomposition(candidate.Decomposition) != nil {
+			return fmt.Errorf("film AI candidate %s is invalid", candidate.ID)
+		}
+	}
+	return nil
+}
+
 func validateFilmAdoptions(document filmDocument, shots map[string]filmShot, assets map[string]filmAsset) error {
 	if len(document.Adoptions) > 1_000 {
 		return errors.New("film adoption history limit reached")
@@ -409,6 +441,9 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 		return err
 	}
 	if err := validateFilmTasks(document.Tasks); err != nil {
+		return err
+	}
+	if err := validateFilmAICandidates(document.AICandidates, document.Tasks); err != nil {
 		return err
 	}
 	for _, task := range document.Tasks {

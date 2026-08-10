@@ -147,6 +147,29 @@ type filmTextGenerationSnapshot struct {
 	CreatedAt            string `json:"createdAt"`
 }
 
+const (
+	filmAICandidateReady    = "ready"
+	filmAICandidateStale    = "stale"
+	filmAICandidateRejected = "rejected"
+	filmAICandidateApplied  = "applied"
+)
+
+type filmAICandidate struct {
+	ID              string              `json:"id"`
+	Revision        int                 `json:"revision"`
+	Stage           string              `json:"stage"`
+	Status          string              `json:"status"`
+	SourceRevision  int                 `json:"sourceRevision"`
+	SourceSHA256    string              `json:"sourceSha256"`
+	FilmRevision    int                 `json:"filmRevision"`
+	TaskID          string              `json:"taskId"`
+	GenerationJobID string              `json:"generationJobId"`
+	RequestHash     string              `json:"requestHash"`
+	Decomposition   filmAIDecomposition `json:"decomposition"`
+	CreatedAt       string              `json:"createdAt"`
+	AppliedAt       string              `json:"appliedAt,omitempty"`
+}
+
 // filmGenerationSnapshot freezes every Film-domain input used to create a
 // GenerationJob. Assets remain embedded here even when their editable records
 // are changed later, so an approved result can be reproduced and audited.
@@ -293,6 +316,7 @@ type filmDocument struct {
 	Assets             []filmAsset         `json:"assets"`
 	Stages             []filmStage         `json:"stages"`
 	Tasks              []filmTask          `json:"tasks"`
+	AICandidates       []filmAICandidate   `json:"aiCandidates,omitempty"`
 	QualityReports     []filmQualityReport `json:"qualityReports"`
 	Timeline           filmTimeline        `json:"timeline"`
 	Deliverables       []filmDeliverable   `json:"deliverables"`

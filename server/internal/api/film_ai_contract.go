@@ -9,6 +9,8 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 const maxFilmAICandidateBytes = 4 << 20
@@ -266,4 +268,79 @@ func ensureFilmAIJSONEOF(decoder *json.Decoder) error {
 		return errors.New("AI decomposition response contains trailing content")
 	}
 	return nil
+}
+
+func integrateFilmTextJobResult(document filmDocument, job store.GenerationJob, now string) (filmDocument, error) {
+	if job.Kind != "text" || job.Status != "succeeded" || job.ProjectID != document.ProjectID || !validFilmTimestamp(now) {
+		return filmDocument{}, errors.New("film text generation result is invalid")
+	}
+	for _, existing := range document.AICandidates {
+		if existing.GenerationJobID == job.ID {
+			return document, nil
+		}
+	}
+	var parameters persistedTextJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil || validatePersistedTextJob(job, parameters) != nil ||
+		parameters.Film == nil || parameters.Film.ProjectID != document.ProjectID || parameters.Film.Stage != "decompose" ||
+		parameters.Film.RequestHash != parameters.RequestHash {
+		return filmDocument{}, errors.New("film text generation binding is invalid")
+	}
+	taskIndex := -1
+	for index, task := range document.Tasks {
+		if task.ID == parameters.Film.TaskID && task.GenerationJobID == job.ID && task.RequestHash == parameters.RequestHash {
+			taskIndex = index
+			break
+		}
+	}
+	if taskIndex < 0 || document.Tasks[taskIndex].TextSnapshot == nil {
+		return filmDocument{}, errors.New("film text generation task is unavailable")
+	}
+	var result providerTextResult
+	if json.Unmarshal(job.Result, &result) != nil {
+		return filmDocument{}, errors.New("film text generation result is invalid")
+	}
+	decomposition, err := parseFilmAIDecompositionCandidate([]byte(result.Text))
+	if err != nil {
+		return filmDocument{}, err
+	}
+	next := cloneFilmDocument(document)
+	stale := document.Source.Revision != parameters.SourceRevision || filmSourceSHA256(document.Source) != parameters.SourceSHA256
+	status := filmAICandidateReady
+	if stale {
+		status = filmAICandidateStale
+	}
+	next.AICandidates = append(next.AICandidates, filmAICandidate{
+		ID: stableFilmID("candidate", document.ProjectID, job.ID), Revision: 1, Stage: "decompose", Status: status,
+		SourceRevision: parameters.SourceRevision, SourceSHA256: parameters.SourceSHA256, FilmRevision: parameters.FilmRevision,
+		TaskID: parameters.Film.TaskID, GenerationJobID: job.ID, RequestHash: parameters.RequestHash,
+		Decomposition: decomposition, CreatedAt: now,
+	})
+	if len(next.AICandidates) > 100 {
+		return filmDocument{}, errors.New("film AI candidate retention limit reached")
+	}
+	task := next.Tasks[taskIndex]
+	task.Revision++
+	task.Progress = 1
+	task.UpdatedAt = now
+	stageIndex, stage, err := findFilmStage(next, "decompose")
+	if err != nil {
+		return filmDocument{}, err
+	}
+	stage.Revision++
+	stage.UpdatedAt = now
+	if stale {
+		task.Status, task.Error = filmStatusFailed, "Source changed while AI decomposition was running"
+		stage.Status, stage.Error = filmStatusDraft, "AI decomposition is stale because the manuscript changed"
+	} else {
+		task.Status, task.Error = filmStatusNeedsReview, ""
+		stage.Status, stage.Error = filmStatusNeedsReview, ""
+	}
+	next.Tasks[taskIndex] = task
+	next.Stages[stageIndex] = stage
+	next.Revision++
+	next.UpdatedAt = now
+	if err := validateFilmAggregateLimits(next); err != nil {
+		return filmDocument{}, err
+	}
+	return next, nil
 }
