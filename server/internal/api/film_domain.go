@@ -536,7 +536,7 @@ func validateFilmAggregateLimits(document filmDocument) error {
 	if entityCount > maxFilmEntities {
 		return errors.New("film aggregate entity limit reached")
 	}
-	if len(document.Tasks) > 1_000 || len(document.AICandidates) > 100 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 {
+	if len(document.Tasks) > 1_000 || len(document.AICandidates) > 100 || len(document.StructureVersions) > 100 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 {
 		return errors.New("film aggregate retention limit reached")
 	}
 	issues, repairs := 0, 0
@@ -664,6 +664,13 @@ func updateFilmStage(document filmDocument, stageID, action string, expectedRevi
 	case "approve":
 		if stage.Status != filmStatusNeedsReview {
 			return filmDocument{}, errors.New("only a review-ready stage can be approved")
+		}
+		if stageID == "decompose" {
+			for _, candidate := range document.AICandidates {
+				if candidate.Stage == stageID && candidate.Status == filmAICandidateReady {
+					return filmDocument{}, errors.New("AI decomposition candidate must be applied before approval")
+				}
+			}
 		}
 		stage.Status = filmStatusApproved
 		stage.Error = ""

@@ -93,6 +93,7 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/generation-jobs/{jobId}/sync", server.syncFilmGenerationJob)
 		r.Post("/generation-jobs/{jobId}/retry", server.retryFilmGenerationJob)
 		r.Post("/generation-jobs/{jobId}/cancel", server.cancelFilmGenerationJob)
+		r.Post("/ai-candidates/{candidateId}/apply", server.applyFilmAICandidateHandler)
 		r.Post("/stages/{stageId}/approve", server.approveFilmStage)
 		r.Post("/stages/{stageId}/reject", server.rejectFilmStage)
 		r.Post("/validate", server.validateFilmProduction)

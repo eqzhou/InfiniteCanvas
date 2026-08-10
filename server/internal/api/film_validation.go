@@ -256,6 +256,29 @@ func validateFilmAICandidates(candidates []filmAICandidate, tasks []filmTask) er
 	return nil
 }
 
+func validateFilmStructureVersions(versions []filmStructureVersion) error {
+	if len(versions) > 100 {
+		return errors.New("film structure version retention limit reached")
+	}
+	ids := make(map[string]struct{}, len(versions))
+	for _, version := range versions {
+		if err := addUniqueFilmID(ids, version.ID, "structure version"); err != nil {
+			return err
+		}
+		if version.Revision < 1 || !validProjectID(version.CandidateID) || !validFilmTimestamp(version.CreatedAt) {
+			return fmt.Errorf("film structure version %s is invalid", version.ID)
+		}
+		snapshot := filmDocument{
+			Episodes: version.Episodes, Scenes: version.Scenes, Shots: version.Shots,
+			Dialogues: version.Dialogues, Assets: version.Assets,
+		}
+		if _, _, _, _, err := validateFilmEntities(snapshot); err != nil {
+			return fmt.Errorf("film structure version %s is invalid: %w", version.ID, err)
+		}
+	}
+	return nil
+}
+
 func validateFilmAdoptions(document filmDocument, shots map[string]filmShot, assets map[string]filmAsset) error {
 	if len(document.Adoptions) > 1_000 {
 		return errors.New("film adoption history limit reached")
@@ -444,6 +467,9 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 		return err
 	}
 	if err := validateFilmAICandidates(document.AICandidates, document.Tasks); err != nil {
+		return err
+	}
+	if err := validateFilmStructureVersions(document.StructureVersions); err != nil {
 		return err
 	}
 	for _, task := range document.Tasks {
