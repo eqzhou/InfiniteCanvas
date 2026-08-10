@@ -23,6 +23,7 @@ import {
 } from "@/services/film-client";
 import type { FilmDialogue, FilmShot, FilmStage, FilmStageKind } from "@/types/film";
 import type { BoardProject } from "@/types/board";
+import { listMediaCapabilities, mediaOptionsForKind, type MediaCapabilityCatalog, type MediaKind } from "@/services/media-capabilities";
 import { WorkbenchSection } from "./WorkbenchSection";
 
 const stageLabels: Record<FilmStageKind, string> = { decompose: "拆解", script: "剧本", storyboard: "分镜", first_frame: "首帧", audio: "声音", video: "画面", compose: "合成", delivery: "交付" };
@@ -76,6 +77,8 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
   const [model, setModel] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [config, setConfig] = useState("{\n  \"quality\": \"standard\"\n}");
+  const [mediaCatalog, setMediaCatalog] = useState<MediaCapabilityCatalog | null>(null);
+  const [mediaCatalogError, setMediaCatalogError] = useState("");
   const [episodeFrom, setEpisodeFrom] = useState(1); const [episodeTo, setEpisodeTo] = useState(1);
   const [shotFrom, setShotFrom] = useState(0); const [shotTo, setShotTo] = useState(0);
   const syncKey = useRef("");
@@ -84,6 +87,18 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
     const firstAvailable = capabilities.generationStages[0];
     if (firstAvailable) setStage(firstAvailable);
   }, [capabilities.generationStages, stage]);
+  useEffect(() => {
+    let active = true;
+    void listMediaCapabilities().then((catalog) => { if (active) { setMediaCatalog(catalog); setMediaCatalogError(""); } }).catch((cause) => { if (active) { setMediaCatalog(null); setMediaCatalogError(cause instanceof Error ? cause.message : String(cause)); } });
+    return () => { active = false; };
+  }, []);
+  const mediaKind: MediaKind = stage === "audio" ? "audio" : stage === "video" ? "video" : "image";
+  const mediaOptions = mediaCatalog ? mediaOptionsForKind(mediaCatalog, mediaKind) : [];
+  useEffect(() => {
+    if (!mediaOptions.length) { setProvider(""); setModel(""); return; }
+    const selected = mediaOptions.find((option) => option.channelId === provider && option.model === model) ?? mediaOptions[0]!;
+    setProvider(selected.channelId); setModel(selected.model);
+  }, [mediaCatalog?.version, mediaKind]);
   const refreshJobs = async () => {
     if (!capabilities.generationJobs && !status.document.tasks.some((task) => task.generationJobId)) return;
     try { setJobs(await listFilmGenerationJobs(status.document.projectId, status)); setJobError(""); }
@@ -141,7 +156,7 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
   return <WorkbenchSection id="tasks" title="阶段运行与 Generation Jobs" wide>
     <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
       <div><h3 className="text-sm font-medium">阶段审核状态</h3><ol className="mt-2 space-y-2">{status.document.stages.map((item) => <li key={item.id} data-testid={`film-stage-${item.id}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--ob-line)] p-2"><span>{stageLabels[item.id]}</span><span className="mr-auto text-xs">{item.status} · r{item.revision}</span>{item.status === "needs_review" ? <><button className="ob-btn" onClick={() => onLegacyStage(item, "approve")}>批准</button><button className="ob-btn" onClick={() => onLegacyStage(item, "reject")}>退回</button></> : <button className="ob-btn" disabled={busy || item.status === "approved"} onClick={() => onLegacyStage(item, "run")}>提交产物审核</button>}</li>)}</ol><p className="mt-2 text-xs text-[var(--ob-muted)]">提交产物审核只改变审核状态，不代表媒体生成完成。</p></div>
-      <div><h3 className="text-sm font-medium">范围与生成配置</h3><div className="mt-2 grid gap-2 sm:grid-cols-2"><select aria-label="运行阶段" className="ob-input" value={stage} onChange={(event) => setStage(event.target.value as FilmStageKind)}>{status.document.stages.filter((item) => capabilities.generationStages.includes(item.id)).map((item) => <option key={item.id} value={item.id}>{stageLabels[item.id]}</option>)}</select><input aria-label="幂等键" className="ob-input" value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} /><input aria-label="Provider" className="ob-input" value={provider} onChange={(event) => setProvider(event.target.value)} /><input aria-label="Model" className="ob-input" value={model} onChange={(event) => setModel(event.target.value)} /><label className="text-xs">分集起止<div className="flex gap-1"><input className="ob-input w-full" type="number" min="1" value={episodeFrom} onChange={(e) => setEpisodeFrom(Number(e.target.value))} /><input className="ob-input w-full" type="number" min="1" value={episodeTo} onChange={(e) => setEpisodeTo(Number(e.target.value))} /></div></label><label className="text-xs">镜头 order 起止（从 0）<div className="flex gap-1"><input className="ob-input w-full" type="number" min="0" value={shotFrom} onChange={(e) => setShotFrom(Number(e.target.value))} /><input className="ob-input w-full" type="number" min="0" value={shotTo} onChange={(e) => setShotTo(Number(e.target.value))} /></div></label><textarea aria-label="生成配置 JSON" className="ob-input min-h-24 sm:col-span-2" value={config} onChange={(event) => setConfig(event.target.value)} /></div><button type="button" className="ob-btn ob-btn-primary mt-2" disabled={busy || !capabilities.stageGeneration || !capabilities.generationStages.includes(stage) || !provider.trim() || !model.trim() || !idempotencyKey.trim()} onClick={() => void submit()}>开始生成</button>{!capabilities.stageGeneration ? <p className="mt-2 text-xs text-[var(--ob-muted)]">当前后端未声明范围生成能力，生成请求已禁用。</p> : null}</div>
+      <div><h3 className="text-sm font-medium">范围与生成配置</h3><div className="mt-2 grid gap-2 sm:grid-cols-2"><select aria-label="运行阶段" className="ob-input" value={stage} onChange={(event) => setStage(event.target.value as FilmStageKind)}>{status.document.stages.filter((item) => capabilities.generationStages.includes(item.id)).map((item) => <option key={item.id} value={item.id}>{stageLabels[item.id]}</option>)}</select><input aria-label="幂等键" className="ob-input" value={idempotencyKey} onChange={(event) => setIdempotencyKey(event.target.value)} /><label className="text-xs sm:col-span-2">媒体能力目录<select aria-label="媒体模型能力" className="ob-input mt-1 w-full" disabled={!mediaOptions.length} value={provider && model ? `${provider}:${model}` : ""} onChange={(event) => { const option = mediaOptions.find((item) => `${item.channelId}:${item.model}` === event.target.value); setProvider(option?.channelId ?? ""); setModel(option?.model ?? ""); }}><option value="">{mediaCatalog ? `没有已启用的${mediaKind}模型` : "正在加载服务端目录"}</option>{mediaOptions.map((option) => <option key={`${option.channelId}:${option.model}`} value={`${option.channelId}:${option.model}`}>{option.channelName} · {option.model} · {option.modes.join(" / ")}</option>)}</select></label><label className="text-xs">分集起止<div className="flex gap-1"><input className="ob-input w-full" type="number" min="1" value={episodeFrom} onChange={(e) => setEpisodeFrom(Number(e.target.value))} /><input className="ob-input w-full" type="number" min="1" value={episodeTo} onChange={(e) => setEpisodeTo(Number(e.target.value))} /></div></label><label className="text-xs">镜头 order 起止（从 0）<div className="flex gap-1"><input className="ob-input w-full" type="number" min="0" value={shotFrom} onChange={(e) => setShotFrom(Number(e.target.value))} /><input className="ob-input w-full" type="number" min="0" value={shotTo} onChange={(e) => setShotTo(Number(e.target.value))} /></div></label><textarea aria-label="生成配置 JSON" className="ob-input min-h-24 sm:col-span-2" value={config} onChange={(event) => setConfig(event.target.value)} /></div><p className="mt-2 text-xs text-[var(--ob-muted)]">目录加载完成前不会猜测模型能力。{mediaCatalog ? `目录版本 ${mediaCatalog.version.slice(0, 12)}` : mediaCatalogError}</p><button type="button" className="ob-btn ob-btn-primary mt-2" disabled={busy || !capabilities.stageGeneration || !capabilities.generationStages.includes(stage) || !mediaCatalog || !provider.trim() || !model.trim() || !idempotencyKey.trim()} onClick={() => void submit()}>开始生成</button>{!capabilities.stageGeneration ? <p className="mt-2 text-xs text-[var(--ob-muted)]">当前后端未声明范围生成能力，生成请求已禁用。</p> : null}</div>
     </div>
     <div className="mt-5 flex items-center gap-2"><h3 className="mr-auto text-sm font-medium">父任务与镜头子任务</h3><button className="ob-btn" disabled={!capabilities.generationJobs && !status.document.tasks.some((task) => task.generationJobId)} onClick={() => void refreshJobs()}><RefreshCw size={14} /> 刷新任务</button></div>
     {jobError ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{jobError}</p> : null}
