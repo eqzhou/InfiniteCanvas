@@ -298,6 +298,24 @@ type FilmStore interface {
 	CompareAndSwapFilmProject(ctx context.Context, tenantID, projectID string, expectedRevision int, document []byte) (FilmRecord, error)
 }
 
+type FilmGenerationReservation struct {
+	Job       GenerationJob
+	Units     int
+	UsageMeta json.RawMessage
+}
+
+// FilmGenerationBatchStore commits the aggregate revision, queued jobs and
+// their quota/credit reservations as one serializable transaction.
+type FilmGenerationBatchStore interface {
+	CreateFilmGenerationBatch(
+		ctx context.Context,
+		tenantID, userID, projectID string,
+		expectedRevision int,
+		document []byte,
+		reservations []FilmGenerationReservation,
+	) (FilmRecord, error)
+}
+
 // FilmRestoreStore makes the film aggregate update and its rollback point one
 // durable operation. Tokens are stored as digests and are tenant/project bound.
 type FilmRestoreStore interface {

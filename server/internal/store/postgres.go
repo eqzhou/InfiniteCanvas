@@ -1474,6 +1474,143 @@ func (s *PostgresStore) CompareAndSwapFilmProject(
 	return record, nil
 }
 
+func (s *PostgresStore) CreateFilmGenerationBatch(
+	ctx context.Context,
+	tenantID, userID, projectID string,
+	expectedRevision int,
+	document []byte,
+	reservations []FilmGenerationReservation,
+) (FilmRecord, error) {
+	tenantID = normalizeTenantID(tenantID)
+	if expectedRevision < 1 || !json.Valid(document) || len(reservations) == 0 || len(reservations) > 1_000 {
+		return FilmRecord{}, ErrInvalidInput
+	}
+	type preparedReservation struct {
+		reservation FilmGenerationReservation
+		created     time.Time
+		updated     time.Time
+	}
+	prepared := make([]preparedReservation, len(reservations))
+	totalUnits := 0
+	for index, reservation := range reservations {
+		job := reservation.Job
+		if job.Status != "queued" || job.ProjectID != projectID || job.ID == "" || job.Kind == "" || !json.Valid(job.Parameters) || !json.Valid(job.Result) {
+			return FilmRecord{}, ErrInvalidInput
+		}
+		created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
+		if err != nil {
+			return FilmRecord{}, fmt.Errorf("invalid generation createdAt: %w", err)
+		}
+		updated, err := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+		if err != nil {
+			return FilmRecord{}, fmt.Errorf("invalid generation updatedAt: %w", err)
+		}
+		if len(reservation.UsageMeta) == 0 {
+			reservation.UsageMeta = json.RawMessage(`{}`)
+		}
+		if !json.Valid(reservation.UsageMeta) {
+			return FilmRecord{}, ErrInvalidInput
+		}
+		if generationJobConsumesQuota(job.Kind) {
+			if reservation.Units < 1 {
+				reservation.Units = 1
+			}
+			totalUnits += reservation.Units
+		}
+		prepared[index] = preparedReservation{reservation: reservation, created: created, updated: updated}
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return FilmRecord{}, err
+	}
+	var record FilmRecord
+	var filmUpdated time.Time
+	err = tx.QueryRow(ctx, `UPDATE openboard_film_projects
+		SET revision=revision+1, document=$4, updated_at=clock_timestamp()
+		WHERE tenant_id=$1 AND project_id=$2 AND revision=$3
+		RETURNING project_id, revision, document, updated_at`, tenantID, projectID, expectedRevision, document).
+		Scan(&record.ProjectID, &record.Revision, &record.Document, &filmUpdated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		lookupErr := tx.QueryRow(ctx, `SELECT true FROM openboard_film_projects WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID).Scan(&exists)
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			return FilmRecord{}, ErrNotFound
+		}
+		if lookupErr != nil {
+			return FilmRecord{}, lookupErr
+		}
+		return FilmRecord{}, ErrConflict
+	}
+	if err != nil {
+		return FilmRecord{}, err
+	}
+	if totalUnits > 0 {
+		var quota int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(
+			(SELECT generation_quota_monthly FROM openboard_tenants WHERE id=$1), $2)`,
+			tenantID, defaultGenerationQuotaMonthly).Scan(&quota); err != nil {
+			return FilmRecord{}, err
+		}
+		now := time.Now().UTC()
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		var used int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(units), 0) FROM openboard_usage_events
+			WHERE tenant_id=$1 AND kind='generation' AND created_at >= $2`, tenantID, monthStart).Scan(&used); err != nil {
+			return FilmRecord{}, err
+		}
+		if generationQuotaExceeded(used, totalUnits, quota) {
+			return FilmRecord{}, ErrQuotaExceeded
+		}
+	}
+	for _, item := range prepared {
+		reservation, job := item.reservation, item.reservation.Job
+		inserted, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
+			(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+			VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			ON CONFLICT (tenant_id, id) DO NOTHING`, tenantID, job.ID, job.ProjectID, job.Kind,
+			job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error,
+			item.created, item.updated)
+		if err != nil {
+			return FilmRecord{}, err
+		}
+		if inserted.RowsAffected() == 0 {
+			return FilmRecord{}, generationJobConflictError(ctx, tx, tenantID, job.ID)
+		}
+		if !generationJobConsumesQuota(job.Kind) {
+			continue
+		}
+		var userArg any
+		if userID != "" {
+			userArg = userID
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_usage_events (tenant_id,user_id,kind,units,meta)
+			VALUES ($1,$2,'generation',$3,$4)`, tenantID, userArg, reservation.Units, reservation.UsageMeta); err != nil {
+			return FilmRecord{}, err
+		}
+		if userID != "" {
+			cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
+			if err != nil {
+				return FilmRecord{}, err
+			}
+			if err := s.reserveCreditsTx(ctx, tx, tenantID, userID, job.ID, job.Model, cost*reservation.Units, reservation.UsageMeta); err != nil {
+				return FilmRecord{}, err
+			}
+		}
+	}
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
+		return FilmRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return FilmRecord{}, err
+	}
+	record.UpdatedAt = filmUpdated.UTC().Format(time.RFC3339Nano)
+	return record, nil
+}
+
 func (s *PostgresStore) RestoreFilmProject(
 	ctx context.Context,
 	tenantID string,
