@@ -146,6 +146,9 @@ func TestFilmAIDecomposeRunCreatesOneIdempotentTextJob(t *testing.T) {
 	if first.Code != http.StatusAccepted {
 		t.Fatalf("AI decompose run: %d %s", first.Code, first.Body.String())
 	}
+	if backend.atomicBatchCalls.Load() != 1 {
+		t.Fatal("AI decompose did not atomically commit Film, job, quota, and credits")
+	}
 	created := decodeFilmResponse(t, first)
 	if created.Stages[0].Status != filmStatusRunning || len(created.Tasks) == 0 {
 		t.Fatalf("stage/task state = %#v %#v", created.Stages[0], created.Tasks)

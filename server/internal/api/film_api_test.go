@@ -29,6 +29,7 @@ type filmMemoryStore struct {
 	tokens             map[string]filmMemoryRestoreToken
 	workspaceTokens    map[string]filmMemoryWorkspaceToken
 	cleanupGenerations map[string]store.FilmCleanupGeneration
+	atomicBatchCalls   atomic.Int32
 }
 
 type filmMemoryWorkspaceToken struct {
@@ -399,6 +400,40 @@ func (m *filmMemoryStore) CompareAndSwapFilmProject(_ context.Context, tenantID,
 	record.Revision++
 	record.Document = append([]byte(nil), document...)
 	m.films[key] = record
+	return record, nil
+}
+
+func (m *filmMemoryStore) CreateFilmGenerationBatch(
+	_ context.Context,
+	tenantID, _ string, projectID string,
+	expectedRevision int,
+	document []byte,
+	reservations []store.FilmGenerationReservation,
+) (store.FilmRecord, error) {
+	m.filmMu.Lock()
+	defer m.filmMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantKey(tenantID, projectID)
+	record, exists := m.films[key]
+	if !exists {
+		return store.FilmRecord{}, store.ErrNotFound
+	}
+	if record.Revision != expectedRevision {
+		return store.FilmRecord{}, store.ErrConflict
+	}
+	for _, reservation := range reservations {
+		if _, duplicate := m.jobs[tenantKey(tenantID, reservation.Job.ID)]; duplicate {
+			return store.FilmRecord{}, store.ErrConflict
+		}
+	}
+	for _, reservation := range reservations {
+		m.jobs[tenantKey(tenantID, reservation.Job.ID)] = reservation.Job
+	}
+	record.Revision++
+	record.Document = append([]byte(nil), document...)
+	m.films[key] = record
+	m.atomicBatchCalls.Add(1)
 	return record, nil
 }
 
