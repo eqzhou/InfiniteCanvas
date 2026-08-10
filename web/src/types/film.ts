@@ -39,7 +39,7 @@ export type FilmScene = {
 
 export type FilmDirectorSource = {
   revision: number;
-  targetField: "storyboard" | "first_frame";
+  targetField: "scene" | "storyboard" | "first_frame";
   captureId: string;
   directorNodeId: string;
   cameraId: string;
@@ -276,7 +276,7 @@ export type FilmRepairProposal = {
 
 export type FilmEntityVersion = {
   id: string;
-  entityType: "shot" | "asset" | "timeline";
+  entityType: "scene" | "shot" | "asset" | "timeline";
   entityId: string;
   revision: number;
   snapshot: Record<string, unknown>;

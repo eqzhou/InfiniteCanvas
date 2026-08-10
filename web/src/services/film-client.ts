@@ -18,12 +18,13 @@ export type FilmStatus = {
 
 export type FilmRestoreMediaProvenance =
   | { kind: "shot"; entityId: string; field: "imageStorageKey" | "firstFrameStorageKey" | "audioStorageKey" | "videoStorageKey" }
+  | { kind: "scene"; entityId: string; field: "directorSource" }
   | { kind: "asset"; entityId: string; field: "mediaStorageKey" }
   | { kind: "dialogue"; entityId: string; field: "audioStorageKey" }
-  | { kind: "task"; entityId: string; field: `identity:${string}` | "style" | `reference:${number}` }
+  | { kind: "task"; entityId: string; field: `identity:${string}` | "style" | "storyboardDirectorSource" | "firstFrameDirectorSource" | `reference:${number}` }
   | { kind: "timeline"; entityId: string; field: "source" }
   | { kind: "deliverable"; entityId: string; field: "storageKey" }
-  | { kind: "version"; entityId: string; field: "imageStorageKey" | "firstFrameStorageKey" | "audioStorageKey" | "videoStorageKey" };
+  | { kind: "version"; entityId: string; field: "directorSource" | "imageStorageKey" | "firstFrameStorageKey" | "audioStorageKey" | "videoStorageKey" };
 
 export type FilmRestoreMedia = {
   storageKey: string;

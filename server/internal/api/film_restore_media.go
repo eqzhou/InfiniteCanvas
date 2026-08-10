@@ -74,6 +74,11 @@ func filmRestoreReferences(document filmDocument) map[string]map[string]struct{}
 		add(shot.AudioStorageKey, "shot", shot.ID, "audioStorageKey")
 		add(shot.VideoStorageKey, "shot", shot.ID, "videoStorageKey")
 	}
+	for _, scene := range document.Scenes {
+		if scene.DirectorSource != nil {
+			add(scene.DirectorSource.StorageKey, "scene", scene.ID, "directorSource")
+		}
+	}
 	for _, asset := range document.Assets {
 		add(asset.MediaStorageKey, "asset", asset.ID, "mediaStorageKey")
 	}
@@ -90,6 +95,12 @@ func filmRestoreReferences(document filmDocument) map[string]map[string]struct{}
 		if task.Snapshot.StyleVersion != nil {
 			add(task.Snapshot.StyleVersion.MediaStorageKey, "task", task.ID, "style")
 		}
+		if task.Snapshot.StoryboardDirectorSource != nil {
+			add(task.Snapshot.StoryboardDirectorSource.StorageKey, "task", task.ID, "storyboardDirectorSource")
+		}
+		if task.Snapshot.FirstFrameDirectorSource != nil {
+			add(task.Snapshot.FirstFrameDirectorSource.StorageKey, "task", task.ID, "firstFrameDirectorSource")
+		}
 		for index, storageKey := range task.Snapshot.ReferenceStorageKeys {
 			add(storageKey, "task", task.ID, "reference:"+strconv.Itoa(index))
 		}
@@ -103,17 +114,21 @@ func filmRestoreReferences(document filmDocument) map[string]map[string]struct{}
 		add(deliverable.StorageKey, "deliverable", deliverable.ID, "storageKey")
 	}
 	for _, version := range document.Versions {
-		if version.EntityType != "shot" {
-			continue
+		if version.EntityType == "scene" {
+			var scene filmScene
+			if json.Unmarshal(version.Snapshot, &scene) == nil && scene.DirectorSource != nil {
+				add(scene.DirectorSource.StorageKey, "version", version.ID, "directorSource")
+			}
+		} else if version.EntityType == "shot" {
+			var shot filmShot
+			if json.Unmarshal(version.Snapshot, &shot) != nil {
+				continue
+			}
+			add(shot.ImageStorageKey, "version", version.ID, "imageStorageKey")
+			add(shot.FirstFrameStorageKey, "version", version.ID, "firstFrameStorageKey")
+			add(shot.AudioStorageKey, "version", version.ID, "audioStorageKey")
+			add(shot.VideoStorageKey, "version", version.ID, "videoStorageKey")
 		}
-		var shot filmShot
-		if json.Unmarshal(version.Snapshot, &shot) != nil {
-			continue
-		}
-		add(shot.ImageStorageKey, "version", version.ID, "imageStorageKey")
-		add(shot.FirstFrameStorageKey, "version", version.ID, "firstFrameStorageKey")
-		add(shot.AudioStorageKey, "version", version.ID, "audioStorageKey")
-		add(shot.VideoStorageKey, "version", version.ID, "videoStorageKey")
 	}
 	return references
 }
@@ -193,6 +208,14 @@ func validateFilmRestoreIdentity(document filmDocument, item filmRestoreMedia) e
 		matched := false
 		var identityErr error
 		switch provenance.Kind {
+		case "scene":
+			for _, scene := range document.Scenes {
+				if scene.ID == provenance.EntityID && provenance.Field == "directorSource" && scene.DirectorSource != nil {
+					source := scene.DirectorSource
+					identityErr, matched = match("image/", "", source.SHA256, source.ObjectVersion, 0), true
+					break
+				}
+			}
 		case "shot":
 			for _, shot := range document.Shots {
 				if shot.ID != provenance.EntityID {
@@ -247,6 +270,12 @@ func validateFilmRestoreIdentity(document filmDocument, item filmRestoreMedia) e
 							break
 						}
 					}
+				case provenance.Field == "storyboardDirectorSource" && task.Snapshot.StoryboardDirectorSource != nil:
+					source := task.Snapshot.StoryboardDirectorSource
+					identityErr, matched = match("image/", "", source.SHA256, source.ObjectVersion, 0), true
+				case provenance.Field == "firstFrameDirectorSource" && task.Snapshot.FirstFrameDirectorSource != nil:
+					source := task.Snapshot.FirstFrameDirectorSource
+					identityErr, matched = match("image/", "", source.SHA256, source.ObjectVersion, 0), true
 				case strings.HasPrefix(provenance.Field, "reference:"):
 					index, err := strconv.Atoi(strings.TrimPrefix(provenance.Field, "reference:"))
 					if err == nil && index >= 0 && index < len(task.Snapshot.ReferenceStorageKeys) && task.Snapshot.ReferenceStorageKeys[index] == item.StorageKey {
@@ -288,8 +317,19 @@ func validateFilmRestoreIdentity(document filmDocument, item filmRestoreMedia) e
 			}
 		case "version":
 			for _, version := range document.Versions {
-				if version.ID != provenance.EntityID || version.EntityType != "shot" {
+				if version.ID != provenance.EntityID {
 					continue
+				}
+				if version.EntityType == "scene" && provenance.Field == "directorSource" {
+					var scene filmScene
+					if json.Unmarshal(version.Snapshot, &scene) == nil && scene.DirectorSource != nil {
+						source := scene.DirectorSource
+						identityErr, matched = match("image/", "", source.SHA256, source.ObjectVersion, 0), true
+					}
+					break
+				}
+				if version.EntityType != "shot" {
+					break
 				}
 				var shot filmShot
 				if json.Unmarshal(version.Snapshot, &shot) != nil {
@@ -375,6 +415,22 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 		s.cleanupRestoredFilmBlobs(ctx, tenantID, userID, document.ProjectID, createdKeys)
 		return filmDocument{}, nil, nil, err
 	}
+	copyDirectorSource := func(source *filmDirectorSource) error {
+		if source == nil || source.StorageKey == "" {
+			return nil
+		}
+		value, err := copyMedia(source.StorageKey, "image/png", "image/", source.SHA256, source.ObjectVersion, 0, "")
+		if err != nil {
+			return err
+		}
+		source.StorageKey, source.SHA256, source.ObjectVersion = value.key, value.digest, value.version
+		return nil
+	}
+	for index := range document.Scenes {
+		if err := copyDirectorSource(document.Scenes[index].DirectorSource); err != nil {
+			return fail(err)
+		}
+	}
 	for index := range document.Shots {
 		shot := &document.Shots[index]
 		for _, stage := range []string{"storyboard", "first_frame", "audio", "video"} {
@@ -389,8 +445,14 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 			switch stage {
 			case "storyboard":
 				shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID = value.key, value.digest, value.version, ""
+				if shot.StoryboardDirectorSource != nil {
+					shot.StoryboardDirectorSource.StorageKey, shot.StoryboardDirectorSource.SHA256, shot.StoryboardDirectorSource.ObjectVersion = value.key, value.digest, value.version
+				}
 			case "first_frame":
 				shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = value.key, value.digest, value.version, ""
+				if shot.FirstFrameDirectorSource != nil {
+					shot.FirstFrameDirectorSource.StorageKey, shot.FirstFrameDirectorSource.SHA256, shot.FirstFrameDirectorSource.ObjectVersion = value.key, value.digest, value.version
+				}
 			case "audio":
 				shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID = value.key, value.digest, value.version, ""
 			case "video":
@@ -449,6 +511,12 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 		if err := copyAsset(task.Snapshot.StyleVersion); err != nil {
 			return fail(err)
 		}
+		if err := copyDirectorSource(task.Snapshot.StoryboardDirectorSource); err != nil {
+			return fail(err)
+		}
+		if err := copyDirectorSource(task.Snapshot.FirstFrameDirectorSource); err != nil {
+			return fail(err)
+		}
 		for referenceIndex, source := range task.Snapshot.ReferenceStorageKeys {
 			item, ok := mediaBySource[source]
 			if !ok {
@@ -463,6 +531,17 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 	}
 	for index := range document.Versions {
 		version := &document.Versions[index]
+		if version.EntityType == "scene" {
+			var scene filmScene
+			if json.Unmarshal(version.Snapshot, &scene) != nil {
+				return fail(errors.New("film version snapshot is invalid"))
+			}
+			if err := copyDirectorSource(scene.DirectorSource); err != nil {
+				return fail(err)
+			}
+			version.Snapshot, _ = json.Marshal(scene)
+			continue
+		}
 		if version.EntityType != "shot" {
 			continue
 		}
@@ -482,8 +561,14 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 			switch stage {
 			case "storyboard":
 				shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID = value.key, value.digest, value.version, ""
+				if shot.StoryboardDirectorSource != nil {
+					shot.StoryboardDirectorSource.StorageKey, shot.StoryboardDirectorSource.SHA256, shot.StoryboardDirectorSource.ObjectVersion = value.key, value.digest, value.version
+				}
 			case "first_frame":
 				shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = value.key, value.digest, value.version, ""
+				if shot.FirstFrameDirectorSource != nil {
+					shot.FirstFrameDirectorSource.StorageKey, shot.FirstFrameDirectorSource.SHA256, shot.FirstFrameDirectorSource.ObjectVersion = value.key, value.digest, value.version
+				}
 			case "audio":
 				shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID = value.key, value.digest, value.version, ""
 			case "video":
