@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,24 @@ func TestFilmDirectorAdoptionRejectsUnknownCapture(t *testing.T) {
 	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/director/adopt", body)
 	if response.Code != http.StatusNotFound && response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("unknown Director capture accepted: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFilmGenerationSnapshotFreezesDirectorSource(t *testing.T) {
+	document := newFilmDocument("film-director-snapshot")
+	director := &filmDirectorSource{
+		Revision: 1, TargetField: "storyboard", CaptureID: "capture-main", DirectorNodeID: "director-main",
+		CameraID: "camera-main", CameraName: "Main", Width: 1920, Height: 1080,
+		StorageKey: "film:media:director:stable", SHA256: strings.Repeat("a", 64), ObjectVersion: "version-1",
+		Snapshot: json.RawMessage(`{"version":1}`), AdoptedAt: document.CreatedAt,
+	}
+	shot := filmShot{ID: "shot-main", Revision: 2, Description: "Frame", DirectorSource: director}
+	snapshot := buildFilmGenerationSnapshot(document, shot, "provider", "model", filmGenerationConfig{}, document.CreatedAt)
+	if snapshot.DirectorSource == nil || snapshot.DirectorSource.CaptureID != "capture-main" {
+		t.Fatalf("Director source was not frozen into generation snapshot: %#v", snapshot)
+	}
+	shot.DirectorSource.CameraName = "Changed"
+	if snapshot.DirectorSource.CameraName != "Main" {
+		t.Fatal("generation snapshot retained a mutable Director source pointer")
 	}
 }
