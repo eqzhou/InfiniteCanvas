@@ -12,7 +12,8 @@ describe("Agent composer structured suggestions", () => {
   test("inserts a readable token and deduplicates immutable metadata", () => {
     const reference = { kind: "node" as const, id: "node-1", label: "产品主图" };
     const first = applyAgentComposerSuggestion("比较 @主", { kind: "node", query: "主", start: 3, end: 5 }, reference, []);
-    const second = applyAgentComposerSuggestion(first.text, detectAgentComposerTrigger(`${first.text}@产`, first.text.length + 2)!, reference, first.references);
+    const secondText = `${first.text}@产`;
+    const second = applyAgentComposerSuggestion(secondText, detectAgentComposerTrigger(secondText, secondText.length)!, reference, first.references);
     expect(first).toEqual({ text: "比较 @产品主图 ", cursor: 9, references: [reference] });
     expect(second.references).toEqual([reference]);
   });
