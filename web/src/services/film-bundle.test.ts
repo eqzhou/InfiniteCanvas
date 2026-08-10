@@ -138,6 +138,12 @@ describe("complete film bundle rollback", () => {
       adoptedAt: film.createdAt,
     };
     film.scenes = [{ id: "scene-1", revision: 1, episodeId: "episode-1", order: 0, heading: "Scene", synopsis: "Action", status: "approved", directorSource: source }];
+    film.shots = [{
+      id: "shot-1", revision: 1, sceneId: "scene-1", order: 0, title: "Shot", description: "Action", status: "approved",
+      durationSeconds: 1, aspectRatio: "16:9", identityVersionIds: [], imageStorageKey: "image:director",
+      imageSha256: source.sha256, imageObjectVersion: source.objectVersion,
+      storyboardDirectorSource: { ...source, targetField: "storyboard" },
+    }];
     film.tasks = [{
       id: "task-1", revision: 1, stage: "storyboard", title: "Task", status: "needs_review", progress: 1,
       createdAt: film.createdAt, updatedAt: film.updatedAt,
@@ -153,11 +159,13 @@ describe("complete film bundle rollback", () => {
     const restore = prepareFilmRestore(film, imported);
 
     expect(restore.media[0]?.provenance).toEqual([
+      { kind: "shot", entityId: "shot-1", field: "imageStorageKey" },
       { kind: "scene", entityId: "scene-1", field: "directorSource" },
       { kind: "task", entityId: "task-1", field: "storyboardDirectorSource" },
       { kind: "task", entityId: "task-1", field: "firstFrameDirectorSource" },
     ]);
     expect(restore.document.scenes[0]?.directorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
+    expect(restore.document.shots[0]?.storyboardDirectorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
     expect(restore.document.tasks[0]?.snapshot?.storyboardDirectorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
     expect(restore.document.tasks[0]?.snapshot?.firstFrameDirectorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
   });
