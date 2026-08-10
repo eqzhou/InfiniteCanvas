@@ -61,7 +61,7 @@ func TestTenantAdminStoragePoolIsEncryptedPreferredAndKeepsDeletedPlacements(t *
 	MountServer(router, server)
 
 	config := []byte(`[{"id":"tenant-main","endpoint":"` + upstream.URL + `","bucket":"tenant-bucket","region":"auto","prefix":"tenant-prefix","weight":7,"healthy":true,"allowInsecureLoopback":true}]`)
-	if got := request(t, router, http.MethodPut, "/api/admin/storage-pool", config); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", config); got.Code != http.StatusOK {
 		t.Fatalf("put pool = %d %s", got.Code, got.Body.String())
 	}
 	secret := []byte(`{"accessKeyId":"tenant-access","secretAccessKey":"tenant-secret","sessionToken":"tenant-session"}`)
@@ -89,10 +89,10 @@ func TestTenantAdminStoragePoolIsEncryptedPreferredAndKeepsDeletedPlacements(t *
 
 	// Deletion is an admin-facing tombstone: it disables future selection but
 	// retains the provider and credential for immutable old placements.
-	if got := request(t, router, http.MethodDelete, "/api/admin/storage-pool/tenant-main", nil); got.Code != http.StatusNoContent {
+	if got := deleteAdminConfigForTest(t, router, "/api/admin/storage-pool", "/api/admin/storage-pool/tenant-main"); got.Code != http.StatusNoContent {
 		t.Fatalf("delete = %d %s", got.Code, got.Body.String())
 	}
-	if got := request(t, router, http.MethodPut, "/api/admin/storage-pool", config); got.Code != http.StatusConflict {
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", config); got.Code != http.StatusConflict {
 		t.Fatalf("reusing tombstoned id = %d %s", got.Code, got.Body.String())
 	}
 	value, err := server.readTenantBlob(context.Background(), store.DefaultTenantID, "pool-object", maxUploadBytes)
@@ -118,11 +118,11 @@ func TestTenantStoragePoolRejectsStableIDRebinding(t *testing.T) {
 	router := chi.NewRouter()
 	MountServer(router, server)
 	first := []byte(`[{"id":"stable","endpoint":"http://127.0.0.1:9000","bucket":"bucket-one","region":"auto","prefix":"openboard","weight":1,"healthy":true,"allowInsecureLoopback":true}]`)
-	if got := request(t, router, http.MethodPut, "/api/admin/storage-pool", first); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", first); got.Code != http.StatusOK {
 		t.Fatalf("first = %d %s", got.Code, got.Body.String())
 	}
 	rebound := []byte(`[{"id":"stable","endpoint":"http://127.0.0.1:9000","bucket":"bucket-two","region":"auto","prefix":"openboard","weight":1,"healthy":true,"allowInsecureLoopback":true}]`)
-	if got := request(t, router, http.MethodPut, "/api/admin/storage-pool", rebound); got.Code != http.StatusConflict {
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", rebound); got.Code != http.StatusConflict {
 		t.Fatalf("rebind = %d %s", got.Code, got.Body.String())
 	}
 }
@@ -150,7 +150,7 @@ func TestTenantStoragePoolAdminRoutesRejectMembersAndStayTenantScoped(t *testing
 	seedAdminUser(backend, owner)
 	ownerHandler := tenantAdminHandler(t, backend, owner)
 	config := []byte(`[{"id":"isolated","endpoint":"http://127.0.0.1:9000","bucket":"tenant-bucket","region":"auto","prefix":"openboard","weight":1,"healthy":true,"allowInsecureLoopback":true}]`)
-	if got := request(t, ownerHandler, http.MethodPut, "/api/admin/storage-pool", config); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, ownerHandler, "/api/admin/storage-pool", config); got.Code != http.StatusOK {
 		t.Fatalf("owner put = %d %s", got.Code, got.Body.String())
 	}
 	if len(backend.state[tenantKey("tenant-a", tenantStoragePoolStateKey)]) != 0 || len(backend.state[tenantKey("tenant-b", tenantStoragePoolStateKey)]) == 0 {

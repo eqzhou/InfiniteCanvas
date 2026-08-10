@@ -48,11 +48,21 @@ func (s *Server) getAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 	if !s.requireTenantAdmin(w, r, "storage pool unavailable") {
 		return
 	}
-	providers, err := s.loadTenantStoragePool(r.Context(), tenantIDFrom(r))
+	configRaw, rawErr := getOptionalState(r.Context(), s.store, tenantIDFrom(r), tenantStoragePoolStateKey)
+	if rawErr != nil {
+		http.Error(w, "failed to load storage pool", http.StatusInternalServerError)
+		return
+	}
+	providers := []tenantStoragePoolProvider{}
+	var err error
+	if len(configRaw) > 0 {
+		providers, err = decodeTenantStoragePool(configRaw)
+	}
 	if err != nil {
 		http.Error(w, "failed to load storage pool", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set(adminRevisionHeader, adminConfigRevision(providers))
 	secrets, _, err := s.loadTenantStoragePoolSecrets(r.Context(), tenantIDFrom(r), providers)
 	if err != nil {
 		http.Error(w, "failed to load storage pool", http.StatusInternalServerError)
@@ -116,6 +126,10 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		http.Error(w, "failed to load storage pool", http.StatusInternalServerError)
+		return
+	}
+	if revision := r.Header.Get(adminRevisionHeader); revision == "" || revision != adminConfigRevision(current) {
+		http.Error(w, "storage pool changed concurrently", http.StatusConflict)
 		return
 	}
 	currentByID := make(map[string]tenantStoragePoolProvider, len(current))
@@ -247,6 +261,10 @@ func (s *Server) deleteAdminStoragePoolProvider(w http.ResponseWriter, r *http.R
 		http.Error(w, "failed to load storage pool", http.StatusInternalServerError)
 		return
 	}
+	if revision := r.Header.Get(adminRevisionHeader); revision == "" || revision != adminConfigRevision(providers) {
+		http.Error(w, "storage pool changed concurrently", http.StatusConflict)
+		return
+	}
 	found := false
 	for index := range providers {
 		if providers[index].ID == id && !providers[index].Deleted {
@@ -266,5 +284,6 @@ func (s *Server) deleteAdminStoragePoolProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.InvalidateTenantBlobStore(tenantID)
+	w.Header().Set(adminRevisionHeader, adminConfigRevision(providers))
 	w.WriteHeader(http.StatusNoContent)
 }

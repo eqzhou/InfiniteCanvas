@@ -28,11 +28,25 @@ export type AdminModelCosts = {
   modelCosts: Array<{ model: string; credits: number }>;
   /** Cost used when a model has no exact entry. */
   defaultCredits: number;
+  /** Opaque server version used to prevent silent concurrent overwrites. */
+  revision?: string;
 };
 export type AdminTenantQuota = {
   generationThisMonth: number;
   generationQuotaMonthly: number;
 };
+
+const maxAdminQuotaValue = 1_000_000_000;
+
+export function parseTenantQuotaDraft(value: string): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= maxAdminQuotaValue ? parsed : null;
+}
+
+export function isCreditAdjustmentReady(delta: number, reason: string): boolean {
+  return Number.isSafeInteger(delta) && delta !== 0 && Math.abs(delta) <= maxAdminQuotaValue && reason.trim().length > 0;
+}
 
 export type AdminStoragePoolProviderStatus = {
   id: string;
@@ -79,7 +93,14 @@ export type AdminChannel = {
 };
 
 const channelIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const adminRevisionPattern = /^[a-f0-9]{64}$/;
 const channelProtocols = new Set<AdminChannelProtocol>(["openai", "gemini", "apimart", "kie", "azure", "edge"]);
+
+function readAdminRevision(response: Response): string {
+  const revision = response.headers.get("X-OpenBoard-Revision") ?? "";
+  if (!adminRevisionPattern.test(revision)) throw new Error("管理员配置版本响应无效");
+  return revision;
+}
 
 /** Trim, drop blanks, and keep first-seen order (case-insensitive dedupe). */
 export function cleanAdminChannelModels(values: readonly string[] | undefined): string[] {
@@ -190,6 +211,7 @@ export async function adjustAdminCredits(
   input: { delta: number; reason: string; idempotencyKey: string },
 ): Promise<{ user: AdminUser; log: AdminCreditLog; replayed: boolean }> {
   if (!Number.isSafeInteger(input.delta) || input.delta === 0) throw new Error("算力变化必须是非零整数");
+  if (Math.abs(input.delta) > maxAdminQuotaValue) throw new Error(`单次算力变化不能超过 ${maxAdminQuotaValue}`);
   if (!input.reason.trim() || !input.idempotencyKey.trim()) throw new Error("算力调整原因和幂等键不能为空");
   return json(await authFetch(`admin/users/${encodeURIComponent(userId)}/credit-adjustments`, {
     method: "POST",
@@ -226,6 +248,9 @@ export function putAdminTenantQuota(generationQuotaMonthly: number): Promise<Adm
   if (!Number.isSafeInteger(generationQuotaMonthly) || generationQuotaMonthly < 0) {
     throw new Error("团队月度生成额度必须是非负整数");
   }
+  if (generationQuotaMonthly > maxAdminQuotaValue) {
+    throw new Error(`团队月度生成额度必须是 0 到 ${maxAdminQuotaValue} 的整数`);
+  }
   return authFetch("admin/tenant-quota", {
     method: "PUT",
     body: JSON.stringify({ generationQuotaMonthly }),
@@ -237,23 +262,28 @@ export async function putAdminModelCosts(input: AdminModelCosts): Promise<AdminM
   const modelCosts = input.modelCosts.map((item) => {
     const model = item.model.trim();
     const key = model.toLowerCase();
-    if (!model || seen.has(key) || !Number.isSafeInteger(item.credits) || item.credits < 1) {
+    if (!model || seen.has(key) || !Number.isSafeInteger(item.credits) || item.credits < 1 || item.credits > maxAdminQuotaValue) {
       throw new Error("模型成本配置无效或重复");
     }
     seen.add(key);
     return { model, credits: item.credits };
   });
-  if (!Number.isSafeInteger(input.defaultCredits) || input.defaultCredits < 1) throw new Error("默认模型成本必须至少为 1 算力");
-  return json(await authFetch("admin/models", {
+  if (!Number.isSafeInteger(input.defaultCredits) || input.defaultCredits < 1 || input.defaultCredits > maxAdminQuotaValue) throw new Error("默认模型成本必须是 1 到 1000000000 的整数");
+  if (!input.revision) throw new Error("请先重新加载模型算力成本再保存");
+  const response = await authFetch("admin/models", {
     method: "PUT",
-    body: JSON.stringify({ modelCosts, defaultCredits: input.defaultCredits }),
-  }));
+    body: JSON.stringify({ modelCosts, defaultCredits: input.defaultCredits, revision: input.revision }),
+  });
+  if (response.status === 409) throw new Error("模型算力成本已被其他管理员修改，请刷新页面后重试");
+  return json(response);
 }
 
-export async function getAdminStoragePoolStatus(): Promise<AdminStoragePoolProviderStatus[]> {
-  const values = await json<unknown>(await authFetch("admin/storage-pool"));
+export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStoragePoolProviderStatus[]; revision: string }> {
+  const response = await authFetch("admin/storage-pool");
+  const revision = readAdminRevision(response);
+  const values = await json<unknown>(response);
   if (!Array.isArray(values)) throw new Error("存储池状态响应无效");
-  return values.map((value) => {
+  const items = values.map((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("存储池状态响应无效");
     const item = value as Record<string, unknown>;
     if (typeof item.id !== "string" || !channelIdPattern.test(item.id) || typeof item.kind !== "string" ||
@@ -295,6 +325,7 @@ export async function getAdminStoragePoolStatus(): Promise<AdminStoragePoolProvi
       ...(typeof item.error === "string" && item.error.length <= 500 ? { error: item.error } : {}),
     };
   });
+  return { items, revision };
 }
 
 export type AdminStoragePoolProviderInput = {
@@ -311,11 +342,16 @@ function normalizeStorageProvider(item: AdminStoragePoolProviderInput): AdminSto
   return value;
 }
 
-export async function putAdminStoragePool(items: AdminStoragePoolProviderInput[]): Promise<AdminStoragePoolProviderStatus[]> {
+export async function putAdminStoragePool(items: AdminStoragePoolProviderInput[], revision: string): Promise<{ items: AdminStoragePoolProviderStatus[]; revision: string }> {
   if (items.length > 64) throw new Error("存储提供商不能超过 64 个");
   const normalized = items.map(normalizeStorageProvider);
   if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw new Error("存储提供商 ID 不能重复");
-  return json(await authFetch("admin/storage-pool", { method: "PUT", body: JSON.stringify(normalized) }));
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载存储池配置再保存");
+  const response = await authFetch("admin/storage-pool", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
+  if (response.status === 409) throw new Error("存储池配置已被其他管理员修改，请重新加载后重试");
+  const nextRevision = readAdminRevision(response);
+  const values = await json<AdminStoragePoolProviderStatus[]>(response);
+  return { items: values, revision: nextRevision };
 }
 
 export async function putAdminStoragePoolSecret(id: string, credential: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }): Promise<void> {
@@ -324,32 +360,42 @@ export async function putAdminStoragePoolSecret(id: string, credential: { access
   if (!response.ok) await json(response);
 }
 
-export async function deleteAdminStoragePoolProvider(id: string): Promise<void> {
-  const response = await authFetch(`admin/storage-pool/${encodeURIComponent(id)}`, { method: "DELETE" });
+export async function deleteAdminStoragePoolProvider(id: string, revision: string): Promise<string> {
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载存储池配置再删除");
+  const response = await authFetch(`admin/storage-pool/${encodeURIComponent(id)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
   if (!response.ok) await json(response);
+  return readAdminRevision(response);
 }
 
-export async function listAdminChannels(): Promise<AdminChannel[]> {
-  const channels = await json<AdminChannel[]>(await authFetch("admin/channels"));
-  return channels.map((channel) => ({
+export async function listAdminChannels(): Promise<{ items: AdminChannel[]; revision: string }> {
+  const response = await authFetch("admin/channels");
+  const revision = readAdminRevision(response);
+  const channels = await json<AdminChannel[]>(response);
+  return { revision, items: channels.map((channel) => ({
     ...channel,
     defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel : "",
     defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel : "",
     defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel : "",
     defaultAudioModel: typeof channel.defaultAudioModel === "string" ? channel.defaultAudioModel : "",
-  }));
+  })) };
 }
 
-export async function putAdminChannels(channels: AdminChannel[]): Promise<AdminChannel[]> {
+export async function putAdminChannels(channels: AdminChannel[], revision: string): Promise<{ items: AdminChannel[]; revision: string }> {
   if (channels.length > 100) throw new Error("共享渠道数量不能超过 100");
   const normalized = channels.map(normalizeAdminChannel);
   if (new Set(normalized.map((channel) => channel.id)).size !== normalized.length) throw new Error("共享渠道 ID 不能重复");
-  return json(await authFetch("admin/channels", { method: "PUT", body: JSON.stringify(normalized) }));
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载共享渠道再保存");
+  const response = await authFetch("admin/channels", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
+  if (response.status === 409) throw new Error("共享渠道已被其他管理员修改，请重新加载后重试");
+  const nextRevision = readAdminRevision(response);
+  return { items: await json<AdminChannel[]>(response), revision: nextRevision };
 }
 
-export async function deleteAdminChannel(channelId: string): Promise<void> {
-  const response = await authFetch(`admin/channels/${encodeURIComponent(channelId)}`, { method: "DELETE" });
+export async function deleteAdminChannel(channelId: string, revision: string): Promise<string> {
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载共享渠道再删除");
+  const response = await authFetch(`admin/channels/${encodeURIComponent(channelId)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
   if (!response.ok) await json(response);
+  return readAdminRevision(response);
 }
 
 export async function putAdminChannelSecret(channelId: string, apiKey: string, secretBindingId: string): Promise<void> {

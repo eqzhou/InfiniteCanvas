@@ -800,6 +800,8 @@ html.dark .ob-overlay-canvas {
 }
 
 .ob-segment-item {
+  flex-shrink: 0;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   justify-content: center;

@@ -482,10 +482,9 @@ func decodeAdminChannels(raw []byte) ([]adminChannelPublic, error) {
 }
 
 // replaceAdminChannels invalidates secrets before publishing a destination or
-// lifecycle change. CAS prevents a concurrent administrator from silently
-// overwriting either state. If the second CAS loses, the safe failure mode is a
-// channel that needs its secret entered again, never a secret sent elsewhere.
-func (s *Server) replaceAdminChannels(ctx context.Context, tenantID string, requested []adminChannelPublic) ([]adminChannelPublic, error) {
+// lifecycle change. The client revision rejects stale editors, while one
+// multi-state CAS commits channel metadata and encrypted secrets atomically.
+func (s *Server) replaceAdminChannels(ctx context.Context, tenantID, expectedRevision string, requested []adminChannelPublic) ([]adminChannelPublic, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -496,6 +495,9 @@ func (s *Server) replaceAdminChannels(ctx context.Context, tenantID string, requ
 	current, err := decodeAdminChannels(currentRaw)
 	if err != nil {
 		return nil, err
+	}
+	if expectedRevision == "" || expectedRevision != adminConfigRevision(current) {
+		return nil, store.ErrConflict
 	}
 	currentByID := make(map[string]adminChannelPublic, len(current))
 	for _, channel := range current {
@@ -529,20 +531,19 @@ func (s *Server) replaceAdminChannels(ctx context.Context, tenantID string, requ
 			retained[channel.ID] = secrets[channel.ID]
 		}
 	}
-	if secretRaw != nil {
-		nextSecretRaw, encryptErr := s.encryptAdminChannelSecrets(tenantID, next, retained)
-		if encryptErr != nil {
-			return nil, encryptErr
-		}
-		if err := s.store.CompareAndSwapState(ctx, tenantID, adminChannelSecretsStateKey, secretRaw, nextSecretRaw); err != nil {
-			return nil, err
-		}
+	nextSecretRaw, err := s.encryptAdminChannelSecrets(tenantID, next, retained)
+	if err != nil {
+		return nil, err
 	}
 	nextRaw, err := json.Marshal(next)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.store.CompareAndSwapState(ctx, tenantID, adminChannelsStateKey, currentRaw, nextRaw); err != nil {
+	mutations := []store.StateMutation{
+		{Key: adminChannelsStateKey, Expected: currentRaw, Value: nextRaw},
+		{Key: adminChannelSecretsStateKey, Expected: secretRaw, Value: nextSecretRaw},
+	}
+	if err := s.store.CompareAndSwapStates(ctx, tenantID, mutations); err != nil {
 		return nil, err
 	}
 	return next, nil
@@ -568,7 +569,12 @@ func (s *Server) putAdminChannelSecret(w http.ResponseWriter, r *http.Request) {
 	tenantID := tenantIDFrom(r)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	channels, err := s.loadAdminChannels(r.Context(), tenantID)
+	channelRaw, err := getOptionalState(r.Context(), s.store, tenantID, adminChannelsStateKey)
+	if err != nil {
+		http.Error(w, "failed to load channel", http.StatusInternalServerError)
+		return
+	}
+	channels, err := decodeAdminChannels(channelRaw)
 	if err != nil {
 		http.Error(w, "failed to load channel", http.StatusInternalServerError)
 		return
@@ -608,8 +614,12 @@ func (s *Server) putAdminChannelSecret(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save channel secret", http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.CompareAndSwapState(r.Context(), tenantID, adminChannelSecretsStateKey, secretRaw, envelope); errors.Is(err, store.ErrConflict) {
-		http.Error(w, "channel secrets changed concurrently", http.StatusConflict)
+	mutations := []store.StateMutation{
+		{Key: adminChannelsStateKey, Expected: channelRaw, Value: channelRaw},
+		{Key: adminChannelSecretsStateKey, Expected: secretRaw, Value: envelope},
+	}
+	if err := s.store.CompareAndSwapStates(r.Context(), tenantID, mutations); errors.Is(err, store.ErrConflict) {
+		http.Error(w, "channel or secrets changed concurrently", http.StatusConflict)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to save channel secret", http.StatusInternalServerError)
@@ -636,6 +646,10 @@ func (s *Server) deleteAdminChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load channels", http.StatusInternalServerError)
 		return
 	}
+	if revision := r.Header.Get(adminRevisionHeader); revision == "" || revision != adminConfigRevision(channels) {
+		http.Error(w, "channels changed concurrently", http.StatusConflict)
+		return
+	}
 	next := make([]adminChannelPublic, 0, len(channels))
 	found := false
 	for _, channel := range channels {
@@ -654,27 +668,30 @@ func (s *Server) deleteAdminChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete channel", http.StatusInternalServerError)
 		return
 	}
-	if secretRaw != nil {
-		values, decryptErr := s.decryptAdminChannelSecretsRaw(tenantID, channels, secretRaw)
-		if decryptErr != nil {
-			http.Error(w, "failed to delete channel", http.StatusInternalServerError)
-			return
-		}
-		delete(values, id)
-		envelope, encryptErr := s.encryptAdminChannelSecrets(tenantID, next, values)
-		if encryptErr != nil || s.store.CompareAndSwapState(r.Context(), tenantID, adminChannelSecretsStateKey, secretRaw, envelope) != nil {
-			http.Error(w, "failed to delete channel", http.StatusConflict)
-			return
-		}
+	values, decryptErr := s.decryptAdminChannelSecretsRaw(tenantID, channels, secretRaw)
+	if decryptErr != nil {
+		http.Error(w, "failed to delete channel", http.StatusInternalServerError)
+		return
+	}
+	delete(values, id)
+	nextSecretRaw, encryptErr := s.encryptAdminChannelSecrets(tenantID, next, values)
+	if encryptErr != nil {
+		http.Error(w, "failed to delete channel", http.StatusConflict)
+		return
 	}
 	raw, _ := json.Marshal(next)
-	if err := s.store.CompareAndSwapState(r.Context(), tenantID, adminChannelsStateKey, channelRaw, raw); errors.Is(err, store.ErrConflict) {
+	mutations := []store.StateMutation{
+		{Key: adminChannelsStateKey, Expected: channelRaw, Value: raw},
+		{Key: adminChannelSecretsStateKey, Expected: secretRaw, Value: nextSecretRaw},
+	}
+	if err := s.store.CompareAndSwapStates(r.Context(), tenantID, mutations); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "channels changed concurrently", http.StatusConflict)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to delete channel", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set(adminRevisionHeader, adminConfigRevision(next))
 	w.WriteHeader(http.StatusNoContent)
 }
 

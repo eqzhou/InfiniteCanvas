@@ -1,8 +1,10 @@
 package api
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -13,6 +15,14 @@ import (
 )
 
 const adminChannelsStateKey = "adminChannels"
+const adminBillingStateKey = "adminBilling"
+const adminRevisionHeader = "X-OpenBoard-Revision"
+
+func adminConfigRevision(value any) string {
+	raw, _ := json.Marshal(value)
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum[:])
+}
 
 // adminChannelPublic is a tenant-shared channel template without secrets.
 type adminChannelPublic struct {
@@ -144,11 +154,13 @@ func (s *Server) getAdminChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store == nil {
+		w.Header().Set(adminRevisionHeader, adminConfigRevision([]adminChannelPublic{}))
 		writeJSON(w, []adminChannelPublic{})
 		return
 	}
 	raw, err := s.store.GetState(r.Context(), tenantIDFrom(r), adminChannelsStateKey)
 	if errors.Is(err, store.ErrNotFound) || len(raw) == 0 {
+		w.Header().Set(adminRevisionHeader, adminConfigRevision([]adminChannelPublic{}))
 		writeJSON(w, []adminChannelPublic{})
 		return
 	}
@@ -165,6 +177,7 @@ func (s *Server) getAdminChannels(w http.ResponseWriter, r *http.Request) {
 	if channels == nil {
 		channels = []adminChannelPublic{}
 	}
+	w.Header().Set(adminRevisionHeader, adminConfigRevision(channels))
 	configured, _ := s.adminChannelSecretPresence(r.Context(), tenantIDFrom(r))
 	for index := range channels {
 		channels[index].SecretConfigured = configured[channels[index].ID]
@@ -207,7 +220,7 @@ func (s *Server) putAdminChannels(w http.ResponseWriter, r *http.Request) {
 		seen[id] = struct{}{}
 		clean = append(clean, item)
 	}
-	clean, err := s.replaceAdminChannels(r.Context(), tenantIDFrom(r), clean)
+	clean, err := s.replaceAdminChannels(r.Context(), tenantIDFrom(r), r.Header.Get(adminRevisionHeader), clean)
 	if errors.Is(err, store.ErrConflict) {
 		http.Error(w, "channels changed concurrently", http.StatusConflict)
 		return
@@ -216,25 +229,60 @@ func (s *Server) putAdminChannels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save admin channels", http.StatusInternalServerError)
 		return
 	}
+	revision := adminConfigRevision(clean)
 	configured, _ := s.adminChannelSecretPresence(r.Context(), tenantIDFrom(r))
 	for index := range clean {
 		clean[index].SecretConfigured = configured[clean[index].ID]
 	}
+	w.Header().Set(adminRevisionHeader, revision)
 	writeJSON(w, clean)
 }
 
 func (s *Server) getAdminModels(w http.ResponseWriter, r *http.Request) {
 	// Public price list for billing estimate UI; no secrets.
 	if s.store == nil {
-		writeJSON(w, store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 1})
+		config := store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 1}
+		writeJSON(w, adminModelCreditConfig{ModelCreditConfig: config, Revision: adminConfigRevision(config)})
 		return
 	}
-	cfg, err := s.store.GetModelCreditConfig(r.Context(), tenantIDFrom(r))
+	raw, err := getOptionalState(r.Context(), s.store, tenantIDFrom(r), adminBillingStateKey)
 	if err != nil {
 		http.Error(w, "failed to load model costs", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, cfg)
+	cfg, err := decodeModelCreditConfig(raw)
+	if err != nil {
+		http.Error(w, "failed to load model costs", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, adminModelCreditConfig{ModelCreditConfig: cfg, Revision: adminConfigRevision(cfg)})
+}
+
+type adminModelCreditConfig struct {
+	store.ModelCreditConfig
+	Revision string `json:"revision,omitempty"`
+}
+
+func decodeModelCreditConfig(raw []byte) (store.ModelCreditConfig, error) {
+	cfg := store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 1}
+	if len(raw) == 0 {
+		return cfg, nil
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return store.ModelCreditConfig{}, errors.New("invalid model costs")
+	}
+	if cfg.ModelCosts == nil {
+		cfg.ModelCosts = []store.ModelCreditCost{}
+	}
+	if cfg.DefaultCredits < 1 {
+		cfg.DefaultCredits = 1
+	}
+	for index := range cfg.ModelCosts {
+		if cfg.ModelCosts[index].Credits < 1 {
+			cfg.ModelCosts[index].Credits = 1
+		}
+	}
+	return cfg, nil
 }
 
 func normalizeModelCreditConfig(input store.ModelCreditConfig) (store.ModelCreditConfig, string) {
@@ -265,21 +313,43 @@ func (s *Server) putAdminModels(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	var input store.ModelCreditConfig
+	var input adminModelCreditConfig
 	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	config, message := normalizeModelCreditConfig(input)
+	config, message := normalizeModelCreditConfig(input.ModelCreditConfig)
 	if message != "" {
 		http.Error(w, message, http.StatusBadRequest)
 		return
 	}
-	if err := s.store.PutModelCreditConfig(r.Context(), tenantIDFrom(r), config); err != nil {
+	raw, err := getOptionalState(r.Context(), s.store, tenantIDFrom(r), adminBillingStateKey)
+	if err != nil {
+		http.Error(w, "failed to load model costs", http.StatusInternalServerError)
+		return
+	}
+	current, err := decodeModelCreditConfig(raw)
+	if err != nil {
+		http.Error(w, "failed to load model costs", http.StatusInternalServerError)
+		return
+	}
+	if input.Revision == "" || input.Revision != adminConfigRevision(current) {
+		http.Error(w, "model costs changed concurrently", http.StatusConflict)
+		return
+	}
+	next, err := json.Marshal(config)
+	if err != nil {
 		http.Error(w, "failed to save model costs", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, config)
+	if err := s.store.CompareAndSwapState(r.Context(), tenantIDFrom(r), adminBillingStateKey, raw, next); errors.Is(err, store.ErrConflict) {
+		http.Error(w, "model costs changed concurrently", http.StatusConflict)
+		return
+	} else if err != nil {
+		http.Error(w, "failed to save model costs", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, adminModelCreditConfig{ModelCreditConfig: config, Revision: adminConfigRevision(config)})
 }
 
 func (s *Server) listAdminCreditLogs(w http.ResponseWriter, r *http.Request) {

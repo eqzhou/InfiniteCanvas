@@ -21,29 +21,30 @@ import (
 )
 
 type memoryStore struct {
-	mu                     sync.RWMutex
-	projects               map[string][]byte
-	state                  map[string][]byte
-	jobs                   map[string]store.GenerationJob
-	libraryAssets          map[string]store.LibraryAsset
-	aiCallLogs             map[string]store.AICallLog
-	storageUsage           int64
-	users                  int
-	releases               map[string]struct{}
-	reservations           map[string]struct{}
-	compareAndSwapStateErr error
-	generationJobCreateErr error
-	generationJobPutErr    error
-	authUsers              map[string]store.AuthUser
-	credits                map[string]int64
-	creditLogs             map[string]struct{}
-	creditReserveAmounts   map[string]int64
-	creditReserveUsers     map[string]string
-	creditLogItems         []store.CreditLog
-	creditAdjustments      map[string]string
-	updateUserErr          error
-	mediaRefs              map[string]store.MediaReference
-	tenants                map[string]store.Tenant
+	mu                       sync.RWMutex
+	projects                 map[string][]byte
+	state                    map[string][]byte
+	jobs                     map[string]store.GenerationJob
+	libraryAssets            map[string]store.LibraryAsset
+	aiCallLogs               map[string]store.AICallLog
+	storageUsage             int64
+	users                    int
+	releases                 map[string]struct{}
+	reservations             map[string]struct{}
+	compareAndSwapStateErr   error
+	compareAndSwapStatesHook func(tenantID string, mutations []store.StateMutation)
+	generationJobCreateErr   error
+	generationJobPutErr      error
+	authUsers                map[string]store.AuthUser
+	credits                  map[string]int64
+	creditLogs               map[string]struct{}
+	creditReserveAmounts     map[string]int64
+	creditReserveUsers       map[string]string
+	creditLogItems           []store.CreditLog
+	creditAdjustments        map[string]string
+	updateUserErr            error
+	mediaRefs                map[string]store.MediaReference
+	tenants                  map[string]store.Tenant
 }
 
 func tenantKey(tenantID, key string) string {
@@ -191,6 +192,9 @@ func (m *memoryStore) CompareAndSwapState(_ context.Context, tenantID, key strin
 }
 
 func (m *memoryStore) CompareAndSwapStates(_ context.Context, tenantID string, mutations []store.StateMutation) error {
+	if m.compareAndSwapStatesHook != nil {
+		m.compareAndSwapStatesHook(tenantID, mutations)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.compareAndSwapStateErr != nil {

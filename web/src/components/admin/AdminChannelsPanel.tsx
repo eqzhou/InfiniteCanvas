@@ -84,19 +84,29 @@ export function AdminChannelsPanel() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [modelReviews, setModelReviews] = useState<Record<string, PendingModelReview>>({});
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [revision, setRevision] = useState("");
   const persistedIdsRef = useRef(new Set<string>());
   const persistedChannelsRef = useRef(new Map<string, AdminChannel>());
 
   const load = async () => {
+    setLoading(true);
+    setLoaded(false);
     try {
       setError("");
-      const loaded = await listAdminChannels();
+      const result = await listAdminChannels();
+      const loaded = result.items;
+      setRevision(result.revision);
       persistedIdsRef.current = new Set(loaded.map((channel) => channel.id));
       persistedChannelsRef.current = new Map(loaded.map((channel) => [channel.id, channel]));
       setModelReviews({});
       setChannels(loaded);
+      setLoaded(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoading(false);
     }
   };
   useEffect(() => { void load(); }, []);
@@ -115,11 +125,13 @@ export function AdminChannelsPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" aria-busy={loading || busy !== ""}>
       <div className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface)] p-4 text-sm text-[var(--ob-muted)]">
         此处管理租户共享渠道，与工作区设置中的个人渠道相互独立。启用且允许用户使用的渠道可由服务端执行图片、视频或音频任务；请求渠道 <code>shared-auto</code> 时按权重确定性选择并将具体渠道写入任务快照。填写「可用模型」后，自动路由只会选中列表内包含请求模型的渠道；留空表示不限制。共享密钥只可覆盖写入，不会返回浏览器。模型拉取目前支持 OpenAI/APIMart 兼容接口。
       </div>
-      <fieldset className="contents" disabled={busy !== ""}>
+      {loading ? <p className="text-sm text-[var(--ob-muted)]">正在读取共享渠道…</p> : null}
+      {!loading && !loaded ? <button type="button" className="ob-btn" onClick={() => void load()}>重新加载共享渠道</button> : null}
+      <fieldset className="contents" disabled={busy !== "" || !loaded}>
       {channels.map((channel) => (
         <section key={channel.id} className="space-y-3 rounded-xl border border-[var(--ob-line)] p-4">
           <div className="grid gap-3 md:grid-cols-4">
@@ -176,7 +188,7 @@ export function AdminChannelsPanel() {
             })}>拉取模型</button>
             <button type="button" className="ob-btn" disabled={busy !== ""} onClick={() => void run(`delete:${channel.id}`, async () => {
               const persisted = shouldDeleteAdminChannel(persistedIdsRef.current, channel.id);
-              if (persisted) await deleteAdminChannel(channel.id);
+              if (persisted) setRevision(await deleteAdminChannel(channel.id, revision));
               persistedIdsRef.current = new Set([...persistedIdsRef.current].filter((id) => id !== channel.id));
               invalidateSharedChannelCatalog();
               setChannels((current) => current.filter((item) => item.id !== channel.id));
@@ -220,9 +232,11 @@ export function AdminChannelsPanel() {
         </section>
       ))}
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="ob-btn" onClick={() => setChannels((current) => [...current, emptyAdminChannel(current.length + 1)])}>添加渠道</button>
-        <button type="button" className="ob-btn is-primary" disabled={busy !== ""} onClick={() => void run("save", async () => {
-          const saved = await putAdminChannels(channels);
+        <button type="button" className="ob-btn" disabled={!loaded || busy !== ""} onClick={() => setChannels((current) => [...current, emptyAdminChannel(current.length + 1)])}>添加渠道</button>
+        <button type="button" className="ob-btn ob-btn-primary" disabled={!loaded || busy !== ""} onClick={() => void run("save", async () => {
+          const result = await putAdminChannels(channels, revision);
+          const saved = result.items;
+          setRevision(result.revision);
           persistedIdsRef.current = new Set(saved.map((channel) => channel.id));
           persistedChannelsRef.current = new Map(saved.map((channel) => [channel.id, channel]));
           invalidateSharedChannelCatalog();
@@ -285,7 +299,7 @@ export function AdminChannelModelDiffReview({
         ))}
       </div>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="ob-btn is-primary" onClick={onConfirm}>确认更新模型</button>
+        <button type="button" className="ob-btn ob-btn-primary" onClick={onConfirm}>确认更新模型</button>
         <button type="button" className="ob-btn" onClick={onCancel}>取消</button>
       </div>
     </div>

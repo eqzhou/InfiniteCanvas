@@ -62,7 +62,7 @@ func TestAdminSharedChannelsEncryptSecretsAndNeverReturnThem(t *testing.T) {
 		Enabled: true, AllowUserUse: true, Weight: 2, TimeoutSeconds: 15, DefaultImageModel: "gpt-image-1",
 		Models: []string{"gpt-image-1", "gpt-4.1"},
 	}})
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
 	}
 	if got := putSharedChannelSecret(t, router, "shared-main", "sk-shared-private"); got.Code != http.StatusNoContent {
@@ -99,7 +99,7 @@ func TestSharedChannelGenerationFallbackPreservesPersonalPrecedence(t *testing.T
 		t.Fatal(err)
 	}
 	channels := []byte(`[{"id":"shared-main","name":"Shared","baseUrl":"https://shared.example","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"gpt-image-1"}]`)
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
 	}
 	if got := putSharedChannelSecret(t, router, "shared-main", "sk-shared"); got.Code != http.StatusNoContent {
@@ -239,7 +239,7 @@ func TestSharedJobCreationPersistsResolvedDefaultModels(t *testing.T) {
 		"enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,
 		"defaultImageModel":"image-default","defaultVideoModel":"video-default","defaultAudioModel":"audio-default"
 	}]`)
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
 	}
 	if got := putSharedChannelSecret(t, router, "shared-main", "sk-shared"); got.Code != http.StatusNoContent {
@@ -326,7 +326,7 @@ func TestAdminSharedChannelDestinationChangeInvalidatesSecret(t *testing.T) {
 			ID: "shared-main", Name: "Shared", BaseURL: baseURL, Protocol: protocol,
 			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 10, DefaultImageModel: "image-model",
 		}})
-		return request(t, router, http.MethodPut, "/api/admin/channels", body)
+		return putAdminConfigForTest(t, router, "/api/admin/channels", body)
 	}
 	if got := putChannel(oldProvider.URL, "openai"); got.Code != http.StatusOK {
 		t.Fatalf("create channel: %d %s", got.Code, got.Body.String())
@@ -368,16 +368,16 @@ func TestAdminSharedChannelDeleteAndRecreateDoesNotReviveSecret(t *testing.T) {
 		ID: "shared-main", Name: "Shared", BaseURL: provider.URL, Protocol: "openai",
 		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 10, DefaultImageModel: "image-model",
 	}})
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", body); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", body); got.Code != http.StatusOK {
 		t.Fatalf("create channel: %d %s", got.Code, got.Body.String())
 	}
 	if got := putSharedChannelSecret(t, router, "shared-main", "sk-deleted"); got.Code != http.StatusNoContent {
 		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
 	}
-	if got := request(t, router, http.MethodDelete, "/api/admin/channels/shared-main", nil); got.Code != http.StatusNoContent {
+	if got := deleteAdminConfigForTest(t, router, "/api/admin/channels", "/api/admin/channels/shared-main"); got.Code != http.StatusNoContent {
 		t.Fatalf("delete channel: %d %s", got.Code, got.Body.String())
 	}
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", body); got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte(`"secretConfigured": false`)) {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", body); got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte(`"secretConfigured": false`)) {
 		t.Fatalf("recreated channel revived secret: %d %s", got.Code, got.Body.String())
 	}
 	if _, _, err := server.resolveSharedChannel(context.Background(), store.DefaultTenantID, "shared-main"); err == nil {
@@ -414,18 +414,53 @@ func TestAdminSharedChannelSecretAADRejectsChangedLifecycleAndDestination(t *tes
 func TestAdminSharedChannelUpdateUsesCAS(t *testing.T) {
 	_, backend, router := sharedChannelHandler(t)
 	original := []byte(`[{"id":"shared-main","name":"Shared","baseUrl":"https://old.example","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"old"}]`)
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", original); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", original); got.Code != http.StatusOK {
 		t.Fatalf("create channel: %d %s", got.Code, got.Body.String())
 	}
 	backend.compareAndSwapStateErr = store.ErrConflict
 	updated := []byte(`[{"id":"shared-main","name":"Shared","baseUrl":"https://new.example","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"new"}]`)
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", updated); got.Code != http.StatusConflict {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", updated); got.Code != http.StatusConflict {
 		t.Fatalf("concurrent update was not rejected: %d %s", got.Code, got.Body.String())
 	}
 	backend.compareAndSwapStateErr = nil
 	channels, err := decodeAdminChannels(backend.state[tenantKey(store.DefaultTenantID, adminChannelsStateKey)])
 	if err != nil || len(channels) != 1 || channels[0].BaseURL != "https://old.example" {
 		t.Fatalf("conflicting update overwrote channel: %#v, %v", channels, err)
+	}
+}
+
+func TestAdminSharedChannelFirstSecretSaveRejectsConcurrentChannelChange(t *testing.T) {
+	server, backend, router := sharedChannelHandler(t)
+	body := []byte(`[{"id":"shared-main","name":"Shared","baseUrl":"https://old.example","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"image-model"}]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", body); got.Code != http.StatusOK {
+		t.Fatalf("create channel: %d %s", got.Code, got.Body.String())
+	}
+
+	listed := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	var channels []adminChannelPublic
+	if json.Unmarshal(listed.Body.Bytes(), &channels) != nil || len(channels) != 1 {
+		t.Fatalf("load channel binding: %d %s", listed.Code, listed.Body.String())
+	}
+	staleBinding := channels[0].SecretBindingID
+	backend.compareAndSwapStatesHook = func(tenantID string, _ []store.StateMutation) {
+		backend.compareAndSwapStatesHook = nil
+		changed := append([]adminChannelPublic(nil), channels...)
+		changed[0].BaseURL = "https://new.example"
+		changed[0].SecretBindingID = "concurrent-binding"
+		raw, _ := json.Marshal(changed)
+		backend.state[tenantKey(tenantID, adminChannelsStateKey)] = raw
+	}
+	secretBody, _ := json.Marshal(adminChannelSecretInput{APIKey: "sk-stale", SecretBindingID: staleBinding})
+	got := request(t, router, http.MethodPut, "/api/admin/channels/shared-main/secret", secretBody)
+	if got.Code != http.StatusConflict {
+		t.Fatalf("concurrent destination update was not rejected: %d %s", got.Code, got.Body.String())
+	}
+	secrets, err := server.decryptAdminChannelSecrets(context.Background(), store.DefaultTenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets["shared-main"] != "" {
+		t.Fatal("stale secret was persisted after concurrent destination update")
 	}
 }
 
@@ -612,7 +647,7 @@ func TestAdminAzureAudioConnectionUsesSpeechEndpoint(t *testing.T) {
 		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 15,
 		DefaultAudioModel: "azure-neural-tts",
 	}})
-	if got := request(t, router, http.MethodPut, "/api/admin/channels", channels); got.Code != http.StatusOK {
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
 	}
 	if got := putSharedChannelSecret(t, router, "azure-audio", "azure-secret"); got.Code != http.StatusNoContent {

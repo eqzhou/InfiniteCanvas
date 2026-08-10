@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -17,7 +18,10 @@ func TestTenantAdminAuthOffRequiresProcessToken(t *testing.T) {
 	server.SetProcessToken("test-token")
 	router := chi.NewRouter()
 	MountServer(router, server)
-	body := []byte(`{"modelCosts":[],"defaultCredits":1}`)
+	body, err := json.Marshal(adminModelCreditConfig{ModelCreditConfig: store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 1}, Revision: adminConfigRevision(store.ModelCreditConfig{ModelCosts: []store.ModelCreditCost{}, DefaultCredits: 1})})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	anonymous := requestWithHeaders(t, router, http.MethodPut, "/api/admin/models", body, nil)
@@ -30,6 +34,30 @@ func TestTenantAdminAuthOffRequiresProcessToken(t *testing.T) {
 	if authorized.Code != http.StatusOK {
 		t.Fatalf("token admin write = %d %s", authorized.Code, authorized.Body.String())
 	}
+}
+
+func putAdminConfigForTest(t *testing.T, handler http.Handler, path string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	listed := request(t, handler, http.MethodGet, path, nil)
+	if listed.Code != http.StatusOK || listed.Header().Get(adminRevisionHeader) == "" {
+		t.Fatalf("load %s revision: %d %s", path, listed.Code, listed.Body.String())
+	}
+	return requestWithHeaders(t, handler, http.MethodPut, path, body, map[string]string{
+		adminRevisionHeader: listed.Header().Get(adminRevisionHeader),
+		"Authorization":     "Bearer test-token",
+	})
+}
+
+func deleteAdminConfigForTest(t *testing.T, handler http.Handler, collectionPath, targetPath string) *httptest.ResponseRecorder {
+	t.Helper()
+	listed := request(t, handler, http.MethodGet, collectionPath, nil)
+	if listed.Code != http.StatusOK || listed.Header().Get(adminRevisionHeader) == "" {
+		t.Fatalf("load %s revision: %d %s", collectionPath, listed.Code, listed.Body.String())
+	}
+	return requestWithHeaders(t, handler, http.MethodDelete, targetPath, nil, map[string]string{
+		adminRevisionHeader: listed.Header().Get(adminRevisionHeader),
+		"Authorization":     "Bearer test-token",
+	})
 }
 
 func tenantAdminHandler(t *testing.T, backend *memoryStore, actor store.AuthUser) http.Handler {
@@ -56,8 +84,18 @@ func TestAdminModelsPutValidatesAndPersistsTenantCosts(t *testing.T) {
 	actor := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active"}
 	seedAdminUser(backend, actor)
 	handler := tenantAdminHandler(t, backend, actor)
+	initial := request(t, handler, http.MethodGet, "/api/admin/models", nil)
+	var initialConfig struct {
+		Revision string `json:"revision"`
+	}
+	if initial.Code != http.StatusOK || json.Unmarshal(initial.Body.Bytes(), &initialConfig) != nil || initialConfig.Revision == "" {
+		t.Fatalf("initial model config = %d %s", initial.Code, initial.Body.String())
+	}
 
-	body := []byte(`{"modelCosts":[{"model":" gpt-image-1 ","credits":7},{"model":"sora-2","credits":12}],"defaultCredits":3}`)
+	body, err := json.Marshal(map[string]any{"modelCosts": []map[string]any{{"model": " gpt-image-1 ", "credits": 7}, {"model": "sora-2", "credits": 12}}, "defaultCredits": 3, "revision": initialConfig.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := request(t, handler, http.MethodPut, "/api/admin/models", body)
 	if got.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, body = %s", got.Code, got.Body.String())
@@ -65,15 +103,31 @@ func TestAdminModelsPutValidatesAndPersistsTenantCosts(t *testing.T) {
 	var saved struct {
 		ModelCosts     []store.ModelCreditCost `json:"modelCosts"`
 		DefaultCredits int                     `json:"defaultCredits"`
+		Revision       string                  `json:"revision"`
 	}
 	if err := json.Unmarshal(got.Body.Bytes(), &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.DefaultCredits != 3 || len(saved.ModelCosts) != 2 || saved.ModelCosts[0].Model != "gpt-image-1" {
+	if saved.DefaultCredits != 3 || len(saved.ModelCosts) != 2 || saved.ModelCosts[0].Model != "gpt-image-1" || saved.Revision == "" {
 		t.Fatalf("saved = %#v", saved)
 	}
 	if cost, err := backend.GetModelCreditCost(t.Context(), actor.TenantID, "GPT-IMAGE-1"); err != nil || cost != 7 {
 		t.Fatalf("cost = %d, %v", cost, err)
+	}
+	secondBody, err := json.Marshal(map[string]any{"modelCosts": []map[string]any{{"model": "gpt-image-1", "credits": 8}}, "defaultCredits": 4, "revision": saved.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second := request(t, handler, http.MethodPut, "/api/admin/models", secondBody); second.Code != http.StatusOK {
+		t.Fatalf("second sequential save = %d %s", second.Code, second.Body.String())
+	}
+	staleBody, err := json.Marshal(map[string]any{"modelCosts": []any{}, "defaultCredits": 1, "revision": initialConfig.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := request(t, handler, http.MethodPut, "/api/admin/models", staleBody)
+	if stale.Code != http.StatusConflict || stale.Body.String() != "model costs changed concurrently\n" {
+		t.Fatalf("stale update = %d %q", stale.Code, stale.Body.String())
 	}
 
 	duplicate := request(t, handler, http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[{"model":"Model-X","credits":1},{"model":" model-x ","credits":2}],"defaultCredits":1}`))

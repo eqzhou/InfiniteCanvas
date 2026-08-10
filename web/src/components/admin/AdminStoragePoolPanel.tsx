@@ -33,6 +33,8 @@ export function AdminStoragePoolPanel() {
   const [items, setItems] = useState<AdminStoragePoolProviderStatus[]>([]);
   const [drafts, setDrafts] = useState<AdminStoragePoolProviderInput[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [revision, setRevision] = useState("");
   const [error, setError] = useState("");
   const [secretFor, setSecretFor] = useState("");
   const [accessKeyId, setAccessKeyId] = useState("");
@@ -40,7 +42,8 @@ export function AdminStoragePoolPanel() {
   const [sessionToken, setSessionToken] = useState("");
   const load = async () => {
     setLoading(true);
-    try { const next = await getAdminStoragePoolStatus(); setItems(next); setDrafts(editable(next)); setError(""); }
+    setLoaded(false);
+    try { const result = await getAdminStoragePoolStatus(); setItems(result.items); setDrafts(editable(result.items)); setRevision(result.revision); setError(""); setLoaded(true); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setLoading(false); }
   };
@@ -48,14 +51,14 @@ export function AdminStoragePoolPanel() {
   const update = (index: number, patch: Partial<AdminStoragePoolProviderInput>) => setDrafts((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
   const save = async () => {
     setLoading(true);
-    try { const next = await putAdminStoragePool(drafts); setItems(next); setDrafts(editable(next)); setError(""); }
+    try { const result = await putAdminStoragePool(drafts, revision); setItems(result.items); setDrafts(editable(result.items)); setRevision(result.revision); setError(""); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setLoading(false); }
   };
   const remove = async (id: string, index: number) => {
     if (!id) { setDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index)); return; }
     setLoading(true);
-    try { await deleteAdminStoragePoolProvider(id); await load(); }
+    try { setRevision(await deleteAdminStoragePoolProvider(id, revision)); await load(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setLoading(false); }
   };
   const saveSecret = async () => {
@@ -67,13 +70,13 @@ export function AdminStoragePoolPanel() {
   return <section className="space-y-4" aria-labelledby="storage-pool-title">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h2 id="storage-pool-title" className="text-lg font-semibold">租户存储池</h2><p className="text-sm text-[var(--ob-muted)]">用户单存储优先，其次使用这里的加权池，最后回退到进程存储。凭据加密保存且永不回显。</p></div>
-      <div className="flex gap-2"><button type="button" className="ob-btn" disabled={loading} onClick={() => setDrafts((current) => [...current, blankProvider()])}><Plus size={15} />新增</button><button type="button" className="ob-btn" disabled={loading} onClick={() => void save()}><Save size={15} />保存</button><button type="button" className="ob-btn" disabled={loading} onClick={() => void load()}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />刷新</button></div>
+      <div className="flex gap-2"><button type="button" className="ob-btn" disabled={loading || !loaded} onClick={() => setDrafts((current) => [...current, blankProvider()])}><Plus size={15} />新增</button><button type="button" className="ob-btn ob-btn-primary" disabled={loading || !loaded} onClick={() => void save()}><Save size={15} />保存</button><button type="button" className="ob-btn" disabled={loading} onClick={() => void load()}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />{loaded ? "刷新" : "重新加载"}</button></div>
     </div>
     {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
-    {!loading && drafts.length === 0 ? <div className="ob-surface p-5 text-sm text-[var(--ob-muted)]">尚未配置租户存储池；当前使用进程级存储回退。</div> : null}
+    {!loading && loaded && drafts.length === 0 ? <div className="ob-surface p-5 text-sm text-[var(--ob-muted)]">尚未配置租户存储池；当前使用进程级存储回退。</div> : null}
     {items.some((item) => item.endpoint === undefined) ? <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{items.filter((item) => item.endpoint === undefined).map((item) => <article key={item.id} className="ob-surface space-y-2 p-4"><div className="flex justify-between gap-3"><div><h3 className="font-medium">{item.id}</h3><p className="text-xs text-[var(--ob-muted)]">进程回退 · {item.kind}</p></div><span className="text-xs">权重 {item.weight}</span></div><p className="text-sm">{storageProbeLabel(item)} · {storageCapacityLabel(item)}</p></article>)}</div> : null}
     <div className="space-y-3">
-      {drafts.map((item, index) => { const status = items.find((candidate) => candidate.id === item.id); return <article key={`${item.id}-${index}`} className="ob-surface space-y-3 p-4">
+      {drafts.map((item, index) => { const status = items.find((candidate) => candidate.id === item.id); return <article key={index} className="ob-surface space-y-3 p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-sm">稳定 ID<input className="ob-input mt-1 w-full" value={item.id} disabled={Boolean(status)} onChange={(event) => update(index, { id: event.target.value })} /></label>
           <label className="text-sm xl:col-span-2">S3/R2 Endpoint<input className="ob-input mt-1 w-full" value={item.endpoint} disabled={Boolean(status)} onChange={(event) => update(index, { endpoint: event.target.value })} /></label>
