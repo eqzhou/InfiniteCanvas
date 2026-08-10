@@ -182,6 +182,9 @@ func parseFilmAIDecompositionCandidate(value []byte) (filmAIDecomposition, error
 	if len(value) == 0 || len(value) > maxFilmAICandidateBytes {
 		return filmAIDecomposition{}, errors.New("AI decomposition response exceeds limits")
 	}
+	if err := rejectFilmAIDuplicateJSONFields(value); err != nil {
+		return filmAIDecomposition{}, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(value))
 	decoder.DisallowUnknownFields()
 	var candidate filmAIDecomposition
@@ -195,6 +198,66 @@ func parseFilmAIDecompositionCandidate(value []byte) (filmAIDecomposition, error
 		return filmAIDecomposition{}, err
 	}
 	return candidate, nil
+}
+
+func rejectFilmAIDuplicateJSONFields(value []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	var visit func() error
+	visit = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delimiter, composite := token.(json.Delim)
+		if !composite {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				nameToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				name, ok := nameToken.(string)
+				if !ok {
+					return errors.New("AI decomposition object key is invalid")
+				}
+				if _, exists := seen[name]; exists {
+					return errors.New("AI decomposition response contains duplicate fields")
+				}
+				seen[name] = struct{}{}
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+		case '[':
+			for decoder.More() {
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+		default:
+			return errors.New("AI decomposition JSON is invalid")
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		closingDelimiter, ok := closing.(json.Delim)
+		if !ok || delimiter == '{' && closingDelimiter != '}' || delimiter == '[' && closingDelimiter != ']' {
+			return errors.New("AI decomposition JSON is invalid")
+		}
+		return nil
+	}
+	if err := visit(); err != nil {
+		return errors.New("AI decomposition response is not valid strict JSON")
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("AI decomposition response contains trailing content")
+	}
+	return nil
 }
 
 func ensureFilmAIJSONEOF(decoder *json.Decoder) error {
