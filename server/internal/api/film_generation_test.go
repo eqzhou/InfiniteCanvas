@@ -77,6 +77,9 @@ func TestFilmGenerationRunCreatesExistingServerJobIdempotently(t *testing.T) {
 	if first.Code != http.StatusAccepted {
 		t.Fatalf("first run: %d %s", first.Code, first.Body.String())
 	}
+	if backend.atomicBatchCalls.Load() != 1 {
+		t.Fatalf("Film media generation did not atomically commit aggregate, jobs, quota, and credits")
+	}
 	created := decodeFilmResponse(t, first)
 	if created.Stages[2].Status != filmStatusRunning || len(created.Tasks) < 2 {
 		t.Fatalf("stage/task state = %#v %#v", created.Stages[2], created.Tasks)
