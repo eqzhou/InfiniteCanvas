@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { FileUp, Plus, Save, Send } from "lucide-react";
+import { FileUp, Plus, Save, Send, Sparkles } from "lucide-react";
 
 import { preflightFilmImport } from "@/lib/film-import";
 import { filmEditorKey } from "@/lib/film-drafts";
@@ -55,6 +55,69 @@ export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDr
     {parseState === "parsing" ? <p role="status" className="mt-2 text-sm text-[var(--ob-muted)]">文件上传中，正在解析…</p> : null}
     {fileError ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{fileError}</p> : null}
     <p className="mt-2 text-xs text-[var(--ob-muted)]">客户端预检上限 50 MiB；扫描型 PDF 若无文本，请先 OCR 后再导入。当前源修订 r{document.source.revision}</p>
+  </WorkbenchSection>;
+}
+
+type AIChannelChoice = { id: string; name: string; models: string[] };
+
+const candidateStatusLabels = {
+  ready: "待采用",
+  stale: "原稿已变更",
+  rejected: "已拒绝",
+  applied: "已采用",
+} as const;
+
+export function AIDecompositionPanel({ document, busy, channels, channelId, model, onChannel, onModel, onRun, onApply }: {
+  document: FilmDocument;
+  busy: boolean;
+  channels: AIChannelChoice[];
+  channelId: string;
+  model: string;
+  onChannel: (channelId: string) => void;
+  onModel: (model: string) => void;
+  onRun: () => void;
+  onApply: (candidateId: string) => void;
+}) {
+  const selectedChannel = channels.find((channel) => channel.id === channelId);
+  const candidates = [...(document.aiCandidates ?? [])].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  return <WorkbenchSection id="ai-decomposition" title="AI 故事拆解 / AI Decomposition">
+    <div className="grid gap-2 sm:grid-cols-2">
+      <label className="text-xs text-[var(--ob-muted)]">共享文字渠道
+        <select aria-label="AI 拆解渠道" className="ob-input mt-1 w-full" value={channelId} onChange={(event) => onChannel(event.target.value)}>
+          {!channels.length ? <option value="">暂无可用共享文字渠道</option> : null}
+          {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
+        </select>
+      </label>
+      <label className="text-xs text-[var(--ob-muted)]">冻结模型
+        <input aria-label="AI 拆解模型" className="ob-input mt-1 w-full" value={model} onChange={(event) => onModel(event.target.value)} list="film-ai-text-models" placeholder="选择或输入模型" />
+        <datalist id="film-ai-text-models">{selectedChannel?.models.map((item) => <option key={item} value={item} />)}</datalist>
+      </label>
+    </div>
+    <button type="button" className="ob-btn ob-btn-primary mt-3" disabled={busy || !document.source.text.trim() || !channelId || !model.trim()} onClick={onRun}>
+      <Sparkles size={14} /> 运行 AI 拆解
+    </button>
+    <p className="mt-2 text-xs text-[var(--ob-muted)]">生成会冻结原稿修订、渠道、模型、提示词和输出结构。结果只进入候选区，不会覆盖正式分集与镜头。</p>
+    <p className="mt-1 text-xs text-[var(--ob-muted)]">先采用候选，再批准拆解阶段。</p>
+    {!candidates.length ? <p className="mt-4 rounded-lg border border-dashed border-[var(--ob-line)] p-4 text-sm text-[var(--ob-muted)]">尚无 AI 拆解候选。</p> : <ul className="mt-4 space-y-3">
+      {candidates.map((candidate) => {
+        const snapshot = document.tasks.find((task) => task.id === candidate.taskId)?.textSnapshot;
+        const counts = candidate.decomposition.episodes.reduce((total, episode) => ({
+          scenes: total.scenes + episode.scenes.length,
+          shots: total.shots + episode.scenes.reduce((sum, scene) => sum + scene.shots.length, 0),
+        }), { scenes: 0, shots: 0 });
+        return <li key={candidate.id} className="rounded-lg border border-[var(--ob-line)] p-3" data-status={candidate.status}>
+          <div className="flex flex-wrap items-center gap-2">
+            <strong className="text-sm">候选 · {candidateStatusLabels[candidate.status]}</strong>
+            <span className="rounded-full border border-[var(--ob-line)] px-2 py-0.5 text-xs">源 r{candidate.sourceRevision}</span>
+            {snapshot ? <span className="text-xs text-[var(--ob-muted)]">{snapshot.providerId} / {snapshot.model}</span> : null}
+          </div>
+          <p className="mt-2 text-sm">{candidate.decomposition.summary}</p>
+          {candidate.decomposition.theme ? <p className="mt-1 text-xs text-[var(--ob-muted)]">主题：{candidate.decomposition.theme}</p> : null}
+          <p className="mt-2 text-xs text-[var(--ob-muted)]">{candidate.decomposition.characters.length} 角色 · {candidate.decomposition.locations.length} 场景资产 · {candidate.decomposition.episodes.length} 集 · {counts.scenes} 场 · {counts.shots} 镜头</p>
+          {candidate.status === "ready" ? <button type="button" className="ob-btn mt-3" disabled={busy} onClick={() => onApply(candidate.id)}>采用这个候选</button> : null}
+        </li>;
+      })}
+    </ul>}
   </WorkbenchSection>;
 }
 

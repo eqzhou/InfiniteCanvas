@@ -3,13 +3,15 @@ import { AlertCircle, Check, Clapperboard, RefreshCw } from "lucide-react";
 import { Link, Navigate, useParams } from "react-router";
 
 import { AgentPanel, EpisodesPanel, ProductionPanel, ProjectionPanel } from "@/components/film/ProductionPanels";
-import { AssetsPanel, ManuscriptPanel } from "@/components/film/ManuscriptAssetsPanels";
+import { AIDecompositionPanel, AssetsPanel, ManuscriptPanel } from "@/components/film/ManuscriptAssetsPanels";
 import { DeliveryPanel, TimelinePanel } from "@/components/film/TimelineDeliveryPanels";
 import { WorkbenchSection } from "@/components/film/WorkbenchSection";
 import { isFilmNavigationAway, resolvePendingFilmResponse, shouldConfirmFilmLeave, type VersionedFilmDraftState } from "@/lib/film-drafts";
 import { refreshFilmProjection as refreshManagedFilmProjection, type FilmProjectionDiff } from "@/lib/film-document";
+import { useSharedChannels } from "@/services/shared-channels";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
+  applyFilmAICandidate,
   applyFilmRepair,
   adoptFilmCanvasMedia,
   cancelFilmExport,
@@ -24,6 +26,7 @@ import {
   importFilmManuscript,
   importFilmManuscriptFile,
   loadFilmStatus,
+  requestFilmAIDecomposition,
   requestFilmExport,
   restoreFilmEntityVersion,
   requestFilmStageRun,
@@ -49,6 +52,19 @@ function friendlyError(cause: unknown): string {
 export function FilmWorkbenchPage() {
   const { projectId = "" } = useParams();
   const project = useBoardStore((state) => state.projects.find((candidate) => candidate.id === projectId));
+  const config = useBoardStore((state) => state.config);
+  const sharedChannels = useSharedChannels();
+  const textChannels = useMemo(() => sharedChannels.flatMap((channel) => {
+    const defaultModel = channel.defaultTextModel?.trim();
+    if (!defaultModel) return [];
+    return [{
+      id: channel.id,
+      name: channel.name,
+      models: [...new Set([defaultModel, ...(channel.models ?? []).map((item) => item.trim()).filter(Boolean)])],
+    }];
+  }), [sharedChannels]);
+  const [textChannelId, setTextChannelId] = useState(config.activeSharedChannelId ?? "");
+  const [textModel, setTextModel] = useState("");
   const [status, setStatus] = useState<FilmStatus | null>(null);
   const [manuscript, setManuscript] = useState("");
   const [manuscriptDirty, setManuscriptDirty] = useState(false);
@@ -60,7 +76,18 @@ export function FilmWorkbenchPage() {
   const draftRef = useRef<VersionedFilmDraftState>({ manuscript: "", manuscriptDirty: false, manuscriptVersion: 0, timelineDirty: false, timelineVersion: 0 });
   const document = status?.document;
   const latestReport = document?.qualityReports.at(-1);
-  const navigation = useMemo(() => [["manuscript", "原稿"], ["assets", "资产"], ["episodes", "镜头"], ["tasks", "任务"], ["projection", "投影"], ["timeline", "时间线"], ["quality", "质量"], ["delivery", "交付"], ["agent", "Agent"]] as const, []);
+  const navigation = useMemo(() => [["manuscript", "原稿"], ["ai-decomposition", "AI 拆解"], ["assets", "资产"], ["episodes", "镜头"], ["tasks", "任务"], ["projection", "投影"], ["timeline", "时间线"], ["quality", "质量"], ["delivery", "交付"], ["agent", "Agent"]] as const, []);
+
+  useEffect(() => {
+    const selected = textChannels.find((channel) => channel.id === textChannelId) ?? textChannels[0];
+    if (!selected) {
+      setTextChannelId("");
+      setTextModel("");
+      return;
+    }
+    if (selected.id !== textChannelId) setTextChannelId(selected.id);
+    if (!selected.models.includes(textModel)) setTextModel(selected.models[0] ?? "");
+  }, [textChannelId, textChannels, textModel]);
 
   const applyStatus = (next: FilmStatus, options: RunOptions, started = { manuscriptVersion: draftRef.current.manuscriptVersion, timelineVersion: draftRef.current.timelineVersion }) => {
     const current = statusRef.current;
@@ -152,6 +179,20 @@ export function FilmWorkbenchPage() {
     <main className="mx-auto grid max-w-7xl gap-4 p-4 pb-16 lg:grid-cols-2">{error ? <div role="alert" className="ob-banner lg:col-span-2" data-tone="danger"><AlertCircle size={16} />{error}</div> : null}{notice ? <div role="status" className="ob-banner lg:col-span-2" data-tone="success"><Check size={16} />{notice}</div> : null}
       {!status || !document ? <div role="status" className="ob-card p-8 lg:col-span-2">正在加载影片制作数据…</div> : <>
         <ManuscriptPanel document={document} capabilities={status.capabilities} manuscript={manuscript} busy={!!busy} onDraft={setDraft} onImportText={(text, format, originalName) => run("导入原稿", () => importFilmManuscript(projectId, { revision: document.source.revision, text, format, originalName }), { clearManuscript: true, notice: "原稿已导入，拆解产物等待审核" })} onImportFile={(file, format) => run("解析原稿", () => importFilmManuscriptFile(projectId, { revision: document.source.revision, file, format }), { clearManuscript: true, notice: "文件解析完成，拆解产物等待审核" })} />
+        <AIDecompositionPanel document={document} busy={!!busy} channels={textChannels} channelId={textChannelId} model={textModel} onChannel={(channelId) => {
+          setTextChannelId(channelId);
+          setTextModel(textChannels.find((channel) => channel.id === channelId)?.models[0] ?? "");
+        }} onModel={setTextModel} onRun={() => {
+          const stage = document.stages.find((item) => item.id === "decompose");
+          if (!stage) return;
+          const idempotencyKey = `film-decompose-${document.source.revision}-${Date.now().toString(36)}`;
+          void run("AI 故事拆解", () => requestFilmAIDecomposition(projectId, {
+            revision: stage.revision,
+            providerId: textChannelId,
+            model: textModel,
+            idempotencyKey,
+          }), { notice: "AI 拆解任务已入队；完成后会生成待审候选" });
+        }} onApply={(candidateId) => void run("采用 AI 拆解候选", () => applyFilmAICandidate(projectId, candidateId, document.revision), { notice: "候选已采用并保存为可追溯结构版本；现在可以审批拆解阶段" })} />
         <AssetsPanel status={status} busy={!!busy} onCreate={(input) => void run("创建资产", () => createFilmAsset(projectId, input))} onSave={(asset: FilmAsset, patch) => void run("保存资产", () => updateFilmAsset(projectId, asset.id, { revision: asset.revision, kind: patch.kind as FilmAssetKind | undefined, title: patch.title, description: patch.description, parentAssetId: patch.parentAssetId, voice: patch.voice, stylePrompt: patch.stylePrompt, aspectRatio: patch.aspectRatio, ageStage: patch.ageStage, costume: patch.costume, storyPeriod: patch.storyPeriod, isDefault: patch.isDefault }))} />
         <EpisodesPanel status={status} busy={!!busy} onSaveEpisode={(id, revision, title) => void run("保存集", () => updateFilmEpisode(projectId, id, { revision, title }))} onSaveShot={(shot: FilmShot, patch) => void run("保存镜头", () => updateFilmShot(projectId, shot.id, { revision: shot.revision, description: patch.description, durationSeconds: patch.durationSeconds, styleAssetId: patch.styleAssetId, identityVersionIds: patch.identityVersionIds }))} onCreateDialogue={(shotId, kind, text) => void run("创建对白", () => createFilmDialogue(projectId, { shotId, kind, text }))} onSaveDialogue={(dialogue, patch) => void run("保存对白", () => updateFilmDialogue(projectId, dialogue.id, { revision: dialogue.revision, kind: patch.kind, text: patch.text, characterAssetId: patch.characterAssetId, voiceAssetId: patch.voiceAssetId }))} onDeleteDialogue={(dialogue) => void run("删除对白", () => deleteFilmDialogue(projectId, dialogue.id, dialogue.revision))} />
         <ProductionPanel status={status} busy={!!busy} onLegacyStage={(stage, action) => void run(action === "run" ? "提交审核" : action === "approve" ? "批准阶段" : "退回阶段", () => changeFilmStage(projectId, stage.id, action, stage.revision), { notice: action === "run" ? "产物已提交审核；这不代表生成完成" : undefined })} onRun={(stage: FilmStageKind, request: FilmStageRunRequest) => run("开始生成", () => requestFilmStageRun(projectId, stage, request), { notice: "生成任务已入队，请以 GenerationJob 状态为准" })} onSynced={(next) => applyStatus(next, {})} />
