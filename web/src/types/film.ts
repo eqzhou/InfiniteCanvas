@@ -154,6 +154,8 @@ export type FilmTextGenerationSnapshot = {
   sourceSha256: string;
   providerId: string;
   model: string;
+  capabilityVersion?: string;
+  generationMode?: "text_to_image" | "image_to_image" | "text_to_video" | "image_to_video" | "text_to_audio";
   promptVersion: string;
   outputSchema: string;
   targetEntityId?: string;

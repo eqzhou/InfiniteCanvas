@@ -23,5 +23,7 @@ describe("TextEntryDialogContent", () => {
     expect(html).toContain("生成新图片");
     expect(html).toContain("disabled");
     expect(html).toContain("<textarea");
+    expect(html).toContain('aria-label="长提示词编辑器"');
+    expect(html).toContain("0 字符");
   });
 });
