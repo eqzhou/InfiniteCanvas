@@ -387,6 +387,13 @@ func filmAudioInputs(document filmDocument, shot filmShot, config filmGeneration
 }
 
 func filmJobBinding(job store.GenerationJob) (*filmGenerationBinding, string) {
+	if job.Kind == "text" {
+		var parameters persistedTextJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) == nil && parameters.Executor == serverExecutorMarker {
+			return parameters.Film, parameters.RequestHash
+		}
+		return nil, ""
+	}
 	if job.Kind == "image" {
 		var parameters persistedImageJobParameters
 		if json.Unmarshal(job.Parameters, &parameters) == nil && parameters.Executor == serverExecutorMarker {
@@ -403,7 +410,11 @@ func filmJobBinding(job store.GenerationJob) (*filmGenerationBinding, string) {
 
 func matchingFilmGenerationJob(job store.GenerationJob, binding filmGenerationBinding) bool {
 	storedBinding, requestHash := filmJobBinding(job)
-	return storedBinding != nil && requestHash == binding.RequestHash && *storedBinding == binding && job.ProjectID == binding.ProjectID && job.Kind == filmStageGenerationKind(binding.Stage)
+	expectedKind := filmStageGenerationKind(binding.Stage)
+	if binding.Stage == "decompose" || binding.Stage == "script" {
+		expectedKind = "text"
+	}
+	return storedBinding != nil && requestHash == binding.RequestHash && *storedBinding == binding && job.ProjectID == binding.ProjectID && job.Kind == expectedKind
 }
 
 func filmGenerationStoreError(err error) error {

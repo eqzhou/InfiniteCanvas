@@ -78,8 +78,21 @@ func findFilmTaskByJob(document filmDocument, jobID string) (int, filmTask, erro
 	return -1, filmTask{}, errors.New("generation job is not bound to this film")
 }
 
+func latestFilmTaskIndex(document filmDocument, task filmTask) int {
+	if task.ShotID != "" {
+		return latestFilmStageTasks(document, task.Stage)[task.ShotID]
+	}
+	for index := len(document.Tasks) - 1; index >= 0; index-- {
+		candidate := document.Tasks[index]
+		if candidate.Stage == task.Stage && candidate.ShotID == "" && candidate.GenerationJobID != "" {
+			return index
+		}
+	}
+	return -1
+}
+
 func setFilmTaskFromJob(s *Server, r *http.Request, document *filmDocument, taskIndex int, task filmTask, job store.GenerationJob) error {
-	if latestFilmStageTasks(*document, task.Stage)[task.ShotID] != taskIndex {
+	if latestFilmTaskIndex(*document, task) != taskIndex {
 		return errors.New("generation job is historical and cannot update current film media")
 	}
 	if task.Status == filmStatusCanceled {
@@ -147,6 +160,47 @@ func setFilmTaskFromJob(s *Server, r *http.Request, document *filmDocument, task
 	return nil
 }
 
+func setFilmTextTaskFromJob(document *filmDocument, taskIndex int, task filmTask, job store.GenerationJob) error {
+	if latestFilmTaskIndex(*document, task) != taskIndex {
+		return errors.New("generation job is historical and cannot update the current film text task")
+	}
+	binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: task.Stage, TaskID: task.ID, RequestHash: task.RequestHash}
+	if !matchingFilmGenerationJob(job, binding) {
+		return errors.New("generation job binding is invalid")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch job.Status {
+	case "queued":
+		task.Status, task.Progress, task.Error = filmStatusRunning, 0, ""
+	case "running":
+		task.Status, task.Progress, task.Error = filmStatusRunning, 0.5, ""
+	case "failed":
+		task.Status, task.Progress, task.Error = filmStatusFailed, 0, stableFilmJobError(job.Status)
+	case "cancelled", "canceled":
+		task.Status, task.Progress, task.Error = filmStatusCanceled, 0, stableFilmJobError(job.Status)
+	default:
+		return errors.New("text generation job state is unsupported")
+	}
+	task.Revision++
+	task.UpdatedAt = now
+	document.Tasks[taskIndex] = task
+	stageIndex, stage, err := findFilmStage(*document, task.Stage)
+	if err != nil {
+		return err
+	}
+	stage.Revision++
+	stage.UpdatedAt = now
+	if task.Status == filmStatusRunning {
+		stage.Status, stage.Error = filmStatusRunning, ""
+	} else {
+		stage.Status, stage.Error = filmStatusFailed, "Text generation requires retry"
+	}
+	document.Stages[stageIndex] = stage
+	document.Revision++
+	document.UpdatedAt = now
+	return nil
+}
+
 func (s *Server) syncFilmGenerationJob(w http.ResponseWriter, r *http.Request) {
 	var input filmRevisionRequest
 	if err := decodeFilmRequest(w, r, 4096, &input); err != nil {
@@ -166,7 +220,7 @@ func (s *Server) syncFilmGenerationJob(w http.ResponseWriter, r *http.Request) {
 		writeFilmError(w, http.StatusNotFound, "generation_job_not_found", err.Error())
 		return
 	}
-	if latestFilmStageTasks(document, task.Stage)[task.ShotID] != taskIndex || task.Status == filmStatusCanceled {
+	if latestFilmTaskIndex(document, task) != taskIndex || task.Status == filmStatusCanceled {
 		writeFilmError(w, http.StatusConflict, "generation_job_stale", "generation job is no longer the active task for this shot")
 		return
 	}
@@ -194,7 +248,12 @@ func (s *Server) syncFilmGenerationJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := cloneFilmDocument(document)
-	if err := setFilmTaskFromJob(s, r, &next, taskIndex, task, job); err != nil {
+	if job.Kind == "text" {
+		err = setFilmTextTaskFromJob(&next, taskIndex, task, job)
+	} else {
+		err = setFilmTaskFromJob(s, r, &next, taskIndex, task, job)
+	}
+	if err != nil {
 		writeFilmOperationError(w, err)
 		return
 	}
@@ -261,7 +320,7 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 		writeFilmError(w, http.StatusNotFound, "generation_job_not_found", err.Error())
 		return
 	}
-	if latestFilmStageTasks(document, task.Stage)[task.ShotID] != taskIndex {
+	if latestFilmTaskIndex(document, task) != taskIndex {
 		writeFilmError(w, http.StatusConflict, "generation_job_historical", "historical generation jobs cannot be retried")
 		return
 	}
@@ -343,7 +402,7 @@ func (s *Server) cancelFilmGenerationJob(w http.ResponseWriter, r *http.Request)
 		writeFilmError(w, http.StatusNotFound, "generation_job_not_found", err.Error())
 		return
 	}
-	if latestFilmStageTasks(document, task.Stage)[task.ShotID] != taskIndex {
+	if latestFilmTaskIndex(document, task) != taskIndex {
 		writeFilmError(w, http.StatusConflict, "generation_job_stale", "only the active generation task can be canceled")
 		return
 	}
@@ -356,7 +415,12 @@ func (s *Server) cancelFilmGenerationJob(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	next := cloneFilmDocument(document)
-	if err := setFilmTaskFromJob(s, r, &next, taskIndex, task, job); err != nil {
+	if job.Kind == "text" {
+		err = setFilmTextTaskFromJob(&next, taskIndex, task, job)
+	} else {
+		err = setFilmTaskFromJob(s, r, &next, taskIndex, task, job)
+	}
+	if err != nil {
 		writeFilmOperationError(w, err)
 		return
 	}
