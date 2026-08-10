@@ -1481,6 +1481,30 @@ func (s *PostgresStore) CreateFilmGenerationBatch(
 	document []byte,
 	reservations []FilmGenerationReservation,
 ) (FilmRecord, error) {
+	return retryFilmGenerationBatch(func() (FilmRecord, error) {
+		return s.createFilmGenerationBatchOnce(ctx, tenantID, userID, projectID, expectedRevision, document, reservations)
+	})
+}
+
+func retryFilmGenerationBatch(operation func() (FilmRecord, error)) (FilmRecord, error) {
+	var lastErr error
+	for range 3 {
+		record, err := operation()
+		if !isSerializationFailure(err) {
+			return record, err
+		}
+		lastErr = err
+	}
+	return FilmRecord{}, lastErr
+}
+
+func (s *PostgresStore) createFilmGenerationBatchOnce(
+	ctx context.Context,
+	tenantID, userID, projectID string,
+	expectedRevision int,
+	document []byte,
+	reservations []FilmGenerationReservation,
+) (FilmRecord, error) {
 	tenantID = normalizeTenantID(tenantID)
 	if expectedRevision < 1 || !json.Valid(document) || len(reservations) == 0 || len(reservations) > 1_000 {
 		return FilmRecord{}, ErrInvalidInput
@@ -2813,7 +2837,7 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 		  FROM jsonb_each(result->'steps') AS step
 		), '{}'::jsonb), true) ELSE result END
 		WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running') AND
-		  ((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR
+		  ((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR
 		   (kind='workflow' AND parameters->>'executor'='workflow') OR
 		   (kind='export' AND parameters->>'executor'='film-export'))
 		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
@@ -2868,7 +2892,7 @@ func serverOwnedGenerationJob(job GenerationJob) bool {
 	if json.Unmarshal(job.Parameters, &value) != nil {
 		return false
 	}
-	return ((job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && value.Executor == "server") ||
+	return ((job.Kind == "text" || job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && value.Executor == "server") ||
 		(job.Kind == "workflow" && value.Executor == "workflow") ||
 		(job.Kind == "export" && value.Executor == "film-export")
 }
@@ -3048,7 +3072,7 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 	var activeServerJobs int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND status IN ('queued','running') AND
-		  ((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR
+		  ((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR
 		   (kind='workflow' AND parameters->>'executor'='workflow') OR
 		   (kind='export' AND parameters->>'executor'='film-export'))`, tenantID).Scan(&activeServerJobs); err != nil {
 		return err
@@ -3122,7 +3146,7 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	}
 	var active int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs WHERE tenant_id=$1 AND status IN ('queued','running') AND
-		((kind IN ('image','video','audio') AND parameters->>'executor'='server') OR (kind='workflow' AND parameters->>'executor'='workflow') OR
+			((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR (kind='workflow' AND parameters->>'executor'='workflow') OR
 		 (kind='export' AND parameters->>'executor'='film-export'))`, tenantID).Scan(&active); err != nil {
 		return err
 	}

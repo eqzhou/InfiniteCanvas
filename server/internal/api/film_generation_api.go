@@ -358,17 +358,22 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 		}
 		retryJob.Parameters, _ = json.Marshal(parameters)
 	}
+	jobExists := false
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), retryJob.ID); getErr == nil {
+		binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: retryTask.Stage, ShotID: retryTask.ShotID, TaskID: retryTask.ID, RequestHash: retryTask.RequestHash}
+		if !matchingFilmGenerationJob(existing, binding) {
+			writeFilmError(w, http.StatusConflict, "generation_job_conflict", "generation retry job id belongs to another request")
+			return
+		}
 		retryJob = existing
+		jobExists = true
 	} else if !errors.Is(getErr, store.ErrNotFound) {
 		writeFilmError(w, http.StatusInternalServerError, "generation_storage_error", "generation job state is unavailable")
 		return
-	} else {
-		meta, _ := json.Marshal(map[string]any{"jobId": retryJob.ID, "kind": retryJob.Kind, "executor": serverExecutorMarker, "filmProjectId": document.ProjectID, "shotId": task.ShotID})
-		if err := s.store.CreateServerGenerationJob(r.Context(), tenantIDFrom(r), userIDFrom(r), retryJob, 1, meta); err != nil {
-			writeFilmOperationError(w, filmGenerationStoreError(err))
-			return
-		}
+	}
+	if jobExists && retryJob.Status != "queued" {
+		writeFilmError(w, http.StatusConflict, "generation_retry_invalid", "existing generation retry job is no longer queued")
+		return
 	}
 	next := cloneFilmDocument(document)
 	found := false
@@ -383,10 +388,29 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 		next.UpdatedAt = now
 	}
 	raw, _ := json.Marshal(next)
-	if _, err := backend.CompareAndSwapFilmProject(r.Context(), tenantIDFrom(r), record.ProjectID, record.Revision, raw); err != nil {
-		s.compensateUnreferencedFilmJobs(r.Context(), tenantIDFrom(r), document.ProjectID, []string{retryJob.ID})
-		writeFilmError(w, http.StatusConflict, "revision_conflict", "film production changed; reload before retrying")
-		return
+	tenantID, userID := tenantIDFrom(r), userIDFrom(r)
+	meta, _ := json.Marshal(map[string]any{"jobId": retryJob.ID, "kind": retryJob.Kind, "executor": serverExecutorMarker, "filmProjectId": document.ProjectID, "shotId": task.ShotID})
+	if atomicBackend, ok := s.store.(store.FilmGenerationBatchStore); ok && !jobExists {
+		if _, err := atomicBackend.CreateFilmGenerationBatch(r.Context(), tenantID, userID, record.ProjectID, record.Revision, raw, []store.FilmGenerationReservation{{Job: retryJob, Units: 1, UsageMeta: meta}}); err != nil {
+			writeFilmTextBatchError(w, err)
+			return
+		}
+	} else {
+		created := false
+		if !jobExists {
+			if err := s.store.CreateServerGenerationJob(r.Context(), tenantID, userID, retryJob, 1, meta); err != nil {
+				writeFilmOperationError(w, filmGenerationStoreError(err))
+				return
+			}
+			created = true
+		}
+		if _, err := backend.CompareAndSwapFilmProject(r.Context(), tenantID, record.ProjectID, record.Revision, raw); err != nil {
+			if created {
+				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, []string{retryJob.ID})
+			}
+			writeFilmError(w, http.StatusConflict, "revision_conflict", "film production changed; reload before retrying")
+			return
+		}
 	}
 	s.notifyFilmGenerationWorkers(task.Stage)
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"data": filmJobView(retryTask, retryJob)})
