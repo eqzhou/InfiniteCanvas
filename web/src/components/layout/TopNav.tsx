@@ -339,7 +339,7 @@ export function TopNav({
       </nav>
 
       {/* ── Top header bar ── */}
-      <header className="relative z-[70] flex h-14 shrink-0 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-1.5 shadow-[var(--ob-elev-1)] backdrop-blur-md sm:gap-2 sm:px-3 xl:gap-3 xl:px-4">
+      <header className="ob-header-glow relative z-[70] flex h-14 shrink-0 items-center gap-1 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-1.5 shadow-[var(--ob-elev-1)] backdrop-blur-md sm:gap-2 sm:px-3 xl:gap-3 xl:px-4">
         {/* Left: Logo + Hamburger */}
         <div className="flex shrink-0 items-center gap-1.5">
           {/* Hamburger — visible below md (768px) */}

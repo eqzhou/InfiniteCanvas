@@ -102,6 +102,14 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "config precondition failed", http.StatusPreconditionFailed)
 		return
 	}
+	if !tenantWide {
+		if err := s.enforceMemberCustomChannelPolicy(
+			r.Context(), r, config, config, currentSecrets, plain,
+		); err != nil {
+			writeCustomChannelPolicyError(w, err)
+			return
+		}
+	}
 	mutations := []store.StateMutation{
 		{Key: configKey, Expected: configExpected, Value: bytes.Clone(config)},
 		{Key: storageKey, Expected: bytes.Clone(currentSecrets), Value: envelope},

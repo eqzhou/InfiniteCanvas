@@ -73,10 +73,20 @@ export function hasPersistedProjectChanges(before: BoardProject, after: BoardPro
 }
 
 export class TenantConfigAdminRequiredError extends Error {
-  constructor() {
-    super("Tenant configuration can only be changed by an owner or admin");
+  constructor(message = "仅所有者或管理员可以修改租户配置") {
+    super(message);
     this.name = "TenantConfigAdminRequiredError";
   }
+}
+
+export function configWriteForbiddenMessage(reason: string): string {
+  return reason.trim() === "custom channels disabled by admin"
+    ? "管理员已禁止普通成员修改个人渠道或渠道密钥"
+    : "仅所有者或管理员可以修改租户配置";
+}
+
+async function configWriteForbiddenError(response: Response): Promise<TenantConfigAdminRequiredError> {
+  return new TenantConfigAdminRequiredError(configWriteForbiddenMessage(await response.text()));
 }
 
 export class ConfigPreconditionError extends Error {
@@ -220,7 +230,7 @@ export async function saveServerState(
     headers,
     body: JSON.stringify(value),
   });
-	if (key === "config" && response.status === 403) throw new TenantConfigAdminRequiredError();
+	if (key === "config" && response.status === 403) throw await configWriteForbiddenError(response);
   if (key === "config" && (response.status === 412 || response.status === 428)) throw new ConfigPreconditionError();
   if (!response.ok) throw new Error(`State save failed: HTTP ${response.status}`);
   if (key === "config") {
@@ -242,7 +252,7 @@ export async function saveServerConfigBundle<T>(
     body: JSON.stringify({ config, secrets }),
   });
   if (response.status === 401) throw new SecretAuthRequiredError();
-  if (response.status === 403) throw new TenantConfigAdminRequiredError();
+  if (response.status === 403) throw await configWriteForbiddenError(response);
   if (response.status === 412 || response.status === 428) throw new ConfigPreconditionError();
   if (!response.ok) throw new Error(`Config save failed: HTTP ${response.status}`);
   const nextETag = response.headers.get("ETag");
@@ -268,7 +278,7 @@ export async function saveServerSecrets<T>(value: T): Promise<void> {
   });
   // 401 = no real account session. Prompt/catalog sync must not die on this.
 	if (response.status === 401) throw new SecretAuthRequiredError();
-	if (response.status === 403) throw new TenantConfigAdminRequiredError();
+	if (response.status === 403) throw await configWriteForbiddenError(response);
   if (response.status === 412 || response.status === 428) throw new ConfigPreconditionError();
   if (!response.ok) throw new Error(`Secret save failed: HTTP ${response.status}`);
   const nextETag = response.headers.get("ETag");

@@ -1373,6 +1373,93 @@ func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
 	}
 }
 
+func TestDisabledCustomChannelsRejectMemberRouteAndAPIKeyChanges(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_TOKEN", "")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.saveSitePolicy(t.Context(), "tenant-policy", SitePolicy{
+		AllowRegister: true, AllowCustomChannel: false, AllowCloudChannel: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	member := store.AuthUser{ID: "member-policy", TenantID: "tenant-policy", Role: "member", Status: "active"}
+	admin := store.AuthUser{ID: "admin-policy", TenantID: "tenant-policy", Role: "admin", Status: "active"}
+	originalConfig := []byte(`{"theme":"light","channels":[{"id":"primary","name":"Primary","providers":{"text":{"baseUrl":"https://trusted.example/v1","apiKey":"","model":"gpt-4.1","protocol":"openai"}}}]}`)
+	if err := backend.PutState(t.Context(), member.TenantID, "config", originalConfig); err != nil {
+		t.Fatal(err)
+	}
+
+	memberHandler := withActor(router, member)
+	read := request(t, memberHandler, http.MethodGet, "/api/config", nil)
+	if read.Code != http.StatusOK {
+		t.Fatalf("member bundle read = %d %s", read.Code, read.Body.String())
+	}
+	changedRoute := []byte(`{"theme":"light","channels":[{"id":"primary","name":"Primary","providers":{"text":{"baseUrl":"https://attacker.example/v1","apiKey":"","model":"gpt-4.1","protocol":"openai"}}}]}`)
+	changedRouteBundle, _ := json.Marshal(map[string]json.RawMessage{
+		"config":  changedRoute,
+		"secrets": []byte(`{"apiKeys":{}}`),
+	})
+	if got := requestWithHeaders(t, memberHandler, http.MethodPut, "/api/config", changedRouteBundle, map[string]string{
+		"If-Match": read.Header().Get("ETag"),
+	}); got.Code != http.StatusForbidden {
+		t.Fatalf("member route change = %d %s", got.Code, got.Body.String())
+	}
+
+	preferenceConfig := []byte(`{"theme":"dark","channels":[{"id":"primary","name":"Primary","providers":{"text":{"baseUrl":"https://trusted.example/v1","apiKey":"","model":"gpt-4.1","protocol":"openai"}}}]}`)
+	preferenceBundle, _ := json.Marshal(map[string]json.RawMessage{
+		"config":  preferenceConfig,
+		"secrets": []byte(`{"apiKeys":{}}`),
+	})
+	preferenceWrite := requestWithHeaders(t, memberHandler, http.MethodPut, "/api/config", preferenceBundle, map[string]string{
+		"If-Match": read.Header().Get("ETag"),
+	})
+	if preferenceWrite.Code != http.StatusNoContent {
+		t.Fatalf("member preference change = %d %s", preferenceWrite.Code, preferenceWrite.Body.String())
+	}
+
+	keyChangeBundle, _ := json.Marshal(map[string]json.RawMessage{
+		"config":  preferenceConfig,
+		"secrets": []byte(`{"apiKeys":{"primary":{"text":"member-secret"}}}`),
+	})
+	if got := requestWithHeaders(t, memberHandler, http.MethodPut, "/api/secrets/config", []byte(`{"apiKeys":{"primary":{"text":"member-secret"}}}`), map[string]string{
+		"If-Match": preferenceWrite.Header().Get("ETag"),
+	}); got.Code != http.StatusForbidden {
+		t.Fatalf("member direct key change = %d %s", got.Code, got.Body.String())
+	}
+	if got := requestWithHeaders(t, memberHandler, http.MethodPut, "/api/config", keyChangeBundle, map[string]string{
+		"If-Match": preferenceWrite.Header().Get("ETag"),
+	}); got.Code != http.StatusForbidden {
+		t.Fatalf("member key change = %d %s", got.Code, got.Body.String())
+	}
+
+	stateRead := request(t, memberHandler, http.MethodGet, "/api/state/config", nil)
+	if got := requestWithHeaders(t, memberHandler, http.MethodPut, "/api/state/config", changedRoute, map[string]string{
+		"If-Match": stateRead.Header().Get("ETag"),
+	}); got.Code != http.StatusForbidden {
+		t.Fatalf("member direct state route change = %d %s", got.Code, got.Body.String())
+	}
+
+	adminHandler := withActor(router, admin)
+	adminRead := request(t, adminHandler, http.MethodGet, "/api/config", nil)
+	adminBundle, _ := json.Marshal(map[string]json.RawMessage{
+		"config":  changedRoute,
+		"secrets": []byte(`{"apiKeys":{"primary":{"text":"admin-secret"}}}`),
+	})
+	if got := requestWithHeaders(t, adminHandler, http.MethodPut, "/api/config", adminBundle, map[string]string{
+		"If-Match": adminRead.Header().Get("ETag"),
+	}); got.Code != http.StatusNoContent {
+		t.Fatalf("admin channel change = %d %s", got.Code, got.Body.String())
+	}
+}
+
 func TestConfigStateRejectsStaleConditionalWriteWithoutOverwritingCurrentValue(t *testing.T) {
 	handler := persistentHandler(t)
 	original := []byte(`{"theme":"light","channels":[]}`)

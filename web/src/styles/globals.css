@@ -440,8 +440,10 @@ html.dark .ob-mobile-nav-overlay {
   left: 0;
   bottom: 0;
   z-index: 210;
-  width: min(280px, calc(100vw - 3rem));
-  background: var(--ob-panel);
+  width: min(300px, calc(100vw - 2.5rem));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ob-accent) 3%, var(--ob-panel)) 0%, var(--ob-panel) 180px),
+    var(--ob-panel);
   border-right: 1px solid var(--ob-line);
   box-shadow: var(--ob-shadow-lg);
   transform: translateX(-100%);
@@ -450,6 +452,7 @@ html.dark .ob-mobile-nav-overlay {
   flex-direction: column;
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
 }
 
 .ob-mobile-nav-panel[data-open="true"] {
@@ -556,6 +559,23 @@ html.dark .ob-mobile-nav-overlay {
 /* Fix compact-menu positioning */
 .ob-compact-menu {
   position: relative;
+}
+
+/* Dropdown entrance animation */
+@keyframes ob-dropdown-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ob-compact-menu [role="menu"] {
+  animation: ob-dropdown-in 180ms var(--ob-ease) both;
+  transform-origin: top right;
 }
 
 @media (min-width: 768px) {
@@ -1266,6 +1286,187 @@ html.dark .ob-overlay-canvas {
   box-shadow: var(--ob-elev-2);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+}
+
+/* Header bottom glow accent line */
+.ob-header-glow::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--ob-accent) 35%, transparent) 20%,
+    color-mix(in srgb, var(--ob-accent) 55%, transparent) 50%,
+    color-mix(in srgb, var(--ob-accent) 35%, transparent) 80%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* Settings modal sidebar navigation */
+.ob-settings-sidebar {
+  display: none;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem;
+  border-right: 1px solid var(--ob-line);
+  background: color-mix(in srgb, var(--ob-canvas) 55%, var(--ob-panel));
+  overflow-y: auto;
+  min-width: 180px;
+  flex-shrink: 0;
+}
+
+@media (min-width: 768px) {
+  .ob-settings-sidebar {
+    display: flex;
+  }
+}
+
+.ob-settings-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--ob-muted);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition:
+    background-color var(--ob-duration) var(--ob-ease),
+    color var(--ob-duration) var(--ob-ease);
+}
+
+.ob-settings-sidebar-link:hover {
+  background: var(--ob-accent-soft);
+  color: var(--ob-ink);
+}
+
+.ob-settings-sidebar-link[data-active="true"] {
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+  font-weight: 600;
+}
+
+/* Settings mobile tab bar (horizontal scroll) */
+.ob-settings-tabbar {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 0.15rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--ob-line);
+  background: color-mix(in srgb, var(--ob-canvas) 55%, var(--ob-panel));
+  flex-shrink: 0;
+}
+
+.ob-settings-tabbar::-webkit-scrollbar {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .ob-settings-tabbar {
+    display: none;
+  }
+}
+
+.ob-settings-tabbar-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--ob-muted);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    background-color var(--ob-duration) var(--ob-ease),
+    color var(--ob-duration) var(--ob-ease);
+}
+
+.ob-settings-tabbar-item:hover {
+  background: var(--ob-accent-soft);
+  color: var(--ob-ink);
+}
+
+.ob-settings-tabbar-item[data-active="true"] {
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+  font-weight: 600;
+}
+
+/* Section card for settings groups */
+.ob-settings-section {
+  border: 1px solid var(--ob-line);
+  border-radius: var(--ob-radius-lg);
+  background: color-mix(in srgb, var(--ob-panel) 92%, transparent);
+  padding: 1.25rem;
+  scroll-margin-top: 1rem;
+}
+
+.ob-settings-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.ob-settings-section-icon {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+  flex-shrink: 0;
+}
+
+.ob-settings-section-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ob-ink);
+}
+
+.ob-settings-section-desc {
+  font-size: 0.75rem;
+  color: var(--ob-muted);
+  margin-top: 0.1rem;
+}
+
+/* Agent panel entrance animation */
+@keyframes ob-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(1rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.ob-drawer {
+  animation: ob-slide-in-right 280ms var(--ob-ease) both;
+}
+
+@media (min-width: 1280px) {
+  .ob-drawer {
+    animation: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -137,6 +137,14 @@ func (s *Server) putConfigBundle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "config precondition failed", http.StatusPreconditionFailed)
 		return
 	}
+	if !tenantWide {
+		if err := s.enforceMemberCustomChannelPolicy(
+			r.Context(), r, currentConfig, body.Config, currentSecrets, body.Secrets,
+		); err != nil {
+			writeCustomChannelPolicyError(w, err)
+			return
+		}
+	}
 	if tenantWide {
 		if err := s.preventTenantObjectStorageRebind(r.Context(), tenantID, body.Config); err != nil {
 			http.Error(w, "invalid object storage configuration", http.StatusConflict)

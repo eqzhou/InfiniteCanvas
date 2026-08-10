@@ -5070,6 +5070,54 @@ test("mobile version dialog escapes the transformed navigation drawer", async ({
   await expect(page.getByRole("button", { name: "打开导航菜单" })).toBeFocused();
 });
 
+test("settings section navigation remains usable on mobile and across reopen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFreshBoard(page);
+
+  const openSettings = async () => {
+    await page.getByTitle("设置").click();
+    const dialog = page.getByRole("dialog", { name: "设置" });
+    await expect(dialog).toBeVisible();
+    return dialog;
+  };
+
+  let dialog = await openSettings();
+  const navigation = dialog.getByRole("navigation", { name: "设置分区" });
+  await expect(navigation).toBeVisible();
+  const webdavButton = navigation.getByRole("button", { name: "WebDAV" });
+  await webdavButton.click();
+  await expect.poll(() => dialog.locator("[data-settings-scroll-container]").evaluate(
+    (element) => element.scrollTop / Math.max(1, element.scrollHeight - element.clientHeight),
+  )).toBeGreaterThan(0.9);
+  await expect(webdavButton).toHaveAttribute("aria-current", "location");
+
+  await expect.poll(async () => {
+    const navigationBox = await navigation.boundingBox();
+    const buttonBox = await webdavButton.boundingBox();
+    return Boolean(navigationBox && buttonBox &&
+      buttonBox.x >= navigationBox.x - 1 &&
+      buttonBox.x + buttonBox.width <= navigationBox.x + navigationBox.width + 1);
+  }).toBe(true);
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  )).toBe(true);
+
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+  await expect(dialog).toHaveCount(0);
+  dialog = await openSettings();
+  await expect(dialog.getByRole("navigation", { name: "设置分区" })).toBeVisible();
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+
+  await page.setViewportSize({ width: 1024, height: 768 });
+  dialog = await openSettings();
+  await expect(dialog.locator(".ob-settings-sidebar")).toBeVisible();
+  await expect(dialog.locator(".ob-settings-tabbar")).toBeHidden();
+  await expect.poll(() => dialog.evaluate(
+    (element) => element.scrollWidth <= element.clientWidth,
+  )).toBe(true);
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+});
+
 test("mobile canvas controls stay compact and do not overlap", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFreshBoard(page);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { canManageAdmin } from "@/services/admin";
@@ -36,7 +36,11 @@ import {
   imageSizeOptionsFor,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
-import { exportConfigFile, importConfigFile } from "@/lib/config-file";
+import {
+  exportConfigFile,
+  hasSameChannelConfiguration,
+  importConfigFile,
+} from "@/lib/config-file";
 import { resolveActiveAIChannel, useSharedChannels } from "@/services/shared-channels";
 import {
   AUDIO_PROTOCOL_OPTIONS,
@@ -51,14 +55,24 @@ import {
   AudioLines,
   CloudDownload,
   CloudUpload,
+  Database,
   Film,
+  FolderCog,
+  HardDrive,
   Image as ImageIcon,
+
+  MousePointerClick,
+  Palette,
   Plus,
+  Radio,
   RefreshCw,
   RotateCcw,
+  Server,
   ShieldCheck,
+  Sliders,
   Type,
   X,
+  type LucideIcon,
 } from "lucide-react";
 
 const PROVIDER_KINDS: AiProviderKind[] = ["text", "image", "video", "audio"];
@@ -68,6 +82,58 @@ const PROVIDER_LABELS: Record<AiProviderKind, string> = {
   video: "视频",
   audio: "音频",
 };
+
+export type SettingsSectionDefinition = Readonly<{
+  id: string;
+  label: string;
+  icon: LucideIcon;
+}>;
+
+const MEMBER_SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = Object.freeze([
+  { id: "channel", label: "渠道", icon: Radio },
+  { id: "model", label: "模型服务", icon: Server },
+  { id: "generation", label: "生成偏好", icon: Palette },
+  { id: "defaults", label: "生成默认值", icon: Sliders },
+  { id: "toolbar", label: "图片工具", icon: MousePointerClick },
+  { id: "storage", label: "对象存储", icon: HardDrive },
+  { id: "configfile", label: "配置文件", icon: FolderCog },
+  { id: "webdav", label: "WebDAV", icon: Database },
+]);
+
+const SITE_POLICY_SECTION: SettingsSectionDefinition = Object.freeze({
+  id: "policy",
+  label: "站点策略",
+  icon: ShieldCheck,
+});
+
+export function settingsSectionsFor(canManageSitePolicy: boolean): readonly SettingsSectionDefinition[] {
+  if (!canManageSitePolicy) return [...MEMBER_SETTINGS_SECTIONS];
+  return [
+    ...MEMBER_SETTINGS_SECTIONS.slice(0, 4),
+    SITE_POLICY_SECTION,
+    ...MEMBER_SETTINGS_SECTIONS.slice(4),
+  ];
+}
+
+export function settingsScrollTarget(
+  scrollTop: number,
+  containerTop: number,
+  sectionTop: number,
+): number {
+  return Math.max(0, scrollTop + sectionTop - containerTop - 16);
+}
+
+export function settingsHorizontalScrollTarget(
+  scrollLeft: number,
+  containerLeft: number,
+  containerWidth: number,
+  itemLeft: number,
+  itemWidth: number,
+  maxScrollLeft: number,
+): number {
+  const centered = scrollLeft + itemLeft - containerLeft - ((containerWidth - itemWidth) / 2);
+  return Math.min(maxScrollLeft, Math.max(0, centered));
+}
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useBoardStore((s) => s.config);
@@ -83,6 +149,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [sitePolicyLoaded, setSitePolicyLoaded] = useState(false);
   const [sitePolicyBusy, setSitePolicyBusy] = useState(false);
 	const sharedChannels = useSharedChannels();
+  const settingsSections = useMemo(
+    () => settingsSectionsFor(canManageSitePolicy),
+    [canManageSitePolicy],
+  );
+  const [activeSection, setActiveSection] = useState("channel");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const mobileNavigationRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -122,6 +195,42 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       cancelled = true;
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setActiveSection((current) => (
+      settingsSections.some((section) => section.id === current)
+        ? current
+        : "channel"
+    ));
+  }, [open, settingsSections]);
+
+  useEffect(() => {
+    if (!open) return;
+    const navigation = mobileNavigationRef.current;
+    const activeButton = navigation?.querySelector<HTMLElement>(
+      `[data-section-nav-id="${activeSection}"]`,
+    );
+    if (!navigation || !activeButton) return;
+    const frame = window.requestAnimationFrame(() => {
+      const navigationRect = navigation.getBoundingClientRect();
+      const activeRect = activeButton.getBoundingClientRect();
+      const maxScrollLeft = Math.max(0, navigation.scrollWidth - navigation.clientWidth);
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      navigation.scrollTo({
+        left: settingsHorizontalScrollTarget(
+          navigation.scrollLeft,
+          navigationRect.left,
+          navigationRect.width,
+          activeRect.left,
+          activeRect.width,
+          maxScrollLeft,
+        ),
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeSection, open]);
 
   // Only the boolean switches are toggleable; model-catalog fields are edited
   // through their own control and must not be flipped by this helper.
@@ -168,6 +277,43 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   }, [closing, flushConfig, onClose]);
   useEscapeDismiss(open, requestClose);
 
+  const scrollToSection = (id: string) => {
+    const container = scrollRef.current;
+    const section = container?.querySelector<HTMLElement>(`[data-section-id="${id}"]`);
+    if (!container || !section) return;
+    setActiveSection(id);
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    container.scrollTo({
+      top: settingsScrollTarget(
+        container.scrollTop,
+        container.getBoundingClientRect().top,
+        section.getBoundingClientRect().top,
+      ),
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+  };
+
+  const handleScroll = () => {
+    const container = scrollRef.current;
+    if (!container) return;
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 2) {
+      const lastSection = settingsSections.at(-1)?.id ?? "channel";
+      setActiveSection((current) => current === lastSection ? current : lastSection);
+      return;
+    }
+    const containerTop = container.getBoundingClientRect().top;
+    let closest = settingsSections[0]?.id ?? "channel";
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (const section of container.querySelectorAll<HTMLElement>("[data-section-id]")) {
+      const distance = Math.abs(section.getBoundingClientRect().top - containerTop - 16);
+      if (distance < minDistance && section.dataset.sectionId) {
+        minDistance = distance;
+        closest = section.dataset.sectionId;
+      }
+    }
+    setActiveSection((current) => current === closest ? current : closest);
+  };
+
   if (!open) return null;
   const channel = resolveActiveAIChannel(
     config.channels,
@@ -186,9 +332,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const imageSize = normalizeImageSizeForProvider(config.imageSize);
   const sharedChannelSelected = Boolean(config.activeSharedChannelId);
 	const selectedSharedChannelAvailable = !sharedChannelSelected || sharedChannels.some((item) => item.id === config.activeSharedChannelId);
+  const personalChannelEditable = canManageSitePolicy || (
+    sitePolicyLoaded && sitePolicy.allowCustomChannel
+  );
 
   const updateChannel = (patch: Partial<typeof channel>) => {
-    if (sharedChannelSelected) return;
+    if (sharedChannelSelected || !personalChannelEditable) return;
     setConfig({
       ...config,
       channels: config.channels.map((c) =>
@@ -198,6 +347,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   };
 
   const updateProvider = (kind: AiProviderKind, patch: Partial<ReturnType<typeof getProvider>>) => {
+    if (!personalChannelEditable) return;
     const normalized = normalizeChannel(channel);
     const providers = { ...normalized.providers!, [kind]: { ...normalized.providers![kind], ...patch } };
     const nextProtocol = kind === "audio" ? providers.audio.protocol : undefined;
@@ -270,9 +420,63 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 text-sm sm:px-6">
-          <section className="mb-6">
-            <SectionTitle title="渠道" />
+        {/* Mobile horizontal section navigation */}
+        <nav ref={mobileNavigationRef} className="ob-settings-tabbar" aria-label="设置分区">
+          {settingsSections.map((s) => {
+            const Icon = s.icon;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                className="ob-settings-tabbar-item"
+                data-active={activeSection === s.id}
+                data-section-nav-id={s.id}
+                aria-current={activeSection === s.id ? "location" : undefined}
+                onClick={() => scrollToSection(s.id)}
+              >
+                <Icon size={13} />
+                {s.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="flex min-h-0 flex-1">
+          {/* Desktop sidebar navigation */}
+          <nav className="ob-settings-sidebar" aria-label="设置分区">
+            {settingsSections.map((s) => {
+              const Icon = s.icon;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="ob-settings-sidebar-link"
+                  data-active={activeSection === s.id}
+                  aria-current={activeSection === s.id ? "location" : undefined}
+                  onClick={() => scrollToSection(s.id)}
+                >
+                  <Icon size={14} />
+                  {s.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Scrollable content */}
+          <div
+            ref={scrollRef}
+            data-settings-scroll-container
+            onScroll={handleScroll}
+            className="min-h-0 flex-1 overflow-y-auto px-4 py-5 text-sm sm:px-6"
+          >
+          <section className="ob-settings-section mb-5" data-section-id="channel">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><Radio size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">渠道</div>
+                <div className="ob-settings-section-desc">管理 AI 服务渠道与连接配置</div>
+              </div>
+            </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
               个人渠道仅供当前工作区使用；共享渠道由管理员托管，可在管理后台统一配置。
             </p>
@@ -302,7 +506,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <input
                   className="ob-field"
                   value={channel.name}
-                  disabled={sharedChannelSelected}
+                  disabled={sharedChannelSelected || !personalChannelEditable}
+                  title={!personalChannelEditable ? "管理员已禁止普通成员修改个人渠道" : undefined}
                   onChange={(e) => updateChannel({ name: e.target.value })}
                 />
               </Field>
@@ -315,19 +520,23 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   step={1}
                   value={sharedChannelSelected ? (channel.timeoutSeconds ?? "") : (channel.timeoutSeconds ?? 60)}
                   placeholder={sharedChannelSelected ? "管理员配置" : "60"}
-                  disabled={sharedChannelSelected}
-                  title={sharedChannelSelected ? "共享渠道超时由管理员在管理后台配置" : "整个请求的最长等待时间"}
+                  disabled={sharedChannelSelected || !personalChannelEditable}
+                  title={sharedChannelSelected
+                    ? "共享渠道超时由管理员在管理后台配置"
+                    : !personalChannelEditable
+                      ? "管理员已禁止普通成员修改个人渠道"
+                      : "整个请求的最长等待时间"}
                   onChange={(e) => updateChannel({ timeoutSeconds: Number(e.target.value) })}
                 />
               </Field>
               <button
                 type="button"
                 aria-label="添加渠道"
-                title={sitePolicy.allowCustomChannel ? "添加渠道" : "管理员已关闭自定义渠道"}
+                title={personalChannelEditable ? "添加渠道" : "管理员已关闭自定义渠道"}
                 className="ob-icon-btn mt-5"
-                disabled={!sitePolicy.allowCustomChannel}
+                disabled={!personalChannelEditable}
                 onClick={() => {
-                  if (!sitePolicy.allowCustomChannel) {
+                  if (!personalChannelEditable) {
                     setError("管理员已关闭自定义模型渠道");
                     return;
                   }
@@ -345,11 +554,23 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
           </section>
 
-          <section className="mb-6">
-            <SectionTitle title="模型服务" />
+          <section className="ob-settings-section mb-5" data-section-id="model">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><Server size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">模型服务</div>
+                <div className="ob-settings-section-desc">配置各能力的模型协议、地址与密钥</div>
+              </div>
+            </div>
             {sharedChannelSelected ? (
               <SharedChannelManagedNotice channelName={selectedSharedChannelAvailable ? channel.name : "共享渠道正在加载或已不可用"} />
-            ) : <div className="overflow-hidden rounded-xl border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
+            ) : <>
+              {!personalChannelEditable ? (
+                <p className="mb-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-accent-soft)] px-3 py-2 text-xs text-[var(--ob-muted)]">
+                  管理员已禁止普通成员新增或修改个人渠道；请选择管理员配置的共享渠道。
+                </p>
+              ) : null}
+              <div className="overflow-hidden rounded-xl border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
               <div className="hidden grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] gap-2 border-b border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_80%,var(--ob-panel))] px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-[var(--ob-muted)] md:grid">
                 <span>能力</span><span>协议</span><span>服务 URL</span><span>API Key</span><span>模型</span><span />
               </div>
@@ -360,17 +581,25 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   provider={getProvider(channel, kind)}
                   models={resolveSelectableModels(sitePolicy, models[kind] ?? getProvider(channel, kind).models ?? [])}
                   busy={busyKind === kind}
-                  disabled={busyKind !== null || sharedChannelSelected}
+                  disabled={busyKind !== null || sharedChannelSelected || !personalChannelEditable}
                   onPull={() => void pullModels(kind)}
                   onChange={(patch) => updateProvider(kind, patch)}
                 />
               ))}
-            </div>}
+              </div>
+            </>}
           </section>
 
-          <section className="mb-6 grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+          <section className="ob-settings-section mb-5" data-section-id="generation">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><Palette size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">生成偏好</div>
+                <div className="ob-settings-section-desc">系统提示词与图片生成参数</div>
+              </div>
+            </div>
+            <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
             <div>
-              <SectionTitle title="生成偏好" />
               {canManageSitePolicy ? (
                 <>
                   <Field label="全局系统提示词">
@@ -433,11 +662,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 尺寸与质量会原样发送给模型服务；部分模型可能不支持全部预设。
               </p>
             </div>
+            </div>
           </section>
 
 
-          <section className="mb-6">
-            <SectionTitle title="生成默认值" />
+          <section className="ob-settings-section mb-5" data-section-id="defaults">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><Sliders size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">生成默认值</div>
+                <div className="ob-settings-section-desc">视频与音频节点的初始参数</div>
+              </div>
+            </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
               新建的视频与音频节点会继承这些值；节点上已显式设置的值不会被覆盖。
             </p>
@@ -449,8 +685,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </section>
 
           {canManageSitePolicy ? (
-            <section className="mb-6">
-              <SectionTitle title="站点策略" />
+            <section className="ob-settings-section mb-5" data-section-id="policy">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><ShieldCheck size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">站点策略</div>
+                <div className="ob-settings-section-desc">管理员控制注册、渠道与生成权限</div>
+              </div>
+            </div>
               <p className="mb-3 text-xs text-[var(--ob-muted)]">
                 管理员控制开放注册、用户自定义渠道与云端/后端代理生成。更改立即对当前租户生效。
               </p>
@@ -500,7 +742,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 </div>
               )}
               {!sitePolicy.allowCustomChannel ? (
-                <p className="mt-2 text-xs text-[var(--ob-muted)]">当前禁止新增自定义模型渠道；已有渠道仍可编辑与使用。</p>
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">当前禁止普通成员新增、修改个人渠道或更新个人渠道密钥；管理员不受此限制。</p>
               ) : null}
               {!sitePolicy.allowCloudChannel ? (
                 <p className="mt-2 text-xs text-[var(--ob-muted)]">后端代理/云端生成已关闭；客户端直连渠道不受此开关影响。</p>
@@ -515,8 +757,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </section>
           ) : null}
 
-          <section className="mb-6">
-            <SectionTitle title="图片节点快捷工具" />
+          <section className="ob-settings-section mb-5" data-section-id="toolbar">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><MousePointerClick size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">图片节点快捷工具</div>
+                <div className="ob-settings-section-desc">调整图片节点悬浮工具的显示和顺序</div>
+              </div>
+            </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
               调整图片节点悬浮工具的显示和顺序；下载操作始终保留。
             </p>
@@ -526,8 +774,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             />
           </section>
 
-          <section className="mb-6">
-            <SectionTitle title="对象存储 (S3/R2)" />
+          <section className="ob-settings-section mb-5" data-section-id="storage">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><HardDrive size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">对象存储 (S3/R2)</div>
+                <div className="ob-settings-section-desc">配置媒体文件的云存储后端</div>
+              </div>
+            </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
               登录后可随账号同步。开启后正式模式下该账号的媒体写入优先使用此配置；密钥经本地服务加密存储，不会导出到 WebDAV 备份。
             </p>
@@ -642,11 +896,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               return validation ? <p className="mt-2 text-xs text-[var(--ob-danger)]">{validation}</p> : null;
             })()}
           </section>
-          <section>
-            <SectionTitle title="配置与偏好文件" />
+          <section className="ob-settings-section mb-5" data-section-id="configfile">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><FolderCog size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">配置与偏好文件</div>
+                <div className="ob-settings-section-desc">导出导入工作区配置</div>
+              </div>
+            </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
               导出模型地址、模型名、界面与生成偏好；API Key、对象存储密钥和 WebDAV 密码不会写入文件。
-              插件与可执行提示词来源继续通过各自的授权流程管理。导入时会保留当前账号已保存的密钥。
+              插件与可执行提示词来源继续通过各自的授权流程管理。仅当服务目的地未变化时保留当前密钥。
             </p>
             <div className="flex flex-wrap gap-2">
               <button
@@ -675,16 +935,31 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   aria-label="导入配置文件"
                   accept="application/json,.json"
                   className="hidden"
+                  disabled={!canManageSitePolicy && !sitePolicyLoaded}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     event.currentTarget.value = "";
                     if (!file) return;
                     void file.text().then(async (raw) => {
                       const state = useBoardStore.getState();
+                      const previous = structuredClone(state.config);
                       const next = importConfigFile(raw, state.config);
+                      if (!canManageSitePolicy && !sitePolicy.allowCustomChannel &&
+                        !hasSameChannelConfiguration(state.config, next)) {
+                        throw new Error("管理员已禁止修改个人渠道；请导入不改变渠道的偏好配置");
+                      }
                       state.setConfig(next);
-                      await state.flushConfig();
-                      alert("配置与偏好已导入，现有密钥保持不变");
+                      const applied = useBoardStore.getState().config;
+                      try {
+                        await state.flushConfig();
+                      } catch (cause) {
+                        if (useBoardStore.getState().config === applied) {
+                          useBoardStore.getState().setConfig(previous);
+                          await useBoardStore.getState().flushConfig().catch(() => undefined);
+                        }
+                        throw cause;
+                      }
+                      alert("配置与偏好已导入；仅安全保留目的地未变化的密钥");
                     }).catch((cause) => {
                       alert(cause instanceof Error ? cause.message : String(cause));
                     });
@@ -693,8 +968,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               </label>
             </div>
           </section>
-          <section>
-            <SectionTitle title="WebDAV 备份" />
+          <section className="ob-settings-section mb-5" data-section-id="webdav">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><Database size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">WebDAV 备份</div>
+                <div className="ob-settings-section-desc">通过 WebDAV 同步和恢复工作区</div>
+              </div>
+            </div>
             <div className="grid gap-3 lg:grid-cols-[1.4fr_0.7fr_0.7fr]">
               <Field label="WebDAV URL">
                 <input className="ob-field" value={config.webdavUrl ?? ""} onChange={(e) => setConfig({ ...config, webdavUrl: e.target.value })} placeholder="https://example.com/dav/openboard" />
@@ -804,6 +1085,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             `/api/v3` Base URL 与模型名。
             </p>
           </div>
+          </div>
         </div>
       </div>
     </div>
@@ -910,14 +1192,7 @@ function ProviderRow({
   );
 }
 
-function SectionTitle({ title }: { title: string }) {
-  return (
-    <h3 className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--ob-muted)]">
-      <span className="h-px w-3 bg-[color-mix(in_srgb,var(--ob-accent)_55%,transparent)]" aria-hidden />
-      {title}
-    </h3>
-  );
-}
+
 
 /**
  * Tenant model governance. The allow list narrows what ordinary users may pick;

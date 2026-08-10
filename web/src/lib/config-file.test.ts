@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { createDefaultConfig } from "@/lib/defaults";
-import { exportConfigFile, importConfigFile } from "@/lib/config-file";
+import {
+  exportConfigFile,
+  hasSameChannelConfiguration,
+  importConfigFile,
+} from "@/lib/config-file";
+import type { AppConfig } from "@/types/board";
 
 describe("configuration file", () => {
   test("exports preferences and provider destinations without credentials", () => {
@@ -70,6 +75,88 @@ describe("configuration file", () => {
     expect(restored.channels[0]?.providers?.text.apiKey).toBe(currentTextCredential);
     expect(restored.objectStorage?.accessKeyId).toBe(currentStorageCredential);
     expect(restored.objectStorage?.secretAccessKey).toBe(currentStorageCredential);
+  });
+
+  test("drops credentials when an imported provider or backup destination changes", () => {
+    const base = createDefaultConfig();
+    const channel = base.channels[0]!;
+    const providerCredential = "fixture-provider-secret";
+    const current = {
+      ...base,
+      channels: [{
+        ...channel,
+        providers: {
+          ...channel.providers!,
+          text: {
+            ...channel.providers!.text,
+            baseUrl: "https://trusted.example/v1",
+            apiKey: providerCredential,
+          },
+        },
+      }],
+      webdavUrl: "https://trusted.example/dav",
+      webdavUser: "trusted-user",
+      webdavPass: "fixture-webdav-secret",
+      objectStorage: {
+        ...base.objectStorage!,
+        endpoint: "https://trusted.example/storage",
+        bucket: "trusted-bucket",
+        accessKeyId: "fixture-storage-id",
+        secretAccessKey: "fixture-storage-secret",
+        sessionToken: "fixture-storage-session",
+      },
+    };
+    const incoming = exportConfigFile(current) as unknown as {
+      config: AppConfig;
+    };
+    incoming.config.channels[0]!.providers!.text.baseUrl = "https://attacker.example/v1";
+    incoming.config.webdavUrl = "https://attacker.example/dav";
+    incoming.config.objectStorage = {
+      ...incoming.config.objectStorage!,
+      endpoint: "https://attacker.example/storage",
+    };
+
+    const restored = importConfigFile(JSON.stringify(incoming), current);
+
+    expect(restored.channels[0]?.providers?.text.apiKey).toBe("");
+    expect(restored.webdavPass).toBe("");
+    expect(restored.objectStorage?.accessKeyId).toBe("");
+    expect(restored.objectStorage?.secretAccessKey).toBe("");
+    expect(restored.objectStorage?.sessionToken).toBe("");
+  });
+
+  test("keeps one provider credential only when its complete credential route is unchanged", () => {
+    const base = createDefaultConfig();
+    const channel = base.channels[0]!;
+    const textCredential = "fixture-text-secret";
+    const imageCredential = "fixture-image-secret";
+    const current = {
+      ...base,
+      channels: [{
+        ...channel,
+        providers: {
+          ...channel.providers!,
+          text: { ...channel.providers!.text, apiKey: textCredential },
+          image: { ...channel.providers!.image, apiKey: imageCredential },
+        },
+      }],
+    };
+    const incoming = exportConfigFile(current) as unknown as { config: AppConfig };
+    incoming.config.channels[0]!.providers!.image.protocol = "gemini";
+
+    const restored = importConfigFile(JSON.stringify(incoming), current);
+
+    expect(restored.channels[0]?.providers?.text.apiKey).toBe(textCredential);
+    expect(restored.channels[0]?.providers?.image.apiKey).toBe("");
+  });
+
+  test("detects channel changes before a policy-locked import is applied", () => {
+    const current = createDefaultConfig();
+    expect(hasSameChannelConfiguration(current, structuredClone(current))).toBe(true);
+
+    const changed = structuredClone(current);
+    changed.channels[0]!.providers!.image.model = "different-model";
+    expect(hasSameChannelConfiguration(current, changed)).toBe(false);
   });
 
   test("imports Azure and Edge audio provider protocols", () => {

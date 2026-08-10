@@ -46,6 +46,13 @@ export function exportConfigFile(config: AppConfig): OpenBoardConfigFile {
   };
 }
 
+export function hasSameChannelConfiguration(first: AppConfig, second: AppConfig): boolean {
+  const normalizedChannels = (config: AppConfig) => JSON.stringify(
+    config.channels.map((channel) => normalizeChannel(channel)),
+  );
+  return normalizedChannels(first) === normalizedChannels(second);
+}
+
 export function importConfigFile(raw: string, current: AppConfig): AppConfig {
   if (new TextEncoder().encode(raw).byteLength > MAX_CONFIG_FILE_BYTES) {
     throw new Error("配置文件过大");
@@ -68,27 +75,29 @@ export function importConfigFile(raw: string, current: AppConfig): AppConfig {
     const existing = currentChannels.get(channel.id);
     if (!existing) return channel;
     const providers = {
-      text: { ...channel.providers!.text, apiKey: existing.providers!.text.apiKey },
-      image: { ...channel.providers!.image, apiKey: existing.providers!.image.apiKey },
-      video: { ...channel.providers!.video, apiKey: existing.providers!.video.apiKey },
-      audio: { ...channel.providers!.audio, apiKey: existing.providers!.audio.apiKey },
+      text: preserveProviderCredential(channel.providers!.text, existing.providers!.text),
+      image: preserveProviderCredential(channel.providers!.image, existing.providers!.image),
+      video: preserveProviderCredential(channel.providers!.video, existing.providers!.video),
+      audio: preserveProviderCredential(channel.providers!.audio, existing.providers!.audio),
     };
     return { ...channel, apiKey: providers.text.apiKey, providers };
   });
   const currentStorage = normalizeObjectStorage(current.objectStorage);
   const importedStorage = normalizeObjectStorage(imported.objectStorage);
+  const preserveWebDAVPassword = sameWebDAVDestination(imported, current);
+  const preserveStorageCredentials = sameObjectStorageDestination(importedStorage, currentStorage);
   return normalizeAppConfig({
     ...imported,
     channels,
     activeChannelId: channels.some((channel) => channel.id === imported.activeChannelId)
       ? imported.activeChannelId
       : channels[0]?.id ?? null,
-    webdavPass: current.webdavPass ?? "",
+    webdavPass: preserveWebDAVPassword ? current.webdavPass ?? "" : "",
     objectStorage: {
       ...importedStorage,
-      accessKeyId: currentStorage.accessKeyId,
-      secretAccessKey: currentStorage.secretAccessKey,
-      sessionToken: currentStorage.sessionToken,
+      accessKeyId: preserveStorageCredentials ? currentStorage.accessKeyId : "",
+      secretAccessKey: preserveStorageCredentials ? currentStorage.secretAccessKey : "",
+      sessionToken: preserveStorageCredentials ? currentStorage.sessionToken : "",
     },
     // Importing preferences must never bypass the dedicated consent and
     // validation flows for plugins or executable prompt-source scripts.
@@ -97,6 +106,35 @@ export function importConfigFile(raw: string, current: AppConfig): AppConfig {
     disabledPluginIds: current.disabledPluginIds,
     pluginRegistryUrl: current.pluginRegistryUrl,
   });
+}
+
+function preserveProviderCredential(
+  imported: AiEndpointConfig,
+  current: AiEndpointConfig,
+): AiEndpointConfig {
+  const sameCredentialRoute = imported.baseUrl === current.baseUrl &&
+    imported.protocol === current.protocol &&
+    JSON.stringify(imported.template ?? null) === JSON.stringify(current.template ?? null);
+  return {
+    ...imported,
+    apiKey: sameCredentialRoute ? current.apiKey : "",
+  };
+}
+
+function sameWebDAVDestination(imported: AppConfig, current: AppConfig): boolean {
+  return (imported.webdavUrl ?? "").trim() === (current.webdavUrl ?? "").trim() &&
+    (imported.webdavUser ?? "").trim() === (current.webdavUser ?? "").trim();
+}
+
+function sameObjectStorageDestination(
+  imported: ReturnType<typeof normalizeObjectStorage>,
+  current: ReturnType<typeof normalizeObjectStorage>,
+): boolean {
+  return imported.endpoint === current.endpoint &&
+    imported.bucket === current.bucket &&
+    imported.region === current.region &&
+    imported.prefix === current.prefix &&
+    imported.allowInsecureLoopback === current.allowInsecureLoopback;
 }
 
 function parsePortableConfig(value: Record<string, unknown>, current: AppConfig): AppConfig {

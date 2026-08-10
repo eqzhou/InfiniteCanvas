@@ -1,12 +1,19 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { BoardProject } from "@/types/board";
-import { parseRetryAfterMillis } from "./server-storage";
+import { configWriteForbiddenMessage, parseRetryAfterMillis } from "./server-storage";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   mock.restore();
+});
+
+test("config write refusal maps the custom-channel policy to a useful message", () => {
+  expect(configWriteForbiddenMessage("custom channels disabled by admin\n"))
+    .toBe("管理员已禁止普通成员修改个人渠道或渠道密钥");
+  expect(configWriteForbiddenMessage("unrecognized refusal"))
+    .toBe("仅所有者或管理员可以修改租户配置");
 });
 
 function project(id: string): BoardProject {

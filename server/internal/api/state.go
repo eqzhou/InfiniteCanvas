@@ -215,6 +215,19 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := tenantIDFrom(r)
+	if key == "config" && !tenantWide {
+		_, _, _, _, currentConfig, _, _, readErr := s.currentConfigBundle(r)
+		if readErr != nil {
+			http.Error(w, "failed to read config bundle", http.StatusInternalServerError)
+			return
+		}
+		if err := s.enforceMemberCustomChannelPolicy(
+			r.Context(), r, currentConfig, value, nil, nil,
+		); err != nil {
+			writeCustomChannelPolicyError(w, err)
+			return
+		}
+	}
 	if key == "config" && tenantWide {
 		if err := s.preventTenantObjectStorageRebind(r.Context(), tenantID, value); errors.Is(err, errTenantObjectStorageRebind) {
 			http.Error(w, "object storage destination cannot be changed while data exists", http.StatusConflict)
