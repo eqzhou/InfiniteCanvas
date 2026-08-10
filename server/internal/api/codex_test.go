@@ -139,7 +139,7 @@ done
 		t.Fatalf("failed message changed selection=%s", unchanged.Body.String())
 	}
 	message := request(t, handler, http.MethodPost, "/api/codex/message", []byte(
-		`{"sessionId":"`+session.ID+`","text":"hello","model":"gpt-5.6-terra","effort":"high"}`))
+		`{"sessionId":"`+session.ID+`","text":"hello","model":"gpt-5.6-terra","effort":"high","contextReferences":[{"kind":"skill","id":"review-code","label":"Review code"},{"kind":"node","id":"node-1","label":"Product"}]}`))
 	if message.Code != http.StatusOK {
 		t.Fatalf("message status=%d body=%s", message.Code, message.Body.String())
 	}
