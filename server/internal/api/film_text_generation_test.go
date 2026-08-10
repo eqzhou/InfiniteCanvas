@@ -184,3 +184,55 @@ func TestFilmAIDecomposeRunCreatesOneIdempotentTextJob(t *testing.T) {
 		t.Fatalf("text job was hidden from task history: %d %s", listed.Code, listed.Body.String())
 	}
 }
+
+func TestFilmAICandidateMustBeAppliedBeforeStageApproval(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. STATION - NIGHT\nLin hears a signal."}`))
+	document := decodeFilmResponse(t, response)
+	body, _ := json.Marshal(map[string]any{
+		"revision": document.Stages[0].Revision, "mode": "ai", "providerId": "provider-text",
+		"model": "gpt-text", "idempotencyKey": "apply-pass-1",
+	})
+	created := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", body))
+	task := created.Tasks[len(created.Tasks)-1]
+	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Status = "succeeded"
+	job.Result, _ = json.Marshal(providerTextResult{Text: validFilmAIDecompositionJSON})
+	record, err := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := integrateFilmTextJobResult(created, job, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(ready)
+	if _, err := backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, "film-api", record.Revision, raw); err != nil {
+		t.Fatal(err)
+	}
+
+	approve, _ := json.Marshal(map[string]any{"revision": ready.Stages[0].Revision})
+	blocked := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/approve", approve)
+	if blocked.Code != http.StatusUnprocessableEntity && blocked.Code != http.StatusConflict {
+		t.Fatalf("ready candidate bypassed apply review: %d %s", blocked.Code, blocked.Body.String())
+	}
+
+	candidate := ready.AICandidates[0]
+	applyBody, _ := json.Marshal(map[string]any{"revision": candidate.Revision})
+	appliedResponse := request(t, handler, http.MethodPost, "/api/film/projects/film-api/ai-candidates/"+candidate.ID+"/apply", applyBody)
+	if appliedResponse.Code != http.StatusOK {
+		t.Fatalf("apply candidate: %d %s", appliedResponse.Code, appliedResponse.Body.String())
+	}
+	applied := decodeFilmResponse(t, appliedResponse)
+	if len(applied.StructureVersions) != 1 || applied.AICandidates[0].Status != filmAICandidateApplied || applied.Episodes[0].Title != "The signal" {
+		t.Fatalf("candidate was not applied through API: %#v", applied)
+	}
+	approve, _ = json.Marshal(map[string]any{"revision": applied.Stages[0].Revision})
+	approved := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/approve", approve)
+	if approved.Code != http.StatusOK || decodeFilmResponse(t, approved).Stages[0].Status != filmStatusApproved {
+		t.Fatalf("applied candidate could not be approved: %d %s", approved.Code, approved.Body.String())
+	}
+}
