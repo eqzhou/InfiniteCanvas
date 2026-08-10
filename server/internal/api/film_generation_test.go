@@ -54,6 +54,67 @@ func filmGenerationRunBody(t *testing.T, revision int, shotID, key string) []byt
 	return body
 }
 
+func TestFilmGenerationStagesRejectModelsOutsideTenantAllowList(t *testing.T) {
+	server, _, handler := filmAPIServerHandler(t)
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{
+		AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: true,
+		AvailableModels: []string{"allowed-model"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	document := prepareFilmGenerationStage(t, handler)
+	for _, stage := range []string{"storyboard", "first_frame", "video", "audio"} {
+		t.Run(stage, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"revision": document.Stages[2].Revision, "shotIds": []string{document.Shots[0].ID},
+				"providerId": "provider-a", "model": "blocked-model", "idempotencyKey": "blocked-" + stage,
+				"config": map[string]any{"size": "1024x1024", "quality": "standard"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/"+stage+"/run", body)
+			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), modelNotAllowedMessage) {
+				t.Fatalf("blocked Film %s model = %d %s", stage, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestFilmGenerationRejectsSharedChannelFinalModelOutsideTenantAllowList(t *testing.T) {
+	server, _, handler := filmAPIServerHandler(t)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{
+		AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: true,
+		AvailableModels: []string{"allowed-model"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	channels, _ := json.Marshal([]adminChannelPublic{{
+		ID: "shared-film", Name: "Shared Film", BaseURL: "https://shared.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultImageModel: "blocked-final-model", Models: []string{"blocked-final-model"},
+	}})
+	if got := putAdminConfigForTest(t, handler, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, handler, "shared-film", "sk-private"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	document := prepareFilmGenerationStage(t, handler)
+	body, _ := json.Marshal(map[string]any{
+		"revision": document.Stages[2].Revision, "shotIds": []string{document.Shots[0].ID},
+		"providerId": "shared-film", "model": "", "idempotencyKey": "blocked-final-shared",
+		"config": map[string]any{"size": "1024x1024", "quality": "standard"},
+	})
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run", body)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), modelNotAllowedMessage) {
+		t.Fatalf("blocked routed Film model = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestSelectFilmGenerationShotsSupportsEpisodeRangeAndOrderZero(t *testing.T) {
 	document := newFilmDocument("film-range")
 	document.Episodes = []filmEpisode{{ID: "ep-0", Revision: 1, Order: 0, Title: "Zero", Status: filmStatusDraft}, {ID: "ep-1", Revision: 1, Order: 1, Title: "One", Status: filmStatusDraft}}
@@ -156,6 +217,7 @@ func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T)
 		t.Fatalf("failed job was not synchronized: %#v", failedDocument.Tasks)
 	}
 
+	batchCallsBeforeRetry := backend.atomicBatchCalls.Load()
 	retried := request(t, handler, http.MethodPost, "/api/film/projects/film-api/generation-jobs/"+task.GenerationJobID+"/retry", nil)
 	if retried.Code != http.StatusAccepted || bytes.Contains(retried.Body.Bytes(), []byte(task.GenerationJobID+`"`)) {
 		t.Fatalf("retry: %d %s", retried.Code, retried.Body.String())
@@ -168,6 +230,9 @@ func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T)
 	retryJob, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, retryID)
 	if err != nil || retryJob.Status != "queued" {
 		t.Fatalf("retry job = %#v err=%v", retryJob, err)
+	}
+	if got := backend.atomicBatchCalls.Load(); got != batchCallsBeforeRetry+1 {
+		t.Fatalf("retry did not atomically commit its Film task and GenerationJob: batch calls %d -> %d", batchCallsBeforeRetry, got)
 	}
 
 	// Retrying only creates a queued real job; it cannot bind media or mark the

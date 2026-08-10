@@ -60,6 +60,21 @@ func TestTextGenerationJobsAreServerManaged(t *testing.T) {
 	}
 }
 
+func TestFilmTextGenerationRejectsModelsOutsideTenantAllowList(t *testing.T) {
+	server, _, handler := filmAPIServerHandler(t)
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{
+		AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: true,
+		AvailableModels: []string{"allowed-model"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"revision":1,"mode":"ai","providerId":"provider-a","model":"blocked-model","idempotencyKey":"blocked-text-model"}`)
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", body)
+	if response.Code != http.StatusForbidden || !bytes.Contains(response.Body.Bytes(), []byte(modelNotAllowedMessage)) {
+		t.Fatalf("blocked Film text model = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestTextWorkerUsesFrozenChannelAndPersistsProviderResult(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	backend := newMemoryStore()
@@ -347,5 +362,19 @@ func TestCancelLatestFilmTextJobDoesNotUseEmptyShotAsIdentity(t *testing.T) {
 	status := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api/status", nil))
 	if status.Tasks[len(status.Tasks)-1].Status != filmStatusCanceled || status.Stages[1].Status != filmStatusFailed {
 		t.Fatalf("text cancellation did not update task and stage: %#v", status)
+	}
+}
+
+func TestDecomposeStageStillAcceptsManualRun(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	imported := decodeFilmResponse(t, request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"EPISODE 1\nINT. STATION - NIGHT\nLin waits."}`)))
+	body, _ := json.Marshal(map[string]any{"revision": imported.Stages[0].Revision})
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", body)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("manual decompose run: %d %s", response.Code, response.Body.String())
+	}
+	document := decodeFilmResponse(t, response)
+	if document.Stages[0].Status != filmStatusNeedsReview {
+		t.Fatalf("manual decompose run status = %q", document.Stages[0].Status)
 	}
 }

@@ -443,7 +443,7 @@ func (m *filmMemoryStore) CreateFilmGenerationBatch(
 	return record, nil
 }
 
-func filmAPIHandler(t *testing.T) (*filmMemoryStore, http.Handler) {
+func filmAPIServerHandler(t *testing.T) (*Server, *filmMemoryStore, http.Handler) {
 	t.Helper()
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	t.Setenv("OPENBOARD_FILM_MODE", "true")
@@ -461,6 +461,12 @@ func filmAPIHandler(t *testing.T) (*filmMemoryStore, http.Handler) {
 	if response := request(t, router, http.MethodPost, "/api/film/projects/film-api", []byte(`{}`)); response.Code != http.StatusCreated {
 		t.Fatalf("create film production: %d %s", response.Code, response.Body.String())
 	}
+	return server, backend, router
+}
+
+func filmAPIHandler(t *testing.T) (*filmMemoryStore, http.Handler) {
+	t.Helper()
+	_, backend, router := filmAPIServerHandler(t)
 	return backend, router
 }
 

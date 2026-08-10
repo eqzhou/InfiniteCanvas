@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -37,6 +38,18 @@ func TestMediaCapabilityCatalogDerivesOnlyEnabledSharedChannelDefaults(t *testin
 	}
 	if catalog.Models[0].ChannelID != "media-main" || catalog.Models[0].Modes[0] == "" || catalog.Models[0].Protocol != "openai" {
 		t.Fatalf("incomplete catalog: %#v", catalog.Models)
+	}
+}
+
+func TestMediaCapabilityUsesRegisteredProviderModelLimits(t *testing.T) {
+	channel := adminChannelPublic{ID: "apimart", Name: "API Mart", Protocol: "apimart"}
+	image := capabilityForChannelDefault(channel, "image", "doubao-seedream-5-0-pro")
+	if image.MaxReferences != 10 || !reflect.DeepEqual(image.Sizes, []string{"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "auto"}) {
+		t.Fatalf("image capability ignored provider registry: %#v", image)
+	}
+	video := capabilityForChannelDefault(channel, "video", "doubao-seedance-2.0")
+	if video.MaxReferences != 9 || !reflect.DeepEqual(video.Durations, []int{5, 15}) {
+		t.Fatalf("video capability ignored provider registry: %#v", video)
 	}
 }
 
@@ -133,6 +146,14 @@ func TestBillingEstimateUsesTheSameSharedMediaCatalogVersion(t *testing.T) {
 	}
 	if got := putSharedChannelSecret(t, router, "billing-image", "sk-private"); got.Code != http.StatusNoContent {
 		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	basicAnonymous := requestWithHeaders(t, router, http.MethodGet, "/api/billing/estimate?model=gpt-image-1&units=2", nil, nil)
+	if basicAnonymous.Code != http.StatusOK {
+		t.Fatalf("anonymous basic estimate: %d %s", basicAnonymous.Code, basicAnonymous.Body.String())
+	}
+	mediaAnonymous := requestWithHeaders(t, router, http.MethodGet, "/api/billing/estimate?model=gpt-image-1&units=2&providerId=billing-image&kind=image&mode=text_to_image", nil, nil)
+	if mediaAnonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous media capability estimate = %d %s", mediaAnonymous.Code, mediaAnonymous.Body.String())
 	}
 	estimate := request(t, router, http.MethodGet, "/api/billing/estimate?model=gpt-image-1&units=2&providerId=billing-image&kind=image&mode=text_to_image", nil)
 	if estimate.Code != http.StatusOK {
