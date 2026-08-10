@@ -324,3 +324,28 @@ func TestRetryFilmTextJobPreservesFrozenContractAndRebindsTask(t *testing.T) {
 		t.Fatalf("text retry was converted into a media task: job=%#v task=%#v", retryJob, retryTask)
 	}
 }
+
+func TestCancelLatestFilmTextJobDoesNotUseEmptyShotAsIdentity(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	imported := decodeFilmResponse(t, request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"EPISODE 1\nINT. STATION - NIGHT\nLin waits."}`)))
+	approveBody, _ := json.Marshal(map[string]any{"revision": imported.Stages[0].Revision})
+	approved := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/approve", approveBody))
+	legacyRunBody, _ := json.Marshal(map[string]any{"revision": approved.Stages[1].Revision})
+	legacy := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/script/run", legacyRunBody))
+	rejectBody, _ := json.Marshal(map[string]any{"revision": legacy.Stages[1].Revision})
+	rejected := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/script/reject", rejectBody))
+	requestBody, _ := json.Marshal(map[string]any{
+		"revision": rejected.Stages[1].Revision, "mode": "ai", "episodeId": rejected.Episodes[0].ID,
+		"providerId": "provider-text", "model": "gpt-text", "idempotencyKey": "cancel-text-pass-1",
+	})
+	running := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/script/run", requestBody))
+	textTask := running.Tasks[len(running.Tasks)-1]
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/generation-jobs/"+textTask.GenerationJobID+"/cancel", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("cancel latest text job: %d %s", response.Code, response.Body.String())
+	}
+	status := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api/status", nil))
+	if status.Tasks[len(status.Tasks)-1].Status != filmStatusCanceled || status.Stages[1].Status != filmStatusFailed {
+		t.Fatalf("text cancellation did not update task and stage: %#v", status)
+	}
+}
