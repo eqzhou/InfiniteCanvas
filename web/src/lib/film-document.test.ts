@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { createProject } from "@/lib/defaults";
+import { createNode, createProject } from "@/lib/defaults";
 import {
   applyApprovedFilmRepair,
   buildFilmProjectionDiffs,
   commitFilmProjection,
   createFilmDocument,
   decomposeFilmSource,
+  ensureFilmSceneDirectorNode,
   refreshFilmProjection,
   validateFilmDocument,
 } from "@/lib/film-document";
@@ -163,5 +164,35 @@ describe("film document", () => {
       before: { title: managed.title, content: managed.metadata.content },
       after: { title: "Close shot", content: "The door opens slowly." },
     }]);
+  });
+
+  test("creates or locates one managed Director node without changing user nodes or layout", () => {
+    const document = decomposeFilmSource(createFilmDocument("film-director", "2026-08-09T00:00:00.000Z"), "INT. ROOM - DAY\nA door opens.");
+    const scene = document.scenes[0]!;
+    const board = { ...createProject("Film", "film"), id: document.projectId };
+    const userDirector = createNode("director", { x: 40, y: 50 }, { id: "user-director", title: "User setup" });
+    const first = ensureFilmSceneDirectorNode({ ...board, nodes: [userDirector] }, scene);
+    const managed = first.project.nodes.find((node) => node.id === first.nodeId)!;
+
+    expect(first.created).toBe(true);
+    expect(first.project.nodes.find((node) => node.id === userDirector.id)).toEqual(userDirector);
+    expect(managed).toMatchObject({
+      type: "director",
+      title: `Director · ${scene.heading}`,
+      metadata: { filmProjectionKey: `director:${scene.id}`, filmProjectionRevision: scene.revision },
+    });
+    expect(managed.metadata.directorScene).toBeDefined();
+
+    const moved = { ...first.project, nodes: first.project.nodes.map((node) => node.id === managed.id ? { ...node, position: { x: 811, y: 377 }, title: "Custom working title" } : node) };
+    const second = ensureFilmSceneDirectorNode(moved, { ...scene, heading: "INT. UPDATED", revision: scene.revision + 1 });
+
+    expect(second.created).toBe(false);
+    expect(second.nodeId).toBe(first.nodeId);
+    expect(second.project.nodes).toHaveLength(2);
+    expect(second.project.nodes.find((node) => node.id === managed.id)).toMatchObject({
+      position: { x: 811, y: 377 },
+      title: "Custom working title",
+      metadata: { filmProjectionKey: `director:${scene.id}`, filmProjectionRevision: scene.revision + 1 },
+    });
   });
 });
