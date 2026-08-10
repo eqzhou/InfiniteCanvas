@@ -11,6 +11,7 @@ import {
   getCodexSession,
   listCodexHistory,
   listCodexModels,
+  listCodexSkills,
   interruptCodexTurn,
   prewarmCodexSession,
   revealCodexFile,
@@ -26,6 +27,8 @@ import {
   type CodexHistorySummary,
   type CodexModel,
   type CodexPermissionMode,
+  type CodexContextReference,
+  type CodexSkill,
   type CodexSession,
 } from "@/services/local-agent";
 import {
@@ -70,6 +73,7 @@ import {
   mergeCodexTranscript,
   type CodexTranscriptState,
 } from "@/services/codex-transcript";
+import { applyAgentComposerSuggestion, detectAgentComposerTrigger } from "@/lib/agent-composer";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = SharedTurnStatus;
@@ -173,6 +177,9 @@ async function insertAttachmentImageNodes(files: File[]): Promise<void> {
 export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const [session, setSession] = useState<CodexSession | null>(null);
   const [text, setText] = useState("");
+  const [composerCursor, setComposerCursor] = useState(0);
+  const [composerReferences, setComposerReferences] = useState<CodexContextReference[]>([]);
+  const [composerSkills, setComposerSkills] = useState<CodexSkill[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState<CodexProgressItem[]>([]);
@@ -202,6 +209,14 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const preferenceWriteRef = useRef<Promise<void>>(Promise.resolve());
   const preferenceRevisionRef = useRef(0);
   const sessionIdRef = useRef<string | undefined>(undefined);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const activeProject = useBoardStore((state) => state.projects.find((project) => project.id === state.activeProjectId));
+  const composerTrigger = detectAgentComposerTrigger(text, composerCursor);
+  const composerSuggestions: CodexContextReference[] = composerTrigger?.kind === "skill"
+    ? composerSkills.filter((skill) => skill.enabled && `${skill.name} ${skill.id}`.toLowerCase().includes(composerTrigger.query.toLowerCase())).slice(0, 8).map((skill) => ({ kind: "skill", id: skill.id, label: skill.name }))
+    : composerTrigger?.kind === "node"
+      ? (activeProject?.nodes ?? []).filter((node) => `${node.title} ${node.id}`.toLowerCase().includes(composerTrigger.query.toLowerCase())).slice(0, 8).map((node) => ({ kind: "node", id: node.id, label: node.title }))
+      : [];
   const sessionInitializationRef = useRef<{
     key: string;
     promise: Promise<CodexSession | null>;
@@ -246,6 +261,12 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   useEffect(() => {
     turnStatusRef.current = turnStatus;
   }, [turnStatus]);
+
+  useEffect(() => {
+    let active = true;
+    void listCodexSkills(connection).then((skills) => { if (active) setComposerSkills(skills); }).catch(() => { if (active) setComposerSkills([]); });
+    return () => { active = false; };
+  }, [connection.baseUrl, connection.token, connection.sessionToken]);
 
   useEffect(() => {
     if (turnStatus !== "running") return;
@@ -662,12 +683,14 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     const prompt = (requestedText ?? text).trim();
     if (!session || !prompt || busy || turnStatusRef.current === "running") return;
     const pendingFiles = requestedText === undefined ? files.slice() : [];
+    const pendingContextReferences = requestedText === undefined ? composerReferences.slice() : [];
     const clientMessageId = uid("message");
     sharedRevisionRef.current += 1;
     setBusy(true);
     setError(null);
     setReconnecting(false);
     setText("");
+    setComposerReferences([]);
     setFiles([]);
     const optimisticState = addCodexUserMessage(transcriptStateRef.current, {
       id: clientMessageId,
@@ -709,6 +732,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           clientId: getRuntimeClientId(),
           clientMessageId,
           permissionMode,
+          contextReferences: pendingContextReferences,
           ...(models.some((item) => item.model === selectedModel) ? { model: selectedModel } : {}),
           ...(models.find((item) => item.model === selectedModel)?.supportedReasoningEfforts
             .some((item) => item.reasoningEffort === selectedEffort) ? { effort: selectedEffort } : {}),
@@ -1017,11 +1041,15 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 <option value="full-access">完全访问（高风险）</option>
               </select>
             </div>
+            {composerReferences.length ? <div className="mb-1 flex flex-wrap gap-1 px-1">{composerReferences.map((reference) => <button key={`${reference.kind}:${reference.id}`} type="button" className="ob-chip text-[10px]" title="移除上下文引用" onClick={() => setComposerReferences((current) => current.filter((item) => item.kind !== reference.kind || item.id !== reference.id))}>{reference.kind === "skill" ? "/" : "@"}{reference.label} ×</button>)}</div> : null}
+            {composerTrigger && composerSuggestions.length ? <div role="listbox" aria-label={composerTrigger.kind === "skill" ? "Skill 建议" : "画布素材建议"} className="mb-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]">{composerSuggestions.map((suggestion) => <button key={`${suggestion.kind}:${suggestion.id}`} role="option" type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--ob-accent-soft)]" onMouseDown={(event) => event.preventDefault()} onClick={() => { const trigger = detectAgentComposerTrigger(text, composerCursor); if (!trigger) return; const next = applyAgentComposerSuggestion(text, trigger, suggestion, composerReferences); setText(next.text); setComposerReferences(next.references); setComposerCursor(next.cursor); requestAnimationFrame(() => { composerRef.current?.focus(); composerRef.current?.setSelectionRange(next.cursor, next.cursor); }); }}>{suggestion.kind === "skill" ? "/" : "@"}{suggestion.label}<span className="ml-2 text-[10px] text-[var(--ob-muted)]">{suggestion.id}</span></button>)}</div> : null}
             <div className="flex items-end gap-1.5">
               <textarea
+                ref={composerRef}
                 disabled={busy || turnStatus === "running"}
                 value={text}
-                onChange={(event) => setText(event.target.value)}
+                onChange={(event) => { setText(event.target.value); setComposerCursor(event.target.selectionStart); }}
+                onSelect={(event) => setComposerCursor(event.currentTarget.selectionStart)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                     event.preventDefault();
@@ -1029,7 +1057,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                   }
                 }}
                 className="min-h-16 min-w-0 flex-1 resize-y border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)] disabled:opacity-50"
-                placeholder="发送消息"
+                placeholder="发送消息；输入 / 选择 Skill，输入 @ 引用画布素材"
               />
               <label className="ob-icon-btn h-8 w-8 shrink-0 cursor-pointer" title="添加图片" aria-label="添加图片">
                 <ImagePlus size={14} />
