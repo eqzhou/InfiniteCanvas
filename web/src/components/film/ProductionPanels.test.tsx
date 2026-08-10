@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createProject } from "@/lib/defaults";
 import { createFilmDocument } from "@/lib/film-document";
 import type { FilmStatus } from "@/services/film-client";
-import { ProjectionPanel } from "./ProductionPanels";
+import { ProductionPanel, ProjectionPanel } from "./ProductionPanels";
 
 describe("Film Director projection workflow", () => {
   test("offers verified Director captures only when the Film canvas has a Director node", () => {
@@ -22,5 +22,16 @@ describe("Film Director projection workflow", () => {
     expect(html).toContain("Director 正式构图");
     expect(html).toContain("加载 Director 拍摄版本");
     expect(html).toContain("采用为分镜或首帧");
+  });
+});
+
+describe("Film media capability selection", () => {
+  test("fails closed while the server capability catalog is unavailable", () => {
+    const document = createFilmDocument("film-catalog", "2026-08-08T00:00:00.000Z");
+    const status: FilmStatus = { document, recordRevision: 1, capabilities: { available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: true, fileUploadImport: true, maxImportBytes: 1, stageGeneration: true, generationJobs: true, generationStages: ["storyboard", "video", "audio"], assetBundleExport: true, mp4Export: false, mp4Diagnostic: "", agentOperations: [] } };
+    const html = renderToStaticMarkup(<ProductionPanel status={status} busy={false} onLegacyStage={() => {}} onRun={async () => false} onSynced={() => {}} />);
+    expect(html).toContain("媒体能力目录");
+    expect(html).toContain("目录加载完成前不会猜测模型能力");
+    expect(html).toContain("disabled");
   });
 });
