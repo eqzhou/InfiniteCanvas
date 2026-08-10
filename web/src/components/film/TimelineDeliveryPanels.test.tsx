@@ -14,6 +14,9 @@ describe("visual production timeline", () => {
     expect(html).toContain('aria-label="时间线播放头"');
     expect(html).toContain('data-testid="visual-timeline-track-video"');
     expect(html).toContain('data-testid="visual-timeline-clip-clip-1"');
+    expect(html).toContain('draggable="true"');
+    expect(html).toContain('aria-label="拖动片段入点"');
+    expect(html).toContain('aria-label="拖动片段出点"');
     expect(html).toContain("左移一帧");
     expect(html).toContain("收缩入点一帧");
   });
