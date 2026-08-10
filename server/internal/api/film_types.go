@@ -230,6 +230,8 @@ type filmGenerationSnapshot struct {
 	Prompt                   string               `json:"prompt"`
 	ProviderID               string               `json:"providerId"`
 	Model                    string               `json:"model"`
+	CapabilityVersion        string               `json:"capabilityVersion,omitempty"`
+	GenerationMode           string               `json:"generationMode,omitempty"`
 	Config                   filmGenerationConfig `json:"config"`
 	IdentityVersions         []filmAsset          `json:"identityVersions"`
 	StyleVersion             *filmAsset           `json:"styleVersion,omitempty"`

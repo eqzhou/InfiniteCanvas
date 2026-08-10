@@ -23,6 +23,15 @@ type mediaCapabilityCatalog struct {
 	Models  []mediaModelCapability `json:"models"`
 }
 
+func validFilmGenerationMode(mode string) bool {
+	switch mode {
+	case "text_to_image", "image_to_image", "text_to_video", "image_to_video", "text_to_audio":
+		return true
+	default:
+		return false
+	}
+}
+
 func capabilityForChannelDefault(channel adminChannelPublic, kind, model string) mediaModelCapability {
 	capability := mediaModelCapability{ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol, Model: model, Kind: kind}
 	switch kind {

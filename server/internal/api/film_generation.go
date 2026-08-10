@@ -332,6 +332,10 @@ func buildFilmGenerationJob(stage string, shot filmShot, projectID, providerID, 
 }
 
 func buildFilmGenerationSnapshot(document filmDocument, shot filmShot, providerID, model string, config filmGenerationConfig, now string) *filmGenerationSnapshot {
+	return buildFilmGenerationSnapshotWithCapability(document, shot, providerID, model, config, now, "", "")
+}
+
+func buildFilmGenerationSnapshotWithCapability(document filmDocument, shot filmShot, providerID, model string, config filmGenerationConfig, now, capabilityVersion, generationMode string) *filmGenerationSnapshot {
 	identities := make([]filmAsset, 0, len(shot.IdentityVersionIDs))
 	wanted := make(map[string]struct{}, len(shot.IdentityVersionIDs))
 	for _, id := range shot.IdentityVersionIDs {
@@ -362,11 +366,31 @@ func buildFilmGenerationSnapshot(document filmDocument, shot filmShot, providerI
 	}
 	return &filmGenerationSnapshot{
 		ShotRevision: shot.Revision, Prompt: prompt, ProviderID: providerID, Model: model,
+		CapabilityVersion: capabilityVersion, GenerationMode: generationMode,
 		Config: config, IdentityVersions: identities, StyleVersion: style,
 		StoryboardDirectorSource: cloneDirectorSource(shot.StoryboardDirectorSource),
 		FirstFrameDirectorSource: cloneDirectorSource(shot.FirstFrameDirectorSource),
 		ReferenceStorageKeys:     append([]string(nil), config.ReferenceStorageKeys...),
 		EstimatedGenerations:     1, EstimatedCredits: 1, CreatedAt: now,
+	}
+}
+
+func filmGenerationMode(stage string, shot filmShot, config filmGenerationConfig) string {
+	switch stage {
+	case "storyboard", "first_frame":
+		if len(config.ReferenceStorageKeys) > 0 || shot.StoryboardDirectorSource != nil || shot.FirstFrameDirectorSource != nil {
+			return "image_to_image"
+		}
+		return "text_to_image"
+	case "video":
+		if len(config.ReferenceStorageKeys) > 0 || shot.FirstFrameStorageKey != "" {
+			return "image_to_video"
+		}
+		return "text_to_video"
+	case "audio":
+		return "text_to_audio"
+	default:
+		return ""
 	}
 }
 
@@ -546,6 +570,33 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		if snapshot != nil {
 			selectedModel = snapshot.Model
 		}
+		capabilityVersion, generationMode := "", ""
+		if snapshot != nil {
+			mediaCatalog, catalogErr := s.buildMediaCapabilityCatalog(r.Context(), tenantID)
+			if catalogErr != nil {
+				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
+				writeFilmError(w, http.StatusServiceUnavailable, "media_capabilities_unavailable", "media capability catalog is unavailable")
+				return
+			}
+			kind := filmStageGenerationKind(stage)
+			for _, capability := range mediaCatalog.Models {
+				if capability.ChannelID == selectedProviderID && capability.Model == selectedModel && capability.Kind == kind {
+					generationMode = filmGenerationMode(stage, jobShot, jobConfig)
+					for _, mode := range capability.Modes {
+						if mode == generationMode {
+							capabilityVersion = mediaCatalog.Version
+							break
+						}
+					}
+					break
+				}
+			}
+			if capabilityVersion == "" {
+				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
+				writeFilmError(w, http.StatusUnprocessableEntity, "media_capability_unsupported", "selected shared model does not advertise the requested generation mode")
+				return
+			}
+		}
 		job, buildErr := buildFilmGenerationJob(stage, jobShot, document.ProjectID, selectedProviderID, selectedModel, taskID, jobID, requestHash, jobConfig, snapshot, now)
 		if buildErr != nil {
 			s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
@@ -578,7 +629,7 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			}
 			createdJobs = append(createdJobs, jobID)
 		}
-		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, Title: "Generate " + stage + " for " + shot.Title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: buildFilmGenerationSnapshot(document, jobShot, selectedProviderID, selectedModel, jobConfig, now)})
+		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, Title: "Generate " + stage + " for " + shot.Title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: buildFilmGenerationSnapshotWithCapability(document, jobShot, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)})
 	}
 	if len(next.Tasks) > 1_000 {
 		s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)

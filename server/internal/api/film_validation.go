@@ -225,6 +225,9 @@ func validateFilmTasks(tasks []filmTask) error {
 				validateFilmGenerationConfig(task.Stage, snapshot.Config) != nil {
 				return fmt.Errorf("film task %s generation snapshot is invalid", task.ID)
 			}
+			if (snapshot.CapabilityVersion == "") != (snapshot.GenerationMode == "") || (snapshot.CapabilityVersion != "" && (!validFilmRequestHash(snapshot.CapabilityVersion) || !validFilmGenerationMode(snapshot.GenerationMode))) {
+				return fmt.Errorf("film task %s media capability snapshot is invalid", task.ID)
+			}
 			if snapshot.StoryboardDirectorSource != nil && !validFilmDirectorSource(snapshot.StoryboardDirectorSource, snapshot.StoryboardDirectorSource.StorageKey) {
 				return fmt.Errorf("film task %s storyboard Director snapshot is invalid", task.ID)
 			}
