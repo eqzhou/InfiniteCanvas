@@ -99,10 +99,12 @@ describe("application configuration", () => {
       canvasPanelWidth: 900,
       canvasPanelCollapsed: true,
       canvasPanelTab: "assets",
+      canvasInteractionTool: "pan",
     })).toMatchObject({
       canvasPanelWidth: 420,
       canvasPanelCollapsed: true,
       canvasPanelTab: "assets",
+      canvasInteractionTool: "pan",
     });
     expect(normalizeAppConfig({
       ...base,
@@ -114,10 +116,12 @@ describe("application configuration", () => {
       ...base,
       canvasPanelWidth: 10,
       canvasPanelTab: "invalid" as "projects",
+      canvasInteractionTool: "invalid" as "select",
     })).toMatchObject({
       canvasPanelWidth: 240,
       canvasPanelCollapsed: false,
       canvasPanelTab: "projects",
+      canvasInteractionTool: "select",
     });
   });
 
