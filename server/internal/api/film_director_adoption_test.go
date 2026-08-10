@@ -118,3 +118,36 @@ func TestFilmGenerationSnapshotFreezesDirectorSource(t *testing.T) {
 		t.Fatal("generation snapshot retained a mutable Director source pointer")
 	}
 }
+
+func TestDirectorSceneAndTaskSourcesParticipateInRestoreContract(t *testing.T) {
+	document := newFilmDocument("film-main")
+	source := &filmDirectorSource{
+		Revision: 1, TargetField: "scene", CaptureID: "capture-main", DirectorNodeID: "director-main",
+		CameraID: "camera-main", CameraName: "Main", Width: 1920, Height: 1080,
+		StorageKey: "image:director", SHA256: strings.Repeat("a", 64), ObjectVersion: "director-v1",
+		Snapshot: json.RawMessage(`{"camera":"main"}`), AdoptedAt: "2026-08-08T00:00:00Z",
+	}
+	document.Scenes = []filmScene{{ID: "scene-main", Revision: 1, EpisodeID: "episode-main", Order: 0, Heading: "Scene", Synopsis: "Action", Status: "approved", DirectorSource: source}}
+	document.Tasks = []filmTask{{ID: "task-main", Revision: 1, Stage: "storyboard", Status: "needs_review", Snapshot: &filmGenerationSnapshot{
+		ShotRevision: 1, Prompt: "Prompt", ProviderID: "provider", Model: "model", IdentityVersions: []filmAsset{}, ReferenceStorageKeys: []string{},
+		StoryboardDirectorSource: cloneFilmDirectorSource(source, "storyboard"), FirstFrameDirectorSource: cloneFilmDirectorSource(source, "first_frame"),
+	}}}
+
+	references := filmRestoreReferences(document)["image:director"]
+	for _, key := range []string{
+		filmRestoreReferenceKey("scene", "scene-main", "directorSource"),
+		filmRestoreReferenceKey("task", "task-main", "storyboardDirectorSource"),
+		filmRestoreReferenceKey("task", "task-main", "firstFrameDirectorSource"),
+	} {
+		if _, ok := references[key]; !ok {
+			t.Fatalf("missing Director restore reference %q: %#v", key, references)
+		}
+	}
+}
+
+func cloneFilmDirectorSource(source *filmDirectorSource, target string) *filmDirectorSource {
+	cloned := *source
+	cloned.TargetField = target
+	cloned.Snapshot = append(json.RawMessage(nil), source.Snapshot...)
+	return &cloned
+}

@@ -120,6 +120,48 @@ describe("complete film bundle rollback", () => {
     expect(restore.document.dialogues?.[0]).toMatchObject({ audioSha256: "b".repeat(64), audioObjectVersion: "audio-v1" });
   });
 
+  test("preserves scene and frozen Director source identities", () => {
+    const film = createFilmDocument("director-film", "2026-08-08T00:00:00.000Z");
+    const source = {
+      revision: 1,
+      targetField: "scene" as const,
+      captureId: "capture-1",
+      directorNodeId: "director-1",
+      cameraId: "camera-1",
+      cameraName: "Main",
+      width: 1920,
+      height: 1080,
+      storageKey: "image:director",
+      sha256: "0".repeat(64),
+      objectVersion: "old-version",
+      snapshot: { camera: "main" },
+      adoptedAt: film.createdAt,
+    };
+    film.scenes = [{ id: "scene-1", revision: 1, episodeId: "episode-1", order: 0, heading: "Scene", synopsis: "Action", status: "approved", directorSource: source }];
+    film.tasks = [{
+      id: "task-1", revision: 1, stage: "storyboard", title: "Task", status: "needs_review", progress: 1,
+      createdAt: film.createdAt, updatedAt: film.updatedAt,
+      snapshot: {
+        shotRevision: 1, prompt: "Prompt", providerId: "provider", model: "model", config: {}, identityVersions: [],
+        storyboardDirectorSource: { ...source, targetField: "storyboard" },
+        firstFrameDirectorSource: { ...source, targetField: "first_frame" },
+        referenceStorageKeys: [], estimatedGenerations: 1, createdAt: film.createdAt,
+      },
+    }];
+    const imported = [{ storageKey: "image:director", mimeType: "image/png", bytes: 8, sha256: "a".repeat(64), objectVersion: "director-v2" }];
+
+    const restore = prepareFilmRestore(film, imported);
+
+    expect(restore.media[0]?.provenance).toEqual([
+      { kind: "scene", entityId: "scene-1", field: "directorSource" },
+      { kind: "task", entityId: "task-1", field: "storyboardDirectorSource" },
+      { kind: "task", entityId: "task-1", field: "firstFrameDirectorSource" },
+    ]);
+    expect(restore.document.scenes[0]?.directorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
+    expect(restore.document.tasks[0]?.snapshot?.storyboardDirectorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
+    expect(restore.document.tasks[0]?.snapshot?.firstFrameDirectorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
+  });
+
   test("keeps migrated Film sources that remain referenced outside Film", () => {
     const project = createProject("Shared", "film");
     project.nodes = [{ id: "node-1", type: "image", title: "Shared", position: { x: 0, y: 0 }, width: 320, height: 240, metadata: { storageKey: "image:shared" } }];
