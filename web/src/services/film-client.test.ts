@@ -10,7 +10,9 @@ import {
   normalizeFilmCapabilities,
   requestFilmStageRun,
   requestFilmAIDecomposition,
+  requestFilmAIScript,
   applyFilmAICandidate,
+  applyFilmAIScriptCandidate,
   requestFilmExport,
   retryFilmGenerationJob,
   waitForFilmGenerationStage,
@@ -191,6 +193,25 @@ describe("film client", () => {
       url: "/api/film/projects/film-ai/ai-candidates/candidate-1/apply",
       body: { revision: 4 },
     });
+  });
+
+  test("sends strict episode script and script candidate apply contracts", async () => {
+    const film = createFilmDocument("film-script", "2026-08-08T00:00:00.000Z");
+    const requests: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ data: film, meta: { recordRevision: 3 } }), { status: 202 });
+    }) as typeof fetch;
+
+    await requestFilmAIScript("film-script", {
+      revision: 2, episodeId: "episode-1", providerId: "shared-text", model: "gpt-text", idempotencyKey: "script-1",
+    });
+    await applyFilmAIScriptCandidate("film-script", "script-candidate-1", 4);
+
+    expect(requests).toEqual([
+      { url: "/api/film/projects/film-script/stages/script/run", body: { revision: 2, mode: "ai", episodeId: "episode-1", providerId: "shared-text", model: "gpt-text", idempotencyKey: "script-1" } },
+      { url: "/api/film/projects/film-script/ai-script-candidates/script-candidate-1/apply", body: { revision: 4 } },
+    ]);
   });
 
   test("sends a stable idempotency key for every export kind", async () => {
