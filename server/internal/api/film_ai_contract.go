@@ -65,6 +65,32 @@ type filmAIDecomposition struct {
 	Episodes   []filmAIEpisode   `json:"episodes"`
 }
 
+type filmAIScriptDialogue struct {
+	Kind    string `json:"kind"`
+	Speaker string `json:"speaker"`
+	Text    string `json:"text"`
+}
+
+type filmAIScriptShot struct {
+	Key             string                 `json:"key"`
+	Title           string                 `json:"title"`
+	Description     string                 `json:"description"`
+	DurationSeconds float64                `json:"durationSeconds"`
+	Dialogues       []filmAIScriptDialogue `json:"dialogues"`
+}
+
+type filmAIScriptScene struct {
+	Key      string             `json:"key"`
+	Heading  string             `json:"heading"`
+	Synopsis string             `json:"synopsis"`
+	Shots    []filmAIScriptShot `json:"shots"`
+}
+
+type filmAIScript struct {
+	Summary string              `json:"summary"`
+	Scenes  []filmAIScriptScene `json:"scenes"`
+}
+
 func validFilmAIKey(value string) bool {
 	return projectIDPattern.MatchString(value) && len(value) <= 100
 }
@@ -180,6 +206,39 @@ func validateFilmAIDecomposition(candidate filmAIDecomposition) error {
 	return nil
 }
 
+func validateFilmAIScript(candidate filmAIScript) error {
+	if !validFilmAIString(candidate.Summary, 4_000, true) || len(candidate.Scenes) == 0 {
+		return errors.New("AI script summary or scenes are invalid")
+	}
+	seen := make(map[string]struct{})
+	entities := 0
+	for _, scene := range candidate.Scenes {
+		entities++
+		if entities > maxFilmEntities || addFilmAIKey(seen, "scene", scene.Key) != nil ||
+			!validFilmAIString(scene.Heading, 500, true) || !validFilmAIString(scene.Synopsis, 4_000, false) || len(scene.Shots) == 0 {
+			return errors.New("AI script scene is invalid")
+		}
+		for _, shot := range scene.Shots {
+			entities++
+			if entities > maxFilmEntities || addFilmAIKey(seen, "shot", shot.Key) != nil ||
+				!validFilmAIString(shot.Title, 500, true) || !validFilmAIString(shot.Description, 4_000, true) ||
+				math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) || shot.DurationSeconds < 1.0/120 ||
+				shot.DurationSeconds > 900 || shot.Dialogues == nil {
+				return errors.New("AI script shot is invalid")
+			}
+			for _, dialogue := range shot.Dialogues {
+				entities++
+				if entities > maxFilmEntities || (dialogue.Kind != "dialogue" && dialogue.Kind != "narration") ||
+					!validFilmAIString(dialogue.Speaker, 500, false) || !validFilmAIString(dialogue.Text, 10_000, true) ||
+					(dialogue.Kind == "narration" && dialogue.Speaker != "") {
+					return errors.New("AI script dialogue is invalid")
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func parseFilmAIDecompositionCandidate(value []byte) (filmAIDecomposition, error) {
 	if len(value) == 0 || len(value) > maxFilmAICandidateBytes {
 		return filmAIDecomposition{}, errors.New("AI decomposition response exceeds limits")
@@ -198,6 +257,28 @@ func parseFilmAIDecompositionCandidate(value []byte) (filmAIDecomposition, error
 	}
 	if err := validateFilmAIDecomposition(candidate); err != nil {
 		return filmAIDecomposition{}, err
+	}
+	return candidate, nil
+}
+
+func parseFilmAIScriptCandidate(value []byte) (filmAIScript, error) {
+	if len(value) == 0 || len(value) > maxFilmAICandidateBytes {
+		return filmAIScript{}, errors.New("AI script response exceeds limits")
+	}
+	if err := rejectFilmAIDuplicateJSONFields(value); err != nil {
+		return filmAIScript{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.DisallowUnknownFields()
+	var candidate filmAIScript
+	if err := decoder.Decode(&candidate); err != nil {
+		return filmAIScript{}, errors.New("AI script response is not valid strict JSON")
+	}
+	if err := ensureFilmAIJSONEOF(decoder); err != nil {
+		return filmAIScript{}, err
+	}
+	if err := validateFilmAIScript(candidate); err != nil {
+		return filmAIScript{}, err
 	}
 	return candidate, nil
 }
