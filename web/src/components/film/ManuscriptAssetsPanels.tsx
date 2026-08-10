@@ -146,6 +146,62 @@ export function AIDecompositionPanel({ document, busy, channels, channelId, mode
   </WorkbenchSection>;
 }
 
+export function AIScriptPanel({ document, busy, channels, channelId, model, episodeId, onChannel, onModel, onEpisode, onRun, onApply }: {
+  document: FilmDocument;
+  busy: boolean;
+  channels: AIChannelChoice[];
+  channelId: string;
+  model: string;
+  episodeId: string;
+  onChannel: (channelId: string) => void;
+  onModel: (model: string) => void;
+  onEpisode: (episodeId: string) => void;
+  onRun: () => void;
+  onApply: (candidateId: string) => void;
+}) {
+  const selectedChannel = channels.find((channel) => channel.id === channelId);
+  const decomposeApproved = document.stages.find((stage) => stage.id === "decompose")?.status === "approved";
+  const candidates = [...(document.scriptCandidates ?? [])].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  return <WorkbenchSection id="ai-script" title="AI 分集剧本 / Episode Script">
+    <div className="grid gap-2 sm:grid-cols-3">
+      <label className="text-xs text-[var(--ob-muted)]">目标分集
+        <select aria-label="剧本目标分集" className="ob-input mt-1 w-full" value={episodeId} onChange={(event) => onEpisode(event.target.value)}>
+          {!document.episodes.length ? <option value="">暂无分集</option> : null}
+          {[...document.episodes].sort((left, right) => left.order - right.order).map((episode) => <option key={episode.id} value={episode.id}>{episode.order + 1}. {episode.title}</option>)}
+        </select>
+      </label>
+      <label className="text-xs text-[var(--ob-muted)]">共享文字渠道
+        <select aria-label="AI 剧本渠道" className="ob-input mt-1 w-full" value={channelId} onChange={(event) => onChannel(event.target.value)}>
+          {!channels.length ? <option value="">暂无可用共享文字渠道</option> : null}
+          {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
+        </select>
+      </label>
+      <label className="text-xs text-[var(--ob-muted)]">冻结模型
+        <input aria-label="AI 剧本模型" className="ob-input mt-1 w-full" value={model} onChange={(event) => onModel(event.target.value)} list="film-ai-script-models" placeholder="选择或输入模型" />
+        <datalist id="film-ai-script-models">{selectedChannel?.models.map((item) => <option key={item} value={item} />)}</datalist>
+      </label>
+    </div>
+    <button type="button" className="ob-btn ob-btn-primary mt-3" disabled={busy || !decomposeApproved || !episodeId || !channelId || !model.trim()} onClick={onRun}>
+      <Sparkles size={14} /> 生成本集剧本候选
+    </button>
+    {!decomposeApproved ? <p className="mt-2 text-xs text-amber-500">请先采用并批准故事拆解阶段。</p> : null}
+    <p className="mt-2 text-xs text-[var(--ob-muted)]">每次只冻结并生成一集；目标集发生编辑时，运行中的结果会自动标记为过期。</p>
+    {!candidates.length ? <p className="mt-4 rounded-lg border border-dashed border-[var(--ob-line)] p-4 text-sm text-[var(--ob-muted)]">尚无分集剧本候选。</p> : <ul className="mt-4 space-y-3">
+      {candidates.map((candidate) => {
+        const episode = document.episodes.find((item) => item.id === candidate.targetEpisodeId);
+        const shotCount = candidate.script.scenes.reduce((sum, scene) => sum + scene.shots.length, 0);
+        const snapshot = document.tasks.find((task) => task.id === candidate.taskId)?.textSnapshot;
+        return <li key={candidate.id} className="rounded-lg border border-[var(--ob-line)] p-3" data-status={candidate.status}>
+          <div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{episode?.title ?? "已变更分集"} · {candidateStatusLabels[candidate.status]}</strong><span className="rounded-full border border-[var(--ob-line)] px-2 py-0.5 text-xs">目标 r{candidate.targetRevision}</span>{snapshot ? <span className="text-xs text-[var(--ob-muted)]">{snapshot.providerId} / {snapshot.model}</span> : null}</div>
+          <p className="mt-2 text-sm">{candidate.script.summary}</p>
+          <p className="mt-2 text-xs text-[var(--ob-muted)]">{candidate.script.scenes.length} 场 · {shotCount} 镜头</p>
+          {candidate.status === "ready" ? <button type="button" className="ob-btn mt-3" disabled={busy} onClick={() => onApply(candidate.id)}>采用这版剧本</button> : null}
+        </li>;
+      })}
+    </ul>}
+  </WorkbenchSection>;
+}
+
 function AssetEditor({ asset, characters, busy, onSave }: { asset: FilmAsset; characters: FilmAsset[]; busy: boolean; onSave: (asset: FilmAsset, patch: Partial<FilmAsset>) => void }) {
   const [title, setTitle] = useState(asset.title);
   const [description, setDescription] = useState(asset.description);
