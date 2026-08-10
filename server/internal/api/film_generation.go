@@ -539,6 +539,8 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	next := cloneFilmDocument(document)
 	createdJobs := make([]string, 0, len(shots))
+	reservations := make([]store.FilmGenerationReservation, 0, len(shots))
+	atomicBackend, atomicBatch := s.store.(store.FilmGenerationBatchStore)
 	for _, shot := range shots {
 		jobShot, jobConfig := shot, input.Config
 		if stage == "audio" {
@@ -616,18 +618,22 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			return
 		} else {
 			meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind, "executor": serverExecutorMarker, "filmProjectId": document.ProjectID, "shotId": shot.ID})
-			createErr := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, 1, meta)
-			if createErr != nil {
-				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
-				mapped := filmGenerationStoreError(createErr)
-				if errors.Is(createErr, store.ErrConflict) {
-					writeFilmError(w, http.StatusConflict, "generation_job_conflict", "generation job id belongs to another request")
-				} else {
-					writeFilmOperationError(w, mapped)
+			if atomicBatch {
+				reservations = append(reservations, store.FilmGenerationReservation{Job: job, Units: 1, UsageMeta: meta})
+			} else {
+				createErr := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, 1, meta)
+				if createErr != nil {
+					s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
+					mapped := filmGenerationStoreError(createErr)
+					if errors.Is(createErr, store.ErrConflict) {
+						writeFilmError(w, http.StatusConflict, "generation_job_conflict", "generation job id belongs to another request")
+					} else {
+						writeFilmOperationError(w, mapped)
+					}
+					return
 				}
-				return
+				createdJobs = append(createdJobs, jobID)
 			}
-			createdJobs = append(createdJobs, jobID)
 		}
 		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, Title: "Generate " + stage + " for " + shot.Title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: buildFilmGenerationSnapshotWithCapability(document, jobShot, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)})
 	}
@@ -647,11 +653,19 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		writeFilmError(w, http.StatusUnprocessableEntity, "film_document_too_large", "Film production exceeds its storage limit")
 		return
 	}
-	updated, saveErr := backend.CompareAndSwapFilmProject(r.Context(), tenantID, record.ProjectID, record.Revision, raw)
+	var updated store.FilmRecord
+	var saveErr error
+	if atomicBatch && len(reservations) > 0 {
+		updated, saveErr = atomicBackend.CreateFilmGenerationBatch(r.Context(), tenantID, userIDFrom(r), record.ProjectID, record.Revision, raw, reservations)
+	} else {
+		updated, saveErr = backend.CompareAndSwapFilmProject(r.Context(), tenantID, record.ProjectID, record.Revision, raw)
+	}
 	if saveErr != nil {
 		s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 		if errors.Is(saveErr, store.ErrConflict) {
 			writeFilmError(w, http.StatusConflict, "revision_conflict", "Film production changed; reload before retrying")
+		} else if atomicBatch && (errors.Is(saveErr, store.ErrQuotaExceeded) || errors.Is(saveErr, store.ErrInsufficientCredits) || errors.Is(saveErr, store.ErrBanned) || errors.Is(saveErr, store.ErrGone)) {
+			writeFilmOperationError(w, filmGenerationStoreError(saveErr))
 		} else {
 			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be saved")
 		}
