@@ -19,7 +19,10 @@ describe("frontend localization guard", () => {
       "App.tsx",
       "components/layout/TopNav.tsx",
       "pages/AssetsPage.tsx",
+      "pages/AICallLogsPage.tsx",
+      "pages/HomePage.tsx",
       "pages/PluginsPage.tsx",
+      "pages/ServerLibraryPage.tsx",
       "pages/TaskCenterPage.tsx",
     ];
     const sources = Object.fromEntries(await Promise.all(files.map(async (file) => [
