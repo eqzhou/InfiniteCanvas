@@ -283,6 +283,9 @@ export type FilmGenerationSnapshot = {
   prompt: string;
   providerId: string;
   model: string;
+  capabilityVersion?: string;
+  generationMode?: string;
+  resolvedMode?: "text_to_video" | "first_frame_to_video" | "first_last_frame_to_video" | "reference_to_video";
   config: Record<string, unknown>;
   identityVersions: FilmAsset[];
   styleVersion?: FilmAsset;

@@ -34,6 +34,7 @@ type filmGenerationConfig struct {
 	GenerateAudio        bool     `json:"generateAudio,omitempty"`
 	Watermark            bool     `json:"watermark,omitempty"`
 	NegativePrompt       string   `json:"negativePrompt,omitempty"`
+	FrameMode            string   `json:"frameMode,omitempty"`
 	ReferenceStorageKeys []string `json:"referenceStorageKeys,omitempty"`
 	Voice                string   `json:"voice,omitempty"`
 	Format               string   `json:"format,omitempty"`
@@ -245,6 +246,9 @@ func validateFilmGenerationConfig(stage string, config filmGenerationConfig) err
 	}
 	if stage == "video" && (config.Seconds < 0 || config.Seconds > 15) {
 		return errors.New("video seconds is invalid")
+	}
+	if stage == "video" && config.FrameMode != "" && config.FrameMode != "references" && config.FrameMode != "first-last" {
+		return errors.New("video frame mode is invalid")
 	}
 	return nil
 }
@@ -567,7 +571,11 @@ func buildFilmGenerationTargetJob(stage string, shot filmShot, dialogue *filmDia
 		if seconds == 0 {
 			seconds = maxInt(1, minInt(15, int(math.Ceil(shot.DurationSeconds))))
 		}
-		parameters, err := json.Marshal(persistedMediaJobParameters{Executor: serverExecutorMarker, RequestHash: requestHash, Ratio: ratio, Resolution: resolution, Seconds: seconds, GenerateAudio: config.GenerateAudio, Watermark: config.Watermark, NegativePrompt: config.NegativePrompt, ReferenceStorageKeys: append([]string(nil), config.ReferenceStorageKeys...), SharedChannel: shared, Film: binding})
+		resolvedMode, resolveErr := resolveVideoGenerationMode(config.FrameMode, len(config.ReferenceStorageKeys), 0)
+		if resolveErr != nil {
+			return store.GenerationJob{}, resolveErr
+		}
+		parameters, err := json.Marshal(persistedMediaJobParameters{Executor: serverExecutorMarker, RequestHash: requestHash, Ratio: ratio, Resolution: resolution, Seconds: seconds, GenerateAudio: config.GenerateAudio, Watermark: config.Watermark, FrameMode: normalizeVideoFrameMode(config.FrameMode), NegativePrompt: config.NegativePrompt, ReferenceStorageKeys: append([]string(nil), config.ReferenceStorageKeys...), ResolvedMode: resolvedMode, SharedChannel: shared, Film: binding})
 		if err != nil {
 			return store.GenerationJob{}, err
 		}
@@ -922,8 +930,14 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		if stage == "audio" {
 			jobShot, jobConfig = filmDialogueAudioInputs(document, target, jobConfig)
 		}
-		if stage == "video" && (shot.FirstFrameStorageKey != "" || shot.LastFrameStorageKey != "") {
-			jobConfig.ReferenceStorageKeys = orderedFilmVideoReferences(shot, jobConfig.ReferenceStorageKeys)
+		if stage == "video" {
+			var modeErr error
+			jobConfig, _, modeErr = resolveFilmVideoConfig(shot, jobConfig)
+			if modeErr != nil {
+				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
+				writeFilmError(w, http.StatusUnprocessableEntity, "generation_request_invalid", modeErr.Error())
+				return
+			}
 			if err := s.validateFilmGenerationReferences(r.Context(), tenantID, stage, jobConfig.ReferenceStorageKeys); err != nil {
 				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 				writeFilmOperationError(w, err)
@@ -1013,6 +1027,9 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			title = "Generate dialogue audio for " + shot.Title
 		}
 		taskSnapshot := buildFilmGenerationTargetSnapshotWithCapability(document, jobShot, target.Dialogue, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)
+		if stage == "video" {
+			taskSnapshot.ResolvedMode, _ = resolveVideoGenerationMode(jobConfig.FrameMode, len(jobConfig.ReferenceStorageKeys), 0)
+		}
 		taskSnapshot.EstimatedCredits = unitCredits
 		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, DialogueID: dialogueID, Title: title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, ParentGenerationJobID: parentJobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: taskSnapshot})
 	}

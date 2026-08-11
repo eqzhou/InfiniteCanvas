@@ -289,6 +289,7 @@ type filmGenerationSnapshot struct {
 	Model                    string               `json:"model"`
 	CapabilityVersion        string               `json:"capabilityVersion,omitempty"`
 	GenerationMode           string               `json:"generationMode,omitempty"`
+	ResolvedMode             string               `json:"resolvedMode,omitempty"`
 	Config                   filmGenerationConfig `json:"config"`
 	IdentityVersions         []filmAsset          `json:"identityVersions"`
 	StyleVersion             *filmAsset           `json:"styleVersion,omitempty"`

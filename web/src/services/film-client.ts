@@ -104,6 +104,7 @@ export type FilmGenerationConfig = Partial<{
   size: string; quality: string; ratio: string; resolution: string; seconds: number;
   generateAudio: boolean; watermark: boolean; negativePrompt: string;
   referenceStorageKeys: string[]; voice: string; format: string; speed: number; instructions: string;
+  frameMode: "references" | "first-last";
 }>;
 
 export type FilmManuscriptPreflight = {

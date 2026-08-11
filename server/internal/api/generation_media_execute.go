@@ -171,6 +171,7 @@ type persistedMediaJobParameters struct {
 	Film                 *filmGenerationBinding     `json:"film,omitempty"`
 	CapabilityVersion    string                     `json:"capabilityVersion,omitempty"`
 	GenerationMode       string                     `json:"generationMode,omitempty"`
+	ResolvedMode         string                     `json:"resolvedMode,omitempty"`
 	EstimatedCredits     int                        `json:"estimatedCredits,omitempty"`
 }
 
@@ -198,6 +199,11 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 	var input createVideoJobRequest
 	if !decodeStrictGenerationInput(w, r, &input) || !validCreateVideoJob(input) {
 		http.Error(w, "invalid video generation job", http.StatusBadRequest)
+		return
+	}
+	resolvedMode, err := resolveVideoGenerationMode(input.Parameters.FrameMode, len(input.Parameters.ReferenceStorageKeys), len(input.Parameters.Elements))
+	if err != nil {
+		http.Error(w, "video generation mode is invalid", http.StatusBadRequest)
 		return
 	}
 	// The tenant model allow list is a governance rule, so it must hold here
@@ -230,10 +236,7 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 	}
 	capabilityVersion, generationMode := "", ""
 	if sharedSnapshot != nil {
-		generationMode = "text_to_video"
-		if len(input.Parameters.ReferenceStorageKeys) > 0 || len(input.Parameters.Elements) > 0 {
-			generationMode = "image_to_video"
-		}
+		generationMode = videoCapabilityMode(resolvedMode)
 		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "video", input.Model, generationMode)
 		if err != nil {
 			http.Error(w, "shared video capability is unavailable", http.StatusUnprocessableEntity)
@@ -253,6 +256,7 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 		SharedChannel:        sharedSnapshot,
 		CapabilityVersion:    capabilityVersion,
 		GenerationMode:       generationMode,
+		ResolvedMode:         resolvedMode,
 	})
 	s.createServerMediaJob(w, r, store.GenerationJob{
 		ID: input.ID, ProjectID: input.ProjectID, Kind: "video", Status: "queued",
@@ -687,6 +691,11 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 	var parameters persistedMediaJobParameters
 	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Executor != serverExecutorMarker {
 		return resolvedMediaRequest{}, errors.New("invalid media job parameters")
+	}
+	if job.Kind == "video" {
+		if _, err := validateFrozenVideoMode(parameters.ResolvedMode, parameters.FrameMode, len(parameters.ReferenceStorageKeys), len(parameters.Elements)); err != nil {
+			return resolvedMediaRequest{}, err
+		}
 	}
 	configValue, err := s.store.GetState(ctx, tenantID, "config")
 	if err != nil || len(configValue) > 1<<20 {

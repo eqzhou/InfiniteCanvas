@@ -168,8 +168,12 @@ func (s *Server) prepareFilmRepairGeneration(r *http.Request, document filmDocum
 	if stage == "audio" {
 		jobShot, jobConfig = filmDialogueAudioInputs(patched, target, jobConfig)
 	}
-	if stage == "video" && (shot.FirstFrameStorageKey != "" || shot.LastFrameStorageKey != "") {
-		jobConfig.ReferenceStorageKeys = orderedFilmVideoReferences(shot, jobConfig.ReferenceStorageKeys)
+	if stage == "video" {
+		var modeErr error
+		jobConfig, _, modeErr = resolveFilmVideoConfig(shot, jobConfig)
+		if modeErr != nil {
+			return preparedFilmRepairGeneration{}, modeErr
+		}
 		if err := s.validateFilmGenerationReferences(r.Context(), tenantIDFrom(r), stage, jobConfig.ReferenceStorageKeys); err != nil {
 			return preparedFilmRepairGeneration{}, err
 		}
@@ -216,6 +220,9 @@ func (s *Server) prepareFilmRepairGeneration(r *http.Request, document filmDocum
 		return preparedFilmRepairGeneration{}, err
 	}
 	repairSnapshot := buildFilmGenerationTargetSnapshotWithCapability(patched, jobShot, target.Dialogue, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)
+	if stage == "video" {
+		repairSnapshot.ResolvedMode, _ = resolveVideoGenerationMode(jobConfig.FrameMode, len(jobConfig.ReferenceStorageKeys), 0)
+	}
 	repairSnapshot.EstimatedCredits = *input.ExpectedCredits
 	dialogueID := ""
 	if target.Dialogue != nil {
