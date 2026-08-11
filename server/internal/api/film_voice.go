@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	maxVoiceSampleBytes      = 20 << 20
-	maxVoiceCloneSamples     = 10
-	voiceCloneExecutorMarker = "voice-clone"
+	maxVoiceSampleBytes          = 20 << 20
+	maxVoiceConsentEvidenceBytes = 20 << 20
+	maxVoiceCloneSamples         = 10
+	voiceCloneExecutorMarker     = "voice-clone"
 )
 
 type createVoiceIdentityRequest struct {
@@ -35,6 +36,7 @@ type createVoiceConsentRequest struct {
 	RightsBasis        string `json:"rightsBasis"`
 	SubjectDisplayName string `json:"subjectDisplayName"`
 	TermsVersion       string `json:"termsVersion"`
+	EvidenceStorageKey string `json:"evidenceStorageKey"`
 }
 
 type createVoiceCloneRequest struct {
@@ -61,12 +63,6 @@ type voiceCloneJobParameters struct {
 	VersionID       string                     `json:"versionId"`
 	ConsentID       string                     `json:"consentId"`
 	Samples         []voiceCloneSampleSnapshot `json:"samples"`
-}
-
-func isMatchingVoiceCloneJob(job store.GenerationJob, requestHash, versionID string) bool {
-	var parameters voiceCloneJobParameters
-	return json.Unmarshal(job.Parameters, &parameters) == nil && parameters.Executor == voiceCloneExecutorMarker &&
-		parameters.RequestHash == requestHash && parameters.VersionID == versionID
 }
 
 func mountFilmVoiceRoutes(r chi.Router, server *Server) {
@@ -235,6 +231,11 @@ func (s *Server) createVoiceConsent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	actor, authenticated := authUserFrom(r.Context())
+	if !authenticated || !strings.EqualFold(actor.Status, "active") || !isTenantAdmin(actor) {
+		writeFilmError(w, http.StatusForbidden, "consent_admin_required", "Only an active tenant administrator can record voice consent")
+		return
+	}
 	voiceID := chi.URLParam(r, "voiceId")
 	if !validProjectID(voiceID) {
 		writeFilmError(w, http.StatusBadRequest, "invalid_voice_identity", "Voice identity is invalid")
@@ -256,15 +257,28 @@ func (s *Server) createVoiceConsent(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, subjectErr := cleanVoiceField(input.SubjectDisplayName, "subjectDisplayName", 500, true)
 	terms, termsErr := cleanVoiceField(input.TermsVersion, "termsVersion", 100, true)
-	actorID := strings.TrimSpace(userIDFrom(r))
-	if subjectErr != nil || termsErr != nil || !validProjectID(actorID) {
+	evidenceKey := strings.TrimSpace(input.EvidenceStorageKey)
+	actorID := strings.TrimSpace(actor.ID)
+	if subjectErr != nil || termsErr != nil || !validProjectID(actorID) || !validFilmStorageKey(evidenceKey) {
 		writeFilmError(w, http.StatusBadRequest, "invalid_consent", "Consent audit fields are invalid")
+		return
+	}
+	evidence, err := s.readTenantBlob(r.Context(), tenantIDFrom(r), evidenceKey, maxVoiceConsentEvidenceBytes)
+	if errors.Is(err, store.ErrNotFound) {
+		writeFilmError(w, http.StatusNotFound, "consent_evidence_not_found", "Consent evidence was not found")
+		return
+	}
+	if err != nil || len(evidence.Data) == 0 || strings.TrimSpace(evidence.Metadata.ContentType) == "" {
+		writeFilmError(w, http.StatusBadRequest, "consent_evidence_invalid", "Consent evidence could not be verified")
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	value := store.VoiceConsent{
 		ID: stableFilmID("voice_consent", projectID, voiceID, actorID, now), ProjectID: projectID, VoiceIdentityID: voiceID,
-		Accepted: true, RightsBasis: rightsBasis, SubjectDisplayName: subject, TermsVersion: terms, ActorID: actorID, AcceptedAt: now,
+		Accepted: true, RightsBasis: rightsBasis, SubjectDisplayName: subject, TermsVersion: terms,
+		EvidenceStorageKey: evidenceKey, EvidenceMIMEType: evidence.Metadata.ContentType,
+		EvidenceSHA256: sha256Hex(evidence.Data), EvidenceObjectVersion: blobIdentityVersion(evidence),
+		ActorID: actorID, AcceptedAt: now,
 	}
 	created, err := backend.CreateVoiceConsent(r.Context(), tenantIDFrom(r), projectID, value)
 	if err != nil {
@@ -282,6 +296,9 @@ func hashVoiceIdempotency(tenantID, projectID, voiceID, key string) string {
 func (s *Server) createVoiceClone(w http.ResponseWriter, r *http.Request) {
 	backend, projectID, ok := s.loadVoiceProject(w, r)
 	if !ok {
+		return
+	}
+	if !s.authorizeServerGeneration(w, r) {
 		return
 	}
 	voiceID := chi.URLParam(r, "voiceId")
@@ -307,9 +324,22 @@ func (s *Server) createVoiceClone(w http.ResponseWriter, r *http.Request) {
 		writeFilmError(w, http.StatusBadRequest, "invalid_request", "Clone provider, model, consent, samples and idempotency key are required")
 		return
 	}
+	if !s.requireAllowedModel(w, r, input.Model) {
+		return
+	}
 	consent, err := backend.GetVoiceConsent(r.Context(), tenantIDFrom(r), projectID, input.ConsentID)
-	if err != nil || !consent.Accepted || consent.VoiceIdentityID != voiceID {
+	if err != nil || !consent.Accepted || consent.VoiceIdentityID != voiceID || !validSHA256Hex(consent.EvidenceSHA256) || consent.EvidenceStorageKey == "" || consent.EvidenceMIMEType == "" || consent.EvidenceObjectVersion == "" {
 		writeFilmError(w, http.StatusBadRequest, "consent_required", "A matching affirmative consent record is required")
+		return
+	}
+	evidence, err := s.readTenantBlob(r.Context(), tenantIDFrom(r), consent.EvidenceStorageKey, maxVoiceConsentEvidenceBytes)
+	if err != nil || verifyFilmBlob(evidence, "", consent.EvidenceMIMEType, consent.EvidenceSHA256, consent.EvidenceObjectVersion, 0) != nil {
+		writeFilmError(w, http.StatusConflict, "consent_evidence_changed", "Voice consent evidence is unavailable or changed")
+		return
+	}
+	estimatedCredits, err := s.store.GetModelCreditCost(r.Context(), tenantIDFrom(r), input.Model)
+	if err != nil || estimatedCredits < 1 || estimatedCredits > 1_000_000_000 {
+		writeFilmError(w, http.StatusServiceUnavailable, "billing_unavailable", "Voice clone credit quote is unavailable")
 		return
 	}
 	seen := map[string]struct{}{}
@@ -358,27 +388,22 @@ func (s *Server) createVoiceClone(w http.ResponseWriter, r *http.Request) {
 		ProviderID: input.ProviderID, Model: input.Model, Parameters: parameters, Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": jobID, "kind": "audio", "executor": voiceCloneExecutorMarker, "voiceIdentityId": voiceID})
-	jobErr := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, 1, meta)
-	if errors.Is(jobErr, store.ErrConflict) {
-		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, jobID)
-		if getErr != nil || existing.ProjectID != projectID || existing.Kind != "audio" || existing.ProviderID != input.ProviderID || existing.Model != input.Model || !isMatchingVoiceCloneJob(existing, requestHash, versionID) {
-			writeFilmError(w, http.StatusConflict, "generation_job_conflict", "Generation job id is already bound to another request")
-			return
-		}
-	} else if jobErr != nil {
-		writeGenerationCreationError(w, jobErr)
-		return
-	}
 	value := store.VoiceIdentityVersion{
 		ID: versionID, ProjectID: projectID, VoiceIdentityID: voiceID, Status: "queued", SampleIDs: append([]string(nil), input.SampleIDs...),
 		ConsentID: input.ConsentID, ProviderID: input.ProviderID, Model: input.Model, GenerationJobID: jobID, CreatedAt: now, UpdatedAt: now,
 	}
-	created, replayed, err := backend.CreateVoiceCloneVersion(r.Context(), tenantID, projectID, idempotencyHash, value)
+	atomicBackend, available := s.store.(store.VoiceCloneBatchStore)
+	if !available {
+		writeFilmError(w, http.StatusServiceUnavailable, "voice_clone_transaction_unavailable", "Atomic voice clone storage is unavailable")
+		return
+	}
+	created, replayed, err := atomicBackend.CreateVoiceCloneBatch(r.Context(), tenantID, userIDFrom(r), projectID, idempotencyHash, value, job, 1, meta, estimatedCredits)
 	if err != nil {
-		if jobErr == nil {
-			_, _ = s.store.CancelServerGenerationJob(r.Context(), tenantID, jobID, time.Now().UTC())
-		}
-		writeFilmError(w, http.StatusInternalServerError, "voice_clone_create_failed", "Voice clone could not be queued")
+		writeGenerationCreationError(w, err)
+		return
+	}
+	if created.ID != versionID || created.ProjectID != projectID || created.VoiceIdentityID != voiceID || created.GenerationJobID != jobID || created.ProviderID != input.ProviderID || created.Model != input.Model || created.ConsentID != input.ConsentID {
+		writeFilmError(w, http.StatusConflict, "voice_clone_replay_conflict", "Idempotency key belongs to a different voice clone request")
 		return
 	}
 	if !replayed {
@@ -401,6 +426,8 @@ func writeGenerationCreationError(w http.ResponseWriter, err error) {
 		writeFilmError(w, http.StatusUnauthorized, "login_required", "Login is required for voice cloning")
 	case errors.Is(err, store.ErrBanned):
 		writeFilmError(w, http.StatusForbidden, "account_disabled", "Account is disabled")
+	case errors.Is(err, store.ErrConflict):
+		writeFilmError(w, http.StatusConflict, "voice_clone_conflict", "Voice clone request conflicts with current billing or idempotency state")
 	default:
 		writeFilmError(w, http.StatusInternalServerError, "generation_job_failed", "Voice clone generation job could not be stored")
 	}

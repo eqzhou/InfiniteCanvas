@@ -328,15 +328,19 @@ type VoiceSample struct {
 // VoiceConsent is append-only audit evidence. Accepted=false is intentionally
 // not persisted: absence of affirmative consent can never authorize cloning.
 type VoiceConsent struct {
-	ID                 string `json:"id"`
-	ProjectID          string `json:"projectId"`
-	VoiceIdentityID    string `json:"voiceIdentityId"`
-	Accepted           bool   `json:"accepted"`
-	RightsBasis        string `json:"rightsBasis"`
-	SubjectDisplayName string `json:"subjectDisplayName"`
-	TermsVersion       string `json:"termsVersion"`
-	ActorID            string `json:"actorId"`
-	AcceptedAt         string `json:"acceptedAt"`
+	ID                    string `json:"id"`
+	ProjectID             string `json:"projectId"`
+	VoiceIdentityID       string `json:"voiceIdentityId"`
+	Accepted              bool   `json:"accepted"`
+	RightsBasis           string `json:"rightsBasis"`
+	SubjectDisplayName    string `json:"subjectDisplayName"`
+	TermsVersion          string `json:"termsVersion"`
+	EvidenceStorageKey    string `json:"evidenceStorageKey"`
+	EvidenceMIMEType      string `json:"evidenceMimeType"`
+	EvidenceSHA256        string `json:"evidenceSHA256"`
+	EvidenceObjectVersion string `json:"evidenceObjectVersion"`
+	ActorID               string `json:"actorId"`
+	AcceptedAt            string `json:"acceptedAt"`
 }
 
 // VoiceIdentityVersion freezes all clone inputs. Lifecycle fields may move
@@ -369,9 +373,24 @@ type VoiceIdentityStore interface {
 	GetVoiceSample(ctx context.Context, tenantID, projectID, id string) (VoiceSample, error)
 	CreateVoiceConsent(ctx context.Context, tenantID, projectID string, value VoiceConsent) (VoiceConsent, error)
 	GetVoiceConsent(ctx context.Context, tenantID, projectID, id string) (VoiceConsent, error)
-	CreateVoiceCloneVersion(ctx context.Context, tenantID, projectID, idempotencyKeyHash string, value VoiceIdentityVersion) (VoiceIdentityVersion, bool, error)
 	ListVoiceIdentityVersions(ctx context.Context, tenantID, projectID, voiceIdentityID string) ([]VoiceIdentityVersion, error)
 	CompleteVoiceIdentityVersion(ctx context.Context, tenantID, projectID, versionID, jobID, status, providerVoiceID, message, updatedAt string) (VoiceIdentityVersion, error)
+}
+
+// VoiceCloneBatchStore is the production transaction boundary for voice
+// cloning. A queued job must never become claimable before its immutable voice
+// version and sample links exist, and the model quote must match the amount
+// reserved in the same transaction.
+type VoiceCloneBatchStore interface {
+	CreateVoiceCloneBatch(
+		ctx context.Context,
+		tenantID, userID, projectID, idempotencyKeyHash string,
+		value VoiceIdentityVersion,
+		job GenerationJob,
+		units int,
+		usageMeta json.RawMessage,
+		expectedCredits int,
+	) (VoiceIdentityVersion, bool, error)
 }
 
 type FilmGenerationReservation struct {

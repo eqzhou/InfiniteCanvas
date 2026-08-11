@@ -92,6 +92,9 @@ func (s *Server) runFilmStyleExtraction(w http.ResponseWriter, r *http.Request) 
 		writeFilmError(w, http.StatusNotFound, "style_extraction_disabled", "Style extraction is disabled")
 		return
 	}
+	if !s.authorizeServerGeneration(w, r) {
+		return
+	}
 	var input filmStyleExtractionRequest
 	if err := decodeFilmRequest(w, r, 64<<10, &input); err != nil {
 		writeFilmError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -120,6 +123,11 @@ func (s *Server) runFilmStyleExtraction(w http.ResponseWriter, r *http.Request) 
 	value, err := s.readTenantBlob(r.Context(), tenantIDFrom(r), asset.MediaStorageKey, maxProviderTextImageBytes)
 	if err != nil || verifyFilmBlob(value, "image/", asset.MediaMIMEType, asset.MediaSHA256, asset.MediaObjectVersion, 0) != nil {
 		writeFilmError(w, http.StatusUnprocessableEntity, "style_source_invalid", "Source image asset is unavailable or changed")
+		return
+	}
+	detectedMIME, _, _, imageErr := validateGeneratedImage(generatedImage{MIMEType: asset.MediaMIMEType, Data: value.Data})
+	if imageErr != nil || detectedMIME != asset.MediaMIMEType {
+		writeFilmError(w, http.StatusUnprocessableEntity, "style_source_invalid", "Source image asset must be a complete PNG or JPEG image")
 		return
 	}
 	requestHash, err := filmStyleExtractionHash(document.ProjectID, asset, input)

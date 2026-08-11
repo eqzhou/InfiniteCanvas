@@ -132,31 +132,27 @@ func (m *voiceFilmMemoryStore) GetVoiceConsent(_ context.Context, tenantID, proj
 	return value, nil
 }
 
-func (m *voiceFilmMemoryStore) CreateVoiceCloneVersion(_ context.Context, tenantID, projectID, idempotencyKey string, value store.VoiceIdentityVersion) (store.VoiceIdentityVersion, bool, error) {
-	m.voiceMu.Lock()
-	defer m.voiceMu.Unlock()
-	idempotency := voiceStoreKey(tenantID, projectID, idempotencyKey)
-	if versionID, exists := m.idempotencies[idempotency]; exists {
-		return m.versions[voiceStoreKey(tenantID, projectID, versionID)], true, nil
-	}
-	key := voiceStoreKey(tenantID, projectID, value.ID)
-	if _, exists := m.versions[key]; exists {
-		return store.VoiceIdentityVersion{}, false, store.ErrConflict
-	}
-	value.Revision = 1
-	for _, current := range m.versions {
-		if current.ProjectID == projectID && current.VoiceIdentityID == value.VoiceIdentityID && current.Revision >= value.Revision {
-			value.Revision = current.Revision + 1
-		}
-	}
-	value.IdempotencyKeyHash = idempotencyKey
-	m.versions[key], m.idempotencies[idempotency] = value, value.ID
-	return value, false, nil
-}
-
 func (m *voiceFilmMemoryStore) CreateServerGenerationJob(ctx context.Context, tenantID, userID string, job store.GenerationJob, units int, usageMeta json.RawMessage) error {
 	m.legacyJobCreates.Add(1)
 	return m.filmMemoryStore.CreateServerGenerationJob(ctx, tenantID, userID, job, units, usageMeta)
+}
+
+func (m *voiceFilmMemoryStore) CancelServerGenerationJob(ctx context.Context, tenantID, id string, now time.Time) (store.GenerationJob, error) {
+	job, err := m.filmMemoryStore.CancelServerGenerationJob(ctx, tenantID, id, now)
+	if err != nil {
+		return store.GenerationJob{}, err
+	}
+	var parameters voiceCloneJobParameters
+	if job.Kind == "audio" && json.Unmarshal(job.Parameters, &parameters) == nil && parameters.Executor == voiceCloneExecutorMarker {
+		m.voiceMu.Lock()
+		key := voiceStoreKey(tenantID, job.ProjectID, parameters.VersionID)
+		if version, exists := m.versions[key]; exists && (version.Status == "queued" || version.Status == "running") {
+			version.Status, version.Error, version.UpdatedAt = "canceled", "Voice clone was canceled", now.UTC().Format(time.RFC3339Nano)
+			m.versions[key] = version
+		}
+		m.voiceMu.Unlock()
+	}
+	return job, nil
 }
 
 // CreateVoiceCloneBatch is the transaction-shaped fake expected by the voice
@@ -278,7 +274,11 @@ func createVoiceIdentityAndSample(t *testing.T, handler http.Handler) (store.Voi
 		t.Fatalf("create sample: %d %s", sampleResponse.Code, sampleResponse.Body.String())
 	}
 	sample := voiceData[store.VoiceSample](t, sampleResponse.Body.Bytes())
-	consentResponse := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", []byte(`{"accepted":true,"rightsBasis":"self","subjectDisplayName":"Test Performer","termsVersion":"voice-clone-v1"}`))
+	evidence := apimartPNG(t)
+	if upload := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/voice-consent.png", evidence, map[string]string{"Content-Type": "image/png"}); upload.Code != http.StatusNoContent {
+		t.Fatalf("upload consent evidence: %d %s", upload.Code, upload.Body.String())
+	}
+	consentResponse := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", []byte(`{"accepted":true,"rightsBasis":"self","subjectDisplayName":"Test Performer","termsVersion":"voice-clone-v1","evidenceStorageKey":"voice-consent.png"}`))
 	if consentResponse.Code != http.StatusCreated {
 		t.Fatalf("create consent: %d %s", consentResponse.Code, consentResponse.Body.String())
 	}
@@ -299,6 +299,13 @@ func TestVoiceCloneRequiresExplicitAuditedConsentAndTenantAudio(t *testing.T) {
 	if rejected.Code != http.StatusBadRequest {
 		t.Fatalf("non-consent was accepted: %d %s", rejected.Code, rejected.Body.String())
 	}
+	if overwrite := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/"+consent.EvidenceStorageKey, []byte("changed evidence"), map[string]string{"Content-Type": "image/png"}); overwrite.Code != http.StatusNoContent {
+		t.Fatalf("overwrite consent evidence: %d %s", overwrite.Code, overwrite.Body.String())
+	}
+	changedEvidenceBody := []byte(`{"providerId":"audio-main","model":"voice-clone-1","sampleIds":["` + sample.ID + `"],"consentId":"` + consent.ID + `","idempotencyKey":"voice-clone-changed-evidence"}`)
+	if changed := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/clone", changedEvidenceBody); changed.Code != http.StatusConflict {
+		t.Fatalf("changed consent evidence status=%d body=%s", changed.Code, changed.Body.String())
+	}
 	nonAudio := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/not-audio.png", []byte("png"), map[string]string{"Content-Type": "image/png"})
 	if nonAudio.Code != http.StatusNoContent {
 		t.Fatalf("upload non-audio: %d", nonAudio.Code)
@@ -313,11 +320,11 @@ func TestVoiceConsentRequiresTenantAdminAndFrozenEvidence(t *testing.T) {
 	server, _, ownerHandler := voiceCloneAPIHandler(t)
 	created := request(t, ownerHandler, http.MethodPost, "/api/film/projects/voice-film/voice-identities", []byte(`{"title":"Evidence voice"}`))
 	identity := voiceData[store.VoiceIdentity](t, created.Body.Bytes())
-	evidence := []byte("signed voice consent evidence v1")
-	if upload := requestWithHeaders(t, ownerHandler, http.MethodPut, "/api/blobs/voice-consent.txt", evidence, map[string]string{"Content-Type": "text/plain"}); upload.Code != http.StatusNoContent {
+	evidence := apimartPNG(t)
+	if upload := requestWithHeaders(t, ownerHandler, http.MethodPut, "/api/blobs/voice-consent.png", evidence, map[string]string{"Content-Type": "image/png"}); upload.Code != http.StatusNoContent {
 		t.Fatalf("upload consent evidence: %d %s", upload.Code, upload.Body.String())
 	}
-	body := []byte(`{"accepted":true,"rightsBasis":"authorized","subjectDisplayName":"Test Performer","termsVersion":"voice-clone-v1","evidenceStorageKey":"voice-consent.txt"}`)
+	body := []byte(`{"accepted":true,"rightsBasis":"authorized","subjectDisplayName":"Test Performer","termsVersion":"voice-clone-v1","evidenceStorageKey":"voice-consent.png"}`)
 	response := request(t, ownerHandler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", body)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("audited consent status=%d body=%s", response.Code, response.Body.String())
@@ -325,7 +332,7 @@ func TestVoiceConsentRequiresTenantAdminAndFrozenEvidence(t *testing.T) {
 	var payload struct {
 		Data map[string]any `json:"data"`
 	}
-	if json.Unmarshal(response.Body.Bytes(), &payload) != nil || payload.Data["evidenceStorageKey"] != "voice-consent.txt" || payload.Data["evidenceSHA256"] != sha256Hex(evidence) || payload.Data["evidenceObjectVersion"] == "" {
+	if json.Unmarshal(response.Body.Bytes(), &payload) != nil || payload.Data["evidenceStorageKey"] != "voice-consent.png" || payload.Data["evidenceSHA256"] != sha256Hex(evidence) || payload.Data["evidenceObjectVersion"] == "" {
 		t.Fatalf("consent evidence was not frozen: %s", response.Body.String())
 	}
 	memberHandler := withActor(serverHandler(server), store.AuthUser{ID: "voice-member", TenantID: store.DefaultTenantID, Role: "member", Status: "active"})

@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 23
+const currentSchemaVersion = 24
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -268,7 +268,25 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 24 {
+		if err := migrateV24(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV24(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 24, `
+ALTER TABLE openboard_film_voice_consents
+  ADD COLUMN IF NOT EXISTS evidence_storage_key text NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS evidence_mime_type text NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS evidence_sha256 text NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS evidence_object_version text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS openboard_film_voice_consents_evidence_idx
+  ON openboard_film_voice_consents (tenant_id,project_id,evidence_sha256)
+  WHERE evidence_sha256 <> '';
+`)
 }
 
 func migrateV23(ctx context.Context, connection *pgxpool.Conn) error {
@@ -3080,6 +3098,20 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 	}
 	if err := s.refundCreditsTx(ctx, tx, tenantID, "", id, "cancelled"); err != nil {
 		return GenerationJob{}, err
+	}
+	if job.Kind == "audio" {
+		var parameters struct {
+			Executor  string `json:"executor"`
+			VersionID string `json:"versionId"`
+		}
+		if json.Unmarshal(job.Parameters, &parameters) == nil && parameters.Executor == "voice-clone" && parameters.VersionID != "" {
+			if _, err := tx.Exec(ctx, `UPDATE openboard_film_voice_versions
+				SET status='canceled',error='Voice clone was canceled',updated_at=$4
+				WHERE tenant_id=$1 AND generation_job_id=$2 AND id=$3 AND status IN ('queued','running')`,
+				tenantID, id, parameters.VersionID, now); err != nil {
+				return GenerationJob{}, err
+			}
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return GenerationJob{}, err

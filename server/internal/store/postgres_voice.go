@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -104,7 +107,8 @@ func (s *PostgresStore) GetVoiceSample(ctx context.Context, tenantID, projectID,
 func scanVoiceConsent(row pgx.Row) (VoiceConsent, error) {
 	var value VoiceConsent
 	var acceptedAt time.Time
-	err := row.Scan(&value.ID, &value.ProjectID, &value.VoiceIdentityID, &value.Accepted, &value.RightsBasis, &value.SubjectDisplayName, &value.TermsVersion, &value.ActorID, &acceptedAt)
+	err := row.Scan(&value.ID, &value.ProjectID, &value.VoiceIdentityID, &value.Accepted, &value.RightsBasis, &value.SubjectDisplayName, &value.TermsVersion,
+		&value.EvidenceStorageKey, &value.EvidenceMIMEType, &value.EvidenceSHA256, &value.EvidenceObjectVersion, &value.ActorID, &acceptedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return VoiceConsent{}, ErrNotFound
@@ -116,19 +120,33 @@ func scanVoiceConsent(row pgx.Row) (VoiceConsent, error) {
 }
 
 func (s *PostgresStore) CreateVoiceConsent(ctx context.Context, tenantID, projectID string, value VoiceConsent) (VoiceConsent, error) {
+	if !value.Accepted || value.VoiceIdentityID == "" || value.SubjectDisplayName == "" || value.TermsVersion == "" ||
+		value.EvidenceStorageKey == "" || value.EvidenceMIMEType == "" || value.EvidenceObjectVersion == "" || value.ActorID == "" ||
+		(value.RightsBasis != "self" && value.RightsBasis != "licensed" && value.RightsBasis != "authorized") || !validVoiceSHA256(value.EvidenceSHA256) {
+		return VoiceConsent{}, ErrInvalidInput
+	}
 	acceptedAt, err := parseVoiceTime(value.AcceptedAt)
 	if err != nil {
 		return VoiceConsent{}, err
 	}
 	return scanVoiceConsent(s.pool.QueryRow(ctx, `INSERT INTO openboard_film_voice_consents
-		(tenant_id,project_id,id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,actor_id,accepted_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING id,project_id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,actor_id,accepted_at`,
-		normalizeTenantID(tenantID), projectID, value.ID, value.VoiceIdentityID, value.Accepted, value.RightsBasis, value.SubjectDisplayName, value.TermsVersion, value.ActorID, acceptedAt))
+		(tenant_id,project_id,id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,evidence_storage_key,evidence_mime_type,evidence_sha256,evidence_object_version,actor_id,accepted_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		RETURNING id,project_id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,evidence_storage_key,evidence_mime_type,evidence_sha256,evidence_object_version,actor_id,accepted_at`,
+		normalizeTenantID(tenantID), projectID, value.ID, value.VoiceIdentityID, value.Accepted, value.RightsBasis, value.SubjectDisplayName, value.TermsVersion,
+		value.EvidenceStorageKey, value.EvidenceMIMEType, value.EvidenceSHA256, value.EvidenceObjectVersion, value.ActorID, acceptedAt))
+}
+
+func validVoiceSHA256(value string) bool {
+	if len(value) != 64 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (s *PostgresStore) GetVoiceConsent(ctx context.Context, tenantID, projectID, id string) (VoiceConsent, error) {
-	return scanVoiceConsent(s.pool.QueryRow(ctx, `SELECT id,project_id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,actor_id,accepted_at
+	return scanVoiceConsent(s.pool.QueryRow(ctx, `SELECT id,project_id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,evidence_storage_key,evidence_mime_type,evidence_sha256,evidence_object_version,actor_id,accepted_at
 		FROM openboard_film_voice_consents WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, normalizeTenantID(tenantID), projectID, id))
 }
 
@@ -154,13 +172,64 @@ const voiceVersionSelect = `SELECT version.id,version.project_id,version.voice_i
 	FROM openboard_film_voice_versions version LEFT JOIN openboard_film_voice_version_samples link
 	ON link.tenant_id=version.tenant_id AND link.project_id=version.project_id AND link.version_id=version.id`
 
-func (s *PostgresStore) CreateVoiceCloneVersion(ctx context.Context, tenantID, projectID, idempotencyKeyHash string, value VoiceIdentityVersion) (VoiceIdentityVersion, bool, error) {
+func (s *PostgresStore) CreateVoiceCloneBatch(ctx context.Context, tenantID, userID, projectID, idempotencyKeyHash string, value VoiceIdentityVersion, job GenerationJob, units int, usageMeta json.RawMessage, expectedCredits int) (VoiceIdentityVersion, bool, error) {
+	var lastErr error
+	for range 3 {
+		created, replayed, err := s.createVoiceCloneBatchOnce(ctx, tenantID, userID, projectID, idempotencyKeyHash, value, job, units, usageMeta, expectedCredits)
+		if !isSerializationFailure(err) {
+			return created, replayed, err
+		}
+		lastErr = err
+	}
+	return VoiceIdentityVersion{}, false, lastErr
+}
+
+func (s *PostgresStore) createVoiceCloneBatchOnce(ctx context.Context, tenantID, userID, projectID, idempotencyKeyHash string, value VoiceIdentityVersion, job GenerationJob, units int, usageMeta json.RawMessage, expectedCredits int) (VoiceIdentityVersion, bool, error) {
 	tenantID = normalizeTenantID(tenantID)
+	var binding struct {
+		Executor        string `json:"executor"`
+		ProjectID       string `json:"projectId"`
+		VoiceIdentityID string `json:"voiceIdentityId"`
+		VersionID       string `json:"versionId"`
+		ConsentID       string `json:"consentId"`
+	}
+	if strings.TrimSpace(userID) == "" || projectID == "" || !validVoiceSHA256(idempotencyKeyHash) || value.ID == "" || value.VoiceIdentityID == "" || len(value.SampleIDs) == 0 || len(value.SampleIDs) > 10 ||
+		value.GenerationJobID != job.ID || value.ProjectID != projectID || job.ProjectID != projectID || job.Kind != "audio" || job.Status != "queued" ||
+		value.ProviderID == "" || value.Model == "" || value.ProviderID != job.ProviderID || value.Model != job.Model || units < 1 || units > 1_000 || expectedCredits < 1 || expectedCredits > 1_000_000_000 ||
+		json.Unmarshal(job.Parameters, &binding) != nil || binding.Executor != "voice-clone" || binding.ProjectID != projectID || binding.VoiceIdentityID != value.VoiceIdentityID ||
+		binding.VersionID != value.ID || binding.ConsentID != value.ConsentID || !json.Valid(job.Result) || !json.Valid(usageMeta) {
+		return VoiceIdentityVersion{}, false, ErrInvalidInput
+	}
+	seenSamples := make(map[string]struct{}, len(value.SampleIDs))
+	for _, sampleID := range value.SampleIDs {
+		if sampleID == "" {
+			return VoiceIdentityVersion{}, false, ErrInvalidInput
+		}
+		if _, duplicate := seenSamples[sampleID]; duplicate {
+			return VoiceIdentityVersion{}, false, ErrInvalidInput
+		}
+		seenSamples[sampleID] = struct{}{}
+	}
+	createdAt, err := parseVoiceTime(value.CreatedAt)
+	if err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
+	jobCreatedAt, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
+	if err != nil {
+		return VoiceIdentityVersion{}, false, ErrInvalidInput
+	}
+	jobUpdatedAt, err := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+	if err != nil {
+		return VoiceIdentityVersion{}, false, ErrInvalidInput
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return VoiceIdentityVersion{}, false, err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
 	existing, getErr := scanVoiceVersion(tx.QueryRow(ctx, voiceVersionSelect+`
 		WHERE version.tenant_id=$1 AND version.project_id=$2 AND version.idempotency_key_hash=$3
 		GROUP BY version.tenant_id,version.project_id,version.id`, tenantID, projectID, idempotencyKeyHash))
@@ -178,14 +247,11 @@ func (s *PostgresStore) CreateVoiceCloneVersion(ctx context.Context, tenantID, p
 		}
 		return VoiceIdentityVersion{}, false, err
 	}
-	var nextRevision int
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(revision),0)+1 FROM openboard_film_voice_versions
-		WHERE tenant_id=$1 AND project_id=$2 AND voice_identity_id=$3`, tenantID, projectID, value.VoiceIdentityID).Scan(&nextRevision); err != nil {
-		return VoiceIdentityVersion{}, false, err
-	}
-	var consentVoiceID string
-	if err := tx.QueryRow(ctx, `SELECT voice_identity_id FROM openboard_film_voice_consents
-		WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND accepted`, tenantID, projectID, value.ConsentID).Scan(&consentVoiceID); err != nil || consentVoiceID != value.VoiceIdentityID {
+	var consentVoiceID, evidenceDigest, evidenceVersion string
+	if err := tx.QueryRow(ctx, `SELECT voice_identity_id,evidence_sha256,evidence_object_version FROM openboard_film_voice_consents
+		WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND accepted
+		AND evidence_sha256 ~ '^[a-f0-9]{64}$' AND evidence_object_version <> ''`, tenantID, projectID, value.ConsentID).
+		Scan(&consentVoiceID, &evidenceDigest, &evidenceVersion); err != nil || consentVoiceID != value.VoiceIdentityID || evidenceDigest == "" || evidenceVersion == "" {
 		return VoiceIdentityVersion{}, false, ErrInvalidInput
 	}
 	for _, sampleID := range value.SampleIDs {
@@ -195,15 +261,52 @@ func (s *PostgresStore) CreateVoiceCloneVersion(ctx context.Context, tenantID, p
 			return VoiceIdentityVersion{}, false, ErrInvalidInput
 		}
 	}
-	var generationExists int
-	if err := tx.QueryRow(ctx, `SELECT 1 FROM openboard_generation_jobs
-		WHERE tenant_id=$1 AND id=$2 AND project_id=$3 AND kind='audio' AND status='queued'
-		AND provider_id=$4 AND model=$5 AND parameters->>'executor'='voice-clone' AND parameters->>'versionId'=$6`,
-		tenantID, value.GenerationJobID, projectID, value.ProviderID, value.Model, value.ID).Scan(&generationExists); err != nil {
+	var nextRevision int
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(revision),0)+1 FROM openboard_film_voice_versions
+		WHERE tenant_id=$1 AND project_id=$2 AND voice_identity_id=$3`, tenantID, projectID, value.VoiceIdentityID).Scan(&nextRevision); err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
+	inserted, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
+		(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+		VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		ON CONFLICT (tenant_id,id) DO NOTHING`, tenantID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt,
+		job.ProviderID, job.Model, job.Parameters, job.Result, job.Error, jobCreatedAt, jobUpdatedAt)
+	if err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
+	if inserted.RowsAffected() == 0 {
+		return VoiceIdentityVersion{}, false, generationJobConflictError(ctx, tx, tenantID, job.ID)
+	}
+	var quota int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT generation_quota_monthly FROM openboard_tenants WHERE id=$1),$2)`, tenantID, defaultGenerationQuotaMonthly).Scan(&quota); err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	var used int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(units),0) FROM openboard_usage_events
+		WHERE tenant_id=$1 AND kind='generation' AND created_at >= $2`, tenantID, monthStart).Scan(&used); err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
+	if generationQuotaExceeded(used, units, quota) {
+		return VoiceIdentityVersion{}, false, ErrQuotaExceeded
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO openboard_usage_events (tenant_id,user_id,kind,units,meta)
+		VALUES ($1,$2,'generation',$3,$4)`, tenantID, userID, units, usageMeta); err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
+	cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
+	if err != nil {
+		return VoiceIdentityVersion{}, false, err
+	}
+	if cost < 1 || cost > 1_000_000_000/units {
 		return VoiceIdentityVersion{}, false, ErrInvalidInput
 	}
-	createdAt, err := parseVoiceTime(value.CreatedAt)
-	if err != nil {
+	totalCredits := cost * units
+	if totalCredits != expectedCredits {
+		return VoiceIdentityVersion{}, false, ErrConflict
+	}
+	if err := s.reserveCreditsTx(ctx, tx, tenantID, userID, job.ID, job.Model, totalCredits, usageMeta); err != nil {
 		return VoiceIdentityVersion{}, false, err
 	}
 	value.Revision, value.IdempotencyKeyHash = nextRevision, idempotencyKeyHash

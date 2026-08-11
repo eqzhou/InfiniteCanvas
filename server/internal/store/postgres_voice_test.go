@@ -45,6 +45,15 @@ func TestPostgresVoiceIdentitySnapshotsAreTenantScopedAndImmutable(t *testing.T)
 	if _, err := backend.CreateFilmProject(t.Context(), tenantID, projectID, []byte(completeFilmProjectionDocument)); err != nil {
 		t.Fatal(err)
 	}
+	userID := "voice-owner"
+	if _, err := backend.pool.Exec(t.Context(), `INSERT INTO openboard_users
+		(id,tenant_id,email,password_hash,display_name,role,credits,status)
+		VALUES ($1,$2,$3,'','Voice owner','owner',100,'active')`, userID, tenantID, tenantID+"@example.invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutModelCreditConfig(t.Context(), tenantID, ModelCreditConfig{DefaultCredits: 1, ModelCosts: []ModelCreditCost{{Model: "clone-model", Credits: 7}}}); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	identity, err := backend.CreateVoiceIdentity(t.Context(), tenantID, projectID, VoiceIdentity{ID: "voice-one", Title: "Lead", CreatedAt: now, UpdatedAt: now})
 	if err != nil || identity.Revision != 1 {
@@ -59,30 +68,33 @@ func TestPostgresVoiceIdentitySnapshotsAreTenantScopedAndImmutable(t *testing.T)
 	}
 	consent, err := backend.CreateVoiceConsent(t.Context(), tenantID, projectID, VoiceConsent{
 		ID: "consent-one", VoiceIdentityID: identity.ID, Accepted: true, RightsBasis: "self",
-		SubjectDisplayName: "Performer", TermsVersion: "voice-clone-v1", ActorID: "owner-one", AcceptedAt: now,
+		SubjectDisplayName: "Performer", TermsVersion: "voice-clone-v1", EvidenceStorageKey: "consent.txt",
+		EvidenceMIMEType: "text/plain", EvidenceSHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		EvidenceObjectVersion: "blob-consent-v1", ActorID: "owner-one", AcceptedAt: now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := GenerationJob{
 		ID: "voice-job-one", ProjectID: projectID, Kind: "audio", Status: "queued", Prompt: "Lead", ProviderID: "audio-main", Model: "clone-model",
-		Parameters: json.RawMessage(`{"executor":"voice-clone","versionId":"version-one"}`), Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,
+		Parameters: json.RawMessage(`{"executor":"voice-clone","projectId":"voice-film","voiceIdentityId":"voice-one","versionId":"version-one","consentId":"consent-one"}`), Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,
 	}
-	if err := backend.CreateGenerationJob(t.Context(), tenantID, job); err != nil {
-		t.Fatal(err)
-	}
-	version, replayed, err := backend.CreateVoiceCloneVersion(t.Context(), tenantID, projectID,
+	version, replayed, err := backend.CreateVoiceCloneBatch(t.Context(), tenantID, userID, projectID,
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", VoiceIdentityVersion{
-			ID: "version-one", VoiceIdentityID: identity.ID, SampleIDs: []string{sample.ID}, ConsentID: consent.ID,
+			ID: "version-one", ProjectID: projectID, VoiceIdentityID: identity.ID, SampleIDs: []string{sample.ID}, ConsentID: consent.ID,
 			ProviderID: job.ProviderID, Model: job.Model, GenerationJobID: job.ID, CreatedAt: now, UpdatedAt: now,
-		})
+		}, job, 1, json.RawMessage(`{"operation":"voice_clone"}`), 7)
 	if err != nil || replayed || version.Revision != 1 || version.Status != "queued" {
 		t.Fatalf("version=%#v replayed=%v err=%v", version, replayed, err)
 	}
-	replay, replayed, err := backend.CreateVoiceCloneVersion(t.Context(), tenantID, projectID,
-		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", VoiceIdentityVersion{ID: "different-version"})
+	replay, replayed, err := backend.CreateVoiceCloneBatch(t.Context(), tenantID, userID, projectID,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", version, job, 1, json.RawMessage(`{}`), 7)
 	if err != nil || !replayed || replay.ID != version.ID {
 		t.Fatalf("replay=%#v replayed=%v err=%v", replay, replayed, err)
+	}
+	var credits int64
+	if err := backend.pool.QueryRow(t.Context(), `SELECT credits FROM openboard_users WHERE tenant_id=$1 AND id=$2`, tenantID, userID).Scan(&credits); err != nil || credits != 93 {
+		t.Fatalf("voice clone model cost credits=%d err=%v", credits, err)
 	}
 	if _, err := backend.GetVoiceIdentity(t.Context(), tenantID+"-other", projectID, identity.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant identity read err=%v", err)
@@ -98,5 +110,27 @@ func TestPostgresVoiceIdentitySnapshotsAreTenantScopedAndImmutable(t *testing.T)
 	}
 	if _, err := backend.CompleteVoiceIdentityVersion(t.Context(), tenantID, projectID, version.ID, job.ID, "failed", "", "overwrite", readyAt); !errors.Is(err, ErrConflict) {
 		t.Fatalf("terminal immutable version changed: %v", err)
+	}
+
+	cancelJob := job
+	cancelJob.ID = "voice-job-cancel"
+	cancelJob.Parameters = json.RawMessage(`{"executor":"voice-clone","projectId":"voice-film","voiceIdentityId":"voice-one","versionId":"version-cancel","consentId":"consent-one"}`)
+	cancelVersion, replayed, err := backend.CreateVoiceCloneBatch(t.Context(), tenantID, userID, projectID,
+		"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", VoiceIdentityVersion{
+			ID: "version-cancel", ProjectID: projectID, VoiceIdentityID: identity.ID, SampleIDs: []string{sample.ID}, ConsentID: consent.ID,
+			ProviderID: cancelJob.ProviderID, Model: cancelJob.Model, GenerationJobID: cancelJob.ID, CreatedAt: now, UpdatedAt: now,
+		}, cancelJob, 1, json.RawMessage(`{"operation":"voice_clone"}`), 7)
+	if err != nil || replayed || cancelVersion.Status != "queued" {
+		t.Fatalf("cancel version=%#v replayed=%v err=%v", cancelVersion, replayed, err)
+	}
+	if _, err := backend.CancelServerGenerationJob(t.Context(), tenantID, cancelJob.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	canceledVersions, err := backend.ListVoiceIdentityVersions(t.Context(), tenantID, projectID, identity.ID)
+	if err != nil || len(canceledVersions) != 2 || canceledVersions[1].Status != "canceled" {
+		t.Fatalf("atomic canceled versions=%#v err=%v", canceledVersions, err)
+	}
+	if err := backend.pool.QueryRow(t.Context(), `SELECT credits FROM openboard_users WHERE tenant_id=$1 AND id=$2`, tenantID, userID).Scan(&credits); err != nil || credits != 93 {
+		t.Fatalf("voice clone cancel refund credits=%d err=%v", credits, err)
 	}
 }
