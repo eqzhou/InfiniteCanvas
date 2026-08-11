@@ -178,6 +178,7 @@ func TestComfyUICancelIsPromptScopedBeforeInterrupt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	executor.exclusive = true
 	if err := executor.Cancel(t.Context(), comfyUIExternalCheckpoint{PromptID: "prompt-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +186,37 @@ func TestComfyUICancelIsPromptScopedBeforeInterrupt(t *testing.T) {
 	defer fixture.mu.Unlock()
 	if fixture.queueDelete != 1 || fixture.interrupts != 1 {
 		t.Fatalf("queue delete=%d interrupts=%d", fixture.queueDelete, fixture.interrupts)
+	}
+}
+
+func TestComfyUICancelDoesNotInterruptSharedExecutor(t *testing.T) {
+	fixture := newComfyFixture(t)
+	executor, err := newComfyUIExecutor(fixture.server.URL, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.Cancel(t.Context(), comfyUIExternalCheckpoint{PromptID: "prompt-1"}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.queueDelete != 1 || fixture.interrupts != 0 {
+		t.Fatalf("shared cancellation queue delete=%d interrupts=%d", fixture.queueDelete, fixture.interrupts)
+	}
+}
+
+func TestComfyUIExecutorEnforcesAggregateOutputLimit(t *testing.T) {
+	fixture := newComfyFixture(t)
+	fixture.history = `{"prompt-1":{"status":{"status_str":"success","completed":true},"outputs":{"save":{"images":[{"filename":"result.png","subfolder":"final","type":"output"},{"filename":"result.png","subfolder":"final","type":"output"}]}}}}`
+	fixture.output = bytes.Repeat([]byte{0}, maxGeneratedTotalBytes/2+1)
+	manifest := comfyImageManifest(t, fixture.server.URL)
+	executor, err := newComfyUIExecutor(fixture.server.URL, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.pollInterval = time.Millisecond
+	if _, err := executor.Run(t.Context(), comfyUIExecutionRequest{Manifest: manifest}, &comfyUIExternalCheckpoint{PromptID: "prompt-1"}, func(comfyUIExternalCheckpoint) error { return nil }); err == nil || !strings.Contains(err.Error(), "total") {
+		t.Fatalf("aggregate output was accepted: %v", err)
 	}
 }
 
