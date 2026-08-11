@@ -182,7 +182,7 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
     if (!node?.metadata.storageKey || !selected) throw new Error("请选择候选媒体和目标");
     const [targetType, targetId, targetField] = selected.key.split(":") as ["shot" | "asset", string, "image" | "first_frame" | "last_frame" | "video" | "audio" | "media"];
     if (targetType === "shot" && node.type !== (targetField === "first_frame" || targetField === "last_frame" ? "image" : targetField)) throw new Error("候选媒体类型与镜头目标不匹配");
-    await onAdopt({ targetType, targetId, targetField, expectedRevision: selected.revision, sourceNodeId: node.id, storageKey: node.metadata.storageKey, ...(node.metadata.generationJobId ? { generationJobId: node.metadata.generationJobId } : {}) });
+    await onAdopt({ targetType, targetId, targetField, expectedRevision: selected.revision, sourceNodeId: node.id, storageKey: node.metadata.storageKey, ...(node.metadata.generationJobId ? { generationJobId: node.metadata.generationJobId } : {}), ...(node.metadata.splitSourceStorageKey && node.metadata.splitCrop && node.metadata.contentSha256 ? { splitSourceStorageKey: node.metadata.splitSourceStorageKey, splitCrop: node.metadata.splitCrop, candidateSha256: node.metadata.contentSha256 } : {}) });
   };
   const loadDirectorCaptures = async () => {
     const captures = await listFilmDirectorCaptures(project.id, directorNodes.map((node) => node.id));

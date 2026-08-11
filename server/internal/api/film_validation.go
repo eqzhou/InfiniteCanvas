@@ -490,6 +490,10 @@ func validateFilmAdoptions(document filmDocument, shots map[string]filmShot, ass
 			!validFilmText(adoption.Model, 500, false) || !validFilmTimestamp(adoption.AdoptedAt) {
 			return fmt.Errorf("film adoption %s is invalid", adoption.ID)
 		}
+		hasSplit := adoption.SplitSourceStorageKey != "" || adoption.SplitSourceSHA256 != "" || adoption.CandidateSHA256 != "" || adoption.SplitCrop.Width != 0 || adoption.SplitCrop.Height != 0
+		if hasSplit && (!validFilmStorageKey(adoption.SplitSourceStorageKey) || adoption.SplitSourceStorageKey == adoption.StorageKey || len(adoption.SplitSourceSHA256) != 64 || adoption.CandidateSHA256 != adoption.SHA256 || adoption.SplitCrop.X < 0 || adoption.SplitCrop.Y < 0 || adoption.SplitCrop.Width < 1 || adoption.SplitCrop.Height < 1) {
+			return fmt.Errorf("film adoption %s split lineage is invalid", adoption.ID)
+		}
 	}
 	return nil
 }

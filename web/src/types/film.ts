@@ -442,6 +442,10 @@ export type FilmMediaAdoption = {
   prompt?: string;
   providerId?: string;
   model?: string;
+  splitSourceStorageKey?: string;
+  splitSourceSha256?: string;
+  candidateSha256?: string;
+  splitCrop?: { x: number; y: number; width: number; height: number };
   adoptedAt: string;
 };
 

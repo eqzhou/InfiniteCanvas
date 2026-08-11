@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"image"
 	"net/http"
 	"strings"
 	"time"
@@ -12,13 +14,16 @@ import (
 )
 
 type filmAdoptionRequest struct {
-	TargetType       string `json:"targetType"`
-	TargetID         string `json:"targetId"`
-	TargetField      string `json:"targetField"`
-	ExpectedRevision int    `json:"expectedRevision"`
-	SourceNodeID     string `json:"sourceNodeId"`
-	StorageKey       string `json:"storageKey"`
-	GenerationJobID  string `json:"generationJobId,omitempty"`
+	TargetType            string        `json:"targetType"`
+	TargetID              string        `json:"targetId"`
+	TargetField           string        `json:"targetField"`
+	ExpectedRevision      int           `json:"expectedRevision"`
+	SourceNodeID          string        `json:"sourceNodeId"`
+	StorageKey            string        `json:"storageKey"`
+	GenerationJobID       string        `json:"generationJobId,omitempty"`
+	SplitSourceStorageKey string        `json:"splitSourceStorageKey,omitempty"`
+	CandidateSHA256       string        `json:"candidateSha256,omitempty"`
+	SplitCrop             *filmCropRect `json:"splitCrop,omitempty"`
 }
 
 func filmAdoptionExpectedMIME(targetType, field string) string {
@@ -86,6 +91,25 @@ func (s *Server) adoptFilmCanvasMedia(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	digest, version := sha256Hex(value.Data), blobIdentityVersion(value)
+	var splitSourceSHA string
+	if input.SplitSourceStorageKey != "" || input.CandidateSHA256 != "" || input.SplitCrop != nil {
+		if input.SplitSourceStorageKey == "" || input.SplitSourceStorageKey == input.StorageKey || input.CandidateSHA256 != digest || input.SplitCrop == nil {
+			writeFilmError(w, http.StatusUnprocessableEntity, "adoption_lineage_invalid", "split candidate lineage is incomplete or does not match the candidate blob")
+			return
+		}
+		source, sourceErr := s.readTenantBlob(r.Context(), tenantID, input.SplitSourceStorageKey, maxUploadBytes)
+		if sourceErr != nil || !strings.HasPrefix(source.Metadata.ContentType, "image/") {
+			writeFilmError(w, http.StatusUnprocessableEntity, "adoption_lineage_invalid", "split source image is unavailable")
+			return
+		}
+		config, _, decodeErr := image.DecodeConfig(bytes.NewReader(source.Data))
+		crop := *input.SplitCrop
+		if decodeErr != nil || crop.X < 0 || crop.Y < 0 || crop.Width < 1 || crop.Height < 1 || crop.X+crop.Width > config.Width || crop.Y+crop.Height > config.Height {
+			writeFilmError(w, http.StatusUnprocessableEntity, "adoption_lineage_invalid", "split crop is outside the source image")
+			return
+		}
+		splitSourceSHA = sha256Hex(source.Data)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	record, document, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
 		next := cloneFilmDocument(document)
@@ -98,6 +122,11 @@ func (s *Server) adoptFilmCanvasMedia(w http.ResponseWriter, r *http.Request) {
 			TargetRevision: input.ExpectedRevision + 1, SourceNodeID: input.SourceNodeID, StorageKey: input.StorageKey,
 			MIMEType: value.Metadata.ContentType, SHA256: digest, ObjectVersion: version, GenerationJobID: input.GenerationJobID,
 			Prompt: job.Prompt, ProviderID: job.ProviderID, Model: job.Model, AdoptedAt: now,
+			SplitSourceStorageKey: input.SplitSourceStorageKey, SplitSourceSHA256: splitSourceSHA,
+			CandidateSHA256: input.CandidateSHA256,
+		}
+		if input.SplitCrop != nil {
+			adoption.SplitCrop = *input.SplitCrop
 		}
 		found := false
 		if input.TargetType == "shot" {

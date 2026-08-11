@@ -416,22 +416,33 @@ type filmDeliverable struct {
 }
 
 type filmMediaAdoption struct {
-	ID              string `json:"id"`
-	Revision        int    `json:"revision"`
-	TargetType      string `json:"targetType"`
-	TargetID        string `json:"targetId"`
-	TargetField     string `json:"targetField"`
-	TargetRevision  int    `json:"targetRevision"`
-	SourceNodeID    string `json:"sourceNodeId"`
-	StorageKey      string `json:"storageKey"`
-	MIMEType        string `json:"mimeType"`
-	SHA256          string `json:"sha256"`
-	ObjectVersion   string `json:"objectVersion"`
-	GenerationJobID string `json:"generationJobId,omitempty"`
-	Prompt          string `json:"prompt,omitempty"`
-	ProviderID      string `json:"providerId,omitempty"`
-	Model           string `json:"model,omitempty"`
-	AdoptedAt       string `json:"adoptedAt"`
+	ID                    string       `json:"id"`
+	Revision              int          `json:"revision"`
+	TargetType            string       `json:"targetType"`
+	TargetID              string       `json:"targetId"`
+	TargetField           string       `json:"targetField"`
+	TargetRevision        int          `json:"targetRevision"`
+	SourceNodeID          string       `json:"sourceNodeId"`
+	StorageKey            string       `json:"storageKey"`
+	MIMEType              string       `json:"mimeType"`
+	SHA256                string       `json:"sha256"`
+	ObjectVersion         string       `json:"objectVersion"`
+	GenerationJobID       string       `json:"generationJobId,omitempty"`
+	Prompt                string       `json:"prompt,omitempty"`
+	ProviderID            string       `json:"providerId,omitempty"`
+	Model                 string       `json:"model,omitempty"`
+	SplitSourceStorageKey string       `json:"splitSourceStorageKey,omitempty"`
+	SplitSourceSHA256     string       `json:"splitSourceSha256,omitempty"`
+	CandidateSHA256       string       `json:"candidateSha256,omitempty"`
+	SplitCrop             filmCropRect `json:"splitCrop,omitempty"`
+	AdoptedAt             string       `json:"adoptedAt"`
+}
+
+type filmCropRect struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }
 
 type filmDocument struct {

@@ -845,6 +845,9 @@ export type FilmCanvasAdoptionRequest = {
   sourceNodeId: string;
   storageKey: string;
   generationJobId?: string;
+  splitSourceStorageKey?: string;
+  candidateSha256?: string;
+  splitCrop?: { x: number; y: number; width: number; height: number };
 };
 
 export function adoptFilmCanvasMedia(projectId: string, input: FilmCanvasAdoptionRequest): Promise<FilmStatus> {
