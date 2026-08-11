@@ -56,9 +56,9 @@ func TestFilmCapabilitiesExposeIncrementFeatureFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]bool{
-		"webdavMedia":    true,
-		"advancedVoice":  false,
-		"localWorkflows": true,
+		"webdavMedia":     true,
+		"advancedVoice":   false,
+		"localWorkflows":  true,
 		"styleExtraction": true,
 		"stageWaiver":     false,
 	}

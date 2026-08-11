@@ -52,6 +52,15 @@ export type FilmCapabilities = {
   mp4Export: boolean;
   mp4Diagnostic: string;
   agentOperations: FilmAgentOperation[];
+  features: FilmIncrementFeatures;
+};
+
+export type FilmIncrementFeatures = {
+  webdavMedia: boolean;
+  advancedVoice: boolean;
+  localWorkflows: boolean;
+  styleExtraction: boolean;
+  stageWaiver: boolean;
 };
 
 export type FilmAgentOperation = "status" | "list" | "validate" | "run_stage" | "next_steps" | "approve_stage" | "apply_repair" | "export";
@@ -148,6 +157,7 @@ type RawFilmCapabilities = Omit<Partial<Omit<FilmCapabilities, "agentOperations"
   agentOperations?: unknown;
   importMaxBytes?: unknown;
   generationStages?: unknown;
+  features?: unknown;
 };
 
 const DEFAULT_MAX_IMPORT_BYTES = 50 * 1024 * 1024;
@@ -164,6 +174,9 @@ export function normalizeFilmCapabilities(raw: RawFilmCapabilities | null | unde
     : raw?.generationStages && typeof raw.generationStages === "object"
       ? supportedGenerationStages.filter((stage) => (raw.generationStages as Record<string, unknown>)[stage] === true)
       : raw?.stageGeneration ? supportedGenerationStages : [];
+  const rawFeatures = raw?.features && typeof raw.features === "object" && !Array.isArray(raw.features)
+    ? raw.features as Record<string, unknown>
+    : {};
   return {
     available: raw?.available ?? true,
     reason: typeof raw?.reason === "string" ? raw.reason : "",
@@ -183,6 +196,13 @@ export function normalizeFilmCapabilities(raw: RawFilmCapabilities | null | unde
     mp4Export: raw?.mp4Export ?? false,
     mp4Diagnostic: typeof raw?.mp4Diagnostic === "string" ? raw.mp4Diagnostic : "MP4 export is disabled",
     agentOperations: operations,
+    features: {
+      webdavMedia: rawFeatures.webdavMedia === true,
+      advancedVoice: rawFeatures.advancedVoice === true,
+      localWorkflows: rawFeatures.localWorkflows === true,
+      styleExtraction: rawFeatures.styleExtraction === true,
+      stageWaiver: rawFeatures.stageWaiver === true,
+    },
   };
 }
 

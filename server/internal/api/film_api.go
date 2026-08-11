@@ -169,6 +169,7 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 	return map[string]any{
 		"available":         available,
 		"reason":            reason,
+		"features":          incrementFeatureCapabilities(),
 		"import":            available,
 		"generation":        generationAvailable,
 		"generationStages":  generation,

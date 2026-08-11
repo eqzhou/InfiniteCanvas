@@ -74,6 +74,11 @@ services:
       OPENBOARD_S3_SESSION_TOKEN: "${OPENBOARD_S3_SESSION_TOKEN:-}"
       OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK: "${OPENBOARD_S3_ALLOW_INSECURE_LOOPBACK:-false}"
       OPENBOARD_FILM_MODE: "${OPENBOARD_FILM_MODE:-true}"
+      OPENBOARD_WEBDAV_MEDIA: "${OPENBOARD_WEBDAV_MEDIA:-false}"
+      OPENBOARD_ADVANCED_VOICE: "${OPENBOARD_ADVANCED_VOICE:-false}"
+      OPENBOARD_LOCAL_WORKFLOWS: "${OPENBOARD_LOCAL_WORKFLOWS:-false}"
+      OPENBOARD_STYLE_EXTRACTION: "${OPENBOARD_STYLE_EXTRACTION:-false}"
+      OPENBOARD_FILM_STAGE_WAIVER: "${OPENBOARD_FILM_STAGE_WAIVER:-false}"
       # The image owns these exact package paths. Empty/invalid host overrides
       # are ignored here so Compose cannot accidentally hide image capability.
       OPENBOARD_FFMPEG_PATH: /usr/bin/ffmpeg
