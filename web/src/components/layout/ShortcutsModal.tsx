@@ -1,30 +1,33 @@
 import { X } from "lucide-react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
+import type { MessageKey } from "@/i18n/core";
 
-const rows = [
-  ["拖动画布空白", "平移视图"],
-  ["空格 / Alt + 拖动", "在节点上也能平移视图"],
-  ["滚轮", "缩放"],
-  ["Ctrl/Cmd + 拖动", "框选"],
-  ["Shift/Ctrl/Cmd + 点击", "追加或取消选择"],
-  ["Ctrl/Cmd + A", "全选"],
-  ["Ctrl/Cmd + C / V", "复制 / 粘贴"],
-  ["Ctrl/Cmd + D", "复制副本"],
-  ["Ctrl/Cmd + G", "组合选择节点"],
-  ["Ctrl/Cmd + Shift + G", "取消组合"],
-  ["Ctrl/Cmd + Z", "撤销"],
-  ["Ctrl/Cmd + Shift + Z / Y", "重做"],
-  ["Ctrl/Cmd + Shift + E", "导出当前画布为 PNG"],
-  ["Delete / Backspace", "删除"],
-  ["Esc", "取消选择，并关闭当前浮层"],
-  ["拖入图片文件", "上传到画布"],
-  ["右键菜单", "对齐/分布/新建节点"],
-  ["双击连线", "删除连线"],
-  ["单指拖动 / 双指捏合", "触控平移 / 缩放"],
+const rows: ReadonlyArray<readonly [string, MessageKey]> = [
+  ["Mouse drag on empty canvas", "shortcuts.panView"],
+  ["Space / Alt + drag", "shortcuts.panNodes"],
+  ["Mouse wheel", "shortcuts.zoom"],
+  ["Ctrl/Cmd + drag", "shortcuts.marquee"],
+  ["Shift/Ctrl/Cmd + click", "shortcuts.toggleSelection"],
+  ["Ctrl/Cmd + A", "shortcuts.selectAll"],
+  ["Ctrl/Cmd + C / V", "shortcuts.copyPaste"],
+  ["Ctrl/Cmd + D", "shortcuts.duplicate"],
+  ["Ctrl/Cmd + G", "shortcuts.group"],
+  ["Ctrl/Cmd + Shift + G", "shortcuts.ungroup"],
+  ["Ctrl/Cmd + Z", "shortcuts.undo"],
+  ["Ctrl/Cmd + Shift + Z / Y", "shortcuts.redo"],
+  ["Ctrl/Cmd + Shift + E", "shortcuts.exportPng"],
+  ["Delete / Backspace", "shortcuts.delete"],
+  ["Esc", "shortcuts.dismiss"],
+  ["Drop image files", "shortcuts.upload"],
+  ["Context menu", "shortcuts.contextMenu"],
+  ["Double-click connection", "shortcuts.deleteEdge"],
+  ["One-finger drag / pinch", "shortcuts.touch"],
 ];
 
 export function ShortcutsModal() {
+  const { t } = useI18n();
   const open = useBoardStore((s) => s.showShortcuts);
   const setShowShortcuts = useBoardStore((s) => s.setShowShortcuts);
   useEscapeDismiss(open, () => setShowShortcuts(false));
@@ -41,14 +44,14 @@ export function ShortcutsModal() {
           <div className="min-w-0">
             <p className="ob-page-kicker">Canvas</p>
             <h2 id="shortcuts-title" className="text-lg font-semibold tracking-tight text-[var(--ob-ink)]">
-              画布快捷键
+              {t("shortcuts.title")}
             </h2>
           </div>
           <button
             type="button"
             className="ob-icon-btn ml-auto"
-            aria-label="关闭快捷键"
-            title="关闭快捷键"
+            aria-label={t("shortcuts.close")}
+            title={t("shortcuts.close")}
             onClick={() => setShowShortcuts(false)}
           >
             <X size={16} />
@@ -64,7 +67,7 @@ export function ShortcutsModal() {
                       {k}
                     </kbd>
                   </td>
-                  <td className="py-2.5 text-[var(--ob-muted)]">{v}</td>
+                  <td className="py-2.5 text-[var(--ob-muted)]">{t(v)}</td>
                 </tr>
               ))}
             </tbody>

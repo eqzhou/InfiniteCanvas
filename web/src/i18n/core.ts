@@ -1,7 +1,10 @@
+import { settingsEnUS, settingsZhCN } from "./messages/settings";
+
 export const SUPPORTED_LOCALES = ["zh-CN", "en-US"] as const;
 export type AppLocale = typeof SUPPORTED_LOCALES[number];
 
 const zhCN = {
+  ...settingsZhCN,
   "nav.canvas": "画布",
   "nav.assets": "素材",
   "nav.serverLibrary": "服务器素材",
@@ -351,6 +354,7 @@ export type MessageKey = keyof typeof zhCN;
 type MessageParams = Readonly<Record<string, string | number>>;
 
 const enUS: Partial<Record<MessageKey, string>> = {
+  ...settingsEnUS,
   "nav.canvas": "Canvas",
   "nav.assets": "Assets",
   "nav.serverLibrary": "Server assets",

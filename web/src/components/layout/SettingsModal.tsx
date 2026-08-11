@@ -28,6 +28,7 @@ import {
 import { createDefaultObjectStorage, normalizeObjectStorage, validateObjectStorageConfig } from "@/lib/object-storage";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { useI18n } from "@/i18n/I18nProvider";
+import type { MessageKey } from "@/i18n/core";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
 import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
 import { ImageToolbarPreferencesEditor } from "@/components/layout/ImageToolbarPreferencesEditor";
@@ -79,35 +80,35 @@ import {
 } from "lucide-react";
 
 const PROVIDER_KINDS: AiProviderKind[] = ["text", "image", "video", "audio"];
-const PROVIDER_LABELS: Record<AiProviderKind, string> = {
-  text: "文本",
-  image: "生图",
-  video: "视频",
-  audio: "音频",
+const PROVIDER_LABEL_KEYS: Record<AiProviderKind, MessageKey> = {
+  text: "common.text",
+  image: "common.image",
+  video: "common.video",
+  audio: "common.audio",
 };
 
 export type SettingsSectionDefinition = Readonly<{
   id: string;
-  label: string;
+  labelKey: MessageKey;
   icon: LucideIcon;
 }>;
 
 const MEMBER_SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = Object.freeze([
-  { id: "interface", label: "界面", icon: Languages },
-  { id: "channel", label: "渠道", icon: Radio },
-  { id: "usage", label: "用量", icon: Database },
-  { id: "model", label: "模型服务", icon: Server },
-  { id: "generation", label: "生成偏好", icon: Palette },
-  { id: "defaults", label: "生成默认值", icon: Sliders },
-  { id: "toolbar", label: "图片工具", icon: MousePointerClick },
-  { id: "storage", label: "对象存储", icon: HardDrive },
-  { id: "configfile", label: "配置文件", icon: FolderCog },
-  { id: "webdav", label: "WebDAV", icon: Database },
+  { id: "interface", labelKey: "settings.interface", icon: Languages },
+  { id: "channel", labelKey: "settings.channel", icon: Radio },
+  { id: "usage", labelKey: "settings.usage", icon: Database },
+  { id: "model", labelKey: "settings.modelServices", icon: Server },
+  { id: "generation", labelKey: "settings.generationPreferences", icon: Palette },
+  { id: "defaults", labelKey: "settings.generationDefaults", icon: Sliders },
+  { id: "toolbar", labelKey: "settings.imageTools", icon: MousePointerClick },
+  { id: "storage", labelKey: "settings.objectStorage", icon: HardDrive },
+  { id: "configfile", labelKey: "settings.configFile", icon: FolderCog },
+  { id: "webdav", labelKey: "settings.webdavTitle", icon: Database },
 ]);
 
 const SITE_POLICY_SECTION: SettingsSectionDefinition = Object.freeze({
   id: "policy",
-  label: "站点策略",
+  labelKey: "settings.sitePolicy",
   icon: ShieldCheck,
 });
 
@@ -134,15 +135,16 @@ function formatUsageBytes(bytes: number): string {
 }
 
 export function UsageOverview({ snapshot, onRefresh }: { snapshot: UsageSnapshot | null; onRefresh: () => void }) {
+  const { t } = useI18n();
   if (!snapshot) {
-    return <div className="rounded-xl border border-[var(--ob-line)] p-4"><p className="text-sm text-[var(--ob-muted)]">服务端用量暂不可用。</p><button type="button" className="ob-btn mt-3" onClick={onRefresh}><RefreshCw size={14} /> 重新获取</button></div>;
+    return <div className="rounded-xl border border-[var(--ob-line)] p-4"><p className="text-sm text-[var(--ob-muted)]">{t("settings.usageUnavailable")}</p><button type="button" className="ob-btn mt-3" onClick={onRefresh}><RefreshCw size={14} /> {t("settings.retry")}</button></div>;
   }
   const cards = [
-    { label: "团队月生成额度（次数）", value: `${snapshot.generationThisMonth} / ${snapshot.generationQuotaMonthly}`, note: "团队成员共享的月度生成次数上限" },
-    { label: "个人算力余额（credits）", value: String(snapshot.credits ?? 0), note: "每次生成按模型计费并从个人余额扣除" },
-    { label: "服务端媒体存储", value: `${formatUsageBytes(snapshot.storageBytes)} / ${formatUsageBytes(snapshot.storageQuotaBytes)}`, note: "服务器保存的图片、音频、视频和交付物" },
+    { label: t("settings.teamQuota"), value: `${snapshot.generationThisMonth} / ${snapshot.generationQuotaMonthly}`, note: t("settings.teamQuotaNote") },
+    { label: t("settings.personalCredits"), value: String(snapshot.credits ?? 0), note: t("settings.personalCreditsNote") },
+    { label: t("settings.serverStorage"), value: `${formatUsageBytes(snapshot.storageBytes)} / ${formatUsageBytes(snapshot.storageQuotaBytes)}`, note: t("settings.serverStorageNote") },
   ];
-  return <div><div className="grid gap-3 md:grid-cols-3">{cards.map((card) => <div key={card.label} className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3"><p className="text-xs text-[var(--ob-muted)]">{card.label}</p><p className="mt-1 text-lg font-semibold tabular-nums">{card.value}</p><p className="mt-1 text-xs text-[var(--ob-muted)]">{card.note}</p></div>)}</div><div className="mt-3 flex flex-wrap items-center gap-2"><span className="ob-chip">套餐 {snapshot.plan || "free"}</span><button type="button" className="ob-btn" onClick={onRefresh}><RefreshCw size={14} /> 刷新服务端用量</button></div><p className="mt-2 text-xs text-[var(--ob-muted)]">团队生成次数、个人算力和媒体存储是三项独立限制；显示为 0 即当前额度为 0。</p></div>;
+  return <div><div className="grid gap-3 md:grid-cols-3">{cards.map((card) => <div key={card.label} className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3"><p className="text-xs text-[var(--ob-muted)]">{card.label}</p><p className="mt-1 text-lg font-semibold tabular-nums">{card.value}</p><p className="mt-1 text-xs text-[var(--ob-muted)]">{card.note}</p></div>)}</div><div className="mt-3 flex flex-wrap items-center gap-2"><span className="ob-chip">{t("settings.plan", { plan: snapshot.plan || "free" })}</span><button type="button" className="ob-btn" onClick={onRefresh}><RefreshCw size={14} /> {t("settings.refreshUsage")}</button></div><p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.usageExplanation")}</p></div>;
 }
 
 export function settingsScrollTarget(
@@ -441,8 +443,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
           <button
             type="button"
-            aria-label="关闭设置"
-            title="关闭设置"
+            aria-label={t("settings.close")}
+            title={t("settings.close")}
             className="ob-icon-btn ml-auto"
             disabled={closing}
             onClick={requestClose}
@@ -452,7 +454,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         </header>
 
         {/* Mobile horizontal section navigation */}
-        <nav ref={mobileNavigationRef} className="ob-settings-tabbar" aria-label="设置分区">
+        <nav ref={mobileNavigationRef} className="ob-settings-tabbar" aria-label={t("settings.sections")}>
           {settingsSections.map((s) => {
             const Icon = s.icon;
             return (
@@ -466,7 +468,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 onClick={() => scrollToSection(s.id)}
               >
                 <Icon size={13} />
-                {s.label}
+                {t(s.labelKey)}
               </button>
             );
           })}
@@ -474,7 +476,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
         <div className="flex min-h-0 flex-1">
           {/* Desktop sidebar navigation */}
-          <nav className="ob-settings-sidebar" aria-label="设置分区">
+          <nav className="ob-settings-sidebar" aria-label={t("settings.sections")}>
             {settingsSections.map((s) => {
               const Icon = s.icon;
               return (
@@ -487,7 +489,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   onClick={() => scrollToSection(s.id)}
                 >
                   <Icon size={14} />
-                  {s.label}
+                  {t(s.labelKey)}
                 </button>
               );
             })}
@@ -526,18 +528,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><Radio size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">渠道</div>
-                <div className="ob-settings-section-desc">管理 AI 服务渠道与连接配置</div>
+                <div className="ob-settings-section-title">{t("settings.channel")}</div>
+                <div className="ob-settings-section-desc">{t("settings.channelDescription")}</div>
               </div>
             </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
-              个人渠道仅供当前工作区使用；共享渠道由管理员托管，可在管理后台统一配置。
+              {t("settings.channelHint")}
             </p>
             <div className="grid gap-3 sm:grid-cols-[minmax(180px,0.8fr)_minmax(220px,1.1fr)_minmax(130px,0.5fr)_40px]">
-              <Field label="当前渠道">
+              <Field label={t("settings.currentChannel")}>
                 <select
                   className="ob-field"
-                  aria-label="当前渠道"
+                  aria-label={t("settings.currentChannel")}
                   value={config.activeSharedChannelId ? `shared:${config.activeSharedChannelId}` : `personal:${config.activeChannelId ?? ""}`}
                   onChange={(e) => {
 							const [scope, id] = e.target.value.split(":", 2);
@@ -545,26 +547,26 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 						}}
                 >
 					{sharedChannelSelected && !selectedSharedChannelAvailable ? (
-						<option value={`shared:${config.activeSharedChannelId}`}>共享渠道正在加载或已不可用</option>
+						<option value={`shared:${config.activeSharedChannelId}`}>{t("settings.sharedUnavailable")}</option>
 					) : null}
                   {config.channels.map((item) => (
-							<option key={item.id} value={`personal:${item.id}`}>{item.name}（个人）</option>
+							<option key={item.id} value={`personal:${item.id}`}>{item.name} {t("settings.personalSuffix")}</option>
                   ))}
 						{sharedChannels.filter((item) => !config.channels.some((personal) => personal.id === item.id)).map((item) => (
-							<option key={item.id} value={`shared:${item.id}`}>{item.name}（共享）</option>
+							<option key={item.id} value={`shared:${item.id}`}>{item.name} {t("settings.sharedSuffix")}</option>
 						))}
                 </select>
               </Field>
-              <Field label="渠道名称">
+              <Field label={t("settings.channelName")}>
                 <input
                   className="ob-field"
                   value={channel.name}
                   disabled={sharedChannelSelected || !personalChannelEditable}
-                  title={!personalChannelEditable ? "管理员已禁止普通成员修改个人渠道" : undefined}
+                  title={!personalChannelEditable ? t("settings.memberChannelLocked") : undefined}
                   onChange={(e) => updateChannel({ name: e.target.value })}
                 />
               </Field>
-              <Field label="请求超时（秒）">
+              <Field label={t("settings.timeout")}>
                 <input
                   className="ob-field"
                   type="number"
@@ -572,20 +574,20 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   max={600}
                   step={1}
                   value={sharedChannelSelected ? (channel.timeoutSeconds ?? "") : (channel.timeoutSeconds ?? 60)}
-                  placeholder={sharedChannelSelected ? "管理员配置" : "60"}
+                  placeholder={sharedChannelSelected ? t("settings.adminConfigured") : "60"}
                   disabled={sharedChannelSelected || !personalChannelEditable}
                   title={sharedChannelSelected
-                    ? "共享渠道超时由管理员在管理后台配置"
+                    ? t("settings.sharedTimeoutHint")
                     : !personalChannelEditable
-                      ? "管理员已禁止普通成员修改个人渠道"
-                      : "整个请求的最长等待时间"}
+                      ? t("settings.memberChannelLocked")
+                      : t("settings.timeoutHint")}
                   onChange={(e) => updateChannel({ timeoutSeconds: Number(e.target.value) })}
                 />
               </Field>
               <button
                 type="button"
-                aria-label="添加渠道"
-                title={personalChannelEditable ? "添加渠道" : "管理员已关闭自定义渠道"}
+                aria-label={t("settings.addChannel")}
+                title={personalChannelEditable ? t("settings.addChannel") : t("settings.customChannelsDisabled")}
                 className="ob-icon-btn mt-5"
                 disabled={!personalChannelEditable}
                 onClick={() => {
@@ -611,8 +613,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><Database size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">服务端用量</div>
-                <div className="ob-settings-section-desc">分别查看团队次数、个人算力和媒体存储</div>
+                <div className="ob-settings-section-title">{t("settings.usageTitle")}</div>
+                <div className="ob-settings-section-desc">{t("settings.usageDescription")}</div>
               </div>
             </div>
             <UsageOverview snapshot={auth?.usageSnapshot ?? null} onRefresh={() => { void auth?.refreshUsage(); }} />
@@ -622,21 +624,21 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><Server size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">模型服务</div>
-                <div className="ob-settings-section-desc">配置各能力的模型协议、地址与密钥</div>
+                <div className="ob-settings-section-title">{t("settings.modelServices")}</div>
+                <div className="ob-settings-section-desc">{t("settings.modelServicesDescription")}</div>
               </div>
             </div>
             {sharedChannelSelected ? (
-              <SharedChannelManagedNotice channelName={selectedSharedChannelAvailable ? channel.name : "共享渠道正在加载或已不可用"} />
+              <SharedChannelManagedNotice channelName={selectedSharedChannelAvailable ? channel.name : t("settings.sharedUnavailable")} />
             ) : <>
               {!personalChannelEditable ? (
                 <p className="mb-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-accent-soft)] px-3 py-2 text-xs text-[var(--ob-muted)]">
-                  管理员已禁止普通成员新增或修改个人渠道；请选择管理员配置的共享渠道。
+                  {t("settings.memberChannelsDisabled")}
                 </p>
               ) : null}
               <div className="overflow-hidden rounded-xl border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
               <div className="hidden grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] gap-2 border-b border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_80%,var(--ob-panel))] px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-[var(--ob-muted)] md:grid">
-                <span>能力</span><span>协议</span><span>服务 URL</span><span>API Key</span><span>模型</span><span />
+                <span>{t("settings.capability")}</span><span>{t("settings.protocol")}</span><span>{t("settings.serviceUrl")}</span><span>API Key</span><span>{t("settings.model")}</span><span />
               </div>
               {PROVIDER_KINDS.map((kind) => (
                 <ProviderRow
@@ -658,72 +660,72 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><Palette size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">生成偏好</div>
-                <div className="ob-settings-section-desc">系统提示词与图片生成参数</div>
+                <div className="ob-settings-section-title">{t("settings.generationPreferences")}</div>
+                <div className="ob-settings-section-desc">{t("settings.generationPreferencesDescription")}</div>
               </div>
             </div>
             <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
             <div>
               {canManageSitePolicy ? (
                 <>
-                  <Field label="全局系统提示词">
+                  <Field label={t("settings.globalSystemPrompt")}>
                     <textarea
                       className="ob-field min-h-28 resize-y"
                       maxLength={SYSTEM_PROMPT_MAX_LENGTH}
                       value={config.systemPrompt}
                       onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
-                      placeholder="应用于文本、图片生成和图片编辑请求"
+                      placeholder={t("settings.globalSystemPromptPlaceholder")}
                     />
                   </Field>
-                  <Field label="工作流 Agent 系统提示词">
+                  <Field label={t("settings.workflowSystemPrompt")}>
                     <textarea
                       className="ob-field min-h-24 resize-y"
                       maxLength={SYSTEM_PROMPT_MAX_LENGTH}
                       value={config.workflowAgentSystemPrompt ?? ""}
                       onChange={(e) => setConfig({ ...config, workflowAgentSystemPrompt: e.target.value })}
-                      placeholder="留空则使用内置默认提示词"
+                      placeholder={t("settings.workflowSystemPromptPlaceholder")}
                     />
                   </Field>
                   <p className="mb-3 text-xs text-[var(--ob-muted)]">
-                    系统提示词为租户级配置，仅管理员可修改；成员侧保存不会改写服务端生成使用的提示词。
+                    {t("settings.tenantPromptHint")}
                   </p>
                 </>
               ) : (
                 <div className="mb-3 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_70%,transparent)] px-3 py-3 text-xs text-[var(--ob-muted)]">
-                  <p className="font-medium text-[var(--ob-ink)]">系统提示词由管理员维护</p>
+                  <p className="font-medium text-[var(--ob-ink)]">{t("settings.promptManaged")}</p>
                   <p className="mt-1">
-                    当前账号为普通成员，租户级系统提示词只读生效于服务端生成；如需调整请联系管理员。
+                    {t("settings.promptManagedHint")}
                   </p>
                   {config.systemPrompt.trim() ? (
                     <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-[var(--ob-ink)]/80" title={config.systemPrompt}>
-                      当前生效摘要：{config.systemPrompt.trim()}
+                      {t("settings.activePrompt", { prompt: config.systemPrompt.trim() })}
                     </p>
                   ) : (
-                    <p className="mt-2">当前未配置全局系统提示词。</p>
+                    <p className="mt-2">{t("settings.noPrompt")}</p>
                   )}
                 </div>
               )}
             </div>
             <div className="grid content-start grid-cols-1 gap-3 sm:grid-cols-3 lg:mt-8 lg:grid-cols-1">
-              <Field label="图片尺寸">
+              <Field label={t("settings.imageSize")}>
                 <select className="ob-field" value={imageSize} onChange={(e) => setConfig({ ...config, imageSize: e.target.value })}>
                   {optionsWithCurrentValue(imageSizeOptions, imageSize).map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </Field>
-              <Field label="图片质量">
+              <Field label={t("settings.imageQuality")}>
                 <select className="ob-field" value={imageQuality} onChange={(e) => setConfig({ ...config, imageQuality: e.target.value })}>
                   {optionsWithCurrentValue(imageQualityOptions, imageQuality).map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </Field>
-              <Field label="默认数量">
+              <Field label={t("settings.defaultCount")}>
                 <input className="ob-field" type="number" min={1} max={8} value={config.imageCount} onChange={(e) => setConfig({ ...config, imageCount: Number(e.target.value) || 1 })} />
               </Field>
               <p className="text-xs text-[var(--ob-muted)] sm:col-span-3 lg:col-span-1">
-                尺寸与质量会原样发送给模型服务；部分模型可能不支持全部预设。
+                {t("settings.imageOptionsHint")}
               </p>
             </div>
             </div>
@@ -734,12 +736,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><Sliders size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">生成默认值</div>
-                <div className="ob-settings-section-desc">视频与音频节点的初始参数</div>
+                <div className="ob-settings-section-title">{t("settings.generationDefaults")}</div>
+                <div className="ob-settings-section-desc">{t("settings.generationDefaultsDescription")}</div>
               </div>
             </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
-              新建的视频与音频节点会继承这些值；节点上已显式设置的值不会被覆盖。
+              {t("settings.generationDefaultsHint")}
             </p>
             <GenerationDefaultsEditor
               value={config.generationDefaults ?? DEFAULT_GENERATION_DEFAULTS}
@@ -753,15 +755,15 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><ShieldCheck size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">站点策略</div>
-                <div className="ob-settings-section-desc">管理员控制注册、渠道与生成权限</div>
+                <div className="ob-settings-section-title">{t("settings.sitePolicy")}</div>
+                <div className="ob-settings-section-desc">{t("settings.sitePolicyDescription")}</div>
               </div>
             </div>
               <p className="mb-3 text-xs text-[var(--ob-muted)]">
-                管理员控制开放注册、用户自定义渠道与云端/后端代理生成。更改立即对当前租户生效。
+                {t("settings.sitePolicyHint")}
               </p>
               {!sitePolicyLoaded ? (
-                <p className="text-xs text-[var(--ob-muted)]">正在加载站点策略…</p>
+                <p className="text-xs text-[var(--ob-muted)]">{t("settings.loadingPolicy")}</p>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-3">
                   <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
@@ -769,47 +771,47 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       type="button"
                       role="switch"
                       aria-checked={sitePolicy.allowRegister}
-                      aria-label="允许开放注册"
+                      aria-label={t("settings.allowRegistration")}
                       className="ob-switch"
                       data-checked={sitePolicy.allowRegister ? "true" : "false"}
                       disabled={sitePolicyBusy}
                       onClick={() => void toggleSitePolicy("allowRegister")}
                     />
-                    <span className="text-sm text-[var(--ob-ink)]">允许开放注册</span>
+                    <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowRegistration")}</span>
                   </label>
                   <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
                     <button
                       type="button"
                       role="switch"
                       aria-checked={sitePolicy.allowCustomChannel}
-                      aria-label="允许自定义渠道"
+                      aria-label={t("settings.allowCustomChannels")}
                       className="ob-switch"
                       data-checked={sitePolicy.allowCustomChannel ? "true" : "false"}
                       disabled={sitePolicyBusy}
                       onClick={() => void toggleSitePolicy("allowCustomChannel")}
                     />
-                    <span className="text-sm text-[var(--ob-ink)]">允许自定义渠道</span>
+                    <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowCustomChannels")}</span>
                   </label>
                   <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
                     <button
                       type="button"
                       role="switch"
                       aria-checked={sitePolicy.allowCloudChannel}
-                      aria-label="允许云端渠道生成"
+                      aria-label={t("settings.allowCloudGeneration")}
                       className="ob-switch"
                       data-checked={sitePolicy.allowCloudChannel ? "true" : "false"}
                       disabled={sitePolicyBusy}
                       onClick={() => void toggleSitePolicy("allowCloudChannel")}
                     />
-                    <span className="text-sm text-[var(--ob-ink)]">允许云端渠道生成</span>
+                    <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowCloudGeneration")}</span>
                   </label>
                 </div>
               )}
               {!sitePolicy.allowCustomChannel ? (
-                <p className="mt-2 text-xs text-[var(--ob-muted)]">当前禁止普通成员新增、修改个人渠道或更新个人渠道密钥；管理员不受此限制。</p>
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.customChannelDisabledHint")}</p>
               ) : null}
               {!sitePolicy.allowCloudChannel ? (
-                <p className="mt-2 text-xs text-[var(--ob-muted)]">后端代理/云端生成已关闭；客户端直连渠道不受此开关影响。</p>
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.cloudGenerationDisabledHint")}</p>
               ) : null}
               {sitePolicyLoaded ? (
                 <ModelCatalogEditor
@@ -825,12 +827,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><MousePointerClick size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">图片节点快捷工具</div>
-                <div className="ob-settings-section-desc">调整图片节点悬浮工具的显示和顺序</div>
+                <div className="ob-settings-section-title">{t("settings.imageToolbarTitle")}</div>
+                <div className="ob-settings-section-desc">{t("settings.imageToolbarDescription")}</div>
               </div>
             </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
-              调整图片节点悬浮工具的显示和顺序；下载操作始终保留。
+              {t("settings.imageToolbarHint")}
             </p>
             <ImageToolbarPreferencesEditor
               value={config.imageToolbar}
@@ -842,12 +844,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><HardDrive size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">对象存储 (S3/R2)</div>
-                <div className="ob-settings-section-desc">配置媒体文件的云存储后端</div>
+                <div className="ob-settings-section-title">{t("settings.objectStorageTitle")}</div>
+                <div className="ob-settings-section-desc">{t("settings.objectStorageDescription")}</div>
               </div>
             </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
-              登录后可随账号同步。开启后正式模式下该账号的媒体写入优先使用此配置；密钥经本地服务加密存储，不会导出到 WebDAV 备份。
+              {t("settings.objectStorageHint")}
             </p>
             <div className="mb-3 flex items-center gap-2">
               <button
@@ -861,7 +863,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   setConfig({ ...config, objectStorage: { ...current, enabled: !current.enabled } });
                 }}
               />
-              <span className="text-sm text-[var(--ob-muted)]">启用用户级 S3/R2</span>
+              <span className="text-sm text-[var(--ob-muted)]">{t("settings.enableObjectStorage")}</span>
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
               <Field label="Endpoint">
@@ -930,7 +932,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   })}
                 />
               </Field>
-              <Field label="Session Token (可选)">
+              <Field label={t("settings.sessionToken")}>
                 <input
                   className="ob-field"
                   type="password"
@@ -952,7 +954,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     objectStorage: { ...(config.objectStorage ?? createDefaultObjectStorage()), allowInsecureLoopback: e.target.checked },
                   })}
                 />
-                允许 loopback HTTP (MinIO)
+                {t("settings.allowLoopback")}
               </label>
             </div>
             {(() => {
@@ -964,13 +966,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><FolderCog size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">配置与偏好文件</div>
-                <div className="ob-settings-section-desc">导出导入工作区配置</div>
+                <div className="ob-settings-section-title">{t("settings.configTitle")}</div>
+                <div className="ob-settings-section-desc">{t("settings.configDescription")}</div>
               </div>
             </div>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
-              导出模型地址、模型名、界面与生成偏好；API Key、对象存储密钥和 WebDAV 密码不会写入文件。
-              插件与可执行提示词来源继续通过各自的授权流程管理。仅当服务目的地未变化时保留当前密钥。
+              {t("settings.configHint")}
             </p>
             <div className="flex flex-wrap gap-2">
               <button
@@ -990,13 +991,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   URL.revokeObjectURL(url);
                 }}
               >
-                <CloudDownload size={15} /> 导出配置
+                <CloudDownload size={15} /> {t("settings.exportConfig")}
               </button>
               <label className="ob-btn cursor-pointer">
-                <CloudUpload size={15} /> 导入配置
+                <CloudUpload size={15} /> {t("settings.importConfig")}
                 <input
                   type="file"
-                  aria-label="导入配置文件"
+                  aria-label={t("settings.importConfigLabel")}
                   accept="application/json,.json"
                   className="hidden"
                   disabled={!canManageSitePolicy && !sitePolicyLoaded}
@@ -1023,7 +1024,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         }
                         throw cause;
                       }
-                      alert("配置与偏好已导入；仅安全保留目的地未变化的密钥");
+                      alert(t("settings.importSuccess"));
                     }).catch((cause) => {
                       alert(cause instanceof Error ? cause.message : String(cause));
                     });
@@ -1036,18 +1037,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><Database size={14} /></span>
               <div>
-                <div className="ob-settings-section-title">WebDAV 备份</div>
-                <div className="ob-settings-section-desc">通过 WebDAV 同步和恢复工作区</div>
+                <div className="ob-settings-section-title">{t("settings.webdavTitle")}</div>
+                <div className="ob-settings-section-desc">{t("settings.webdavDescription")}</div>
               </div>
             </div>
             <div className="grid gap-3 lg:grid-cols-[1.4fr_0.7fr_0.7fr]">
               <Field label="WebDAV URL">
                 <input className="ob-field" value={config.webdavUrl ?? ""} onChange={(e) => setConfig({ ...config, webdavUrl: e.target.value })} placeholder="https://example.com/dav/openboard" />
               </Field>
-              <Field label="用户名">
+              <Field label={t("settings.username")}>
                 <input className="ob-field" name="openboard-webdav-user" autoComplete="off" value={config.webdavUser ?? ""} onChange={(e) => setConfig({ ...config, webdavUser: e.target.value })} />
               </Field>
-              <Field label="密码">
+              <Field label={t("settings.password")}>
                 <input className="ob-field" name="openboard-webdav-password" autoComplete="new-password" type="password" value={config.webdavPass ?? ""} onChange={(e) => setConfig({ ...config, webdavPass: e.target.value })} />
               </Field>
             </div>
@@ -1063,14 +1064,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         if (!project) throw new Error("当前没有可备份的画布");
                         const bundle = await exportCompleteProjectBundle(project);
                         await webdavPutBlob(state.config, "openboard-current.openboard", bundle);
-                        alert("已上传当前画布完整备份");
+                        alert(t("settings.uploadCanvasSuccess"));
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e));
                       }
                     })();
                   }}
                 >
-                  <CloudUpload size={15} /> 上传当前画布
+                  <CloudUpload size={15} /> {t("settings.uploadCanvas")}
                 </button>
                 <button
                   type="button"
@@ -1088,14 +1089,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                           workflowTemplates: await loadPersonalWorkflowTemplates(),
                         });
                         await webdavPutBlob(state.config, "openboard-workspace.obundle", bundle);
-                        alert("已上传完整工作区备份");
+                        alert(t("settings.uploadWorkspaceSuccess"));
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e));
                       }
                     })();
                   }}
                 >
-                  <CloudUpload size={15} /> 上传完整工作区
+                  <CloudUpload size={15} /> {t("settings.uploadWorkspace")}
                 </button>
                 <button
                   type="button"
@@ -1109,14 +1110,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                           "openboard-current.openboard",
                         );
                         await importCompleteProjectBundle(blob);
-                        alert("已从 WebDAV 导入完整画布备份");
+                        alert(t("settings.importCanvasSuccess"));
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e));
                       }
                     })();
                   }}
                 >
-                  <CloudDownload size={15} /> 导入云端画布
+                  <CloudDownload size={15} /> {t("settings.importCloudCanvas")}
                 </button>
                 <button
                   type="button"
@@ -1124,18 +1125,18 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   onClick={() => {
                     void (async () => {
                       try {
-                        if (!confirm("恢复完整工作区会替换当前项目、素材、提示词和生成历史。继续吗？")) return;
+                        if (!confirm(t("settings.confirmRestoreWorkspace"))) return;
                         const state = useBoardStore.getState();
                         const blob = await webdavGetBlob(state.config, "openboard-workspace.obundle");
                         await importCompleteWorkspaceBundle(blob, state.config);
-                        alert("已恢复完整工作区");
+                        alert(t("settings.restoreWorkspaceSuccess"));
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e));
                       }
                     })();
                   }}
                 >
-                  <RotateCcw size={15} /> 恢复完整工作区
+                  <RotateCcw size={15} /> {t("settings.restoreWorkspace")}
                 </button>
             </div>
           </section>
@@ -1143,11 +1144,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           {error ? <p role="alert" className="mt-4 rounded-md bg-[color-mix(in_srgb,var(--ob-danger)_12%,transparent)] px-3 py-2 text-[var(--ob-danger)]">{error}</p> : null}
           <div className="mt-5 flex items-start gap-2 border-t border-[var(--ob-line)] pt-4 text-xs text-[var(--ob-muted)]">
             <ShieldCheck className="mt-0.5 shrink-0" size={15} />
-            <p>
-            API Key 与对象存储密钥经服务端加密后存入 PostgreSQL，数据库中不保存明文。
-            Ark / Seedance 请为对应服务选择 Ark 协议，并填写兼容的
-            `/api/v3` Base URL 与模型名。
-            </p>
+            <p>{t("settings.securityHint")}</p>
           </div>
           </div>
         </div>
@@ -1157,11 +1154,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 }
 
 export function SharedChannelManagedNotice({ channelName }: { channelName: string }) {
+  const { t } = useI18n();
   return (
     <div className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] px-4 py-3 text-sm">
       <p className="font-medium">{channelName}</p>
       <p className="mt-1 text-xs text-[var(--ob-muted)]">
-        服务地址、模型和访问密钥均由管理员已配置，选择后可直接使用，无需用户再次填写。
+        {t("settings.sharedManaged")}
       </p>
     </div>
   );
@@ -1184,7 +1182,8 @@ function ProviderRow({
   onPull: () => void;
   onChange: (patch: Partial<ReturnType<typeof getProvider>>) => void;
 }) {
-  const label = PROVIDER_LABELS[kind];
+  const { t } = useI18n();
+  const label = t(PROVIDER_LABEL_KEYS[kind]);
   const Icon = kind === "text" ? Type : kind === "image" ? ImageIcon : kind === "video" ? Film : AudioLines;
   const protocolOptions = kind === "audio"
     ? AUDIO_PROTOCOL_OPTIONS
@@ -1192,8 +1191,8 @@ function ProviderRow({
         { value: "openai", label: "OpenAI" },
         { value: "ark", label: "Ark / Seedance" },
         { value: "gemini", label: "Gemini" },
-        { value: "apimart", label: "APIMart（仅服务端）" },
-        { value: "kie", label: "KIE Market（仅服务端）" },
+        { value: "apimart", label: `APIMart (${t("settings.serverOnly")})` },
+        { value: "kie", label: `KIE Market (${t("settings.serverOnly")})` },
         { value: "template", label: "Template" },
       ] as const;
   const requiresKey = kind !== "audio" || audioProtocolRequiresKey(provider.protocol);
@@ -1205,16 +1204,16 @@ function ProviderRow({
     >
       <div className="grid gap-2 md:grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] md:items-center">
         <div className="flex items-center gap-2 font-medium"><Icon size={16} className="text-[var(--ob-accent)]" />{label}</div>
-        <CompactField label="协议">
-          <select className="ob-field" aria-label={`${label}协议`} value={provider.protocol} disabled={disabled} onChange={(e) => {
+        <CompactField label={t("settings.protocol")}>
+          <select className="ob-field" aria-label={`${label} ${t("settings.protocol")}`} value={provider.protocol} disabled={disabled} onChange={(e) => {
             const protocol = e.target.value as typeof provider.protocol;
             onChange(kind === "audio" ? { protocol, ...audioProviderPreset(protocol) } : { protocol });
           }}>
             {protocolOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </CompactField>
-        <CompactField label="服务 URL">
-          <input className="ob-field" aria-label={`${label} URL`} value={provider.baseUrl} disabled={disabled} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder="服务 URL" />
+        <CompactField label={t("settings.serviceUrl")}>
+          <input className="ob-field" aria-label={`${label} URL`} value={provider.baseUrl} disabled={disabled} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder={t("settings.serviceUrl")} />
         </CompactField>
         <CompactField label="API Key">
           <input
@@ -1226,13 +1225,13 @@ function ProviderRow({
             value={provider.apiKey}
             disabled={disabled || !requiresKey}
             onChange={(e) => onChange({ apiKey: e.target.value })}
-            placeholder={requiresKey ? "API Key" : "无需 API Key"}
+            placeholder={requiresKey ? "API Key" : t("settings.noApiKey")}
           />
         </CompactField>
-        <CompactField label="模型">
-          <input className="ob-field" aria-label={`${label}模型`} value={provider.model} disabled={disabled} onChange={(e) => onChange({ model: e.target.value })} placeholder="模型名称" />
+        <CompactField label={t("settings.model")}>
+          <input className="ob-field" aria-label={`${label} ${t("settings.model")}`} value={provider.model} disabled={disabled} onChange={(e) => onChange({ model: e.target.value })} placeholder={t("settings.modelName")} />
         </CompactField>
-        <button type="button" className="ob-icon-btn disabled:opacity-50" aria-label={`拉取${label}模型`} title={canPullModels ? `拉取${label}模型` : "该协议不提供模型列表"} disabled={disabled || !canPullModels} onClick={onPull}>
+        <button type="button" className="ob-icon-btn disabled:opacity-50" aria-label={t("settings.pullModels", { label })} title={canPullModels ? t("settings.pullModels", { label }) : t("settings.noModelList")} disabled={disabled || !canPullModels} onClick={onPull}>
           <RefreshCw size={16} className={busy ? "animate-spin" : ""} />
         </button>
       </div>
@@ -1273,6 +1272,7 @@ function ModelCatalogEditor({
   busy: boolean;
   onSave: (patch: Partial<SitePolicy>) => void;
 }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState(() => (policy.availableModels ?? []).join("\n"));
   const [dirty, setDirty] = useState(false);
   useEffect(() => {
@@ -1280,10 +1280,10 @@ function ModelCatalogEditor({
   }, [policy.availableModels, dirty]);
 
   const defaults: Array<{ key: keyof SitePolicy; label: string }> = [
-    { key: "defaultTextModel", label: "默认文本模型" },
-    { key: "defaultImageModel", label: "默认图片模型" },
-    { key: "defaultVideoModel", label: "默认视频模型" },
-    { key: "defaultAudioModel", label: "默认音频模型" },
+    { key: "defaultTextModel", label: t("settings.defaultTextModel") },
+    { key: "defaultImageModel", label: t("settings.defaultImageModel") },
+    { key: "defaultVideoModel", label: t("settings.defaultVideoModel") },
+    { key: "defaultAudioModel", label: t("settings.defaultAudioModel") },
   ];
   const allowList = (policy.availableModels ?? []);
   // The select must be able to display whatever is currently stored. An empty
@@ -1296,10 +1296,10 @@ function ModelCatalogEditor({
   return (
     <div className="mt-4 rounded-xl border border-[var(--ob-line)] p-3">
       <p className="mb-2 text-xs text-[var(--ob-muted)]">
-        可用模型白名单（每行一个）。留空表示不限制，前台仍按已启用渠道的模型展示。
+        {t("settings.availableModels")}
       </p>
       <textarea
-        aria-label="可用模型白名单"
+        aria-label={t("settings.availableModelsLabel")}
         className="ob-field min-h-20 w-full resize-y font-mono text-xs"
         placeholder="gpt-image-2&#10;gpt-5.5"
         value={draft}
@@ -1317,7 +1317,7 @@ function ModelCatalogEditor({
               disabled={busy}
               onChange={(event) => onSave({ [key]: event.target.value } as Partial<SitePolicy>)}
             >
-              <option value="">未设置（按类型自动选择）</option>
+              <option value="">{t("settings.unsetModel")}</option>
               {optionsFor((policy[key] as string | undefined) ?? "")
                 .map((model) => <option key={model} value={model}>{model}</option>)}
             </select>
@@ -1336,7 +1336,7 @@ function ModelCatalogEditor({
           onSave({ availableModels });
         }}
       >
-        保存模型白名单
+        {t("settings.saveModelList")}
       </button>
     </div>
   );
@@ -1358,6 +1358,7 @@ function TemplateEditor({
   value?: AiTemplateConfig;
   onChange: (value: AiTemplateConfig) => void;
 }) {
+  const { t } = useI18n();
   const fallback: AiTemplateConfig = {
     method: "POST",
     path: "/generate",
@@ -1370,7 +1371,7 @@ function TemplateEditor({
   return (
     <div className="mt-2">
       <textarea
-        aria-label="声明式模板 JSON"
+        aria-label={t("settings.templateJson")}
         className="ob-field min-h-40 resize-y font-mono text-xs"
         value={source}
         onChange={(event) => setSource(event.target.value)}
@@ -1384,13 +1385,13 @@ function TemplateEditor({
               const parsed = JSON.parse(source) as AiTemplateConfig;
               validateProviderTemplate(parsed);
               onChange(parsed);
-              setMessage("模板已应用");
+              setMessage(t("settings.templateApplied"));
             } catch (cause) {
               setMessage(cause instanceof Error ? cause.message : String(cause));
             }
           }}
         >
-          应用模板
+          {t("settings.applyTemplate")}
         </button>
         {message ? <span className="text-xs text-[var(--ob-muted)]">{message}</span> : null}
       </div>
@@ -1412,6 +1413,7 @@ function GenerationDefaultsEditor({
   audioProtocol: ReturnType<typeof getProvider>["protocol"];
   onChange: (next: GenerationDefaults) => void;
 }) {
+  const { t } = useI18n();
   const update = (patch: Partial<GenerationDefaults>) => onChange({ ...value, ...patch });
   const protocolVoices = audioVoiceOptions(audioProtocol);
   const protocolFormats = audioFormatOptions(audioProtocol);
@@ -1420,30 +1422,30 @@ function GenerationDefaultsEditor({
     : [value.audioVoice || defaultAudioVoice(audioProtocol), ...protocolVoices];
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Field label="默认视频比例">
+      <Field label={t("settings.defaultVideoRatio")}>
         <select
           className="ob-field"
-          aria-label="默认视频比例"
+          aria-label={t("settings.defaultVideoRatio")}
           value={value.videoRatio}
           onChange={(event) => update({ videoRatio: event.target.value })}
         >
           {VIDEO_RATIOS.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
         </select>
       </Field>
-      <Field label="默认清晰度">
+      <Field label={t("settings.defaultResolution")}>
         <select
           className="ob-field"
-          aria-label="默认清晰度"
+          aria-label={t("settings.defaultResolution")}
           value={value.videoResolution}
           onChange={(event) => update({ videoResolution: event.target.value })}
         >
           {VIDEO_RESOLUTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
       </Field>
-      <Field label="默认时长（秒）">
+      <Field label={t("settings.defaultDuration")}>
         <input
           className="ob-field"
-          aria-label="默认时长（秒）"
+          aria-label={t("settings.defaultDuration")}
           type="number"
           min={4}
           max={15}
@@ -1454,10 +1456,10 @@ function GenerationDefaultsEditor({
           })}
         />
       </Field>
-      <Field label="默认音频格式">
+      <Field label={t("settings.defaultAudioFormat")}>
         <select
           className="ob-field"
-          aria-label="默认音频格式"
+          aria-label={t("settings.defaultAudioFormat")}
           value={value.audioFormat}
           onChange={(event) => update({ audioFormat: event.target.value })}
         >
@@ -1465,20 +1467,20 @@ function GenerationDefaultsEditor({
             .map((format) => <option key={format} value={format}>{format}</option>)}
         </select>
       </Field>
-      <Field label="默认声音">
+      <Field label={t("settings.defaultVoice")}>
         <select
           className="ob-field"
-          aria-label="默认声音"
+          aria-label={t("settings.defaultVoice")}
           value={value.audioVoice}
           onChange={(event) => update({ audioVoice: event.target.value })}
         >
           {voiceOptions.map((voice) => <option key={voice} value={voice}>{audioVoiceLabel(voice)}</option>)}
         </select>
       </Field>
-      <Field label="默认语速">
+      <Field label={t("settings.defaultSpeed")}>
         <input
           className="ob-field"
-          aria-label="默认语速"
+          aria-label={t("settings.defaultSpeed")}
           type="number"
           min={0}
           max={4}
@@ -1493,7 +1495,7 @@ function GenerationDefaultsEditor({
               : Math.min(4, Math.max(0.25, parsed));
             update({ audioSpeed: speed });
           }}
-          placeholder="0 表示使用服务商默认"
+          placeholder={t("settings.speedPlaceholder")}
         />
       </Field>
       <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
@@ -1501,34 +1503,34 @@ function GenerationDefaultsEditor({
           type="button"
           role="switch"
           aria-checked={value.videoGenerateAudio}
-          aria-label="默认生成声音"
+          aria-label={t("settings.defaultGenerateAudio")}
           className="ob-switch"
           data-checked={value.videoGenerateAudio ? "true" : "false"}
           onClick={() => update({ videoGenerateAudio: !value.videoGenerateAudio })}
         />
-        <span className="text-sm text-[var(--ob-ink)]">默认生成声音</span>
+        <span className="text-sm text-[var(--ob-ink)]">{t("settings.defaultGenerateAudio")}</span>
       </label>
       <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
         <button
           type="button"
           role="switch"
           aria-checked={value.videoWatermark}
-          aria-label="默认添加水印"
+          aria-label={t("settings.defaultWatermark")}
           className="ob-switch"
           data-checked={value.videoWatermark ? "true" : "false"}
           onClick={() => update({ videoWatermark: !value.videoWatermark })}
         />
-        <span className="text-sm text-[var(--ob-ink)]">默认添加水印</span>
+        <span className="text-sm text-[var(--ob-ink)]">{t("settings.defaultWatermark")}</span>
       </label>
-      <Field label={audioProtocol === "openai" ? "默认语音指令" : "默认语音指令（仅 OpenAI）"}>
+      <Field label={audioProtocol === "openai" ? t("settings.defaultInstructions") : t("settings.defaultInstructionsOpenAI")}>
         <input
           className="ob-field"
-          aria-label="默认语音指令"
+          aria-label={t("settings.defaultInstructions")}
           disabled={audioProtocol !== "openai"}
           maxLength={2_000}
           value={value.audioInstructions}
           onChange={(event) => update({ audioInstructions: event.target.value })}
-          placeholder={audioProtocol === "openai" ? "留空则不发送" : "当前语音协议不支持此参数"}
+          placeholder={audioProtocol === "openai" ? t("settings.instructionsEmpty") : t("settings.instructionsUnsupported")}
         />
       </Field>
     </div>
