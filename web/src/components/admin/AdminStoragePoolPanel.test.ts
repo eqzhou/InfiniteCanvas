@@ -6,10 +6,12 @@ import {
   storageCapacityLabel,
   storageCredentialKind,
   storageDeleteTarget,
+  storagePoolErrorMessage,
   storageDraftStatus,
   storageProbeLabel,
 } from "./AdminStoragePoolPanel";
 import type { AdminStoragePoolProviderStatus } from "@/services/admin";
+import { AdminStoragePoolError } from "@/services/admin";
 
 const status = (patch: Partial<AdminStoragePoolProviderStatus> = {}): AdminStoragePoolProviderStatus => ({
   id: "pool", kind: "s3", weight: 1, configuredSelectable: true,
@@ -49,5 +51,16 @@ describe("admin storage pool status labels", () => {
     expect(storageProbeLabel(known)).toBe("探测正常");
     expect(storageCapacityLabel(known)).toContain("512 MB 可用");
     expect(storageProbeLabel(status({ probeKnown: true, probeHealthy: false }))).toBe("探测失败");
+  });
+});
+
+describe("admin storage pool error presentation", () => {
+  test("localizes known stable errors and never exposes unknown server detail", () => {
+    expect(storagePoolErrorMessage(new AdminStoragePoolError("invalid-endpoint"), "en-US"))
+      .toBe("Enter a valid storage endpoint.");
+    expect(storagePoolErrorMessage(new AdminStoragePoolError("conflict", 409), "en-US"))
+      .toBe("This storage pool was changed by another administrator. Reload and try again.");
+    expect(storagePoolErrorMessage(new Error("internal details must not reach the UI"), "en-US"))
+      .toBe("The storage pool request could not be completed. Try again.");
   });
 });

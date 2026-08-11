@@ -19,6 +19,7 @@ import {
   putAdminStoragePool,
   putAdminStoragePoolSecret,
   deleteAdminStoragePoolProvider,
+  AdminStoragePoolError,
   runDueAdminPromptSources,
   updateAdminPromptSource,
   updateAdminPromptCategory,
@@ -221,6 +222,31 @@ describe("admin client", () => {
       id: "process-main", kind: "s3", weight: 3, configuredSelectable: true,
       probeKnown: false, probeHealthy: false, capacityKnown: false,
     }]);
+  });
+
+  test("uses stable storage-pool errors for local validation and server failures", async () => {
+    expect(() => putAdminStoragePool([], "not-a-revision")).toThrow(AdminStoragePoolError);
+    try {
+      await putAdminStoragePool([], "not-a-revision");
+      throw new Error("expected storage pool validation to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AdminStoragePoolError);
+      expect((error as AdminStoragePoolError).code).toBe("invalid-revision");
+    }
+
+    globalThis.fetch = mock(async () => new Response("internal details must not reach the UI", { status: 503 })) as typeof fetch;
+    await expect(getAdminStoragePoolStatus()).rejects.toMatchObject({
+      name: "AdminStoragePoolError",
+      code: "server-unavailable",
+      status: 503,
+    });
+
+    globalThis.fetch = mock(async () => new Response("stale", { status: 409 })) as typeof fetch;
+    await expect(putAdminStoragePool([], adminRevision)).rejects.toMatchObject({
+      name: "AdminStoragePoolError",
+      code: "conflict",
+      status: 409,
+    });
   });
 
   test("validates and writes tenant storage pool configuration and write-only credentials", async () => {
