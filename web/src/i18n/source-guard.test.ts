@@ -18,6 +18,8 @@ describe("frontend localization guard", () => {
     const files = [
       "App.tsx",
       "components/layout/TopNav.tsx",
+      "components/layout/SettingsModal.tsx",
+      "components/layout/ShortcutsModal.tsx",
       "components/workbench/CreativeWorkbench.tsx",
       "components/workflows/WorkflowWorkbench.tsx",
       "pages/AssetsPage.tsx",
