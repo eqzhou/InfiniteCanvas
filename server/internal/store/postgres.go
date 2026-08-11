@@ -3050,6 +3050,7 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 		), '{}'::jsonb), true) ELSE result END
 		WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running') AND
 		  ((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR
+		   (kind IN ('image','video','audio') AND parameters->>'executor'='comfyui') OR
 		   (kind='audio' AND parameters->>'executor'='voice-clone') OR
 		   (kind='workflow' AND parameters->>'executor'='workflow') OR
 		   (kind='film-stage' AND parameters->>'executor'='film-stage') OR
