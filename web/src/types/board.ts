@@ -444,6 +444,7 @@ export type AppConfig = {
   /** Last model selected for each channel and generation kind. */
   preferredModels?: PreferredModels;
   theme: "light" | "dark" | "system";
+  locale?: import("@/i18n/core").AppLocale;
   webdavUrl?: string;
   webdavUser?: string;
   webdavPass?: string;

@@ -27,6 +27,7 @@ import {
 } from "@/lib/generation-defaults";
 import { createDefaultObjectStorage, normalizeObjectStorage, validateObjectStorageConfig } from "@/lib/object-storage";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
 import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
 import { ImageToolbarPreferencesEditor } from "@/components/layout/ImageToolbarPreferencesEditor";
@@ -61,6 +62,7 @@ import {
   FolderCog,
   HardDrive,
   Image as ImageIcon,
+  Languages,
 
   MousePointerClick,
   Palette,
@@ -91,6 +93,7 @@ export type SettingsSectionDefinition = Readonly<{
 }>;
 
 const MEMBER_SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = Object.freeze([
+  { id: "interface", label: "界面", icon: Languages },
   { id: "channel", label: "渠道", icon: Radio },
   { id: "usage", label: "用量", icon: Database },
   { id: "model", label: "模型服务", icon: Server },
@@ -111,9 +114,9 @@ const SITE_POLICY_SECTION: SettingsSectionDefinition = Object.freeze({
 export function settingsSectionsFor(canManageSitePolicy: boolean): readonly SettingsSectionDefinition[] {
   if (!canManageSitePolicy) return [...MEMBER_SETTINGS_SECTIONS];
   return [
-    ...MEMBER_SETTINGS_SECTIONS.slice(0, 5),
+    ...MEMBER_SETTINGS_SECTIONS.slice(0, 6),
     SITE_POLICY_SECTION,
-    ...MEMBER_SETTINGS_SECTIONS.slice(5),
+    ...MEMBER_SETTINGS_SECTIONS.slice(6),
   ];
 }
 
@@ -163,6 +166,7 @@ export function settingsHorizontalScrollTarget(
 }
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { locale, setLocale, t } = useI18n();
   const config = useBoardStore((s) => s.config);
   const setConfig = useBoardStore((s) => s.setConfig);
   const flushConfig = useBoardStore((s) => s.flushConfig);
@@ -180,7 +184,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     () => settingsSectionsFor(canManageSitePolicy),
     [canManageSitePolicy],
   );
-  const [activeSection, setActiveSection] = useState("channel");
+  const [activeSection, setActiveSection] = useState("interface");
   const scrollRef = useRef<HTMLDivElement>(null);
   const mobileNavigationRef = useRef<HTMLElement>(null);
 
@@ -431,9 +435,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       >
         <header className="flex min-h-16 items-center gap-4 border-b border-[var(--ob-line)] px-4 sm:px-6">
           <div>
-            <p className="ob-page-kicker">Workspace</p>
-            <h2 id="settings-title" className="text-lg font-semibold tracking-tight">设置</h2>
-            <p className="text-xs text-[var(--ob-muted)]">工作区配置 · 模型、生成偏好、对象存储与备份</p>
+            <p className="ob-page-kicker">{t("settings.kicker")}</p>
+            <h2 id="settings-title" className="text-lg font-semibold tracking-tight">{t("settings.title")}</h2>
+            <p className="text-xs text-[var(--ob-muted)]">{t("settings.subtitle")}</p>
           </div>
           <button
             type="button"
@@ -496,6 +500,28 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             onScroll={handleScroll}
             className="min-h-0 flex-1 overflow-y-auto px-4 py-5 text-sm sm:px-6"
           >
+          <section className="ob-settings-section mb-5" data-section-id="interface">
+            <div className="ob-settings-section-header">
+              <span className="ob-settings-section-icon"><Languages size={14} /></span>
+              <div>
+                <div className="ob-settings-section-title">{t("settings.interface")}</div>
+                <div className="ob-settings-section-desc">{t("settings.interfaceDescription")}</div>
+              </div>
+            </div>
+            <Field label={t("settings.language")}>
+              <select
+                className="ob-field max-w-xs"
+                aria-label={t("settings.language")}
+                value={locale}
+                onChange={(event) => setLocale(event.target.value === "en-US" ? "en-US" : "zh-CN")}
+              >
+                <option value="zh-CN">{t("locale.zhCN")}</option>
+                <option value="en-US">{t("locale.enUS")}</option>
+              </select>
+            </Field>
+            <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.languageDescription")}</p>
+          </section>
+
           <section className="ob-settings-section mb-5" data-section-id="channel">
             <div className="ob-settings-section-header">
               <span className="ob-settings-section-icon"><Radio size={14} /></span>

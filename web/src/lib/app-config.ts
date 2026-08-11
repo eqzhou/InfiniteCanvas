@@ -9,6 +9,7 @@ import { normalizeImageToolbarPreferences } from "@/lib/image-toolbar-preference
 import { normalizeGenerationDefaults } from "@/lib/generation-defaults";
 import { normalizePreferredModels } from "@/lib/workbench-preferences";
 import { normalizeAudioRoles } from "@/lib/audio-provider";
+import { normalizeLocale } from "@/i18n/core";
 
 export const SYSTEM_PROMPT_MAX_LENGTH = 20_000;
 
@@ -58,6 +59,7 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
     : [];
   return {
     ...config,
+		locale: normalizeLocale((config as AppConfig & { locale?: unknown }).locale),
 		activeSharedChannelId: typeof rawSharedChannelID === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(rawSharedChannelID)
 			? rawSharedChannelID : null,
     systemPrompt: typeof rawSystemPrompt === "string"

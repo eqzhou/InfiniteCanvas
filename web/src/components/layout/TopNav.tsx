@@ -37,6 +37,7 @@ import { isGuestIdentity, useOptionalAuth } from "@/components/auth/AuthGate";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { canManageAdmin } from "@/services/admin";
 import type { UsageSnapshot } from "@/services/auth-session";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function UsageSummary({ snapshot, label }: { snapshot: UsageSnapshot | null; label: string }) {
   if (!snapshot) {
@@ -66,6 +67,7 @@ export function TopNav({
 }: {
   onOpenSettings: () => void;
 }) {
+  const { t } = useI18n();
   const location = useLocation();
   const theme = useBoardStore((s) => s.config.theme);
   const setConfig = useBoardStore((s) => s.setConfig);
@@ -158,15 +160,15 @@ export function TopNav({
 
   const canManage = canManageAdmin(auth);
   const links = [
-    { to: "/", label: "画布", icon: LayoutDashboard },
-    { to: "/assets", label: "素材", icon: Bookmark },
-    { to: "/library", label: "服务器素材", ariaLabel: "服务器素材库页面", icon: Library },
-    { to: "/ai-logs", label: "AI 日志", ariaLabel: "AI 调用日志页面", icon: ScrollText },
-    { to: "/prompts", label: "提示词", ariaLabel: "提示库页面", icon: Sparkles },
-    { to: "/plugins", label: "插件", icon: Puzzle },
-    { to: "/workbench/image", label: "工作台", icon: WandSparkles },
-    { to: "/tasks", label: "任务", icon: ListTodo },
-    ...(canManage ? [{ to: "/admin", label: "管理", icon: Settings }] : []),
+    { to: "/", label: t("nav.canvas"), icon: LayoutDashboard },
+    { to: "/assets", label: t("nav.assets"), icon: Bookmark },
+    { to: "/library", label: t("nav.serverLibrary"), ariaLabel: t("nav.serverLibrary"), icon: Library },
+    { to: "/ai-logs", label: t("nav.aiLogs"), ariaLabel: t("nav.aiLogs"), icon: ScrollText },
+    { to: "/prompts", label: t("nav.prompts"), ariaLabel: t("nav.prompts"), icon: Sparkles },
+    { to: "/plugins", label: t("nav.plugins"), icon: Puzzle },
+    { to: "/workbench/image", label: t("nav.workbench"), icon: WandSparkles },
+    { to: "/tasks", label: t("nav.tasks"), icon: ListTodo },
+    ...(canManage ? [{ to: "/admin", label: t("nav.admin"), icon: Settings }] : []),
   ];
 
   const isLinkActive = (to: string) =>
