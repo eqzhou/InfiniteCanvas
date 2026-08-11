@@ -45,3 +45,15 @@ func TestResolvedVideoModeMapsToStableCapabilityMode(t *testing.T) {
 		t.Fatalf("unknown resolved mode must fail closed, got %s", got)
 	}
 }
+
+func TestValidateFrozenVideoModeRejectsInputDrift(t *testing.T) {
+	if got, err := validateFrozenVideoMode("first_frame_to_video", "first-last", 1, 0); err != nil || got != "first_frame_to_video" {
+		t.Fatalf("matching frozen mode rejected: got=%q err=%v", got, err)
+	}
+	if _, err := validateFrozenVideoMode("text_to_video", "references", 1, 0); err == nil {
+		t.Fatal("a frozen text mode must not be reinterpreted after a reference is added")
+	}
+	if got, err := validateFrozenVideoMode("", "references", 1, 0); err != nil || got != "reference_to_video" {
+		t.Fatalf("legacy jobs should resolve once without drift: got=%q err=%v", got, err)
+	}
+}
