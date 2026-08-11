@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { KeyRound, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import {
   deleteAdminStoragePoolProvider, getAdminStoragePoolStatus, putAdminStoragePool, putAdminStoragePoolSecret,
-  type AdminStoragePoolProviderInput, type AdminStoragePoolProviderStatus,
+  AdminStoragePoolError, type AdminStoragePoolErrorCode, type AdminStoragePoolProviderInput, type AdminStoragePoolProviderStatus,
 } from "@/services/admin";
 import { useI18n } from "@/i18n/I18nProvider";
 import { translate, type AppLocale } from "@/i18n/core";
@@ -23,6 +23,33 @@ export function storageProbeLabel(status: AdminStoragePoolProviderStatus, locale
 export function storageCapacityLabel(status: AdminStoragePoolProviderStatus, locale: AppLocale = "zh-CN"): string {
   if (!status.capacityKnown || status.totalBytes === undefined || status.availableBytes === undefined) return translate(locale, "admin.storage.capacityUnknown");
   return translate(locale, "admin.storage.capacity", { available: formatBytes(status.availableBytes), total: formatBytes(status.totalBytes) });
+}
+
+const storagePoolErrorKeys: Record<AdminStoragePoolErrorCode, keyof typeof import("@/i18n/messages/admin").adminZhCN> = {
+  "invalid-provider": "admin.storage.error.invalidProvider",
+  "invalid-endpoint": "admin.storage.error.invalidEndpoint",
+  "insecure-endpoint": "admin.storage.error.insecureEndpoint",
+  "too-many-providers": "admin.storage.error.tooManyProviders",
+  "duplicate-provider-id": "admin.storage.error.duplicateProviderId",
+  "invalid-revision": "admin.storage.error.invalidRevision",
+  "invalid-response": "admin.storage.error.invalidResponse",
+  "invalid-capacity-response": "admin.storage.error.invalidResponse",
+  "empty-webdav-credential": "admin.storage.error.emptyWebdavCredential",
+  "empty-s3-credential": "admin.storage.error.emptyS3Credential",
+  "invalid-request": "admin.storage.error.invalidRequest",
+  "authentication-required": "admin.storage.error.authenticationRequired",
+  "permission-denied": "admin.storage.error.permissionDenied",
+  "not-found": "admin.storage.error.notFound",
+  "conflict": "admin.storage.error.conflict",
+  "request-too-large": "admin.storage.error.requestTooLarge",
+  "rate-limited": "admin.storage.error.rateLimited",
+  "server-unavailable": "admin.storage.error.serverUnavailable",
+  "request-failed": "admin.storage.error.requestFailed",
+};
+
+export function storagePoolErrorMessage(cause: unknown, locale: AppLocale = "zh-CN"): string {
+  if (cause instanceof AdminStoragePoolError) return translate(locale, storagePoolErrorKeys[cause.code]);
+  return translate(locale, "admin.storage.error.requestFailed");
 }
 
 export const blankStorageProvider = (): AdminStoragePoolProviderInput => ({ kind: "s3", id: "", endpoint: "https://", bucket: "", region: "auto", prefix: "openboard", weight: 1, healthy: true, allowPrivate: false, allowInsecureLoopback: false });
@@ -76,7 +103,7 @@ export function AdminStoragePoolPanel() {
     setLoading(true);
     setLoaded(false);
     try { const result = await getAdminStoragePoolStatus(); setItems(result.items); setDrafts(persistedStorageProviderDrafts(result.items)); setRevision(result.revision); setWebdavEnabled(result.webdavEnabled); setError(""); setLoaded(true); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { setError(storagePoolErrorMessage(cause, locale)); }
     finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
@@ -84,7 +111,7 @@ export function AdminStoragePoolPanel() {
   const save = async () => {
     setLoading(true);
     try { const result = await putAdminStoragePool(drafts.map((draft) => draft.value), revision); setItems(result.items); setDrafts(persistedStorageProviderDrafts(result.items)); setRevision(result.revision); setError(""); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { setError(storagePoolErrorMessage(cause, locale)); }
     finally { setLoading(false); }
   };
   const remove = async (draft: StorageProviderDraft) => {
@@ -93,7 +120,7 @@ export function AdminStoragePoolPanel() {
     if (!window.confirm(t("admin.storage.confirmDelete", { id }))) return;
     setLoading(true);
     try { setRevision(await deleteAdminStoragePoolProvider(id, revision)); await load(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setLoading(false); }
+    catch (cause) { setError(storagePoolErrorMessage(cause, locale)); setLoading(false); }
   };
   const saveSecret = async () => {
     setLoading(true);
@@ -103,7 +130,7 @@ export function AdminStoragePoolPanel() {
       else await putAdminStoragePoolSecret(secretFor, { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) });
       setSecretFor(""); setAccessKeyId(""); setSecretAccessKey(""); setSessionToken(""); setUsername(""); setPassword(""); await load();
     }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setLoading(false); }
+    catch (cause) { setError(storagePoolErrorMessage(cause, locale)); setLoading(false); }
   };
 
   return <section className="space-y-4" aria-labelledby="storage-pool-title">

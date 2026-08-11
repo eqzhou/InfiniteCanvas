@@ -38,6 +38,76 @@ export type AdminTenantQuota = {
 
 const maxAdminQuotaValue = 1_000_000_000;
 
+export type AdminStoragePoolErrorCode =
+  | "invalid-provider"
+  | "invalid-endpoint"
+  | "insecure-endpoint"
+  | "too-many-providers"
+  | "duplicate-provider-id"
+  | "invalid-revision"
+  | "invalid-response"
+  | "invalid-capacity-response"
+  | "empty-webdav-credential"
+  | "empty-s3-credential"
+  | "invalid-request"
+  | "authentication-required"
+  | "permission-denied"
+  | "not-found"
+  | "conflict"
+  | "request-too-large"
+  | "rate-limited"
+  | "server-unavailable"
+  | "request-failed";
+
+export class AdminStoragePoolError extends Error {
+  constructor(public readonly code: AdminStoragePoolErrorCode, public readonly status?: number) {
+    super(code);
+    this.name = "AdminStoragePoolError";
+  }
+}
+
+export function adminStoragePoolErrorCodeForStatus(status: number): AdminStoragePoolErrorCode {
+  if (status === 400 || status === 422) return "invalid-request";
+  if (status === 401) return "authentication-required";
+  if (status === 403) return "permission-denied";
+  if (status === 404) return "not-found";
+  if (status === 409) return "conflict";
+  if (status === 413) return "request-too-large";
+  if (status === 429) return "rate-limited";
+  if (status >= 500 && status <= 599) return "server-unavailable";
+  return "request-failed";
+}
+
+const storagePoolServerErrorCodes: Readonly<Record<string, AdminStoragePoolErrorCode>> = {
+  storage_pool_conflict: "conflict",
+  storage_pool_not_found: "not-found",
+  storage_pool_invalid: "invalid-request",
+  storage_provider_invalid: "invalid-provider",
+  storage_endpoint_invalid: "invalid-endpoint",
+  webdav_disabled: "invalid-request",
+};
+
+async function storagePoolHttpError(response: Response): Promise<never> {
+  const detail = await response.text().catch(() => "");
+  let code = adminStoragePoolErrorCodeForStatus(response.status);
+  try {
+    const parsed = JSON.parse(detail) as { code?: unknown; error?: { code?: unknown } };
+    const serverCode = typeof parsed.code === "string" ? parsed.code : parsed.error?.code;
+    if (typeof serverCode === "string" && storagePoolServerErrorCodes[serverCode]) code = storagePoolServerErrorCodes[serverCode];
+  } catch {
+    // Error bodies are untrusted and are deliberately never shown to the UI.
+  }
+  throw new AdminStoragePoolError(code, response.status);
+}
+
+function storagePoolRevision(response: Response): string {
+  try {
+    return readAdminRevision(response);
+  } catch {
+    throw new AdminStoragePoolError("invalid-response", response.status);
+  }
+}
+
 export function parseTenantQuotaDraft(value: string): number | null {
   if (!/^(0|[1-9]\d*)$/.test(value)) return null;
   const parsed = Number(value);
@@ -334,31 +404,32 @@ export async function putAdminModelCosts(input: AdminModelCosts): Promise<AdminM
 
 export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStoragePoolProviderStatus[]; revision: string; webdavEnabled: boolean }> {
   const response = await authFetch("admin/storage-pool");
-  const revision = readAdminRevision(response);
+  if (!response.ok) await storagePoolHttpError(response);
+  const revision = storagePoolRevision(response);
   const webdavEnabled = response.headers.get("X-OpenBoard-WebDAV-Media-Enabled") === "true";
   const values = await json<unknown>(response);
-  if (!Array.isArray(values)) throw new Error("存储池状态响应无效");
+  if (!Array.isArray(values)) throw new AdminStoragePoolError("invalid-response");
   const items = values.map((value) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("存储池状态响应无效");
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new AdminStoragePoolError("invalid-response");
     const item = value as Record<string, unknown>;
     if (typeof item.id !== "string" || !channelIdPattern.test(item.id) || typeof item.kind !== "string" ||
         item.kind.length > 64 || !Number.isSafeInteger(item.weight) || Number(item.weight) < 0 || Number(item.weight) > 10_000 ||
         typeof item.configuredSelectable !== "boolean" || typeof item.probeKnown !== "boolean" ||
         typeof item.probeHealthy !== "boolean" || typeof item.capacityKnown !== "boolean") {
-      throw new Error("存储池状态响应无效");
+      throw new AdminStoragePoolError("invalid-response");
     }
     const totalBytes = item.totalBytes === undefined ? undefined : Number(item.totalBytes);
     const availableBytes = item.availableBytes === undefined ? undefined : Number(item.availableBytes);
     if ((totalBytes !== undefined && (!Number.isSafeInteger(totalBytes) || totalBytes < 0)) ||
         (availableBytes !== undefined && (!Number.isSafeInteger(availableBytes) || availableBytes < 0)) ||
         (item.capacityKnown && (totalBytes === undefined || availableBytes === undefined || availableBytes > totalBytes))) {
-      throw new Error("存储池容量响应无效");
+      throw new AdminStoragePoolError("invalid-capacity-response");
     }
     for (const [key, max] of [["endpoint", 8 * 1024], ["bucket", 63], ["region", 64], ["prefix", 256]] as const) {
-      if (item[key] !== undefined && (typeof item[key] !== "string" || item[key].length > max)) throw new Error("存储池配置响应无效");
+      if (item[key] !== undefined && (typeof item[key] !== "string" || item[key].length > max)) throw new AdminStoragePoolError("invalid-response");
     }
     for (const key of ["healthy", "allowInsecureLoopback", "allowPrivate", "secretConfigured"] as const) {
-      if (item[key] !== undefined && typeof item[key] !== "boolean") throw new Error("存储池配置响应无效");
+      if (item[key] !== undefined && typeof item[key] !== "boolean") throw new AdminStoragePoolError("invalid-response");
     }
     return {
       id: item.id,
@@ -402,21 +473,21 @@ function normalizeStorageProvider(item: AdminStoragePoolProviderInput): AdminSto
     ...(item.allowPrivate === undefined ? {} : { allowPrivate: kind === "webdav" && item.allowPrivate }),
   };
   const validBucket = kind === "webdav" || /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(value.bucket);
-  if ((kind !== "s3" && kind !== "webdav") || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value.id) || !validBucket || !Number.isSafeInteger(value.weight) || value.weight < 0 || value.weight > 10_000) throw new Error("存储提供商配置无效");
-  let parsed: URL; try { parsed = new URL(value.endpoint); } catch { throw new Error("存储端点无效"); }
+  if ((kind !== "s3" && kind !== "webdav") || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value.id) || !validBucket || !Number.isSafeInteger(value.weight) || value.weight < 0 || value.weight > 10_000) throw new AdminStoragePoolError("invalid-provider");
+  let parsed: URL; try { parsed = new URL(value.endpoint); } catch { throw new AdminStoragePoolError("invalid-endpoint"); }
   const loopback = isLoopbackHostname(parsed.hostname);
-  if (parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback && value.allowInsecureLoopback))) throw new Error("存储端点必须使用 HTTPS（仅显式允许本机 HTTP）");
+  if (parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback && value.allowInsecureLoopback))) throw new AdminStoragePoolError("insecure-endpoint");
   return value;
 }
 
 export async function putAdminStoragePool(items: AdminStoragePoolProviderInput[], revision: string): Promise<{ items: AdminStoragePoolProviderStatus[]; revision: string }> {
-  if (items.length > 64) throw new Error("存储提供商不能超过 64 个");
+  if (items.length > 64) throw new AdminStoragePoolError("too-many-providers");
   const normalized = items.map(normalizeStorageProvider);
-  if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw new Error("存储提供商 ID 不能重复");
-  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载存储池配置再保存");
+  if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw new AdminStoragePoolError("duplicate-provider-id");
+  if (!adminRevisionPattern.test(revision)) throw new AdminStoragePoolError("invalid-revision");
   const response = await authFetch("admin/storage-pool", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
-  if (response.status === 409) throw new Error("存储池配置已被其他管理员修改，请重新加载后重试");
-  const nextRevision = readAdminRevision(response);
+  if (!response.ok) await storagePoolHttpError(response);
+  const nextRevision = storagePoolRevision(response);
   const values = await json<AdminStoragePoolProviderStatus[]>(response);
   return { items: values, revision: nextRevision };
 }
@@ -427,19 +498,19 @@ export type AdminStoragePoolCredential =
 
 export async function putAdminStoragePoolSecret(id: string, credential: AdminStoragePoolCredential): Promise<void> {
   if ("username" in credential) {
-    if (!credential.username.trim() || !credential.password) throw new Error("WebDAV 用户名和密码不能为空");
+    if (!credential.username.trim() || !credential.password) throw new AdminStoragePoolError("empty-webdav-credential");
   } else if (!credential.accessKeyId.trim() || !credential.secretAccessKey.trim()) {
-    throw new Error("Access Key 和 Secret Key 不能为空");
+    throw new AdminStoragePoolError("empty-s3-credential");
   }
   const response = await authFetch(`admin/storage-pool/${encodeURIComponent(id)}/secret`, { method: "PUT", body: JSON.stringify(credential) });
-  if (!response.ok) await json(response);
+  if (!response.ok) await storagePoolHttpError(response);
 }
 
 export async function deleteAdminStoragePoolProvider(id: string, revision: string): Promise<string> {
-  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载存储池配置再删除");
+  if (!adminRevisionPattern.test(revision)) throw new AdminStoragePoolError("invalid-revision");
   const response = await authFetch(`admin/storage-pool/${encodeURIComponent(id)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
-  if (!response.ok) await json(response);
-  return readAdminRevision(response);
+  if (!response.ok) await storagePoolHttpError(response);
+  return storagePoolRevision(response);
 }
 
 export async function listAdminChannels(): Promise<{ items: AdminChannel[]; revision: string }> {
