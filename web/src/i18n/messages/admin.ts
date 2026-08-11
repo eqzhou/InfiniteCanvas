@@ -212,6 +212,14 @@ export const adminZhCN = {
   "admin.storage.credentialConfigured": "凭据已配置",
   "admin.storage.credentialMissing": "凭据未配置",
   "admin.storage.saveBeforeCredential": "请先保存再配置凭据",
+  "admin.storage.webdavEndpoint": "WebDAV 端点",
+  "admin.storage.s3Endpoint": "S3/R2 端点",
+  "admin.storage.bucket": "存储桶",
+  "admin.storage.region": "区域",
+  "admin.storage.prefix": "路径前缀",
+  "admin.storage.accessKeyId": "Access Key ID",
+  "admin.storage.secretAccessKey": "Secret Access Key",
+  "admin.storage.confirmDelete": "确定删除存储提供商“{id}”吗？",
 } as const;
 
 export const adminEnUS: Record<keyof typeof adminZhCN, string> = {
@@ -428,4 +436,12 @@ export const adminEnUS: Record<keyof typeof adminZhCN, string> = {
   "admin.storage.credentialConfigured": "Credential configured",
   "admin.storage.credentialMissing": "Credential missing",
   "admin.storage.saveBeforeCredential": "Save before configuring credentials",
+  "admin.storage.webdavEndpoint": "WebDAV endpoint",
+  "admin.storage.s3Endpoint": "S3/R2 endpoint",
+  "admin.storage.bucket": "Bucket",
+  "admin.storage.region": "Region",
+  "admin.storage.prefix": "Path prefix",
+  "admin.storage.accessKeyId": "Access key ID",
+  "admin.storage.secretAccessKey": "Secret access key",
+  "admin.storage.confirmDelete": "Delete storage provider “{id}”?",
 };

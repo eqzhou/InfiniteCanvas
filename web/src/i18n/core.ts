@@ -734,7 +734,7 @@ export function normalizeLocale(value: unknown): AppLocale | undefined {
 export function detectSupportedLocale(languages: readonly string[]): AppLocale {
   for (const language of languages) {
     const normalized = language.trim().toLowerCase();
-    if (normalized === "en-us" || normalized.startsWith("en-us-")) return "en-US";
+    if (normalized === "en" || normalized.startsWith("en-")) return "en-US";
     if (normalized === "zh-cn" || normalized.startsWith("zh-hans")) return "zh-CN";
   }
   return "zh-CN";
