@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,12 +18,15 @@ import (
 
 type voiceFilmMemoryStore struct {
 	*filmMemoryStore
-	voiceMu       sync.Mutex
-	identities    map[string]store.VoiceIdentity
-	samples       map[string]store.VoiceSample
-	consents      map[string]store.VoiceConsent
-	versions      map[string]store.VoiceIdentityVersion
-	idempotencies map[string]string
+	voiceMu          sync.Mutex
+	identities       map[string]store.VoiceIdentity
+	samples          map[string]store.VoiceSample
+	consents         map[string]store.VoiceConsent
+	versions         map[string]store.VoiceIdentityVersion
+	idempotencies    map[string]string
+	legacyJobCreates atomic.Int32
+	atomicBatchCalls atomic.Int32
+	atomicCredits    atomic.Int32
 }
 
 type scriptedVoiceCloneExecutor struct {
@@ -150,6 +154,42 @@ func (m *voiceFilmMemoryStore) CreateVoiceCloneVersion(_ context.Context, tenant
 	return value, false, nil
 }
 
+func (m *voiceFilmMemoryStore) CreateServerGenerationJob(ctx context.Context, tenantID, userID string, job store.GenerationJob, units int, usageMeta json.RawMessage) error {
+	m.legacyJobCreates.Add(1)
+	return m.filmMemoryStore.CreateServerGenerationJob(ctx, tenantID, userID, job, units, usageMeta)
+}
+
+// CreateVoiceCloneBatch is the transaction-shaped fake expected by the voice
+// API. The production PostgreSQL implementation must provide the same atomic
+// boundary; this fake also lets the test prove the legacy two-write path is not
+// used.
+func (m *voiceFilmMemoryStore) CreateVoiceCloneBatch(_ context.Context, tenantID, userID, projectID, idempotencyKey string, value store.VoiceIdentityVersion, job store.GenerationJob, units int, usageMeta json.RawMessage, expectedCredits int) (store.VoiceIdentityVersion, bool, error) {
+	m.atomicBatchCalls.Add(1)
+	m.atomicCredits.Store(int32(expectedCredits))
+	m.voiceMu.Lock()
+	defer m.voiceMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	idempotency := voiceStoreKey(tenantID, projectID, idempotencyKey)
+	if versionID, exists := m.idempotencies[idempotency]; exists {
+		return m.versions[voiceStoreKey(tenantID, projectID, versionID)], true, nil
+	}
+	if _, exists := m.jobs[tenantKey(tenantID, job.ID)]; exists {
+		return store.VoiceIdentityVersion{}, false, store.ErrConflict
+	}
+	value.Revision = 1
+	for _, current := range m.versions {
+		if current.ProjectID == projectID && current.VoiceIdentityID == value.VoiceIdentityID && current.Revision >= value.Revision {
+			value.Revision = current.Revision + 1
+		}
+	}
+	value.IdempotencyKeyHash = idempotencyKey
+	m.jobs[tenantKey(tenantID, job.ID)] = job
+	m.versions[voiceStoreKey(tenantID, projectID, value.ID)] = value
+	m.idempotencies[idempotency] = value.ID
+	return value, false, nil
+}
+
 func (m *voiceFilmMemoryStore) ListVoiceIdentityVersions(_ context.Context, tenantID, projectID, voiceID string) ([]store.VoiceIdentityVersion, error) {
 	m.voiceMu.Lock()
 	defer m.voiceMu.Unlock()
@@ -269,6 +309,62 @@ func TestVoiceCloneRequiresExplicitAuditedConsentAndTenantAudio(t *testing.T) {
 	}
 }
 
+func TestVoiceConsentRequiresTenantAdminAndFrozenEvidence(t *testing.T) {
+	server, _, ownerHandler := voiceCloneAPIHandler(t)
+	created := request(t, ownerHandler, http.MethodPost, "/api/film/projects/voice-film/voice-identities", []byte(`{"title":"Evidence voice"}`))
+	identity := voiceData[store.VoiceIdentity](t, created.Body.Bytes())
+	evidence := []byte("signed voice consent evidence v1")
+	if upload := requestWithHeaders(t, ownerHandler, http.MethodPut, "/api/blobs/voice-consent.txt", evidence, map[string]string{"Content-Type": "text/plain"}); upload.Code != http.StatusNoContent {
+		t.Fatalf("upload consent evidence: %d %s", upload.Code, upload.Body.String())
+	}
+	body := []byte(`{"accepted":true,"rightsBasis":"authorized","subjectDisplayName":"Test Performer","termsVersion":"voice-clone-v1","evidenceStorageKey":"voice-consent.txt"}`)
+	response := request(t, ownerHandler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", body)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("audited consent status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	if json.Unmarshal(response.Body.Bytes(), &payload) != nil || payload.Data["evidenceStorageKey"] != "voice-consent.txt" || payload.Data["evidenceSHA256"] != sha256Hex(evidence) || payload.Data["evidenceObjectVersion"] == "" {
+		t.Fatalf("consent evidence was not frozen: %s", response.Body.String())
+	}
+	memberHandler := withActor(serverHandler(server), store.AuthUser{ID: "voice-member", TenantID: store.DefaultTenantID, Role: "member", Status: "active"})
+	denied := request(t, memberHandler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", []byte(`{"accepted":true,"rightsBasis":"self","subjectDisplayName":"Test Performer","termsVersion":"voice-clone-v1"}`))
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("member recorded consent: %d %s", denied.Code, denied.Body.String())
+	}
+}
+
+func TestVoiceCloneEnforcesSitePolicyModelAndQuotedCredits(t *testing.T) {
+	server, backend, handler := voiceCloneAPIHandler(t)
+	identity, sample, consent := createVoiceIdentityAndSample(t, handler)
+	body := []byte(`{"providerId":"audio-main","model":"voice-clone-1","sampleIds":["` + sample.ID + `"],"consentId":"` + consent.ID + `","idempotencyKey":"voice-policy-test"}`)
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: false, AvailableModels: []string{"voice-clone-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if response := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/clone", body); response.Code != http.StatusForbidden {
+		t.Fatalf("disabled cloud generation status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: true, AvailableModels: []string{"other-model"}}); err != nil {
+		t.Fatal(err)
+	}
+	if response := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/clone", body); response.Code != http.StatusForbidden {
+		t.Fatalf("blocked voice model status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: true, AvailableModels: []string{"voice-clone-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutModelCreditConfig(t.Context(), store.DefaultTenantID, store.ModelCreditConfig{DefaultCredits: 1, ModelCosts: []store.ModelCreditCost{{Model: "voice-clone-1", Credits: 7}}}); err != nil {
+		t.Fatal(err)
+	}
+	if response := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/clone", body); response.Code != http.StatusAccepted {
+		t.Fatalf("allowed voice clone status=%d body=%s", response.Code, response.Body.String())
+	}
+	if backend.atomicBatchCalls.Load() != 1 || backend.legacyJobCreates.Load() != 0 || backend.atomicCredits.Load() != 7 {
+		t.Fatalf("voice clone boundary atomic=%d legacy=%d credits=%d", backend.atomicBatchCalls.Load(), backend.legacyJobCreates.Load(), backend.atomicCredits.Load())
+	}
+}
+
 func TestVoiceCloneCreatesImmutableVersionAndIdempotentGenerationJob(t *testing.T) {
 	_, backend, handler := voiceCloneAPIHandler(t)
 	identity, sample, consent := createVoiceIdentityAndSample(t, handler)
@@ -365,7 +461,7 @@ func TestVoiceCloneSyncRecoversCompletedGenerationLifecycle(t *testing.T) {
 }
 
 func TestVoiceCloneUsesExistingCancellationAndRefundLifecycle(t *testing.T) {
-	_, _, handler := voiceCloneAPIHandler(t)
+	_, backend, handler := voiceCloneAPIHandler(t)
 	identity, sample, consent := createVoiceIdentityAndSample(t, handler)
 	body := []byte(`{"providerId":"audio-main","model":"voice-clone-1","sampleIds":["` + sample.ID + `"],"consentId":"` + consent.ID + `","idempotencyKey":"voice-clone-cancel-1"}`)
 	created := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/clone", body)
@@ -374,6 +470,10 @@ func TestVoiceCloneUsesExistingCancellationAndRefundLifecycle(t *testing.T) {
 	var canceledJob store.GenerationJob
 	if json.Unmarshal(canceled.Body.Bytes(), &canceledJob) != nil || canceled.Code != http.StatusOK || canceledJob.Status != "cancelled" {
 		t.Fatalf("cancel status=%d body=%s", canceled.Code, canceled.Body.String())
+	}
+	versions, err := backend.ListVoiceIdentityVersions(t.Context(), store.DefaultTenantID, "voice-film", identity.ID)
+	if err != nil || len(versions) != 1 || versions[0].Status != "canceled" {
+		t.Fatalf("cancel did not atomically update voice version: versions=%#v err=%v", versions, err)
 	}
 	synced := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/versions/"+version.ID+"/sync", nil)
 	value := voiceData[store.VoiceIdentityVersion](t, synced.Body.Bytes())

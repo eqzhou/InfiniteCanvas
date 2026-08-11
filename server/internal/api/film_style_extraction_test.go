@@ -71,6 +71,58 @@ func TestFilmStyleExtractionFeatureGate(t *testing.T) {
 	}
 }
 
+func TestFilmStyleExtractionEnforcesServerGenerationPolicy(t *testing.T) {
+	t.Setenv(styleExtractionFeatureEnv, "true")
+	server, backend, handler := filmAPIServerHandler(t)
+	document, source, _ := seedFilmStyleReference(t, server, backend, handler)
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: false, AvailableModels: []string{"gpt-text"}}); err != nil {
+		t.Fatal(err)
+	}
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/style-extractions", styleExtractionBody(t, document.Revision, source.ID, "style-policy-1", "lighting"))
+	if response.Code != http.StatusForbidden || backend.atomicBatchCalls.Load() != 0 {
+		t.Fatalf("disabled cloud style extraction status=%d batches=%d body=%s", response.Code, backend.atomicBatchCalls.Load(), response.Body.String())
+	}
+}
+
+func TestFilmStyleExtractionRejectsCorruptDeclaredImage(t *testing.T) {
+	t.Setenv(styleExtractionFeatureEnv, "true")
+	server, backend, handler := filmAPIServerHandler(t)
+	document, source, _ := seedFilmStyleReference(t, server, backend, handler)
+	corrupt := []byte("\x89PNG\r\n\x1a\ntruncated")
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/"+source.MediaStorageKey, corrupt, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatalf("replace style source: %d %s", response.Code, response.Body.String())
+	}
+	blob, err := server.readTenantBlob(t.Context(), store.DefaultTenantID, source.MediaStorageKey, maxProviderTextImageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := backend.GetFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err = decodeFilmDocument(record.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range document.Assets {
+		if document.Assets[index].ID == source.ID {
+			document.Assets[index].MediaSHA256 = sha256Hex(corrupt)
+			document.Assets[index].MediaObjectVersion = blobIdentityVersion(blob)
+		}
+	}
+	document.Revision++
+	raw, _ := json.Marshal(document)
+	updated, err := backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, record.Revision, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, _ = decodeFilmDocument(updated.Document)
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/style-extractions", styleExtractionBody(t, document.Revision, source.ID, "style-corrupt-1", "texture"))
+	if response.Code != http.StatusUnprocessableEntity || backend.atomicBatchCalls.Load() != 0 {
+		t.Fatalf("corrupt style source status=%d batches=%d body=%s", response.Code, backend.atomicBatchCalls.Load(), response.Body.String())
+	}
+}
+
 func TestFilmStyleExtractionQueuesFrozenIdempotentJobAndAdoptsCandidate(t *testing.T) {
 	t.Setenv(styleExtractionFeatureEnv, "true")
 	server, backend, handler := filmAPIServerHandler(t)

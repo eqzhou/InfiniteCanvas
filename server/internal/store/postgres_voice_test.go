@@ -11,8 +11,8 @@ import (
 )
 
 func TestVoiceCloneGenerationClaimIsNarrowlyScoped(t *testing.T) {
-	if currentSchemaVersion < 23 {
-		t.Fatalf("voice identity persistence requires schema v23 or newer, got v%d", currentSchemaVersion)
+	if currentSchemaVersion < 24 {
+		t.Fatalf("audited atomic voice cloning requires schema v24 or newer, got v%d", currentSchemaVersion)
 	}
 	if !validServerGenerationClaim(GenerationClaim{Kind: "audio", Executor: "voice-clone"}) {
 		t.Fatal("voice clone worker claim was rejected")
