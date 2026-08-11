@@ -26,6 +26,9 @@ describe("i18n core", () => {
     expect(translate("en-US", "nav.serverLibrary")).toBe("Server assets");
     expect(translate("en-US", "usage.generations", { current: 2, limit: 10 }))
       .toBe("Team generations 2/10");
+    expect(translate("en-US", "auth.checking")).toBe("Checking sign-in status…");
+    expect(translate("en-US", "help.title")).toBe("Help");
+    expect(translate("en-US", "agent.errors")).toBe("Errors");
   });
 
   test("formats numbers and bytes with the active locale", () => {
