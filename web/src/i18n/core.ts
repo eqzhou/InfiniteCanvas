@@ -728,7 +728,9 @@ const enUS: Partial<Record<MessageKey, string>> = {
 };
 
 function placeholders(template: string): string[] {
-  return [...template.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)]
+  // Workflow prompt examples use double braces literally; only single braces are
+  // runtime i18n interpolation placeholders.
+  return [...template.matchAll(/(?<!\{)\{([A-Za-z][A-Za-z0-9]*)\}(?!\})/g)]
     .map((match) => match[1]!)
     .sort();
 }
