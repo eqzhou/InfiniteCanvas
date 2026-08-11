@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -8,6 +9,15 @@ import (
 
 	"github.com/openboard/openboard/server/internal/store"
 )
+
+func onePixelPNG(t *testing.T) []byte {
+	t.Helper()
+	value, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
 
 func TestFilmStageWaiverAPIHonorsFeatureGateAndPersistsAudit(t *testing.T) {
 	t.Setenv(filmStageWaiverFeatureEnv, "true")
@@ -144,5 +154,38 @@ func TestFilmStageWaiverJSONDoesNotLeakUnstructuredActorData(t *testing.T) {
 	raw, err := json.Marshal(next.StageWaivers[0])
 	if err != nil || strings.Contains(string(raw), "Password") {
 		t.Fatalf("unsafe waiver serialization: %v %s", err, raw)
+	}
+}
+
+func TestFilmSplitCandidateAdoptionFreezesVerifiedGridLineage(t *testing.T) {
+	_, handler := filmAPIHandler(t)
+	document := decodeFilmResponse(t, request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. SET - DAY\nAction."}`)))
+	source := onePixelPNG(t)
+	child := onePixelPNG(t)
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/image:grid-source", source, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatal(response.Body.String())
+	}
+	if response := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/image:grid-child", child, map[string]string{"Content-Type": "image/png"}); response.Code != http.StatusNoContent {
+		t.Fatal(response.Body.String())
+	}
+	body, _ := json.Marshal(map[string]any{
+		"targetType": "shot", "targetId": document.Shots[0].ID, "targetField": "image", "expectedRevision": document.Shots[0].Revision,
+		"sourceNodeId": "node-grid-child", "storageKey": "image:grid-child", "candidateSha256": sha256Hex(child),
+		"splitSourceStorageKey": "image:grid-source", "splitCrop": map[string]any{"x": 0, "y": 0, "width": 1, "height": 1},
+	})
+	adoptedResponse := request(t, handler, http.MethodPost, "/api/film/projects/film-api/projection/adopt", body)
+	if adoptedResponse.Code != http.StatusOK {
+		t.Fatalf("adopt split: %d %s", adoptedResponse.Code, adoptedResponse.Body.String())
+	}
+	adopted := decodeFilmResponse(t, adoptedResponse)
+	lineage := adopted.Adoptions[len(adopted.Adoptions)-1]
+	if lineage.SplitSourceStorageKey != "image:grid-source" || lineage.SplitSourceSHA256 != sha256Hex(source) || lineage.CandidateSHA256 != sha256Hex(child) || lineage.SplitCrop.Width != 1 {
+		t.Fatalf("split lineage = %#v", lineage)
+	}
+
+	badBody := strings.Replace(string(body), sha256Hex(child), strings.Repeat("0", 64), 1)
+	bad := request(t, handler, http.MethodPost, "/api/film/projects/film-api/projection/adopt", []byte(badBody))
+	if bad.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("forged candidate hash status = %d body=%s", bad.Code, bad.Body.String())
 	}
 }
