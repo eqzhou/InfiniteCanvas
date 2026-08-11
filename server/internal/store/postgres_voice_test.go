@@ -75,6 +75,17 @@ func TestPostgresVoiceIdentitySnapshotsAreTenantScopedAndImmutable(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	samples, err := backend.ListVoiceSamples(t.Context(), tenantID, projectID, identity.ID)
+	if err != nil || len(samples) != 1 || samples[0].ID != sample.ID {
+		t.Fatalf("samples=%#v err=%v", samples, err)
+	}
+	consents, err := backend.ListVoiceConsents(t.Context(), tenantID, projectID, identity.ID)
+	if err != nil || len(consents) != 1 || consents[0].ID != consent.ID {
+		t.Fatalf("consents=%#v err=%v", consents, err)
+	}
+	if other, err := backend.ListVoiceSamples(t.Context(), tenantID+"-other", projectID, identity.ID); err != nil || len(other) != 0 {
+		t.Fatalf("cross-tenant samples=%#v err=%v", other, err)
+	}
 	job := GenerationJob{
 		ID: "voice-job-one", ProjectID: projectID, Kind: "audio", Status: "queued", Prompt: "Lead", ProviderID: "audio-main", Model: "clone-model",
 		Parameters: json.RawMessage(`{"executor":"voice-clone","projectId":"voice-film","voiceIdentityId":"voice-one","versionId":"version-one","consentId":"consent-one"}`), Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,

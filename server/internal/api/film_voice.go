@@ -69,10 +69,32 @@ func mountFilmVoiceRoutes(r chi.Router, server *Server) {
 	r.Get("/film/projects/{projectId}/voice-identities", server.listVoiceIdentities)
 	r.Post("/film/projects/{projectId}/voice-identities", server.createVoiceIdentity)
 	r.Post("/film/projects/{projectId}/voice-identities/{voiceId}/samples", server.addVoiceSample)
+	r.Get("/film/projects/{projectId}/voice-identities/{voiceId}/samples", server.listVoiceSamples)
 	r.Post("/film/projects/{projectId}/voice-identities/{voiceId}/consents", server.createVoiceConsent)
+	r.Get("/film/projects/{projectId}/voice-identities/{voiceId}/consents", server.listVoiceConsents)
 	r.Post("/film/projects/{projectId}/voice-identities/{voiceId}/clone", server.createVoiceClone)
 	r.Get("/film/projects/{projectId}/voice-identities/{voiceId}/versions", server.listVoiceVersions)
 	r.Post("/film/projects/{projectId}/voice-identities/{voiceId}/versions/{versionId}/sync", server.syncVoiceVersion)
+}
+
+type voiceSampleSummary struct {
+	ID              string `json:"id"`
+	ProjectID       string `json:"projectId"`
+	VoiceIdentityID string `json:"voiceIdentityId"`
+	Label           string `json:"label,omitempty"`
+	MIMEType        string `json:"mimeType"`
+	CreatedAt       string `json:"createdAt"`
+}
+
+type voiceConsentSummary struct {
+	ID                 string `json:"id"`
+	ProjectID          string `json:"projectId"`
+	VoiceIdentityID    string `json:"voiceIdentityId"`
+	Accepted           bool   `json:"accepted"`
+	RightsBasis        string `json:"rightsBasis"`
+	SubjectDisplayName string `json:"subjectDisplayName"`
+	TermsVersion       string `json:"termsVersion"`
+	AcceptedAt         string `json:"acceptedAt"`
 }
 
 func advancedVoiceEnabled() bool {
@@ -226,6 +248,32 @@ func (s *Server) addVoiceSample(w http.ResponseWriter, r *http.Request) {
 	writeVoiceData(w, http.StatusCreated, created)
 }
 
+func (s *Server) listVoiceSamples(w http.ResponseWriter, r *http.Request) {
+	backend, projectID, ok := s.loadVoiceProject(w, r)
+	if !ok {
+		return
+	}
+	voiceID := chi.URLParam(r, "voiceId")
+	if !validProjectID(voiceID) {
+		writeFilmError(w, http.StatusBadRequest, "invalid_voice_identity", "Voice identity is invalid")
+		return
+	}
+	if _, err := backend.GetVoiceIdentity(r.Context(), tenantIDFrom(r), projectID, voiceID); err != nil {
+		writeFilmError(w, http.StatusNotFound, "voice_identity_not_found", "Voice identity was not found")
+		return
+	}
+	values, err := backend.ListVoiceSamples(r.Context(), tenantIDFrom(r), projectID, voiceID)
+	if err != nil {
+		writeFilmError(w, http.StatusInternalServerError, "sample_list_failed", "Voice samples could not be loaded")
+		return
+	}
+	summaries := make([]voiceSampleSummary, 0, len(values))
+	for _, value := range values {
+		summaries = append(summaries, voiceSampleSummary{ID: value.ID, ProjectID: value.ProjectID, VoiceIdentityID: value.VoiceIdentityID, Label: value.Label, MIMEType: value.MIMEType, CreatedAt: value.CreatedAt})
+	}
+	writeVoiceData(w, http.StatusOK, summaries)
+}
+
 func (s *Server) createVoiceConsent(w http.ResponseWriter, r *http.Request) {
 	backend, projectID, ok := s.loadVoiceProject(w, r)
 	if !ok {
@@ -286,6 +334,32 @@ func (s *Server) createVoiceConsent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeVoiceData(w, http.StatusCreated, created)
+}
+
+func (s *Server) listVoiceConsents(w http.ResponseWriter, r *http.Request) {
+	backend, projectID, ok := s.loadVoiceProject(w, r)
+	if !ok {
+		return
+	}
+	voiceID := chi.URLParam(r, "voiceId")
+	if !validProjectID(voiceID) {
+		writeFilmError(w, http.StatusBadRequest, "invalid_voice_identity", "Voice identity is invalid")
+		return
+	}
+	if _, err := backend.GetVoiceIdentity(r.Context(), tenantIDFrom(r), projectID, voiceID); err != nil {
+		writeFilmError(w, http.StatusNotFound, "voice_identity_not_found", "Voice identity was not found")
+		return
+	}
+	values, err := backend.ListVoiceConsents(r.Context(), tenantIDFrom(r), projectID, voiceID)
+	if err != nil {
+		writeFilmError(w, http.StatusInternalServerError, "consent_list_failed", "Voice consent records could not be loaded")
+		return
+	}
+	summaries := make([]voiceConsentSummary, 0, len(values))
+	for _, value := range values {
+		summaries = append(summaries, voiceConsentSummary{ID: value.ID, ProjectID: value.ProjectID, VoiceIdentityID: value.VoiceIdentityID, Accepted: value.Accepted, RightsBasis: value.RightsBasis, SubjectDisplayName: value.SubjectDisplayName, TermsVersion: value.TermsVersion, AcceptedAt: value.AcceptedAt})
+	}
+	writeVoiceData(w, http.StatusOK, summaries)
 }
 
 func hashVoiceIdempotency(tenantID, projectID, voiceID, key string) string {

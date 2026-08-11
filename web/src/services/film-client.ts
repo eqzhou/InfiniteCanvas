@@ -940,13 +940,13 @@ export type FilmVoiceIdentity = {
   currentVersionId?: string; createdAt: string; updatedAt: string;
 };
 export type FilmVoiceSample = {
-  id: string; projectId: string; voiceIdentityId: string; label?: string; storageKey: string;
-  mimeType: string; sha256: string; mediaObjectVersion?: string; createdAt: string;
+  id: string; projectId: string; voiceIdentityId: string; label?: string; storageKey?: string;
+  mimeType: string; sha256?: string; mediaObjectVersion?: string; createdAt: string;
 };
 export type FilmVoiceConsent = {
   id: string; projectId: string; voiceIdentityId: string; accepted: boolean; rightsBasis: "self" | "licensed" | "authorized";
-  subjectDisplayName: string; termsVersion: string; evidenceStorageKey: string; evidenceMimeType: string;
-  evidenceSHA256: string; evidenceObjectVersion: string; actorId: string; acceptedAt: string;
+  subjectDisplayName: string; termsVersion: string; evidenceStorageKey?: string; evidenceMimeType?: string;
+  evidenceSHA256?: string; evidenceObjectVersion?: string; actorId?: string; acceptedAt: string;
 };
 export type FilmVoiceVersion = {
   id: string; projectId: string; voiceIdentityId: string; revision: number;
@@ -967,11 +967,19 @@ export function addFilmVoiceSample(projectId: string, voiceId: string, input: { 
   return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/samples`), { method: "POST", body: JSON.stringify(input) }));
 }
 
+export function listFilmVoiceSamples(projectId: string, voiceId: string): Promise<FilmVoiceSample[]> {
+  return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/samples`)));
+}
+
 export function createFilmVoiceConsent(projectId: string, voiceId: string, input: {
   accepted: true; rightsBasis: "self" | "licensed" | "authorized"; subjectDisplayName: string;
   termsVersion: string; evidenceStorageKey: string;
 }): Promise<FilmVoiceConsent> {
   return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/consents`), { method: "POST", body: JSON.stringify(input) }));
+}
+
+export function listFilmVoiceConsents(projectId: string, voiceId: string): Promise<FilmVoiceConsent[]> {
+  return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/consents`)));
 }
 
 export function createFilmVoiceClone(projectId: string, voiceId: string, input: {

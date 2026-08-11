@@ -104,6 +104,24 @@ func (s *PostgresStore) GetVoiceSample(ctx context.Context, tenantID, projectID,
 		FROM openboard_film_voice_samples WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, normalizeTenantID(tenantID), projectID, id))
 }
 
+func (s *PostgresStore) ListVoiceSamples(ctx context.Context, tenantID, projectID, voiceIdentityID string) ([]VoiceSample, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,project_id,voice_identity_id,label,storage_key,mime_type,sha256,media_object_version,created_at
+		FROM openboard_film_voice_samples WHERE tenant_id=$1 AND project_id=$2 AND voice_identity_id=$3 ORDER BY created_at,id`, normalizeTenantID(tenantID), projectID, voiceIdentityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := []VoiceSample{}
+	for rows.Next() {
+		value, scanErr := scanVoiceSample(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
 func scanVoiceConsent(row pgx.Row) (VoiceConsent, error) {
 	var value VoiceConsent
 	var acceptedAt time.Time
@@ -148,6 +166,24 @@ func validVoiceSHA256(value string) bool {
 func (s *PostgresStore) GetVoiceConsent(ctx context.Context, tenantID, projectID, id string) (VoiceConsent, error) {
 	return scanVoiceConsent(s.pool.QueryRow(ctx, `SELECT id,project_id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,evidence_storage_key,evidence_mime_type,evidence_sha256,evidence_object_version,actor_id,accepted_at
 		FROM openboard_film_voice_consents WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, normalizeTenantID(tenantID), projectID, id))
+}
+
+func (s *PostgresStore) ListVoiceConsents(ctx context.Context, tenantID, projectID, voiceIdentityID string) ([]VoiceConsent, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,project_id,voice_identity_id,accepted,rights_basis,subject_display_name,terms_version,evidence_storage_key,evidence_mime_type,evidence_sha256,evidence_object_version,actor_id,accepted_at
+		FROM openboard_film_voice_consents WHERE tenant_id=$1 AND project_id=$2 AND voice_identity_id=$3 ORDER BY accepted_at,id`, normalizeTenantID(tenantID), projectID, voiceIdentityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := []VoiceConsent{}
+	for rows.Next() {
+		value, scanErr := scanVoiceConsent(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
 }
 
 func scanVoiceVersion(row pgx.Row) (VoiceIdentityVersion, error) {

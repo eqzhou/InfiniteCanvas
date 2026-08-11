@@ -12,7 +12,9 @@ import {
   createFilmVoiceConsent,
   createFilmVoiceIdentity,
   getFilmAdvancedGenerationJob,
+  listFilmVoiceConsents,
   listFilmVoiceIdentities,
+  listFilmVoiceSamples,
   listFilmVoiceVersions,
   loadFilmStatus,
   requestFilmStyleExtraction,
@@ -158,13 +160,23 @@ function VoiceIdentityPanel({ status, channels }: PanelProps) {
   const refreshIdentities = () => execute(() => listFilmVoiceIdentities(status.document.projectId), (items) => {
     setIdentities(items); setSelectedId((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? "");
   }, t("film.advanced.refreshed"));
-  const refreshVersions = (voiceId = selectedId) => {
-    if (!voiceId) { setVersions([]); return; }
-    void execute(() => listFilmVoiceVersions(status.document.projectId, voiceId), setVersions, t("film.advanced.refreshed"));
+  const refreshVoiceRecords = (voiceId = selectedId) => {
+    if (!voiceId) { setVersions([]); setSamples([]); setConsents([]); return; }
+    void execute(
+      () => Promise.all([
+        listFilmVoiceVersions(status.document.projectId, voiceId),
+        listFilmVoiceSamples(status.document.projectId, voiceId),
+        listFilmVoiceConsents(status.document.projectId, voiceId),
+      ]),
+      ([nextVersions, nextSamples, nextConsents]) => {
+        setVersions(nextVersions); setSamples(nextSamples); setConsents(nextConsents);
+      },
+      t("film.advanced.refreshed"),
+    );
   };
 
   useEffect(() => { if (status.capabilities.features.advancedVoice) void refreshIdentities(); }, [status.document.projectId, status.capabilities.features.advancedVoice]);
-  useEffect(() => { if (selectedId) refreshVersions(selectedId); else setVersions([]); }, [selectedId]);
+  useEffect(() => { refreshVoiceRecords(selectedId); }, [selectedId]);
   useEffect(() => {
     const channel = channels.find((item) => item.id === providerId) ?? channels[0];
     if (!channel) { setProviderId(""); setModel(""); return; }

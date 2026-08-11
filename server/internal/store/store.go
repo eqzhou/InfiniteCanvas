@@ -371,8 +371,10 @@ type VoiceIdentityStore interface {
 	ListVoiceIdentities(ctx context.Context, tenantID, projectID string) ([]VoiceIdentity, error)
 	AddVoiceSample(ctx context.Context, tenantID, projectID string, value VoiceSample) (VoiceSample, error)
 	GetVoiceSample(ctx context.Context, tenantID, projectID, id string) (VoiceSample, error)
+	ListVoiceSamples(ctx context.Context, tenantID, projectID, voiceIdentityID string) ([]VoiceSample, error)
 	CreateVoiceConsent(ctx context.Context, tenantID, projectID string, value VoiceConsent) (VoiceConsent, error)
 	GetVoiceConsent(ctx context.Context, tenantID, projectID, id string) (VoiceConsent, error)
+	ListVoiceConsents(ctx context.Context, tenantID, projectID, voiceIdentityID string) ([]VoiceConsent, error)
 	ListVoiceIdentityVersions(ctx context.Context, tenantID, projectID, voiceIdentityID string) ([]VoiceIdentityVersion, error)
 	CompleteVoiceIdentityVersion(ctx context.Context, tenantID, projectID, versionID, jobID, status, providerVoiceID, message, updatedAt string) (VoiceIdentityVersion, error)
 }

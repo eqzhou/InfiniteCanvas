@@ -108,6 +108,18 @@ func (m *voiceFilmMemoryStore) GetVoiceSample(_ context.Context, tenantID, proje
 	return value, nil
 }
 
+func (m *voiceFilmMemoryStore) ListVoiceSamples(_ context.Context, tenantID, projectID, voiceID string) ([]store.VoiceSample, error) {
+	m.voiceMu.Lock()
+	defer m.voiceMu.Unlock()
+	values := []store.VoiceSample{}
+	for key, value := range m.samples {
+		if strings.HasPrefix(key, voiceStoreKey(tenantID, projectID, "")) && value.VoiceIdentityID == voiceID {
+			values = append(values, value)
+		}
+	}
+	return values, nil
+}
+
 func (m *voiceFilmMemoryStore) CreateVoiceConsent(_ context.Context, tenantID, projectID string, value store.VoiceConsent) (store.VoiceConsent, error) {
 	m.voiceMu.Lock()
 	defer m.voiceMu.Unlock()
@@ -130,6 +142,18 @@ func (m *voiceFilmMemoryStore) GetVoiceConsent(_ context.Context, tenantID, proj
 		return store.VoiceConsent{}, store.ErrNotFound
 	}
 	return value, nil
+}
+
+func (m *voiceFilmMemoryStore) ListVoiceConsents(_ context.Context, tenantID, projectID, voiceID string) ([]store.VoiceConsent, error) {
+	m.voiceMu.Lock()
+	defer m.voiceMu.Unlock()
+	values := []store.VoiceConsent{}
+	for key, value := range m.consents {
+		if strings.HasPrefix(key, voiceStoreKey(tenantID, projectID, "")) && value.VoiceIdentityID == voiceID {
+			values = append(values, value)
+		}
+	}
+	return values, nil
 }
 
 func (m *voiceFilmMemoryStore) CreateServerGenerationJob(ctx context.Context, tenantID, userID string, job store.GenerationJob, units int, usageMeta json.RawMessage) error {
@@ -283,6 +307,35 @@ func createVoiceIdentityAndSample(t *testing.T, handler http.Handler) (store.Voi
 		t.Fatalf("create consent: %d %s", consentResponse.Code, consentResponse.Body.String())
 	}
 	return identity, sample, voiceData[store.VoiceConsent](t, consentResponse.Body.Bytes())
+}
+
+func TestVoiceIdentityListsPersistedSamplesAndConsents(t *testing.T) {
+	_, _, handler := voiceCloneAPIHandler(t)
+	identity, sample, consent := createVoiceIdentityAndSample(t, handler)
+
+	samplesResponse := request(t, handler, http.MethodGet, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/samples", nil)
+	if samplesResponse.Code != http.StatusOK {
+		t.Fatalf("list samples: %d %s", samplesResponse.Code, samplesResponse.Body.String())
+	}
+	samples := voiceData[[]store.VoiceSample](t, samplesResponse.Body.Bytes())
+	if len(samples) != 1 || samples[0].ID != sample.ID || samples[0].VoiceIdentityID != identity.ID {
+		t.Fatalf("persisted samples=%#v", samples)
+	}
+	if strings.Contains(samplesResponse.Body.String(), "storageKey") || strings.Contains(samplesResponse.Body.String(), "sha256") {
+		t.Fatalf("sample list leaked frozen media identity: %s", samplesResponse.Body.String())
+	}
+
+	consentsResponse := request(t, handler, http.MethodGet, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", nil)
+	if consentsResponse.Code != http.StatusOK {
+		t.Fatalf("list consents: %d %s", consentsResponse.Code, consentsResponse.Body.String())
+	}
+	consents := voiceData[[]store.VoiceConsent](t, consentsResponse.Body.Bytes())
+	if len(consents) != 1 || consents[0].ID != consent.ID || consents[0].VoiceIdentityID != identity.ID {
+		t.Fatalf("persisted consents=%#v", consents)
+	}
+	if strings.Contains(consentsResponse.Body.String(), "evidenceStorageKey") || strings.Contains(consentsResponse.Body.String(), "evidenceSHA256") || strings.Contains(consentsResponse.Body.String(), "actorId") {
+		t.Fatalf("consent list leaked evidence identity: %s", consentsResponse.Body.String())
+	}
 }
 
 func TestVoiceCloneRequiresExplicitAuditedConsentAndTenantAudio(t *testing.T) {

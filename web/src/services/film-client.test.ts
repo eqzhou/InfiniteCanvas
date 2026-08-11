@@ -36,7 +36,9 @@ import {
   createFilmVoiceClone,
   createFilmVoiceConsent,
   createFilmVoiceIdentity,
+  listFilmVoiceConsents,
   listFilmVoiceIdentities,
+  listFilmVoiceSamples,
   listFilmVoiceVersions,
   requestFilmStyleExtraction,
   syncFilmVoiceVersion,
@@ -98,6 +100,9 @@ describe("film client", () => {
       if (path.endsWith("/voice-identities") && (init?.method ?? "GET") === "GET") {
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
+      if (path.endsWith("/samples") || path.endsWith("/consents")) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
       if (path.endsWith("/versions") || path.endsWith("/sync")) {
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
@@ -114,6 +119,8 @@ describe("film client", () => {
       termsVersion: "voice-consent-v1",
       evidenceStorageKey: "upload:consent-evidence",
     });
+    await listFilmVoiceSamples("film-advanced", "voice-1");
+    await listFilmVoiceConsents("film-advanced", "voice-1");
     await createFilmVoiceClone("film-advanced", "voice-1", {
       providerId: "shared-audio",
       model: "voice-clone-model",
@@ -129,6 +136,8 @@ describe("film client", () => {
     expect(requests.map((request) => request.url)).toEqual([
       "/api/film/projects/film-advanced/voice-identities",
       "/api/film/projects/film-advanced/voice-identities",
+      "/api/film/projects/film-advanced/voice-identities/voice-1/samples",
+      "/api/film/projects/film-advanced/voice-identities/voice-1/consents",
       "/api/film/projects/film-advanced/voice-identities/voice-1/samples",
       "/api/film/projects/film-advanced/voice-identities/voice-1/consents",
       "/api/film/projects/film-advanced/voice-identities/voice-1/clone",
