@@ -57,3 +57,29 @@ func TestValidateFrozenVideoModeRejectsInputDrift(t *testing.T) {
 		t.Fatalf("legacy jobs should resolve once without drift: got=%q err=%v", got, err)
 	}
 }
+
+func TestResolveFilmVideoConfigPreservesFrameIntent(t *testing.T) {
+	firstOnly, mode, err := resolveFilmVideoConfig(
+		filmShot{FirstFrameStorageKey: "image:first"},
+		filmGenerationConfig{},
+	)
+	if err != nil || mode != "first_frame_to_video" || firstOnly.FrameMode != "first-last" || len(firstOnly.ReferenceStorageKeys) != 1 {
+		t.Fatalf("first-frame config = %#v mode=%q err=%v", firstOnly, mode, err)
+	}
+
+	firstLast, mode, err := resolveFilmVideoConfig(
+		filmShot{FirstFrameStorageKey: "image:first", LastFrameStorageKey: "image:last"},
+		filmGenerationConfig{},
+	)
+	if err != nil || mode != "first_last_frame_to_video" || firstLast.FrameMode != "first-last" || len(firstLast.ReferenceStorageKeys) != 2 {
+		t.Fatalf("first-last config = %#v mode=%q err=%v", firstLast, mode, err)
+	}
+
+	references, mode, err := resolveFilmVideoConfig(
+		filmShot{FirstFrameStorageKey: "image:first"},
+		filmGenerationConfig{ReferenceStorageKeys: []string{"image:style"}},
+	)
+	if err != nil || mode != "reference_to_video" || references.FrameMode != "references" || len(references.ReferenceStorageKeys) != 2 {
+		t.Fatalf("reference config = %#v mode=%q err=%v", references, mode, err)
+	}
+}
