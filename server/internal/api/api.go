@@ -105,6 +105,13 @@ type Server struct {
 	filmImportMu            sync.Mutex
 	filmTenantImports       map[string]int
 	filmImportStarts        map[string][]time.Time
+	filmPDFTextRunner       filmPDFTextRunner
+	filmPDFCapabilityMu     sync.Mutex
+	filmPDFCapabilityConfig filmPDFTextConfig
+	filmPDFCapabilityErr    error
+	filmPDFCapabilityReady  bool
+	filmPDFRetryAt          time.Time
+	filmImportWorkerID      string
 	filmQualityGlobal       chan struct{}
 	filmQualityMu           sync.Mutex
 	filmTenantQuality       map[string]int
@@ -284,6 +291,7 @@ func NewServer(dataDir string) *Server {
 		filmImportGlobal:    make(chan struct{}, 4),
 		filmTenantImports:   make(map[string]int),
 		filmImportStarts:    make(map[string][]time.Time),
+		filmImportWorkerID:  randomGenerationOwner(),
 		filmQualityGlobal:   make(chan struct{}, 4),
 		filmTenantQuality:   make(map[string]int),
 		filmQualityStarts:   make(map[string][]time.Time),

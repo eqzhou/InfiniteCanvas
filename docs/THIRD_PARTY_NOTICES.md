@@ -42,10 +42,13 @@ shipping a build that includes the native binding.
 | Package | Version | Package source and declared license |
 |---|---:|---|
 | FFmpeg | 8.0.1-r1 | Alpine Linux v3.23 `community` signed package metadata; `GPL-2.0-or-later AND LGPL-2.1-or-later` |
+| Poppler utilities | 25.12.0-r1 | Alpine Linux v3.23 `main` signed package metadata; `GPL-2.0-or-later` |
+| Bubblewrap | 0.11.0-r2 | Alpine Linux v3.23 `main` signed package metadata; `LGPL-2.0-or-later` |
 
 The digest-pinned Alpine 3.23 runtime installs this exact repository package,
-which provides both `/usr/bin/ffmpeg` and `/usr/bin/ffprobe`. No standalone
-binary is downloaded. This inventory records package metadata; it does not
+which provides `/usr/bin/ffmpeg`, `/usr/bin/ffprobe`, `/usr/bin/pdftotext`,
+and `/usr/bin/bwrap`. No standalone binary is downloaded. This inventory
+records package metadata; it does not
 determine which license options apply to a particular FFmpeg build or complete
 source-offer, notice, codec/patent, or distribution obligations. Preserve the
 APK/base-image package records and complete the container redistribution review
@@ -60,5 +63,5 @@ inventory and attribution review.
 - [x] Generate a preliminary SPDX SBOM from the installed frozen web dependency tree
 - [x] Scan installed npm and Go module versions against OSV in CI
 - [ ] Include complete license texts and notices for shipped dependencies
-- [ ] Complete container/base-image and FFmpeg build/redistribution license review
+- [ ] Complete container/base-image, FFmpeg, Poppler, and Bubblewrap build/redistribution license review
 - [ ] Review fonts, icons, screenshots, and generated media

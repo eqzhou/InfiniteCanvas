@@ -3,17 +3,22 @@ package api
 import (
 	"archive/zip"
 	"bytes"
-	"compress/zlib"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
@@ -119,25 +124,108 @@ func TestExtractFilmImportRejectsDuplicateDOCXEntries(t *testing.T) {
 
 func TestExtractFilmImportPDFRequiresUsableTextLayer(t *testing.T) {
 	textPDF := makeMinimalFilmPDF(t, "", []byte("BT /F1 12 Tf 72 720 Td (INT. LAB - NIGHT) Tj 0 -20 Td (A monitor glows.) Tj ET"))
-	text, format, err := extractFilmImport("script.pdf", "application/pdf", textPDF, 1<<20)
-	if err != nil || format != "pdf" || !strings.Contains(text, "A monitor glows.") {
-		t.Fatalf("text PDF extraction format=%q text=%q err=%v", format, text, err)
+	runner := func(_ context.Context, executable string, arguments []string, stdout, _ io.Writer) error {
+		if executable != "/opt/poppler/bin/pdftotext" {
+			t.Fatalf("executable = %q", executable)
+		}
+		if len(arguments) != 6 || arguments[0] != "-layout" || arguments[1] != "-enc" || arguments[2] != "UTF-8" || arguments[3] != "-nopgbrk" || arguments[5] != "-" || !filepath.IsAbs(arguments[4]) {
+			t.Fatalf("unsafe or unexpected pdftotext arguments: %#v", arguments)
+		}
+		if _, err := os.Stat(arguments[4]); err != nil {
+			t.Fatalf("temporary PDF is unavailable to extractor: %v", err)
+		}
+		_, _ = io.WriteString(stdout, "EPISODE 1\nINT. LAB - NIGHT\nA monitor glows.\n")
+		return nil
+	}
+	config := filmPDFTextConfig{Executable: "/opt/poppler/bin/pdftotext", TempRoot: t.TempDir(), Timeout: time.Second, OutputLimit: maxFilmSourceBytes}
+	text, err := extractFilmPDFWithRunner(context.Background(), textPDF, 1<<20, config, runner)
+	if err != nil || !strings.Contains(text, "A monitor glows.") {
+		t.Fatalf("text PDF extraction text=%q err=%v", text, err)
+	}
+	if !strings.Contains(text, "EPISODE 1\nINT. LAB - NIGHT") {
+		t.Fatalf("PDF extraction flattened structural newlines: %q", text)
 	}
 
 	imageOnly := makeMinimalFilmPDF(t, "", []byte("q 1 0 0 1 0 0 cm /Im1 Do Q"))
-	if _, _, err := extractFilmImport("scan.pdf", "application/pdf", imageOnly, 1<<20); err == nil || !strings.Contains(strings.ToLower(err.Error()), "ocr") {
+	emptyRunner := func(_ context.Context, _ string, _ []string, _, _ io.Writer) error { return nil }
+	if _, err := extractFilmPDFWithRunner(context.Background(), imageOnly, 1<<20, config, emptyRunner); err == nil || !strings.Contains(strings.ToLower(err.Error()), "ocr") {
 		t.Fatalf("image-only PDF error=%v, want OCR guidance", err)
 	}
 }
 
-func TestExtractFilmImportPDFEnforcesGlobalExpansionAndOperatorLimits(t *testing.T) {
-	var compressed bytes.Buffer
-	zw := zlib.NewWriter(&compressed)
-	_, _ = zw.Write(bytes.Repeat([]byte("BT (word) Tj ET\n"), (maxFilmPDFOperators/2)+1))
-	_ = zw.Close()
-	pdf := makeMinimalFilmPDF(t, "/Filter /FlateDecode", compressed.Bytes())
-	if _, _, err := extractFilmImport("operators.pdf", "application/pdf", pdf, maxFilmPDFExpandedBytes+1); err == nil {
-		t.Fatal("PDF operator/ratio bomb was accepted")
+func TestExtractFilmPDFRunsThroughConfiguredSandboxWrapper(t *testing.T) {
+	pdf := makeMinimalFilmPDF(t, "", []byte("BT (text) Tj ET"))
+	config := filmPDFTextConfig{
+		Executable: "/usr/bin/pdftotext", SandboxExecutable: "/usr/local/bin/openboard-pdf-sandbox",
+		TempRoot: t.TempDir(), Timeout: time.Second, OutputLimit: maxFilmSourceBytes,
+	}
+	runner := func(_ context.Context, executable string, arguments []string, stdout, _ io.Writer) error {
+		if executable != config.SandboxExecutable || len(arguments) != 7 || arguments[0] != config.Executable {
+			t.Fatalf("sandbox invocation executable=%q arguments=%#v", executable, arguments)
+		}
+		_, _ = io.WriteString(stdout, "INT. SAFE ROOM - DAY\nThe parser is isolated.")
+		return nil
+	}
+	if _, err := extractFilmPDFWithRunner(context.Background(), pdf, 1<<20, config, runner); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExtractFilmPDFEnforcesTimeoutAndOutputLimit(t *testing.T) {
+	pdf := makeMinimalFilmPDF(t, "", []byte("BT (text) Tj ET"))
+	config := filmPDFTextConfig{Executable: "/opt/poppler/bin/pdftotext", TempRoot: t.TempDir(), Timeout: 10 * time.Millisecond, OutputLimit: 32}
+	timedOut := func(ctx context.Context, _ string, _ []string, _, _ io.Writer) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, err := extractFilmPDFWithRunner(context.Background(), pdf, 1<<20, config, timedOut); err == nil || !strings.Contains(strings.ToLower(err.Error()), "timed out") {
+		t.Fatalf("timeout error = %v", err)
+	}
+	overflow := func(_ context.Context, _ string, _ []string, stdout, _ io.Writer) error {
+		_, err := stdout.Write(bytes.Repeat([]byte("x"), 64))
+		return err
+	}
+	if _, err := extractFilmPDFWithRunner(context.Background(), pdf, 1<<20, config, overflow); err == nil || !strings.Contains(strings.ToLower(err.Error()), "limit") {
+		t.Fatalf("output limit error = %v", err)
+	}
+}
+
+func TestResolveFilmPDFTextConfigDiagnosesMissingOrRelativeTool(t *testing.T) {
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", "pdftotext")
+	if _, err := resolveFilmPDFTextConfig(t.TempDir()); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("relative tool path error = %v", err)
+	}
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", filepath.Join(t.TempDir(), "missing-pdftotext"))
+	if _, err := resolveFilmPDFTextConfig(t.TempDir()); err == nil || !strings.Contains(strings.ToLower(err.Error()), "unavailable") {
+		t.Fatalf("missing tool error = %v", err)
+	}
+}
+
+func TestResolveFilmPDFTextConfigRequiresSandboxOutsideTestMode(t *testing.T) {
+	toolPath := filepath.Join(t.TempDir(), "pdftotext")
+	if err := os.WriteFile(toolPath, []byte("test executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", toolPath)
+	t.Setenv("OPENBOARD_PDF_SANDBOX_PATH", "")
+	if _, err := resolveFilmPDFTextConfig(t.TempDir()); err == nil || !strings.Contains(strings.ToLower(err.Error()), "sandbox") {
+		t.Fatalf("production PDF parser without sandbox error = %v", err)
+	}
+}
+
+func TestExecFilmPDFTextRunnerDoesNotInheritServiceSecrets(t *testing.T) {
+	scriptPath := filepath.Join(t.TempDir(), "show-environment")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nenv\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_MASTER_KEY", "must-not-reach-parser")
+	var output bytes.Buffer
+	if err := (execFilmPDFTextRunner{}).Run(context.Background(), scriptPath, nil, &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "OPENBOARD_MASTER_KEY") || strings.Contains(output.String(), "must-not-reach-parser") {
+		t.Fatalf("service secret leaked into parser environment: %q", output.String())
 	}
 }
 
@@ -162,7 +250,16 @@ func TestExtractFilmImportRejectsExtensionMIMEAndSignatureMismatch(t *testing.T)
 }
 
 func TestFilmImportSupportsBoundedJSONAndMultipart(t *testing.T) {
-	_, handler := filmAPIHandler(t)
+	server, _, handler := filmAPIServerHandler(t)
+	toolPath := filepath.Join(t.TempDir(), "pdftotext")
+	if err := os.WriteFile(toolPath, []byte("test executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", toolPath)
+	server.filmPDFTextRunner = func(_ context.Context, _ string, _ []string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "INT. VAULT - DAY\nA door opens.\n")
+		return nil
+	}
 
 	pdf := makeMinimalFilmPDF(t, "", []byte("BT (INT. VAULT - DAY) Tj (A door opens.) Tj ET"))
 	jsonBody, _ := json.Marshal(map[string]any{
@@ -202,21 +299,274 @@ func TestFilmImportSupportsBoundedJSONAndMultipart(t *testing.T) {
 	}
 }
 
-func TestExtractFilmImportRejectsPDFPseudoStructureAndPolyglot(t *testing.T) {
-	stream := []byte("BT (Valid text layer) Tj ET")
-	valid := makeMinimalFilmPDF(t, "", stream)
-	length := []byte(fmt.Sprintf("/Length %d", len(stream)))
-	tests := [][]byte{
-		append([]byte("POLYGLOT"), valid...),
-		bytes.Replace(valid, []byte("/Type /Catalog"), []byte("/Type /NotCatalog"), 1),
-		bytes.Replace(valid, []byte("/Type /Page /Parent"), []byte("/Type /Fake /Parent"), 1),
-		bytes.Replace(valid, []byte("startxref\n"), []byte("startxref\n999999"), 1),
-		bytes.Replace(valid, length, []byte("/Length 2"), 1),
-		bytes.Replace(valid, length, append(append([]byte(nil), length...), append([]byte(" "), length...)...), 1),
+func TestFilmImportStatusIsPersistedAndQueryableWhileParsing(t *testing.T) {
+	server, _, handler := filmAPIServerHandler(t)
+	toolPath := filepath.Join(t.TempDir(), "pdftotext")
+	if err := os.WriteFile(toolPath, []byte("test executable"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	for _, value := range tests {
-		if _, _, err := extractFilmImport("bad.pdf", "application/pdf", value, 1<<20); err == nil {
-			t.Fatal("pseudo-structured PDF was accepted")
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", toolPath)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server.filmPDFTextRunner = func(ctx context.Context, _ string, _ []string, stdout, _ io.Writer) error {
+		close(started)
+		select {
+		case <-release:
+			_, _ = io.WriteString(stdout, "EPISODE 1\nINT. EDIT BAY - NIGHT\nThe cut locks.\n")
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	pdf := makeMinimalFilmPDF(t, "", []byte("BT (placeholder) Tj ET"))
+	body, contentType := makeFilmImportMultipart(t, 0, "script.pdf", "application/pdf", pdf)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/film/projects/film-api/source/import", bytes.NewReader(body))
+		req.Header.Set("Content-Type", contentType)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		done <- recorder
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("PDF parser did not start")
+	}
+	statusResponse := request(t, handler, http.MethodGet, "/api/film/projects/film-api/source/import/status", nil)
+	if statusResponse.Code != http.StatusOK {
+		t.Fatalf("status response: %d %s", statusResponse.Code, statusResponse.Body.String())
+	}
+	var statusPayload struct {
+		Data filmSourceImportStatus `json:"data"`
+	}
+	if err := json.Unmarshal(statusResponse.Body.Bytes(), &statusPayload); err != nil || statusPayload.Data.Status != filmStatusRunning || statusPayload.Data.OriginalName != "script.pdf" {
+		t.Fatalf("running import status = %#v, err=%v", statusPayload.Data, err)
+	}
+	close(release)
+	result := <-done
+	if result.Code != http.StatusOK {
+		t.Fatalf("import response: %d %s", result.Code, result.Body.String())
+	}
+	completed := request(t, handler, http.MethodGet, "/api/film/projects/film-api/source/import/status", nil)
+	if err := json.Unmarshal(completed.Body.Bytes(), &statusPayload); err != nil || statusPayload.Data.Status != "succeeded" || statusPayload.Data.CompletedAt == "" {
+		t.Fatalf("completed import status = %#v, err=%v", statusPayload.Data, err)
+	}
+}
+
+func TestFilmImportCancellationPersistsFailureWithDetachedContext(t *testing.T) {
+	server, memoryBackend, handler := filmAPIServerHandler(t)
+	memoryBackend.requireLiveContext = true
+	toolPath := filepath.Join(t.TempDir(), "pdftotext")
+	if err := os.WriteFile(toolPath, []byte("test executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", toolPath)
+	started := make(chan struct{})
+	server.filmPDFTextRunner = func(ctx context.Context, _ string, _ []string, _, _ io.Writer) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	pdf := makeMinimalFilmPDF(t, "", []byte("BT (placeholder) Tj ET"))
+	body, contentType := makeFilmImportMultipart(t, 0, "canceled.pdf", "application/pdf", pdf)
+	requestContext, cancel := context.WithCancel(context.Background())
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/film/projects/film-api/source/import", bytes.NewReader(body)).WithContext(requestContext)
+		req.Header.Set("Content-Type", contentType)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		done <- recorder
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("PDF parser did not start")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled import handler did not return")
+	}
+	status := request(t, handler, http.MethodGet, "/api/film/projects/film-api/source/import/status", nil)
+	var payload struct {
+		Data filmSourceImportStatus `json:"data"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &payload); err != nil || payload.Data.Status != filmStatusFailed || payload.Data.CompletedAt == "" {
+		t.Fatalf("canceled import status = %#v, err=%v", payload.Data, err)
+	}
+}
+
+func TestFilmImportStatusMarksInterruptedWorkerFailedAfterRestart(t *testing.T) {
+	first, memoryBackend, _ := filmAPIServerHandler(t)
+	backend := first.store.(store.FilmStore)
+	record, err := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := decodeFilmDocument(record.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	document.Source.ImportStatus = &filmSourceImportStatus{ID: "import-restart", Status: filmStatusRunning, OriginalName: "restart.pdf", Format: "pdf", WorkerInstanceID: "previous-process", StartedAt: now, UpdatedAt: now}
+	raw, _ := json.Marshal(document)
+	if _, err := backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, "film-api", record.Revision, raw); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewServerWithStore(t.TempDir(), memoryBackend)
+	t.Cleanup(restarted.Close)
+	router := chi.NewRouter()
+	MountServer(router, restarted)
+	response := request(t, router, http.MethodGet, "/api/film/projects/film-api/source/import/status", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("restart status: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Data filmSourceImportStatus `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || payload.Data.Status != filmStatusFailed || !strings.Contains(strings.ToLower(payload.Data.Error), "interrupted") {
+		t.Fatalf("reconciled import status = %#v, err=%v", payload.Data, err)
+	}
+}
+
+func TestFilmImportPersistsMissingPDFToolFailureAndCapabilityDiagnostic(t *testing.T) {
+	server, _, handler := filmAPIServerHandler(t)
+	missing := filepath.Join(t.TempDir(), "missing-pdftotext")
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", missing)
+	pdf := makeMinimalFilmPDF(t, "", []byte("BT (placeholder) Tj ET"))
+	body, contentType := makeFilmImportMultipart(t, 0, "missing-tool.pdf", "application/pdf", pdf)
+	req := httptest.NewRequest(http.MethodPost, "/api/film/projects/film-api/source/import", bytes.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "pdf_tool_unavailable") {
+		t.Fatalf("missing tool response: %d %s", response.Code, response.Body.String())
+	}
+	status := request(t, handler, http.MethodGet, "/api/film/projects/film-api/source/import/status", nil)
+	var payload struct {
+		Data filmSourceImportStatus `json:"data"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &payload); err != nil || payload.Data.Status != filmStatusFailed || !strings.Contains(payload.Data.Error, "unavailable") {
+		t.Fatalf("persisted missing-tool status = %#v, err=%v", payload.Data, err)
+	}
+	capabilities := server.filmCapabilityData(httptest.NewRequest(http.MethodGet, "/api/film/capabilities", nil))
+	if capabilities["pdfImport"] != false || !strings.Contains(strings.ToLower(fmt.Sprint(capabilities["pdfDiagnostic"])), "unavailable") {
+		t.Fatalf("PDF capability = %#v", capabilities)
+	}
+}
+
+func TestFilmPDFCapabilityCachesSandboxSelfTest(t *testing.T) {
+	directory := t.TempDir()
+	toolPath := filepath.Join(directory, "pdftotext")
+	if err := os.WriteFile(toolPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	countPath := filepath.Join(directory, "sandbox-count")
+	sandboxPath := filepath.Join(directory, "pdf-sandbox")
+	script := fmt.Sprintf("#!/bin/sh\nprintf x >> %q\nexit 0\n", countPath)
+	if err := os.WriteFile(sandboxPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", toolPath)
+	t.Setenv("OPENBOARD_PDF_SANDBOX_PATH", sandboxPath)
+	server := NewServer(directory)
+	defer server.Close()
+	if _, err := server.filmPDFTextCapability(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.filmPDFTextCapability(); err != nil {
+		t.Fatal(err)
+	}
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "x" {
+		t.Fatalf("sandbox self-test count = %q, want one invocation", count)
+	}
+}
+
+func TestFilmPDFCapabilityRetriesCachedFailureAfterTTL(t *testing.T) {
+	directory := t.TempDir()
+	toolPath := filepath.Join(directory, "pdftotext")
+	if err := os.WriteFile(toolPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(directory, "sandbox-ready")
+	countPath := filepath.Join(directory, "sandbox-count")
+	sandboxPath := filepath.Join(directory, "pdf-sandbox")
+	script := fmt.Sprintf("#!/bin/sh\nprintf x >> %q\nif [ ! -f %q ]; then touch %q; exit 1; fi\nexit 0\n", countPath, markerPath, markerPath)
+	if err := os.WriteFile(sandboxPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_PDFTOTEXT_PATH", toolPath)
+	t.Setenv("OPENBOARD_PDF_SANDBOX_PATH", sandboxPath)
+	server := NewServer(directory)
+	defer server.Close()
+	if _, err := server.filmPDFTextCapability(); err == nil {
+		t.Fatal("initial sandbox failure was not reported")
+	}
+	if _, err := server.filmPDFTextCapability(); err == nil {
+		t.Fatal("failure cache was not honored before its retry deadline")
+	}
+	server.filmPDFCapabilityMu.Lock()
+	server.filmPDFRetryAt = time.Now().Add(-time.Second)
+	server.filmPDFCapabilityMu.Unlock()
+	if _, err := server.filmPDFTextCapability(); err != nil {
+		t.Fatalf("sandbox capability did not recover after retry deadline: %v", err)
+	}
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "xx" {
+		t.Fatalf("sandbox self-test count = %q, want one failure and one retry", count)
+	}
+}
+
+func makeFilmImportMultipart(t *testing.T, revision int, filename, mimeType string, data []byte) ([]byte, string) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("revision", strconv.Itoa(revision)); err != nil {
+		t.Fatal(err)
+	}
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filename))
+	header.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body.Bytes(), writer.FormDataContentType()
+}
+
+func TestExtractFilmPDFDelegatesModernStructuresAndRejectsPolyglotEnvelope(t *testing.T) {
+	modern := []byte("%PDF-1.7\n1 0 obj << /Type /XRef /Filter /FlateDecode >> stream\nobject-stream-placeholder\nendstream\nendobj\nstartxref\n9\n%%EOF\n")
+	runner := func(_ context.Context, _ string, _ []string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "第一集\n内景 实验室 夜\n屏幕亮起。\n")
+		return nil
+	}
+	config := filmPDFTextConfig{Executable: "/opt/poppler/bin/pdftotext", TempRoot: t.TempDir(), Timeout: time.Second, OutputLimit: maxFilmSourceBytes}
+	text, err := extractFilmPDFWithRunner(context.Background(), modern, 1<<20, config, runner)
+	if err != nil || !strings.Contains(text, "内景 实验室 夜") {
+		t.Fatalf("modern PDF was not delegated to pdftotext: text=%q err=%v", text, err)
+	}
+	for _, invalid := range [][]byte{
+		append([]byte("POLYGLOT"), modern...),
+		[]byte("%PDF-1.7\nno trailer"),
+	} {
+		if _, err := extractFilmPDFWithRunner(context.Background(), invalid, 1<<20, config, runner); err == nil {
+			t.Fatal("invalid PDF envelope was accepted")
 		}
 	}
 }

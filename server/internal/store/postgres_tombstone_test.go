@@ -240,7 +240,7 @@ func TestDeletedGenerationJobResistsRecreation(t *testing.T) {
 		"put":    func() error { return backend.PutGenerationJob(ctx, tenantID, stale) },
 		"create": func() error { return backend.CreateGenerationJob(ctx, tenantID, stale) },
 		"server create": func() error {
-			return backend.CreateServerGenerationJob(ctx, tenantID, "", stale, 1, json.RawMessage(`{}`))
+			return backend.CreateServerGenerationJob(ctx, tenantID, "tombstone-test-user", stale, 1, json.RawMessage(`{}`))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -268,7 +268,7 @@ func TestDeletedGenerationJobResistsRecreation(t *testing.T) {
 		"put":    func() error { return backend.PutGenerationJob(ctx, tenantID, fakeTombstone) },
 		"create": func() error { return backend.CreateGenerationJob(ctx, tenantID, fakeTombstone) },
 		"server create": func() error {
-			return backend.CreateServerGenerationJob(ctx, tenantID, "", fakeTombstone, 1, json.RawMessage(`{}`))
+			return backend.CreateServerGenerationJob(ctx, tenantID, "tombstone-test-user", fakeTombstone, 1, json.RawMessage(`{}`))
 		},
 	} {
 		t.Run("reject deleted status/"+name, func(t *testing.T) {

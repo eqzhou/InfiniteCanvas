@@ -171,6 +171,7 @@ type persistedMediaJobParameters struct {
 	Film                 *filmGenerationBinding     `json:"film,omitempty"`
 	CapabilityVersion    string                     `json:"capabilityVersion,omitempty"`
 	GenerationMode       string                     `json:"generationMode,omitempty"`
+	EstimatedCredits     int                        `json:"estimatedCredits,omitempty"`
 }
 
 type serverMediaJobResult struct {

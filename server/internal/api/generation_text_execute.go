@@ -15,21 +15,22 @@ import (
 )
 
 type persistedTextJobParameters struct {
-	Executor       string                     `json:"executor"`
-	RequestHash    string                     `json:"requestHash"`
-	Operation      string                     `json:"operation"`
-	PromptVersion  string                     `json:"promptVersion"`
-	OutputSchema   string                     `json:"outputSchema"`
-	ScriptMode     string                     `json:"scriptMode,omitempty"`
-	SystemPrompt   string                     `json:"systemPrompt"`
-	SourceRevision int                        `json:"sourceRevision"`
-	SourceSHA256   string                     `json:"sourceSha256"`
-	FilmRevision   int                        `json:"filmRevision"`
-	TargetEntityID string                     `json:"targetEntityId,omitempty"`
-	TargetRevision int                        `json:"targetRevision,omitempty"`
-	TargetSHA256   string                     `json:"targetSha256,omitempty"`
-	SharedChannel  *generationChannelSnapshot `json:"sharedChannel,omitempty"`
-	Film           *filmGenerationBinding     `json:"film,omitempty"`
+	Executor         string                     `json:"executor"`
+	RequestHash      string                     `json:"requestHash"`
+	Operation        string                     `json:"operation"`
+	PromptVersion    string                     `json:"promptVersion"`
+	OutputSchema     string                     `json:"outputSchema"`
+	ScriptMode       string                     `json:"scriptMode,omitempty"`
+	SystemPrompt     string                     `json:"systemPrompt"`
+	SourceRevision   int                        `json:"sourceRevision"`
+	SourceSHA256     string                     `json:"sourceSha256"`
+	FilmRevision     int                        `json:"filmRevision"`
+	TargetEntityID   string                     `json:"targetEntityId,omitempty"`
+	TargetRevision   int                        `json:"targetRevision,omitempty"`
+	TargetSHA256     string                     `json:"targetSha256,omitempty"`
+	EstimatedCredits int                        `json:"estimatedCredits,omitempty"`
+	SharedChannel    *generationChannelSnapshot `json:"sharedChannel,omitempty"`
+	Film             *filmGenerationBinding     `json:"film,omitempty"`
 }
 
 type textExecutor interface {

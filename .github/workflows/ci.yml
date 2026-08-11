@@ -168,7 +168,7 @@ jobs:
           cache-dependency-path: server/go.sum
       - name: Install formal E2E database clients
         if: matrix.extended
-        run: sudo apt-get update && sudo apt-get install --yes postgresql-client redis-tools
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client redis-tools poppler-utils
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps ${{ matrix.browser }}
       - name: Film Chromium E2E (credential-free)
@@ -235,12 +235,19 @@ jobs:
           docker compose exec -T openboard sh -c '
             test "$OPENBOARD_FFMPEG_PATH" = /usr/bin/ffmpeg
             test "$OPENBOARD_FFPROBE_PATH" = /usr/bin/ffprobe
+            test "$OPENBOARD_PDFTOTEXT_PATH" = /usr/bin/pdftotext
+            test "$OPENBOARD_PDF_SANDBOX_PATH" = /usr/local/bin/openboard-pdf-sandbox
             apk list --installed ffmpeg 2>/dev/null | grep -q '^ffmpeg-8\.0\.1-r1 '
+            apk list --installed poppler-utils 2>/dev/null | grep -q '^poppler-utils-25\.12\.0-r1 '
+            apk list --installed bubblewrap 2>/dev/null | grep -q '^bubblewrap-0\.11\.0-r2 '
             "$OPENBOARD_FFMPEG_PATH" -hide_banner -version >/dev/null
             "$OPENBOARD_FFPROBE_PATH" -hide_banner -version >/dev/null
+            "$OPENBOARD_PDFTOTEXT_PATH" -v 2>&1 | grep -q '25\.12\.0'
+            /usr/bin/bwrap --version | grep -q '0\.11\.0'
           '
           curl --fail --silent http://127.0.0.1:8080/api/film/capabilities > film-capabilities.json
           grep -q '"mp4Export":true' film-capabilities.json
+          grep -q '"pdfImport":true' film-capabilities.json
           docker compose exec -T postgres psql -U openboard_local -d openboard_local -Atc \
             "select count(*) from information_schema.tables where table_schema='public'" | grep -Eq '^(1[2-9]|[2-9][0-9]+)$'
           docker compose exec -T redis redis-cli -a "$OPENBOARD_REDIS_PASSWORD" ping | grep -q PONG

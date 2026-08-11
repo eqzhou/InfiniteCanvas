@@ -170,6 +170,50 @@ describe("complete film bundle rollback", () => {
     expect(restore.document.tasks[0]?.snapshot?.firstFrameDirectorSource).toMatchObject({ sha256: "a".repeat(64), objectVersion: "director-v2" });
   });
 
+  test("preserves last frames and media in every entity version", () => {
+    const film = createFilmDocument("version-media", "2026-08-08T00:00:00.000Z");
+    const director = {
+      revision: 1, targetField: "last_frame" as const, captureId: "capture-last", directorNodeId: "director-last",
+      cameraId: "camera-last", cameraName: "Last", width: 1920, height: 1080, storageKey: "image:last",
+      sha256: "0".repeat(64), objectVersion: "old", snapshot: {}, adoptedAt: film.createdAt,
+    };
+    film.shots = [{
+      id: "shot-1", revision: 2, sceneId: "scene-1", order: 0, title: "Shot", description: "Action", status: "draft",
+      durationSeconds: 1, aspectRatio: "16:9", identityVersionIds: [], lastFrameStorageKey: "image:last", lastFrameDirectorSource: director,
+    }];
+    film.tasks = [{
+      id: "task-1", revision: 1, stage: "last_frame", title: "Last frame", status: "needs_review", progress: 1,
+      createdAt: film.createdAt, updatedAt: film.updatedAt,
+      snapshot: { shotRevision: 2, prompt: "Last", providerId: "provider", model: "model", config: {}, identityVersions: [], lastFrameDirectorSource: director, referenceStorageKeys: [], estimatedGenerations: 1, createdAt: film.createdAt },
+    }];
+    film.versions = [
+      { id: "version-shot", entityType: "shot", entityId: "shot-1", revision: 1, snapshot: { ...film.shots[0]!, revision: 1, lastFrameStorageKey: "image:version-last", lastFrameDirectorSource: { ...director, storageKey: "image:version-last" } }, reason: "test", createdAt: film.createdAt },
+      { id: "version-dialogue", entityType: "dialogue", entityId: "dialogue-1", revision: 1, snapshot: { id: "dialogue-1", revision: 1, audioStorageKey: "media:version-dialogue" }, reason: "test", createdAt: film.createdAt },
+      { id: "version-asset", entityType: "asset", entityId: "asset-1", revision: 1, snapshot: { id: "asset-1", revision: 1, mediaStorageKey: "image:version-asset" }, reason: "test", createdAt: film.createdAt },
+      { id: "version-timeline", entityType: "timeline", entityId: "timeline", revision: 1, snapshot: { revision: 1, tracks: [{ kind: "video", clips: [{ id: "clip-old", source: "media:version-timeline" }] }] }, reason: "test", createdAt: film.createdAt },
+    ];
+    const imported = [
+      { storageKey: "image:last", mimeType: "image/jpeg", bytes: 1, sha256: "1".repeat(64), objectVersion: "last-v2" },
+      { storageKey: "image:version-last", mimeType: "image/png", bytes: 2, sha256: "2".repeat(64), objectVersion: "version-last-v2" },
+      { storageKey: "media:version-dialogue", mimeType: "audio/wav", bytes: 3, sha256: "3".repeat(64), objectVersion: "dialogue-v2" },
+      { storageKey: "image:version-asset", mimeType: "image/png", bytes: 4, sha256: "4".repeat(64), objectVersion: "asset-v2" },
+      { storageKey: "media:version-timeline", mimeType: "video/mp4", bytes: 5, sha256: "5".repeat(64), objectVersion: "timeline-v2" },
+    ];
+
+    const restore = prepareFilmRestore(film, imported);
+
+    expect(restore.media[0]?.provenance).toEqual([
+      { kind: "shot", entityId: "shot-1", field: "lastFrameStorageKey" },
+      { kind: "task", entityId: "task-1", field: "lastFrameDirectorSource" },
+    ]);
+    expect(restore.media[4]?.provenance).toEqual([{ kind: "version", entityId: "version-timeline", field: "timeline:video:clip-old" }]);
+    expect(restore.document.shots[0]).toMatchObject({ lastFrameSha256: "1".repeat(64), lastFrameObjectVersion: "last-v2" });
+    expect(restore.document.tasks[0]?.snapshot?.lastFrameDirectorSource).toMatchObject({ sha256: "1".repeat(64), objectVersion: "last-v2" });
+    expect(restore.document.versions?.find((version) => version.id === "version-shot")?.snapshot).toMatchObject({ lastFrameSha256: "2".repeat(64), lastFrameObjectVersion: "version-last-v2" });
+    expect(restore.document.versions?.find((version) => version.id === "version-dialogue")?.snapshot).toMatchObject({ audioSha256: "3".repeat(64), audioObjectVersion: "dialogue-v2" });
+    expect(restore.document.versions?.find((version) => version.id === "version-asset")?.snapshot).toMatchObject({ mediaSha256: "4".repeat(64), mediaObjectVersion: "asset-v2" });
+  });
+
   test("keeps migrated Film sources that remain referenced outside Film", () => {
     const project = createProject("Shared", "film");
     project.nodes = [{ id: "node-1", type: "image", title: "Shared", position: { x: 0, y: 0 }, width: 320, height: 240, metadata: { storageKey: "image:shared" } }];

@@ -90,9 +90,31 @@ func TestFilmBindsVerifiedDirectorSceneVersion(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("bind Director scene: %d %s", response.Code, response.Body.String())
 	}
-	bound := decodeFilmResponse(t, response).Scenes[0]
+	boundDocument := decodeFilmResponse(t, response)
+	bound := boundDocument.Scenes[0]
 	if bound.DirectorSource == nil || bound.DirectorSource.TargetField != "scene" || bound.DirectorSource.CaptureID != capture.ID || bound.Revision != document.Scenes[0].Revision+1 {
 		t.Fatalf("scene source was not frozen: %#v", bound)
+	}
+	if err := validateFilmAggregate(boundDocument, boundDocument.ProjectID); err != nil {
+		t.Fatalf("Director scene version made the aggregate invalid: %v", err)
+	}
+	restoreCandidate := cloneFilmDocument(boundDocument)
+	restoreCandidate.Scenes[0].DirectorSource.StorageKey = "image:imported-director"
+	if err := validateFilmRestoreDocument(restoreCandidate, restoreCandidate.ProjectID); err != nil {
+		t.Fatalf("restore preflight rejected a provenance-backed temporary Director key: %v", err)
+	}
+	if len(boundDocument.Versions) != 1 || boundDocument.Versions[0].EntityType != "scene" {
+		t.Fatalf("scene history version missing: %#v", boundDocument.Versions)
+	}
+	restoreBody, _ := json.Marshal(map[string]any{"revision": bound.Revision})
+	restoredResponse := request(t, handler, http.MethodPost, "/api/film/projects/film-api/versions/"+boundDocument.Versions[0].ID+"/restore", restoreBody)
+	if restoredResponse.Code != http.StatusOK {
+		t.Fatalf("restore Director scene version: %d %s", restoredResponse.Code, restoredResponse.Body.String())
+	}
+	restoredDocument := decodeFilmResponse(t, restoredResponse)
+	restored := restoredDocument.Scenes[0]
+	if restored.DirectorSource != nil || restored.Revision != bound.Revision+1 || restored.Status != filmStatusDraft || len(restoredDocument.Versions) != 2 {
+		t.Fatalf("scene history was not restored reversibly: scene=%#v versions=%#v", restored, restoredDocument.Versions)
 	}
 }
 

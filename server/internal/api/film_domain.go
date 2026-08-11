@@ -214,7 +214,7 @@ func decomposeFilmSourceWithLimits(document filmDocument, source string, limits 
 	}
 	next := cloneFilmDocument(document)
 	next.Revision++
-	next.Source = filmSource{Revision: document.Source.Revision + 1, Text: normalized, Format: document.Source.Format, OriginalName: document.Source.OriginalName, ImportedAt: document.UpdatedAt}
+	next.Source = filmSource{Revision: document.Source.Revision + 1, Text: normalized, Format: document.Source.Format, OriginalName: document.Source.OriginalName, ImportedAt: document.UpdatedAt, ImportStatus: document.Source.ImportStatus}
 	next.Episodes, next.Scenes, next.Shots, next.Dialogues = episodes, scenes, shots, dialogues
 	next.QualityReports = []filmQualityReport{}
 	next.ProjectionRevision++
@@ -702,6 +702,47 @@ func validateFilmAggregateLimits(document filmDocument) error {
 	}
 	if len(document.Tasks) > 1_000 || len(document.AICandidates) > 100 || len(document.ScriptCandidates) > 100 || len(document.StructureVersions) > 100 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 {
 		return errors.New("film aggregate retention limit reached")
+	}
+	relationCount := len(document.Scenes) + len(document.Shots) + len(document.Dialogues)
+	for _, shot := range document.Shots {
+		fanout := 1 + len(shot.IdentityVersionIDs)
+		if shot.StyleAssetID != "" {
+			fanout++
+		}
+		if fanout > maxFilmRelationsPerEntity {
+			return errors.New("film relation per-entity limit reached")
+		}
+		relationCount += len(shot.IdentityVersionIDs)
+		if shot.StyleAssetID != "" {
+			relationCount++
+		}
+	}
+	for _, dialogue := range document.Dialogues {
+		fanout := 1
+		if dialogue.CharacterAssetID != "" {
+			fanout++
+			relationCount++
+		}
+		if dialogue.VoiceAssetID != "" {
+			fanout++
+			relationCount++
+		}
+		if fanout > maxFilmRelationsPerEntity {
+			return errors.New("film relation per-entity limit reached")
+		}
+	}
+	for _, asset := range document.Assets {
+		fanout := len(asset.EpisodeIDs) + len(asset.SceneIDs) + len(asset.ShotIDs)
+		if asset.ParentAssetID != "" {
+			fanout++
+		}
+		if fanout > maxFilmRelationsPerEntity {
+			return errors.New("film relation per-entity limit reached")
+		}
+		relationCount += fanout
+	}
+	if relationCount > maxFilmRelations {
+		return errors.New("film aggregate relation limit reached")
 	}
 	issues, repairs := 0, 0
 	for _, report := range document.QualityReports {

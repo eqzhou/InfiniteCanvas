@@ -71,6 +71,10 @@ test("the deployment sample documents bounded film resource controls", () => {
   for (const name of [
     "OPENBOARD_FFMPEG_PATH",
     "OPENBOARD_FFPROBE_PATH",
+    "OPENBOARD_PDFTOTEXT_PATH",
+    "OPENBOARD_PDFTOTEXT_TIMEOUT",
+    "OPENBOARD_PDFTOTEXT_MAX_OUTPUT_BYTES",
+    "OPENBOARD_PDF_SANDBOX_PATH",
     "OPENBOARD_FILM_IMPORT_MAX_BYTES",
     "OPENBOARD_FILM_RENDER_TIMEOUT_SECONDS",
   ]) {

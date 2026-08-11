@@ -288,7 +288,7 @@ func TestFilmGenerationRunCreatesDurableParentJobInAtomicBatch(t *testing.T) {
 
 func TestAggregateFilmStageGenerationJobDerivesTerminalAndPartialStates(t *testing.T) {
 	now := "2026-08-11T01:00:00Z"
-	parent, err := buildFilmStageGenerationJob("film-api", "storyboard", "job-parent", strings.Repeat("a", 64), now, []string{"job-a", "job-b"})
+	parent, err := buildFilmStageGenerationJob("film-api", "storyboard", "job-parent", strings.Repeat("a", 64), now, []string{"job-a", "job-b"}, []int{3, 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,18 +298,21 @@ func TestAggregateFilmStageGenerationJobDerivesTerminalAndPartialStates(t *testi
 		wantStatus string
 		wantResult filmStageGenerationResult
 	}{
-		{name: "queued", statuses: []string{"queued", "queued"}, wantStatus: "queued", wantResult: filmStageGenerationResult{Outcome: "queued", Total: 2, Queued: 2, Progress: 0}},
-		{name: "running", statuses: []string{"succeeded", "running"}, wantStatus: "running", wantResult: filmStageGenerationResult{Outcome: "running", Total: 2, Running: 1, Succeeded: 1, Progress: 0.75}},
-		{name: "succeeded", statuses: []string{"succeeded", "succeeded"}, wantStatus: "succeeded", wantResult: filmStageGenerationResult{Outcome: "succeeded", Total: 2, Succeeded: 2, Progress: 1}},
+		{name: "queued", statuses: []string{"queued", "queued"}, wantStatus: "queued", wantResult: filmStageGenerationResult{Outcome: "queued", Total: 2, Queued: 2, Progress: 0, ActualCredits: 0}},
+		{name: "running", statuses: []string{"succeeded", "running"}, wantStatus: "running", wantResult: filmStageGenerationResult{Outcome: "running", Total: 2, Running: 1, Succeeded: 1, Progress: 0.75, ActualCredits: 3}},
+		{name: "succeeded", statuses: []string{"succeeded", "succeeded"}, wantStatus: "succeeded", wantResult: filmStageGenerationResult{Outcome: "succeeded", Total: 2, Succeeded: 2, Progress: 1, ActualCredits: 6}},
 		{name: "failed", statuses: []string{"failed", "failed"}, wantStatus: "failed", wantResult: filmStageGenerationResult{Outcome: "failed", Total: 2, Failed: 2, Progress: 1}},
 		{name: "cancelled", statuses: []string{"cancelled", "cancelled"}, wantStatus: "cancelled", wantResult: filmStageGenerationResult{Outcome: "cancelled", Total: 2, Cancelled: 2, Progress: 1}},
-		{name: "partial failure", statuses: []string{"succeeded", "failed"}, wantStatus: "failed", wantResult: filmStageGenerationResult{Outcome: "partial_failure", Total: 2, Succeeded: 1, Failed: 1, Progress: 1}},
+		{name: "partial failure", statuses: []string{"succeeded", "failed"}, wantStatus: "failed", wantResult: filmStageGenerationResult{Outcome: "partial_failure", Total: 2, Succeeded: 1, Failed: 1, Progress: 1, ActualCredits: 3}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			children := make([]store.GenerationJob, len(test.statuses))
 			for index, status := range test.statuses {
-				children[index] = store.GenerationJob{ID: []string{"job-a", "job-b"}[index], Status: status, UpdatedAt: now}
+				childID := []string{"job-a", "job-b"}[index]
+				binding := &filmGenerationBinding{ProjectID: "film-api", Stage: "storyboard", ShotID: "shot-one", TaskID: "task-" + childID, ParentGenerationJobID: parent.ID, RequestHash: strings.Repeat("a", 64)}
+				parameters, _ := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, RequestHash: strings.Repeat("a", 64), Film: binding, EstimatedCredits: 3})
+				children[index] = store.GenerationJob{ID: childID, ProjectID: "film-api", Kind: "image", Status: status, Parameters: parameters, Result: json.RawMessage(`{}`), UpdatedAt: now}
 			}
 			got, err := aggregateFilmStageGenerationJob(parent, children)
 			if err != nil {
@@ -405,9 +408,37 @@ func TestCancelFilmStageParentReportsChildCancellationFailure(t *testing.T) {
 	}
 }
 
+func TestCancelFilmStageParentRejectsReusedMismatchedChildID(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	created := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run",
+		filmGenerationRunBody(t, document.Stages[2].Revision, document.Shots[0].ID, "parent-cancel-reused-child")))
+	task := created.Tasks[len(created.Tasks)-1]
+	child, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.ProjectID = "unrelated-project"
+	if err := backend.PutGenerationJob(t.Context(), store.DefaultTenantID, child); err != nil {
+		t.Fatal(err)
+	}
+
+	canceled := request(t, handler, http.MethodPost, "/api/generation-jobs/"+task.ParentGenerationJobID+"/cancel", nil)
+	if canceled.Code != http.StatusConflict {
+		t.Fatalf("mismatched child cancellation = %d %s", canceled.Code, canceled.Body.String())
+	}
+	child, _ = backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if child.Status != "queued" {
+		t.Fatalf("unrelated reused child was cancelled: %#v", child)
+	}
+}
+
 func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T) {
 	backend, handler := filmAPIHandler(t)
 	document := prepareFilmGenerationStage(t, handler)
+	if err := backend.PutModelCreditConfig(t.Context(), store.DefaultTenantID, store.ModelCreditConfig{DefaultCredits: 1, ModelCosts: []store.ModelCreditCost{{Model: "model-a", Credits: 5}}}); err != nil {
+		t.Fatal(err)
+	}
 	run := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run",
 		filmGenerationRunBody(t, document.Stages[2].Revision, document.Shots[0].ID, "job-api-pass"))
 	created := decodeFilmResponse(t, run)
@@ -447,6 +478,9 @@ func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T)
 	}
 
 	batchCallsBeforeRetry := backend.atomicBatchCalls.Load()
+	if err := backend.PutModelCreditConfig(t.Context(), store.DefaultTenantID, store.ModelCreditConfig{DefaultCredits: 1, ModelCosts: []store.ModelCreditCost{{Model: "model-a", Credits: 7}}}); err != nil {
+		t.Fatal(err)
+	}
 	retried := request(t, handler, http.MethodPost, "/api/film/projects/film-api/generation-jobs/"+task.GenerationJobID+"/retry", nil)
 	if retried.Code != http.StatusAccepted || bytes.Contains(retried.Body.Bytes(), []byte(task.GenerationJobID+`"`)) {
 		t.Fatalf("retry: %d %s", retried.Code, retried.Body.String())
@@ -460,6 +494,10 @@ func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T)
 	if err != nil || retryJob.Status != "queued" {
 		t.Fatalf("retry job = %#v err=%v", retryJob, err)
 	}
+	var retryParameters persistedImageJobParameters
+	if json.Unmarshal(retryJob.Parameters, &retryParameters) != nil || retryParameters.EstimatedCredits != 7 || len(backend.lastReservations) != 1 || backend.lastReservations[0].ExpectedCredits == nil || *backend.lastReservations[0].ExpectedCredits != 7 {
+		t.Fatalf("retry did not freeze its current exact quote: %#v %#v", retryParameters, backend.lastReservations)
+	}
 	if got := backend.atomicBatchCalls.Load(); got != batchCallsBeforeRetry+1 {
 		t.Fatalf("retry did not atomically commit its Film task and GenerationJob: batch calls %d -> %d", batchCallsBeforeRetry, got)
 	}
@@ -467,7 +505,7 @@ func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T)
 	// Retrying only creates a queued real job; it cannot bind media or mark the
 	// film task complete before that job succeeds and is explicitly synced.
 	status := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api/status", nil))
-	if status.Shots[0].ImageStorageKey != "" || status.Tasks[len(status.Tasks)-1].Status != filmStatusRunning {
+	if status.Shots[0].ImageStorageKey != "" || status.Tasks[len(status.Tasks)-1].Status != filmStatusRunning || status.Tasks[len(status.Tasks)-1].Snapshot.EstimatedCredits != 7 {
 		t.Fatalf("retry forged completion: %#v %#v", status.Shots[0], status.Tasks[len(status.Tasks)-1])
 	}
 }
@@ -684,6 +722,18 @@ func TestFilmGenerationSyncRequiresSucceededTenantBlobAndMIME(t *testing.T) {
 	digest := sha256.Sum256([]byte("payload"))
 	if finalDocument.Shots[0].ImageStorageKey != "image:film-sync" || finalDocument.Shots[0].ImageSHA256 != hex.EncodeToString(digest[:]) || finalDocument.Shots[0].ImageGenerationJobID != goodJob.ID || finalDocument.Stages[2].Status != filmStatusNeedsReview {
 		t.Fatalf("successful media was not bound: %#v %#v", finalDocument.Shots[0], finalDocument.Stages[2])
+	}
+}
+
+func TestLastFrameGenerationResultRequiresImageMIME(t *testing.T) {
+	server, _, handler := filmAPIServerHandler(t)
+	put := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/image:last-frame-wrong-mime", []byte("payload"), map[string]string{"Content-Type": "audio/mpeg"})
+	if put.Code != http.StatusNoContent {
+		t.Fatalf("seed blob: %d %s", put.Code, put.Body.String())
+	}
+	job := store.GenerationJob{Result: json.RawMessage(`{"items":[{"storageKey":"image:last-frame-wrong-mime","mimeType":"audio/mpeg","bytes":7}]}`)}
+	if _, err := validFilmGenerationResult(t.Context(), server, store.DefaultTenantID, "last_frame", job); err == nil {
+		t.Fatal("last-frame generation accepted non-image media")
 	}
 }
 

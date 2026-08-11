@@ -2,189 +2,273 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
-const maxFilmPDFObjects = 4096
+const (
+	defaultFilmPDFTextTimeout = 30 * time.Second
+	maxFilmPDFTextTimeout     = 2 * time.Minute
+	minFilmPDFOutputBytes     = int64(4 << 10)
+	maxFilmPDFDiagnosticBytes = int64(8 << 10)
+	maxFilmPDFInputBytes      = int64(20 << 20)
+	filmPDFCapabilityRetryTTL = 5 * time.Second
+)
 
-type filmPDFXref struct {
-	offset     int
-	generation string
+var (
+	errFilmPDFOutputLimit     = errors.New("PDF extracted text exceeds its configured output limit")
+	errFilmPDFToolUnavailable = errors.New("PDF text extraction tool is unavailable")
+)
+
+type filmPDFTextConfig struct {
+	Executable        string
+	SandboxExecutable string
+	TempRoot          string
+	Timeout           time.Duration
+	OutputLimit       int64
 }
 
-func validateFilmPDFStructure(data []byte) error {
-	if len(data) < 64 || !bytes.HasPrefix(data, []byte("%PDF-")) || !bytes.HasSuffix(bytes.TrimSpace(data), []byte("%%EOF")) {
+type filmPDFTextRunner func(ctx context.Context, executable string, arguments []string, stdout, stderr io.Writer) error
+
+type execFilmPDFTextRunner struct{}
+
+func (execFilmPDFTextRunner) Run(ctx context.Context, executable string, arguments []string, stdout, stderr io.Writer) error {
+	command := exec.CommandContext(ctx, executable, arguments...)
+	command.Env = []string{"HOME=/nonexistent", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "PATH=/usr/bin:/bin"}
+	command.Stdout = stdout
+	command.Stderr = stderr
+	return command.Run()
+}
+
+func (s *Server) filmPDFTextCapability() (filmPDFTextConfig, error) {
+	// Injected runners are test-only and may be attached after a test server is
+	// mounted, so they deliberately bypass the immutable production cache.
+	if s.filmPDFTextRunner != nil {
+		return resolveFilmPDFTextConfig(s.dataDir, true)
+	}
+	s.filmPDFCapabilityMu.Lock()
+	defer s.filmPDFCapabilityMu.Unlock()
+	if s.filmPDFCapabilityReady {
+		return s.filmPDFCapabilityConfig, nil
+	}
+	now := time.Now()
+	if s.filmPDFCapabilityErr != nil && now.Before(s.filmPDFRetryAt) {
+		return filmPDFTextConfig{}, s.filmPDFCapabilityErr
+	}
+	s.filmPDFCapabilityConfig, s.filmPDFCapabilityErr = resolveFilmPDFTextConfig(s.dataDir)
+	if s.filmPDFCapabilityErr == nil {
+		s.filmPDFCapabilityReady = true
+		s.filmPDFRetryAt = time.Time{}
+	} else {
+		s.filmPDFRetryAt = now.Add(filmPDFCapabilityRetryTTL)
+	}
+	return s.filmPDFCapabilityConfig, s.filmPDFCapabilityErr
+}
+
+func resolveFilmPDFTextConfig(dataDir string, allowInjectedTestRunner ...bool) (filmPDFTextConfig, error) {
+	executable := strings.TrimSpace(os.Getenv("OPENBOARD_PDFTOTEXT_PATH"))
+	if executable != "" && !filepath.IsAbs(executable) {
+		return filmPDFTextConfig{}, errors.New("OPENBOARD_PDFTOTEXT_PATH must be an absolute path")
+	}
+	if executable == "" {
+		resolved, err := exec.LookPath("pdftotext")
+		if err != nil {
+			return filmPDFTextConfig{}, fmt.Errorf("%w: install Poppler pdftotext or set OPENBOARD_PDFTOTEXT_PATH to its absolute path", errFilmPDFToolUnavailable)
+		}
+		absolute, absoluteErr := filepath.Abs(resolved)
+		if absoluteErr != nil {
+			return filmPDFTextConfig{}, errors.New("PDF text extractor path could not be resolved")
+		}
+		executable = absolute
+	}
+	executable, err := resolveFilmPDFExecutable(executable)
+	if err != nil {
+		return filmPDFTextConfig{}, fmt.Errorf("%w: configured pdftotext executable is missing or not executable", errFilmPDFToolUnavailable)
+	}
+	sandboxExecutable := strings.TrimSpace(os.Getenv("OPENBOARD_PDF_SANDBOX_PATH"))
+	if sandboxExecutable == "" && !(len(allowInjectedTestRunner) == 1 && allowInjectedTestRunner[0]) {
+		return filmPDFTextConfig{}, fmt.Errorf("%w: OPENBOARD_PDF_SANDBOX_PATH is required for PDF parsing", errFilmPDFToolUnavailable)
+	}
+	if sandboxExecutable != "" {
+		if !filepath.IsAbs(sandboxExecutable) {
+			return filmPDFTextConfig{}, errors.New("OPENBOARD_PDF_SANDBOX_PATH must be an absolute path")
+		}
+		sandboxExecutable, err = resolveFilmPDFExecutable(sandboxExecutable)
+		if err != nil {
+			return filmPDFTextConfig{}, fmt.Errorf("%w: configured PDF sandbox is missing, writable, or not executable", errFilmPDFToolUnavailable)
+		}
+		if err := probeFilmPDFSandbox(sandboxExecutable); err != nil {
+			return filmPDFTextConfig{}, fmt.Errorf("%w: configured PDF sandbox self-test failed", errFilmPDFToolUnavailable)
+		}
+	}
+	timeout := defaultFilmPDFTextTimeout
+	if raw := strings.TrimSpace(os.Getenv("OPENBOARD_PDFTOTEXT_TIMEOUT")); raw != "" {
+		parsed, parseErr := time.ParseDuration(raw)
+		if parseErr != nil || parsed < time.Second || parsed > maxFilmPDFTextTimeout {
+			return filmPDFTextConfig{}, fmt.Errorf("OPENBOARD_PDFTOTEXT_TIMEOUT must be between 1s and %s", maxFilmPDFTextTimeout)
+		}
+		timeout = parsed
+	}
+	outputLimit := int64(maxFilmSourceBytes)
+	if raw := strings.TrimSpace(os.Getenv("OPENBOARD_PDFTOTEXT_MAX_OUTPUT_BYTES")); raw != "" {
+		parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || parsed < minFilmPDFOutputBytes || parsed > int64(maxFilmSourceBytes) {
+			return filmPDFTextConfig{}, fmt.Errorf("OPENBOARD_PDFTOTEXT_MAX_OUTPUT_BYTES must be between %d and %d", minFilmPDFOutputBytes, maxFilmSourceBytes)
+		}
+		outputLimit = parsed
+	}
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = os.TempDir()
+	}
+	tempRoot, err := filepath.Abs(filepath.Join(dataDir, "film-import-tmp"))
+	if err != nil {
+		return filmPDFTextConfig{}, errors.New("PDF extraction temporary directory could not be resolved")
+	}
+	return filmPDFTextConfig{Executable: executable, SandboxExecutable: sandboxExecutable, TempRoot: tempRoot, Timeout: timeout, OutputLimit: outputLimit}, nil
+}
+
+func probeFilmPDFSandbox(executable string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "--self-test")
+	command.Env = []string{"HOME=/nonexistent", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "PATH=/usr/bin:/bin"}
+	command.Stdout = io.Discard
+	command.Stderr = io.Discard
+	return command.Run()
+}
+
+func resolveFilmPDFExecutable(value string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(value)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return "", errors.New("executable path could not be resolved")
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Mode().Perm()&0o022 != 0 {
+		return "", errors.New("executable path is unsafe")
+	}
+	return resolved, nil
+}
+
+type boundedFilmPDFWriter struct {
+	buffer bytes.Buffer
+	limit  int64
+}
+
+func (writer *boundedFilmPDFWriter) Write(value []byte) (int, error) {
+	remaining := writer.limit - int64(writer.buffer.Len())
+	if int64(len(value)) > remaining {
+		if remaining > 0 {
+			_, _ = writer.buffer.Write(value[:remaining])
+		}
+		return maxInt(0, int(remaining)), errFilmPDFOutputLimit
+	}
+	return writer.buffer.Write(value)
+}
+
+func (writer *boundedFilmPDFWriter) Bytes() []byte {
+	return writer.buffer.Bytes()
+}
+
+type boundedFilmPDFDiagnosticWriter struct {
+	buffer bytes.Buffer
+	limit  int64
+}
+
+func (writer *boundedFilmPDFDiagnosticWriter) Write(value []byte) (int, error) {
+	remaining := writer.limit - int64(writer.buffer.Len())
+	if remaining > 0 {
+		copyLength := minInt(len(value), int(remaining))
+		_, _ = writer.buffer.Write(value[:copyLength])
+	}
+	return len(value), nil
+}
+
+func (writer *boundedFilmPDFDiagnosticWriter) Bytes() []byte {
+	return writer.buffer.Bytes()
+}
+
+func validateFilmPDFEnvelope(data []byte, limit int64) error {
+	if limit < 1 || int64(len(data)) > limit || int64(len(data)) > maxFilmPDFInputBytes {
+		return errors.New("PDF exceeds its configured size limit")
+	}
+	if len(data) < 8 || !bytes.HasPrefix(data, []byte("%PDF-")) || bytes.LastIndex(data, []byte("%%EOF")) < 0 {
 		return errors.New("PDF signature or trailer is invalid")
 	}
-	eof := bytes.LastIndex(data, []byte("%%EOF"))
-	startMarker := bytes.LastIndex(data[:eof], []byte("startxref"))
-	if startMarker < 0 {
-		return errors.New("PDF startxref is missing")
-	}
-	startFields := bytes.Fields(data[startMarker+len("startxref") : eof])
-	if len(startFields) != 1 {
-		return errors.New("PDF startxref is malformed")
-	}
-	xrefOffset, err := strconv.Atoi(string(startFields[0]))
-	if err != nil || xrefOffset < 0 || xrefOffset >= startMarker || !bytes.HasPrefix(data[xrefOffset:], []byte("xref")) {
-		return errors.New("PDF xref offset is invalid")
-	}
-	xref, trailer, err := parseFilmPDFXref(data[xrefOffset:startMarker])
-	if err != nil {
-		return err
-	}
-	for _, entry := range xref {
-		if entry.offset <= 0 || entry.offset >= xrefOffset {
-			return errors.New("PDF xref object offset is invalid")
-		}
-	}
-	rootID, rootGeneration, ok := filmPDFReference(trailer, "/Root")
-	if !ok {
-		return errors.New("PDF trailer root is invalid")
-	}
-	root, ok := filmPDFObject(data, xref, rootID, rootGeneration)
-	if !ok || !bytes.Contains(root, []byte("/Type /Catalog")) {
-		return errors.New("PDF catalog is invalid")
-	}
-	pagesID, pagesGeneration, ok := filmPDFReference(root, "/Pages")
-	if !ok {
-		return errors.New("PDF catalog pages reference is invalid")
-	}
-	pages, ok := filmPDFObject(data, xref, pagesID, pagesGeneration)
-	if !ok || !bytes.Contains(pages, []byte("/Type /Pages")) {
-		return errors.New("PDF page tree is invalid")
-	}
-	pageFound := false
-	for id := range xref {
-		object, exists := filmPDFObject(data, xref, id, "0")
-		parentID, parentGeneration, hasParent := filmPDFReference(object, "/Parent")
-		if exists && bytes.Contains(object, []byte("/Type /Page ")) && hasParent && parentID == pagesID && parentGeneration == pagesGeneration {
-			pageFound = true
-			break
-		}
-	}
-	if !pageFound {
-		return errors.New("PDF page tree has no valid page object")
-	}
-	return validateFilmPDFStreamLengths(data)
-}
-
-func parseFilmPDFXref(section []byte) (map[int]filmPDFXref, []byte, error) {
-	trailerAt := bytes.Index(section, []byte("trailer"))
-	if trailerAt < 0 {
-		return nil, nil, errors.New("PDF trailer is missing")
-	}
-	fields := bytes.Fields(section[:trailerAt])
-	if len(fields) < 3 || string(fields[0]) != "xref" {
-		return nil, nil, errors.New("PDF xref is malformed")
-	}
-	first, firstErr := strconv.Atoi(string(fields[1]))
-	count, countErr := strconv.Atoi(string(fields[2]))
-	if firstErr != nil || countErr != nil || first != 0 || count < 2 || count > maxFilmPDFObjects+1 || len(fields) != 3+count*3 {
-		return nil, nil, errors.New("PDF xref bounds are invalid")
-	}
-	result := make(map[int]filmPDFXref, count-1)
-	for index := 0; index < count; index++ {
-		base := 3 + index*3
-		offset, offsetErr := strconv.Atoi(string(fields[base]))
-		generation := string(fields[base+1])
-		state := string(fields[base+2])
-		if offsetErr != nil || len(generation) != 5 || (state != "n" && state != "f") {
-			return nil, nil, errors.New("PDF xref entry is invalid")
-		}
-		if state == "n" {
-			result[first+index] = filmPDFXref{offset: offset, generation: generation}
-		}
-	}
-	if len(result) == 0 || len(result) > maxFilmPDFObjects {
-		return nil, nil, errors.New("PDF object count is invalid")
-	}
-	return result, section[trailerAt+len("trailer"):], nil
-}
-
-func filmPDFReference(dictionary []byte, key string) (int, string, bool) {
-	fields := bytes.Fields(dictionary)
-	for index := 0; index+3 < len(fields); index++ {
-		if string(fields[index]) != key || string(fields[index+3]) != "R" {
-			continue
-		}
-		id, err := strconv.Atoi(string(fields[index+1]))
-		generation := string(fields[index+2])
-		return id, generation, err == nil && id > 0 && len(generation) <= 6
-	}
-	return 0, "", false
-}
-
-func filmPDFObject(data []byte, xref map[int]filmPDFXref, id int, generation string) ([]byte, bool) {
-	entry, ok := xref[id]
-	generationNumber, generationErr := strconv.Atoi(generation)
-	if !ok || generationErr != nil || entry.generation != fmt.Sprintf("%05d", generationNumber) || entry.offset < 0 || entry.offset >= len(data) {
-		return nil, false
-	}
-	header := []byte(fmt.Sprintf("%d %s obj", id, generation))
-	if !bytes.HasPrefix(data[entry.offset:], header) {
-		return nil, false
-	}
-	end := bytes.Index(data[entry.offset+len(header):], []byte("endobj"))
-	if end < 0 || end > int(maxFilmPDFStreamBytes) {
-		return nil, false
-	}
-	return data[entry.offset+len(header) : entry.offset+len(header)+end], true
-}
-
-func validateFilmPDFStreamLengths(data []byte) error {
-	for offset := 0; offset < len(data); {
-		relative := bytes.Index(data[offset:], []byte("stream"))
-		if relative < 0 {
-			return nil
-		}
-		marker := offset + relative
-		if marker > 0 && data[marker-1] != '>' && data[marker-1] != '\n' && data[marker-1] != '\r' && data[marker-1] != ' ' {
-			offset = marker + len("stream")
-			continue
-		}
-		dictionaryStart := bytes.LastIndex(data[maxInt(0, marker-4096):marker], []byte("<<"))
-		if dictionaryStart < 0 {
-			return errors.New("PDF stream dictionary is malformed")
-		}
-		dictionaryStart += maxInt(0, marker-4096)
-		dictionary := data[dictionaryStart:marker]
-		lengthFields := bytes.Fields(dictionary)
-		length := -1
-		lengthCount := 0
-		for index := 0; index+1 < len(lengthFields); index++ {
-			if string(lengthFields[index]) == "/Length" {
-				lengthCount++
-				length, _ = strconv.Atoi(string(lengthFields[index+1]))
-			}
-		}
-		if lengthCount != 1 || length < 0 || length > int(maxFilmPDFStreamBytes) {
-			return errors.New("PDF stream Length is invalid")
-		}
-		start := marker + len("stream")
-		if start < len(data) && data[start] == '\r' {
-			start++
-		}
-		if start < len(data) && data[start] == '\n' {
-			start++
-		}
-		end := start + length
-		if end > len(data) {
-			return errors.New("PDF stream Length exceeds its object")
-		}
-		after := end
-		if after < len(data) && data[after] == '\r' {
-			after++
-		}
-		if after < len(data) && data[after] == '\n' {
-			after++
-		}
-		if !bytes.HasPrefix(data[after:], []byte("endstream")) {
-			return errors.New("PDF stream Length does not match its contents")
-		}
-		offset = after + len("endstream")
-	}
 	return nil
+}
+
+func extractFilmPDFWithRunner(ctx context.Context, data []byte, limit int64, config filmPDFTextConfig, runner filmPDFTextRunner) (string, error) {
+	if err := validateFilmPDFEnvelope(data, limit); err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(config.Executable) || (config.SandboxExecutable != "" && !filepath.IsAbs(config.SandboxExecutable)) || config.Timeout <= 0 || config.Timeout > maxFilmPDFTextTimeout || config.OutputLimit < 1 || config.OutputLimit > int64(maxFilmSourceBytes) {
+		return "", errors.New("PDF text extraction configuration is invalid")
+	}
+	if runner == nil {
+		defaultRunner := execFilmPDFTextRunner{}
+		runner = defaultRunner.Run
+	}
+	if err := os.MkdirAll(config.TempRoot, 0o700); err != nil {
+		return "", errors.New("PDF extraction temporary directory is unavailable")
+	}
+	temporaryDirectory, err := os.MkdirTemp(config.TempRoot, "pdf-")
+	if err != nil {
+		return "", errors.New("PDF extraction temporary directory could not be created")
+	}
+	defer os.RemoveAll(temporaryDirectory)
+	inputPath := filepath.Join(temporaryDirectory, "input.pdf")
+	if err := os.WriteFile(inputPath, data, 0o600); err != nil {
+		return "", errors.New("PDF extraction input could not be staged")
+	}
+	commandContext, cancel := context.WithTimeout(ctx, config.Timeout)
+	defer cancel()
+	stdout := &boundedFilmPDFWriter{limit: config.OutputLimit}
+	stderr := &boundedFilmPDFDiagnosticWriter{limit: maxFilmPDFDiagnosticBytes}
+	arguments := []string{"-layout", "-enc", "UTF-8", "-nopgbrk", inputPath, "-"}
+	runExecutable := config.Executable
+	if config.SandboxExecutable != "" {
+		arguments = append([]string{config.Executable}, arguments...)
+		runExecutable = config.SandboxExecutable
+	}
+	runErr := runner(commandContext, runExecutable, arguments, stdout, stderr)
+	if errors.Is(runErr, errFilmPDFOutputLimit) {
+		return "", errFilmPDFOutputLimit
+	}
+	if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
+		return "", errors.New("PDF text extraction timed out")
+	}
+	if runErr != nil {
+		diagnostic := strings.TrimSpace(string(stderr.Bytes()))
+		if diagnostic != "" {
+			diagnostic = strings.ReplaceAll(diagnostic, temporaryDirectory, "<temporary-directory>")
+			diagnostic = strings.ReplaceAll(diagnostic, inputPath, "<input.pdf>")
+			diagnostic = strings.Map(func(character rune) rune {
+				if unicode.IsControl(character) && character != '\n' && character != '\t' {
+					return -1
+				}
+				return character
+			}, diagnostic)
+			return "", fmt.Errorf("PDF text extraction failed: %s", diagnostic)
+		}
+		return "", errors.New("PDF text extraction failed")
+	}
+	output := bytes.TrimPrefix(stdout.Bytes(), []byte{0xef, 0xbb, 0xbf})
+	if !utf8.Valid(output) || bytes.IndexByte(output, 0) >= 0 {
+		return "", errors.New("PDF text extractor returned invalid UTF-8")
+	}
+	text := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(string(output), "\r\n", "\n"), "\r", "\n"))
+	if !usableFilmPDFText(text) {
+		return "", errFilmPDFNeedsOCR
+	}
+	return text, nil
 }

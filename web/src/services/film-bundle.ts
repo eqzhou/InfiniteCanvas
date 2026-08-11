@@ -42,6 +42,7 @@ export function prepareFilmRestore(
   for (const shot of document.shots) {
     add(shot.imageStorageKey, { kind: "shot", entityId: shot.id, field: "imageStorageKey" });
     add(shot.firstFrameStorageKey, { kind: "shot", entityId: shot.id, field: "firstFrameStorageKey" });
+    add(shot.lastFrameStorageKey, { kind: "shot", entityId: shot.id, field: "lastFrameStorageKey" });
     add(shot.audioStorageKey, { kind: "shot", entityId: shot.id, field: "audioStorageKey" });
     add(shot.videoStorageKey, { kind: "shot", entityId: shot.id, field: "videoStorageKey" });
   }
@@ -53,13 +54,14 @@ export function prepareFilmRestore(
     add(task.snapshot?.styleVersion?.mediaStorageKey, { kind: "task", entityId: task.id, field: "style" });
     add(task.snapshot?.storyboardDirectorSource?.storageKey, { kind: "task", entityId: task.id, field: "storyboardDirectorSource" });
     add(task.snapshot?.firstFrameDirectorSource?.storageKey, { kind: "task", entityId: task.id, field: "firstFrameDirectorSource" });
+    add(task.snapshot?.lastFrameDirectorSource?.storageKey, { kind: "task", entityId: task.id, field: "lastFrameDirectorSource" });
     for (const [index, key] of (task.snapshot?.referenceStorageKeys ?? []).entries()) add(key, { kind: "task", entityId: task.id, field: `reference:${index}` });
   }
   for (const track of document.timeline.tracks) {
     for (const clip of track.clips) add(clip.source, { kind: "timeline", entityId: clip.id, field: "source" });
   }
   for (const deliverable of document.deliverables) add(deliverable.storageKey, { kind: "deliverable", entityId: deliverable.id, field: "storageKey" });
-  const versionMediaFields = ["imageStorageKey", "firstFrameStorageKey", "audioStorageKey", "videoStorageKey"] as const;
+  const versionMediaFields = ["imageStorageKey", "firstFrameStorageKey", "lastFrameStorageKey", "audioStorageKey", "videoStorageKey"] as const;
   for (const version of document.versions ?? []) {
     if (version.entityType === "scene") {
       const source = version.snapshot.directorSource;
@@ -68,10 +70,27 @@ export function prepareFilmRestore(
       }
       continue;
     }
-    if (version.entityType !== "shot") continue;
-    for (const field of versionMediaFields) {
-      const key = version.snapshot[field];
-      if (typeof key === "string") add(key, { kind: "version", entityId: version.id, field });
+    if (version.entityType === "shot") {
+      for (const field of versionMediaFields) {
+        const key = version.snapshot[field];
+        if (typeof key === "string") add(key, { kind: "version", entityId: version.id, field });
+      }
+    } else if (version.entityType === "dialogue") {
+      const key = version.snapshot.audioStorageKey;
+      if (typeof key === "string") add(key, { kind: "version", entityId: version.id, field: "audioStorageKey" });
+    } else if (version.entityType === "asset") {
+      const key = version.snapshot.mediaStorageKey;
+      if (typeof key === "string") add(key, { kind: "version", entityId: version.id, field: "mediaStorageKey" });
+    } else if (version.entityType === "timeline" && Array.isArray(version.snapshot.tracks)) {
+      for (const track of version.snapshot.tracks) {
+        if (!track || typeof track !== "object" || !Array.isArray((track as { clips?: unknown }).clips)) continue;
+        const kind = String((track as { kind?: unknown }).kind ?? "");
+        for (const clip of (track as { clips: unknown[] }).clips) {
+          if (!clip || typeof clip !== "object") continue;
+          const { id, source } = clip as { id?: unknown; source?: unknown };
+          if (typeof id === "string" && typeof source === "string") add(source, { kind: "version", entityId: version.id, field: `timeline:${kind}:${id}` });
+        }
+      }
     }
   }
   const identity = (key?: string) => key ? byKey.get(key) : undefined;
@@ -88,14 +107,16 @@ export function prepareFilmRestore(
     ...document,
     scenes: document.scenes.map((scene) => ({ ...scene, directorSource: restoreDirectorSource(scene.directorSource) })),
     shots: document.shots.map((shot) => {
-      const image = identity(shot.imageStorageKey), firstFrame = identity(shot.firstFrameStorageKey), video = identity(shot.videoStorageKey), audio = identity(shot.audioStorageKey);
+      const image = identity(shot.imageStorageKey), firstFrame = identity(shot.firstFrameStorageKey), lastFrame = identity(shot.lastFrameStorageKey), video = identity(shot.videoStorageKey), audio = identity(shot.audioStorageKey);
       return { ...shot,
         ...(image ? { imageSha256: image.sha256, imageObjectVersion: image.objectVersion, mediaMimeType: image.mimeType } : {}),
         ...(firstFrame ? { firstFrameSha256: firstFrame.sha256, firstFrameObjectVersion: firstFrame.objectVersion, mediaMimeType: firstFrame.mimeType } : {}),
+        ...(lastFrame ? { lastFrameSha256: lastFrame.sha256, lastFrameObjectVersion: lastFrame.objectVersion, mediaMimeType: lastFrame.mimeType } : {}),
         ...(video ? { videoSha256: video.sha256, videoObjectVersion: video.objectVersion, mediaMimeType: video.mimeType } : {}),
         ...(audio ? { audioSha256: audio.sha256, audioObjectVersion: audio.objectVersion, mediaMimeType: audio.mimeType } : {}),
         storyboardDirectorSource: restoreDirectorSource(shot.storyboardDirectorSource),
         firstFrameDirectorSource: restoreDirectorSource(shot.firstFrameDirectorSource),
+        lastFrameDirectorSource: restoreDirectorSource(shot.lastFrameDirectorSource),
       };
     }),
     dialogues: document.dialogues?.map((dialogue) => {
@@ -111,6 +132,7 @@ export function prepareFilmRestore(
         styleVersion: task.snapshot.styleVersion ? restoreAssetIdentity(task.snapshot.styleVersion) : undefined,
         storyboardDirectorSource: restoreDirectorSource(task.snapshot.storyboardDirectorSource),
         firstFrameDirectorSource: restoreDirectorSource(task.snapshot.firstFrameDirectorSource),
+        lastFrameDirectorSource: restoreDirectorSource(task.snapshot.lastFrameDirectorSource),
       },
     })),
     deliverables: document.deliverables.map((deliverable) => { const item = identity(deliverable.storageKey); return item ? { ...deliverable, mimeType: item.mimeType, bytes: item.bytes, sha256: item.sha256, objectVersion: item.objectVersion } : { ...deliverable }; }),
@@ -121,11 +143,20 @@ export function prepareFilmRestore(
           ? { ...version, snapshot: { ...version.snapshot, directorSource: restoreDirectorSource(source as NonNullable<FilmDocument["scenes"][number]["directorSource"]>) } }
           : version;
       }
+      if (version.entityType === "dialogue") {
+        const item = typeof version.snapshot.audioStorageKey === "string" ? identity(version.snapshot.audioStorageKey) : undefined;
+        return item ? { ...version, snapshot: { ...version.snapshot, audioSha256: item.sha256, audioObjectVersion: item.objectVersion } } : version;
+      }
+      if (version.entityType === "asset") {
+        const item = typeof version.snapshot.mediaStorageKey === "string" ? identity(version.snapshot.mediaStorageKey) : undefined;
+        return item ? { ...version, snapshot: { ...version.snapshot, mediaMimeType: item.mimeType, mediaSha256: item.sha256, mediaObjectVersion: item.objectVersion } } : version;
+      }
       if (version.entityType !== "shot") return version;
       const snapshot = { ...version.snapshot };
       const identities = [
         ["imageStorageKey", "imageSha256", "imageObjectVersion"],
         ["firstFrameStorageKey", "firstFrameSha256", "firstFrameObjectVersion"],
+        ["lastFrameStorageKey", "lastFrameSha256", "lastFrameObjectVersion"],
         ["audioStorageKey", "audioSha256", "audioObjectVersion"],
         ["videoStorageKey", "videoSha256", "videoObjectVersion"],
       ] as const;
@@ -143,6 +174,9 @@ export function prepareFilmRestore(
       }
       if (snapshot.firstFrameDirectorSource && typeof snapshot.firstFrameDirectorSource === "object") {
         snapshot.firstFrameDirectorSource = restoreDirectorSource(snapshot.firstFrameDirectorSource as NonNullable<FilmDocument["shots"][number]["firstFrameDirectorSource"]>);
+      }
+      if (snapshot.lastFrameDirectorSource && typeof snapshot.lastFrameDirectorSource === "object") {
+        snapshot.lastFrameDirectorSource = restoreDirectorSource(snapshot.lastFrameDirectorSource as NonNullable<FilmDocument["shots"][number]["lastFrameDirectorSource"]>);
       }
       return { ...version, snapshot };
     }),

@@ -44,8 +44,8 @@ func TestOnlyProviderGenerationConsumesQuotaAndCredits(t *testing.T) {
 }
 
 func TestFilmStageGenerationJobsAreDurableButNeverClaimable(t *testing.T) {
-	if currentSchemaVersion != 21 {
-		t.Fatalf("Film stage parent jobs require PostgreSQL schema v21, got v%d", currentSchemaVersion)
+	if currentSchemaVersion < 21 {
+		t.Fatalf("Film stage parent jobs require PostgreSQL schema v21 or newer, got v%d", currentSchemaVersion)
 	}
 	for _, executor := range []string{"film-stage", "server", "workflow", "film-export"} {
 		if validServerGenerationClaim(GenerationClaim{Kind: "film-stage", Executor: executor}) {

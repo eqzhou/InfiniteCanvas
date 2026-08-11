@@ -3,12 +3,12 @@ package api
 import (
 	"archive/zip"
 	"bytes"
-	"compress/zlib"
+	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -18,21 +18,20 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 const (
-	defaultFilmImportBytes     = int64(50 << 20)
-	maxFilmImportBytes         = int64(100 << 20)
-	maxFilmJSONImportBytes     = int64(4 << 20)
-	maxFilmDOCXEntries         = 2_048
-	maxFilmDOCXExpanded        = int64(64 << 20)
-	maxFilmPDFStreams          = 256
-	maxFilmPDFExpandedBytes    = int64(32 << 20)
-	maxFilmPDFStreamBytes      = int64(8 << 20)
-	maxFilmPDFOperators        = 20_000
-	maxFilmPDFCompressionRatio = 200
+	defaultFilmImportBytes = int64(50 << 20)
+	maxFilmImportBytes     = int64(100 << 20)
+	maxFilmJSONImportBytes = int64(4 << 20)
+	maxFilmDOCXEntries     = 2_048
+	maxFilmDOCXExpanded    = int64(64 << 20)
 )
 
 var (
@@ -86,46 +85,83 @@ func normalizedFilmImportMIME(value string) (string, error) {
 }
 
 func extractFilmImport(filename, mimeType string, data []byte, limit int64) (string, string, error) {
-	name, err := cleanFilmImportName(filename)
+	name, mediaType, format, err := validateFilmImportMetadata(filename, mimeType, data, limit)
 	if err != nil {
 		return "", "", err
 	}
+	switch format {
+	case "txt":
+		text, err := extractFilmPlainText(data)
+		return text, format, err
+	case "markdown":
+		text, err := extractFilmPlainText(data)
+		return text, format, err
+	case "docx":
+		text, err := extractFilmDOCX(data, limit)
+		return text, format, err
+	case "pdf":
+		return "", format, errors.New("PDF extraction requires the server sandbox")
+	default:
+		return "", "", fmt.Errorf("validated manuscript %q (%s) has unsupported format", name, mediaType)
+	}
+}
+
+func validateFilmImportMetadata(filename, mimeType string, data []byte, limit int64) (string, string, string, error) {
+	name, err := cleanFilmImportName(filename)
+	if err != nil {
+		return "", "", "", err
+	}
 	if limit < 1 || int64(len(data)) > limit {
-		return "", "", errors.New("manuscript import exceeds its configured size limit")
+		return "", "", "", errors.New("manuscript import exceeds its configured size limit")
 	}
 	mediaType, err := normalizedFilmImportMIME(mimeType)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	extension := strings.ToLower(filepath.Ext(name))
 	switch extension {
 	case ".txt":
 		if mediaType != "text/plain" && mediaType != "application/octet-stream" {
-			return "", "", errors.New("TXT extension and MIME type do not match")
+			return "", "", "", errors.New("TXT extension and MIME type do not match")
 		}
-		text, err := extractFilmPlainText(data)
-		return text, "txt", err
+		return name, mediaType, "txt", nil
 	case ".md", ".markdown":
 		if mediaType != "text/markdown" && mediaType != "text/x-markdown" && mediaType != "text/plain" && mediaType != "application/octet-stream" {
-			return "", "", errors.New("Markdown extension and MIME type do not match")
+			return "", "", "", errors.New("Markdown extension and MIME type do not match")
 		}
-		text, err := extractFilmPlainText(data)
-		return text, "markdown", err
+		return name, mediaType, "markdown", nil
 	case ".docx":
 		if mediaType != "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
-			return "", "", errors.New("DOCX extension and MIME type do not match")
+			return "", "", "", errors.New("DOCX extension and MIME type do not match")
 		}
-		text, err := extractFilmDOCX(data, limit)
-		return text, "docx", err
+		return name, mediaType, "docx", nil
 	case ".pdf":
 		if mediaType != "application/pdf" {
-			return "", "", errors.New("PDF extension and MIME type do not match")
+			return "", "", "", errors.New("PDF extension and MIME type do not match")
 		}
-		text, err := extractFilmPDF(data, limit)
-		return text, "pdf", err
+		if err := validateFilmPDFEnvelope(data, limit); err != nil {
+			return "", "", "", err
+		}
+		return name, mediaType, "pdf", nil
 	default:
-		return "", "", errors.New("manuscript extension must be .txt, .md, .markdown, .docx, or .pdf")
+		return "", "", "", errors.New("manuscript extension must be .txt, .md, .markdown, .docx, or .pdf")
 	}
+}
+
+func (s *Server) extractFilmImport(ctx context.Context, filename, mimeType string, data []byte, limit int64) (string, string, error) {
+	_, _, format, err := validateFilmImportMetadata(filename, mimeType, data, limit)
+	if err != nil {
+		return "", "", err
+	}
+	if format != "pdf" {
+		return extractFilmImport(filename, mimeType, data, limit)
+	}
+	config, err := s.filmPDFTextCapability()
+	if err != nil {
+		return "", "", err
+	}
+	text, err := extractFilmPDFWithRunner(ctx, data, limit, config, s.filmPDFTextRunner)
+	return text, format, err
 }
 
 func extractFilmPlainText(data []byte) (string, error) {
@@ -273,214 +309,6 @@ func validateFilmDOCXContentTypes(entry *zip.File) error {
 		return errors.New("DOCX content types do not declare the main document")
 	}
 	return nil
-}
-
-func extractFilmPDF(data []byte, limit int64) (string, error) {
-	if int64(len(data)) > limit {
-		return "", errors.New("PDF exceeds its configured size limit")
-	}
-	if err := validateFilmPDFStructure(data); err != nil {
-		return "", err
-	}
-	var output strings.Builder
-	totalExpanded, operatorCount, streamCount := int64(0), 0, 0
-	for offset := 0; offset < len(data); {
-		index := bytes.Index(data[offset:], []byte("stream"))
-		if index < 0 {
-			break
-		}
-		streamOffset := offset + index
-		if streamOffset > 0 && !unicode.IsSpace(rune(data[streamOffset-1])) && data[streamOffset-1] != '>' {
-			offset = streamOffset + len("stream")
-			continue
-		}
-		streamCount++
-		if streamCount > maxFilmPDFStreams {
-			return "", errors.New("PDF contains too many streams")
-		}
-		start := streamOffset + len("stream")
-		if start < len(data) && data[start] == '\r' {
-			start++
-		}
-		if start < len(data) && data[start] == '\n' {
-			start++
-		}
-		endRelative := bytes.Index(data[start:], []byte("endstream"))
-		if endRelative < 0 {
-			return "", errors.New("PDF stream is malformed")
-		}
-		end := start + endRelative
-		dictionaryStart := bytes.LastIndex(data[maxInt(0, streamOffset-4096):streamOffset], []byte("<<"))
-		if dictionaryStart < 0 {
-			return "", errors.New("PDF stream dictionary is malformed")
-		}
-		dictionaryStart += maxInt(0, streamOffset-4096)
-		dictionaryEnd := bytes.LastIndex(data[dictionaryStart:streamOffset], []byte(">>"))
-		if dictionaryEnd < 0 {
-			return "", errors.New("PDF stream dictionary is malformed")
-		}
-		dictionary := data[dictionaryStart : dictionaryStart+dictionaryEnd+2]
-		content := bytes.TrimRight(data[start:end], "\r\n")
-		var expanded []byte
-		if bytes.Contains(dictionary, []byte("/FlateDecode")) {
-			zreader, err := zlib.NewReader(bytes.NewReader(content))
-			if err != nil {
-				return "", errors.New("PDF compressed text stream is invalid")
-			}
-			expanded, err = io.ReadAll(io.LimitReader(zreader, maxFilmPDFStreamBytes+1))
-			closeErr := zreader.Close()
-			if err != nil || closeErr != nil || int64(len(expanded)) > maxFilmPDFStreamBytes {
-				return "", errors.New("PDF text stream exceeds its expansion limit")
-			}
-			if len(content) == 0 || int64(len(expanded))/int64(len(content)) > maxFilmPDFCompressionRatio {
-				return "", errors.New("PDF stream compression ratio is unsafe")
-			}
-		} else {
-			if int64(len(content)) > maxFilmPDFStreamBytes {
-				return "", errors.New("PDF text stream exceeds its expansion limit")
-			}
-			expanded = content
-		}
-		totalExpanded += int64(len(expanded))
-		if totalExpanded > maxFilmPDFExpandedBytes {
-			return "", errors.New("PDF streams exceed the global expansion limit")
-		}
-		if err := extractPDFTextOperators(expanded, &output, &operatorCount); err != nil {
-			return "", err
-		}
-		if output.Len() > maxFilmSourceBytes {
-			return "", errors.New("PDF extracted text exceeds its limit")
-		}
-		offset = end + len("endstream")
-	}
-	text := strings.TrimSpace(strings.Join(strings.Fields(output.String()), " "))
-	if !usableFilmPDFText(text) {
-		return "", errFilmPDFNeedsOCR
-	}
-	return text, nil
-}
-
-func extractPDFTextOperators(data []byte, output *strings.Builder, operatorCount *int) error {
-	for offset := 0; offset < len(data); {
-		begin := bytes.Index(data[offset:], []byte("BT"))
-		if begin < 0 {
-			return nil
-		}
-		*operatorCount++
-		if *operatorCount > maxFilmPDFOperators {
-			return errors.New("PDF text operator limit exceeded")
-		}
-		begin += offset + 2
-		endRelative := bytes.Index(data[begin:], []byte("ET"))
-		if endRelative < 0 {
-			return errors.New("PDF text object is malformed")
-		}
-		block := data[begin : begin+endRelative]
-		for index := 0; index < len(block); index++ {
-			switch block[index] {
-			case '(':
-				*operatorCount++
-				if *operatorCount > maxFilmPDFOperators {
-					return errors.New("PDF text operator limit exceeded")
-				}
-				value, next, ok := readPDFLiteral(block, index)
-				if ok {
-					output.WriteString(value)
-					output.WriteByte('\n')
-					index = next - 1
-				}
-			case '<':
-				if index+1 < len(block) && block[index+1] == '<' {
-					continue
-				}
-				end := bytes.IndexByte(block[index+1:], '>')
-				if end >= 0 {
-					*operatorCount++
-					if *operatorCount > maxFilmPDFOperators {
-						return errors.New("PDF text operator limit exceeded")
-					}
-					raw := bytes.Map(func(r rune) rune {
-						if unicode.IsSpace(r) {
-							return -1
-						}
-						return r
-					}, block[index+1:index+1+end])
-					if len(raw)%2 == 1 {
-						raw = append(raw, '0')
-					}
-					decoded := make([]byte, hex.DecodedLen(len(raw)))
-					if _, err := hex.Decode(decoded, raw); err == nil && utf8.Valid(decoded) {
-						output.Write(decoded)
-						output.WriteByte('\n')
-					}
-					index += end + 1
-				}
-			}
-		}
-		offset = begin + endRelative + 2
-	}
-	return nil
-}
-
-func readPDFLiteral(data []byte, start int) (string, int, bool) {
-	var output []byte
-	depth := 1
-	for index := start + 1; index < len(data); index++ {
-		character := data[index]
-		if character == '\\' {
-			if index+1 >= len(data) {
-				return "", index, false
-			}
-			index++
-			next := data[index]
-			switch next {
-			case 'n':
-				output = append(output, '\n')
-			case 'r':
-				output = append(output, '\r')
-			case 't':
-				output = append(output, '\t')
-			case 'b':
-				output = append(output, '\b')
-			case 'f':
-				output = append(output, '\f')
-			case '\n':
-			case '\r':
-				if index+1 < len(data) && data[index+1] == '\n' {
-					index++
-				}
-			default:
-				if next >= '0' && next <= '7' {
-					value := int(next - '0')
-					for count := 0; count < 2 && index+1 < len(data) && data[index+1] >= '0' && data[index+1] <= '7'; count++ {
-						index++
-						value = value*8 + int(data[index]-'0')
-					}
-					output = append(output, byte(value))
-				} else {
-					output = append(output, next)
-				}
-			}
-			continue
-		}
-		if character == '(' {
-			depth++
-		}
-		if character == ')' {
-			depth--
-			if depth == 0 {
-				if !utf8.Valid(output) {
-					return "", index + 1, false
-				}
-				return string(output), index + 1, true
-			}
-		}
-		output = append(output, character)
-		if len(output) > maxFilmSourceBytes {
-			return "", index, false
-		}
-	}
-	return "", len(data), false
 }
 
 func usableFilmPDFText(value string) bool {
@@ -666,28 +494,158 @@ func (s *Server) importFilmSource(w http.ResponseWriter, r *http.Request) {
 		writeFilmError(w, http.StatusBadRequest, "invalid_import", err.Error())
 		return
 	}
-	text, format, err := extractFilmImport(payload.name, payload.mimeType, payload.data, limit)
+	name, _, format, err := validateFilmImportMetadata(payload.name, payload.mimeType, payload.data, limit)
 	if err != nil {
-		code := "import_rejected"
-		if errors.Is(err, errFilmPDFNeedsOCR) {
-			code = "pdf_ocr_required"
-		}
-		writeFilmError(w, http.StatusUnprocessableEntity, code, err.Error())
+		writeFilmError(w, http.StatusUnprocessableEntity, "import_rejected", err.Error())
 		return
 	}
 	if payload.format != "" && payload.format != format && !(payload.format == "text" && format == "txt") {
 		writeFilmError(w, http.StatusBadRequest, "invalid_import", "declared import format does not match the validated file")
 		return
 	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	importStatus := filmSourceImportStatus{
+		ID: "import-" + randomGenerationOwner(), Status: filmStatusRunning, Format: format, OriginalName: name,
+		WorkerInstanceID: s.filmImportWorkerID, StartedAt: now, UpdatedAt: now,
+	}
+	_, startedDocument, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
+		if document.Source.Revision != payload.revision {
+			return filmDocument{}, errors.New("source revision conflict")
+		}
+		if current := document.Source.ImportStatus; current != nil && current.Status == filmStatusRunning && current.WorkerInstanceID == s.filmImportWorkerID {
+			return filmDocument{}, errors.New("source import is already running")
+		}
+		document.Source.ImportStatus = &importStatus
+		return document, nil
+	})
+	if !ok {
+		return
+	}
+	text, parsedFormat, err := s.extractFilmImport(r.Context(), name, payload.mimeType, payload.data, limit)
+	if err != nil {
+		s.persistFilmImportFailure(r.Context(), tenantIDFrom(r), chi.URLParam(r, "projectId"), importStatus, err.Error())
+		code := "import_rejected"
+		statusCode := http.StatusUnprocessableEntity
+		if errors.Is(err, errFilmPDFNeedsOCR) {
+			code = "pdf_ocr_required"
+		}
+		if errors.Is(err, errFilmPDFToolUnavailable) {
+			code, statusCode = "pdf_tool_unavailable", http.StatusServiceUnavailable
+		}
+		writeFilmError(w, statusCode, code, err.Error())
+		return
+	}
+	if parsedFormat != format {
+		s.persistFilmImportFailure(r.Context(), tenantIDFrom(r), chi.URLParam(r, "projectId"), importStatus, "validated import format changed during parsing")
+		writeFilmError(w, http.StatusInternalServerError, "import_state_invalid", "validated import format changed during parsing")
+		return
+	}
+	preflight := cloneFilmDocument(startedDocument)
+	preflight.Source.Format = parsedFormat
+	preflight.Source.OriginalName = name
+	if _, err := decomposeFilmSource(preflight, text); err != nil {
+		s.persistFilmImportFailure(r.Context(), tenantIDFrom(r), chi.URLParam(r, "projectId"), importStatus, err.Error())
+		writeFilmOperationError(w, err)
+		return
+	}
 	record, document, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
 		if document.Source.Revision != payload.revision {
 			return filmDocument{}, errors.New("source revision conflict")
 		}
-		document.Source.Format = format
-		document.Source.OriginalName = payload.name
-		return decomposeFilmSource(document, text)
+		if document.Source.ImportStatus == nil || document.Source.ImportStatus.ID != importStatus.ID || document.Source.ImportStatus.Status != filmStatusRunning {
+			return filmDocument{}, errors.New("source import status changed before parsing completed")
+		}
+		document.Source.Format = parsedFormat
+		document.Source.OriginalName = name
+		next, decomposeErr := decomposeFilmSource(document, text)
+		if decomposeErr != nil {
+			return filmDocument{}, decomposeErr
+		}
+		completedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		next.Source.ImportStatus = &filmSourceImportStatus{
+			ID: importStatus.ID, Status: "succeeded", Format: parsedFormat, OriginalName: name,
+			StartedAt: importStatus.StartedAt, UpdatedAt: completedAt, CompletedAt: completedAt,
+		}
+		return next, nil
 	})
 	if ok {
 		s.writeFilmDocument(w, r, http.StatusOK, record, document)
+		return
 	}
+	s.persistFilmImportFailure(r.Context(), tenantIDFrom(r), chi.URLParam(r, "projectId"), importStatus, "source import could not be committed; retry with the latest source revision")
+}
+
+func (s *Server) persistFilmImportFailure(ctx context.Context, tenantID, projectID string, importStatus filmSourceImportStatus, message string) {
+	backend, ok := s.store.(store.FilmStore)
+	if !ok {
+		return
+	}
+	// Parsing commonly ends because the HTTP request was canceled or timed out.
+	// Persist the terminal state with a short-lived detached context so a
+	// database-backed store does not leave the import permanently "running".
+	persistContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	completedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	for attempt := 0; attempt < 3; attempt++ {
+		record, err := backend.GetFilmProject(persistContext, tenantID, projectID)
+		if err != nil {
+			return
+		}
+		document, err := decodeFilmDocument(record.Document)
+		if err != nil || document.Source.ImportStatus == nil || document.Source.ImportStatus.ID != importStatus.ID || document.Source.ImportStatus.Status != filmStatusRunning {
+			return
+		}
+		document.Source.ImportStatus = &filmSourceImportStatus{
+			ID: importStatus.ID, Status: filmStatusFailed, Format: importStatus.Format, OriginalName: importStatus.OriginalName,
+			StartedAt: importStatus.StartedAt, UpdatedAt: completedAt, CompletedAt: completedAt, Error: truncateRunes(message, 2_000),
+		}
+		document.Revision++
+		document.UpdatedAt = completedAt
+		if validateFilmAggregateLimits(document) != nil {
+			return
+		}
+		raw, err := json.Marshal(document)
+		if err != nil || len(raw) > maxProjectBytes {
+			return
+		}
+		if _, err = backend.CompareAndSwapFilmProject(persistContext, tenantID, projectID, record.Revision, raw); err == nil {
+			return
+		} else if !errors.Is(err, store.ErrConflict) {
+			return
+		}
+	}
+}
+
+func (s *Server) getFilmImportStatus(w http.ResponseWriter, r *http.Request) {
+	_, _, document, ok := s.loadFilmProduction(w, r, false)
+	if !ok {
+		return
+	}
+	status := document.Source.ImportStatus
+	if status != nil && status.Status == filmStatusRunning && status.WorkerInstanceID != s.filmImportWorkerID {
+		completedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		_, updated, saved := s.mutateFilmProduction(w, r, func(current filmDocument) (filmDocument, error) {
+			active := current.Source.ImportStatus
+			if active == nil || active.ID != status.ID || active.Status != filmStatusRunning {
+				return current, nil
+			}
+			current.Source.ImportStatus = &filmSourceImportStatus{
+				ID: active.ID, Status: filmStatusFailed, Format: active.Format, OriginalName: active.OriginalName,
+				StartedAt: active.StartedAt, UpdatedAt: completedAt, CompletedAt: completedAt,
+				Error: "PDF or document parsing was interrupted by a server restart; retry the import",
+			}
+			return current, nil
+		})
+		if !saved {
+			return
+		}
+		status = updated.Source.ImportStatus
+	}
+	if status == nil {
+		writeJSON(w, map[string]any{"data": filmSourceImportStatus{Status: "idle"}})
+		return
+	}
+	response := *status
+	response.WorkerInstanceID = ""
+	writeJSON(w, map[string]any{"data": response})
 }

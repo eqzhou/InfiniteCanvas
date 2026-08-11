@@ -57,10 +57,14 @@ func filmRestoreReferenceKey(kind, entityID, field string) string {
 	return kind + "\x00" + entityID + "\x00" + field
 }
 
+func isFilmLogicalMediaSource(value string) bool {
+	return strings.HasPrefix(value, "shot:") || strings.HasPrefix(value, "dialogue:")
+}
+
 func filmRestoreReferences(document filmDocument) map[string]map[string]struct{} {
 	references := map[string]map[string]struct{}{}
 	add := func(storageKey, kind, entityID, field string) {
-		if storageKey == "" || strings.HasPrefix(storageKey, "shot:") {
+		if storageKey == "" || isFilmLogicalMediaSource(storageKey) {
 			return
 		}
 		if references[storageKey] == nil {
@@ -102,6 +106,9 @@ func filmRestoreReferences(document filmDocument) map[string]map[string]struct{}
 		if task.Snapshot.FirstFrameDirectorSource != nil {
 			add(task.Snapshot.FirstFrameDirectorSource.StorageKey, "task", task.ID, "firstFrameDirectorSource")
 		}
+		if task.Snapshot.LastFrameDirectorSource != nil {
+			add(task.Snapshot.LastFrameDirectorSource.StorageKey, "task", task.ID, "lastFrameDirectorSource")
+		}
 		for index, storageKey := range task.Snapshot.ReferenceStorageKeys {
 			add(storageKey, "task", task.ID, "reference:"+strconv.Itoa(index))
 		}
@@ -115,20 +122,42 @@ func filmRestoreReferences(document filmDocument) map[string]map[string]struct{}
 		add(deliverable.StorageKey, "deliverable", deliverable.ID, "storageKey")
 	}
 	for _, version := range document.Versions {
-		if version.EntityType == "scene" {
+		switch version.EntityType {
+		case "scene":
 			var scene filmScene
 			if json.Unmarshal(version.Snapshot, &scene) == nil && scene.DirectorSource != nil {
 				add(scene.DirectorSource.StorageKey, "version", version.ID, "directorSource")
 			}
-		} else if version.EntityType == "shot" {
+		case "shot":
 			var shot filmShot
 			if json.Unmarshal(version.Snapshot, &shot) != nil {
 				continue
 			}
 			add(shot.ImageStorageKey, "version", version.ID, "imageStorageKey")
 			add(shot.FirstFrameStorageKey, "version", version.ID, "firstFrameStorageKey")
+			add(shot.LastFrameStorageKey, "version", version.ID, "lastFrameStorageKey")
 			add(shot.AudioStorageKey, "version", version.ID, "audioStorageKey")
 			add(shot.VideoStorageKey, "version", version.ID, "videoStorageKey")
+		case "dialogue":
+			var dialogue filmDialogue
+			if json.Unmarshal(version.Snapshot, &dialogue) == nil {
+				add(dialogue.AudioStorageKey, "version", version.ID, "audioStorageKey")
+			}
+		case "asset":
+			var asset filmAsset
+			if json.Unmarshal(version.Snapshot, &asset) == nil {
+				add(asset.MediaStorageKey, "version", version.ID, "mediaStorageKey")
+			}
+		case "timeline":
+			var timeline filmTimeline
+			if json.Unmarshal(version.Snapshot, &timeline) != nil {
+				continue
+			}
+			for _, track := range timeline.Tracks {
+				for _, clip := range track.Clips {
+					add(clip.Source, "version", version.ID, "timeline:"+track.Kind+":"+clip.ID)
+				}
+			}
 		}
 	}
 	return references
@@ -229,6 +258,9 @@ func validateFilmRestoreIdentity(document filmDocument, item filmRestoreMedia) e
 				case "firstFrameStorageKey":
 					identityErr = match("image/", "", shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, 0)
 					matched = true
+				case "lastFrameStorageKey":
+					identityErr = match("image/", "", shot.LastFrameSHA256, shot.LastFrameObjectVersion, 0)
+					matched = true
 				case "audioStorageKey":
 					identityErr = match("audio/", "", shot.AudioSHA256, shot.AudioObjectVersion, 0)
 					matched = true
@@ -277,6 +309,9 @@ func validateFilmRestoreIdentity(document filmDocument, item filmRestoreMedia) e
 				case provenance.Field == "firstFrameDirectorSource" && task.Snapshot.FirstFrameDirectorSource != nil:
 					source := task.Snapshot.FirstFrameDirectorSource
 					identityErr, matched = match("image/", "", source.SHA256, source.ObjectVersion, 0), true
+				case provenance.Field == "lastFrameDirectorSource" && task.Snapshot.LastFrameDirectorSource != nil:
+					source := task.Snapshot.LastFrameDirectorSource
+					identityErr, matched = match("image/", "", source.SHA256, source.ObjectVersion, 0), true
 				case strings.HasPrefix(provenance.Field, "reference:"):
 					index, err := strconv.Atoi(strings.TrimPrefix(provenance.Field, "reference:"))
 					if err == nil && index >= 0 && index < len(task.Snapshot.ReferenceStorageKeys) && task.Snapshot.ReferenceStorageKeys[index] == item.StorageKey {
@@ -321,30 +356,66 @@ func validateFilmRestoreIdentity(document filmDocument, item filmRestoreMedia) e
 				if version.ID != provenance.EntityID {
 					continue
 				}
-				if version.EntityType == "scene" && provenance.Field == "directorSource" {
+				switch version.EntityType {
+				case "scene":
+					if provenance.Field != "directorSource" {
+						break
+					}
 					var scene filmScene
 					if json.Unmarshal(version.Snapshot, &scene) == nil && scene.DirectorSource != nil {
 						source := scene.DirectorSource
 						identityErr, matched = match("image/", "", source.SHA256, source.ObjectVersion, 0), true
 					}
-					break
-				}
-				if version.EntityType != "shot" {
-					break
-				}
-				var shot filmShot
-				if json.Unmarshal(version.Snapshot, &shot) != nil {
-					break
-				}
-				switch provenance.Field {
-				case "imageStorageKey":
-					identityErr, matched = match("image/", "", shot.ImageSHA256, shot.ImageObjectVersion, 0), true
-				case "firstFrameStorageKey":
-					identityErr, matched = match("image/", "", shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, 0), true
-				case "audioStorageKey":
-					identityErr, matched = match("audio/", "", shot.AudioSHA256, shot.AudioObjectVersion, 0), true
-				case "videoStorageKey":
-					identityErr, matched = match("video/", "", shot.VideoSHA256, shot.VideoObjectVersion, 0), true
+				case "shot":
+					var shot filmShot
+					if json.Unmarshal(version.Snapshot, &shot) != nil {
+						break
+					}
+					switch provenance.Field {
+					case "imageStorageKey":
+						identityErr, matched = match("image/", "", shot.ImageSHA256, shot.ImageObjectVersion, 0), true
+					case "firstFrameStorageKey":
+						identityErr, matched = match("image/", "", shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, 0), true
+					case "lastFrameStorageKey":
+						identityErr, matched = match("image/", "", shot.LastFrameSHA256, shot.LastFrameObjectVersion, 0), true
+					case "audioStorageKey":
+						identityErr, matched = match("audio/", "", shot.AudioSHA256, shot.AudioObjectVersion, 0), true
+					case "videoStorageKey":
+						identityErr, matched = match("video/", "", shot.VideoSHA256, shot.VideoObjectVersion, 0), true
+					}
+				case "dialogue":
+					var dialogue filmDialogue
+					if provenance.Field == "audioStorageKey" && json.Unmarshal(version.Snapshot, &dialogue) == nil {
+						identityErr, matched = match("audio/", "", dialogue.AudioSHA256, dialogue.AudioObjectVersion, 0), true
+					}
+				case "asset":
+					var asset filmAsset
+					if provenance.Field == "mediaStorageKey" && json.Unmarshal(version.Snapshot, &asset) == nil {
+						identityErr, matched = match("", asset.MediaMIMEType, asset.MediaSHA256, asset.MediaObjectVersion, 0), true
+					}
+				case "timeline":
+					parts := strings.SplitN(provenance.Field, ":", 3)
+					if len(parts) != 3 || parts[0] != "timeline" {
+						break
+					}
+					var timeline filmTimeline
+					if json.Unmarshal(version.Snapshot, &timeline) != nil {
+						break
+					}
+					for _, track := range timeline.Tracks {
+						for _, clip := range track.Clips {
+							if track.Kind != parts[1] || clip.ID != parts[2] || clip.Source != item.StorageKey {
+								continue
+							}
+							prefix, contentType := "audio/", ""
+							if track.Kind == "video" {
+								prefix = "video/"
+							} else if track.Kind == "subtitle" {
+								prefix, contentType = "", "application/x-subrip"
+							}
+							identityErr, matched = match(prefix, contentType, item.SHA256, item.ObjectVersion, item.Bytes), true
+						}
+					}
 				}
 				break
 			}
@@ -523,6 +594,9 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 		if err := copyDirectorSource(task.Snapshot.FirstFrameDirectorSource); err != nil {
 			return fail(err)
 		}
+		if err := copyDirectorSource(task.Snapshot.LastFrameDirectorSource); err != nil {
+			return fail(err)
+		}
 		for referenceIndex, source := range task.Snapshot.ReferenceStorageKeys {
 			item, ok := mediaBySource[source]
 			if !ok {
@@ -546,6 +620,68 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 				return fail(err)
 			}
 			version.Snapshot, _ = json.Marshal(scene)
+			continue
+		}
+		if version.EntityType == "dialogue" {
+			var dialogue filmDialogue
+			if json.Unmarshal(version.Snapshot, &dialogue) != nil {
+				return fail(errors.New("film version snapshot is invalid"))
+			}
+			if dialogue.AudioStorageKey != "" {
+				value, err := copyMedia(dialogue.AudioStorageKey, "", "audio/", dialogue.AudioSHA256, dialogue.AudioObjectVersion, 0, "")
+				if err != nil {
+					return fail(err)
+				}
+				dialogue.AudioStorageKey, dialogue.AudioSHA256, dialogue.AudioObjectVersion, dialogue.AudioGenerationJobID = value.key, value.digest, value.version, ""
+			}
+			version.Snapshot, _ = json.Marshal(dialogue)
+			continue
+		}
+		if version.EntityType == "asset" {
+			var asset filmAsset
+			if json.Unmarshal(version.Snapshot, &asset) != nil {
+				return fail(errors.New("film version snapshot is invalid"))
+			}
+			if asset.MediaStorageKey != "" {
+				value, err := copyMedia(asset.MediaStorageKey, asset.MediaMIMEType, "", asset.MediaSHA256, asset.MediaObjectVersion, 0, "")
+				if err != nil {
+					return fail(err)
+				}
+				asset.MediaStorageKey, asset.MediaSHA256, asset.MediaObjectVersion = value.key, value.digest, value.version
+			}
+			version.Snapshot, _ = json.Marshal(asset)
+			continue
+		}
+		if version.EntityType == "timeline" {
+			var timeline filmTimeline
+			if json.Unmarshal(version.Snapshot, &timeline) != nil {
+				return fail(errors.New("film version snapshot is invalid"))
+			}
+			for trackIndex := range timeline.Tracks {
+				track := &timeline.Tracks[trackIndex]
+				for clipIndex := range track.Clips {
+					clip := &track.Clips[clipIndex]
+					if isFilmLogicalMediaSource(clip.Source) {
+						continue
+					}
+					prefix := "audio/"
+					if track.Kind == "video" {
+						prefix = "video/"
+					} else if track.Kind == "subtitle" {
+						prefix = ""
+					}
+					item, ok := mediaBySource[clip.Source]
+					if !ok {
+						return fail(errors.New("restored timeline version media is not a verified tenant object"))
+					}
+					value, err := copyMedia(clip.Source, item.MIMEType, prefix, item.SHA256, item.ObjectVersion, item.Bytes, "")
+					if err != nil {
+						return fail(err)
+					}
+					clip.Source = value.key
+				}
+			}
+			version.Snapshot, _ = json.Marshal(timeline)
 			continue
 		}
 		if version.EntityType != "shot" {
@@ -592,7 +728,7 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 		track := &document.Timeline.Tracks[trackIndex]
 		for clipIndex := range track.Clips {
 			clip := &track.Clips[clipIndex]
-			if strings.HasPrefix(clip.Source, "shot:") {
+			if isFilmLogicalMediaSource(clip.Source) {
 				continue
 			}
 			prefix := "audio/"

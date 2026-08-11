@@ -10,6 +10,7 @@ import {
   validateProjectPanoramaBudget,
 } from "@/lib/panorama";
 import { assertBundlePanoramaMediaManaged } from "@/lib/plain-project-import";
+import { collectFilmStorageKeys, isFilmStorageKey, remapFilmStorageKeys } from "@/lib/film-media";
 
 type MediaKind = "image" | "media";
 
@@ -94,16 +95,6 @@ function kindForStorageKey(storageKey: string): MediaKind {
   return storageKey.startsWith("image:") ? "image" : "media";
 }
 
-function isFilmStorageKey(value: string): boolean {
-  return value.startsWith("image:") || value.startsWith("media:") || value.startsWith("film:");
-}
-
-const filmShotMediaFields = ["imageStorageKey", "firstFrameStorageKey", "videoStorageKey", "audioStorageKey"] as const;
-
-function collectFilmAssetKey(asset: FilmDocument["assets"][number] | undefined, keys: Set<string>): void {
-  if (asset?.mediaStorageKey) keys.add(asset.mediaStorageKey);
-}
-
 function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[] {
   const keys = new Set<string>();
   for (const node of project.nodes) {
@@ -121,36 +112,7 @@ function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[
     }
   }
 
-  for (const shot of film?.shots ?? []) {
-    if (shot.imageStorageKey) keys.add(shot.imageStorageKey);
-    if (shot.firstFrameStorageKey) keys.add(shot.firstFrameStorageKey);
-    if (shot.videoStorageKey) keys.add(shot.videoStorageKey);
-    if (shot.audioStorageKey) keys.add(shot.audioStorageKey);
-  }
-  for (const asset of film?.assets ?? []) {
-    collectFilmAssetKey(asset, keys);
-  }
-  for (const dialogue of film?.dialogues ?? []) {
-    if (dialogue.audioStorageKey) keys.add(dialogue.audioStorageKey);
-  }
-  for (const task of film?.tasks ?? []) {
-    for (const asset of task.snapshot?.identityVersions ?? []) collectFilmAssetKey(asset, keys);
-    collectFilmAssetKey(task.snapshot?.styleVersion, keys);
-    for (const key of task.snapshot?.referenceStorageKeys ?? []) keys.add(key);
-  }
-  for (const track of film?.timeline.tracks ?? []) {
-    for (const clip of track.clips) if (isFilmStorageKey(clip.source)) keys.add(clip.source);
-  }
-  for (const deliverable of film?.deliverables ?? []) {
-    if (deliverable.storageKey) keys.add(deliverable.storageKey);
-  }
-  for (const version of film?.versions ?? []) {
-    if (version.entityType !== "shot") continue;
-    for (const field of filmShotMediaFields) {
-      const key = version.snapshot[field];
-      if (typeof key === "string") keys.add(key);
-    }
-  }
+  if (film) for (const key of collectFilmStorageKeys(film)) keys.add(key);
   return [...keys];
 }
 
@@ -421,7 +383,7 @@ export function parseBundleFilm(value: unknown, projectId: string): FilmDocument
   uniqueRecords(versions, "entity version");
   for (const value of versions) {
     const version = value as Record<string, unknown>;
-    if (!["shot", "asset", "timeline"].includes(String(version.entityType)) ||
+    if (!["scene", "shot", "dialogue", "asset", "timeline"].includes(String(version.entityType)) ||
       !version.snapshot || typeof version.snapshot !== "object" || Array.isArray(version.snapshot) ||
       JSON.stringify(version.snapshot).length > 256_000) {
       throw new Error("Invalid film entity version");
@@ -562,51 +524,7 @@ function remapFilm(
     if (!result) throw new Error(`Bundle media declaration is missing: ${storageKey}`);
     return result.storageKey;
   };
-  const remapAsset = (asset: FilmDocument["assets"][number]) => ({
-    ...asset,
-    mediaStorageKey: replace(asset.mediaStorageKey),
-  });
-  return {
-    ...film,
-    shots: film.shots.map((shot) => ({
-      ...shot,
-      imageStorageKey: replace(shot.imageStorageKey),
-      firstFrameStorageKey: replace(shot.firstFrameStorageKey),
-      videoStorageKey: replace(shot.videoStorageKey),
-      audioStorageKey: replace(shot.audioStorageKey),
-    })),
-    dialogues: film.dialogues?.map((dialogue) => ({
-      ...dialogue,
-      audioStorageKey: replace(dialogue.audioStorageKey),
-    })),
-    assets: film.assets.map(remapAsset),
-    tasks: film.tasks.map((task) => !task.snapshot ? task : ({
-      ...task,
-      snapshot: {
-        ...task.snapshot,
-        identityVersions: task.snapshot.identityVersions.map(remapAsset),
-        styleVersion: task.snapshot.styleVersion ? remapAsset(task.snapshot.styleVersion) : undefined,
-        referenceStorageKeys: task.snapshot.referenceStorageKeys.map((key) => replace(key)!),
-      },
-    })),
-    timeline: {
-      ...film.timeline,
-      tracks: film.timeline.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) => ({ ...clip, source: isFilmStorageKey(clip.source) ? replace(clip.source)! : clip.source })),
-      })),
-    },
-    deliverables: film.deliverables.map((deliverable) => ({
-      ...deliverable,
-      storageKey: replace(deliverable.storageKey),
-    })),
-    versions: film.versions?.map((version) => version.entityType !== "shot" ? version : ({
-      ...version,
-      snapshot: Object.fromEntries(Object.entries(version.snapshot).map(([field, value]) =>
-        filmShotMediaFields.includes(field as typeof filmShotMediaFields[number]) && typeof value === "string"
-          ? [field, replace(value)] : [field, value])),
-    })),
-  };
+  return remapFilmStorageKeys(film, (key) => replace(key)!);
 }
 
 export async function importProjectBundle(

@@ -107,22 +107,25 @@ func filmTaskTargetID(task filmTask) string {
 }
 
 type filmStageGenerationParameters struct {
-	Executor    string   `json:"executor"`
-	ProjectID   string   `json:"projectId"`
-	Stage       string   `json:"stage"`
-	RequestHash string   `json:"requestHash"`
-	ChildJobIDs []string `json:"childJobIds"`
+	Executor         string   `json:"executor"`
+	ProjectID        string   `json:"projectId"`
+	Stage            string   `json:"stage"`
+	RequestHash      string   `json:"requestHash"`
+	ChildJobIDs      []string `json:"childJobIds"`
+	ChildCredits     []int    `json:"childCredits,omitempty"`
+	EstimatedCredits int      `json:"estimatedCredits,omitempty"`
 }
 
 type filmStageGenerationResult struct {
-	Outcome   string  `json:"outcome"`
-	Total     int     `json:"total"`
-	Queued    int     `json:"queued"`
-	Running   int     `json:"running"`
-	Succeeded int     `json:"succeeded"`
-	Failed    int     `json:"failed"`
-	Cancelled int     `json:"cancelled"`
-	Progress  float64 `json:"progress"`
+	Outcome       string  `json:"outcome"`
+	Total         int     `json:"total"`
+	Queued        int     `json:"queued"`
+	Running       int     `json:"running"`
+	Succeeded     int     `json:"succeeded"`
+	Failed        int     `json:"failed"`
+	Cancelled     int     `json:"cancelled"`
+	Progress      float64 `json:"progress"`
+	ActualCredits int     `json:"actualCredits,omitempty"`
 }
 
 func validFilmIdempotencyKey(value string) bool {
@@ -276,10 +279,20 @@ func filmGenerationTargetRequestHash(projectID, stage string, targets []filmGene
 	return hashGenerationInput(canonical)
 }
 
-func buildFilmStageGenerationJob(projectID, stage, parentJobID, requestHash, now string, childJobIDs []string) (store.GenerationJob, error) {
+func buildFilmStageGenerationJob(projectID, stage, parentJobID, requestHash, now string, childJobIDs []string, childCredits []int) (store.GenerationJob, error) {
+	if len(childCredits) != len(childJobIDs) {
+		return store.GenerationJob{}, errors.New("Film stage child credit quote is invalid")
+	}
+	estimatedCredits := 0
+	for _, credits := range childCredits {
+		if credits < 1 || estimatedCredits > 1_000_000_000-credits {
+			return store.GenerationJob{}, errors.New("Film stage child credit quote is invalid")
+		}
+		estimatedCredits += credits
+	}
 	parameters, err := json.Marshal(filmStageGenerationParameters{
 		Executor: "film-stage", ProjectID: projectID, Stage: stage, RequestHash: requestHash,
-		ChildJobIDs: append([]string(nil), childJobIDs...),
+		ChildJobIDs: append([]string(nil), childJobIDs...), ChildCredits: append([]int(nil), childCredits...), EstimatedCredits: estimatedCredits,
 	})
 	if err != nil {
 		return store.GenerationJob{}, err
@@ -309,10 +322,17 @@ func aggregateFilmStageGenerationJob(parent store.GenerationJob, children []stor
 	result := filmStageGenerationResult{Total: len(parameters.ChildJobIDs)}
 	progressUnits := 0.0
 	latestUpdatedAt := parent.UpdatedAt
-	for _, childID := range parameters.ChildJobIDs {
+	for childIndex, childID := range parameters.ChildJobIDs {
 		child, ok := byID[childID]
 		if !ok {
 			return store.GenerationJob{}, errors.New("Film stage child job is unavailable")
+		}
+		expectedCredits := 0
+		if len(parameters.ChildCredits) == len(parameters.ChildJobIDs) {
+			expectedCredits = parameters.ChildCredits[childIndex]
+		}
+		if !filmStageChildMatches(parent.ID, parameters, child, expectedCredits) {
+			return store.GenerationJob{}, errors.New("Film stage child job binding is invalid")
 		}
 		if child.UpdatedAt > latestUpdatedAt {
 			latestUpdatedAt = child.UpdatedAt
@@ -325,6 +345,9 @@ func aggregateFilmStageGenerationJob(parent store.GenerationJob, children []stor
 			progressUnits += 0.5
 		case "succeeded":
 			result.Succeeded++
+			if len(parameters.ChildCredits) == len(parameters.ChildJobIDs) {
+				result.ActualCredits += parameters.ChildCredits[childIndex]
+			}
 			progressUnits++
 		case "failed":
 			result.Failed++
@@ -358,6 +381,33 @@ func aggregateFilmStageGenerationJob(parent store.GenerationJob, children []stor
 	parent.Result, _ = json.Marshal(result)
 	parent.UpdatedAt = latestUpdatedAt
 	return parent, nil
+}
+
+func filmStageChildMatches(parentID string, parameters filmStageGenerationParameters, child store.GenerationJob, expectedCredits int) bool {
+	binding, requestHash := filmJobBinding(child)
+	credits, hasCredits := filmGenerationJobCreditQuote(child)
+	quoteMatches := expectedCredits == 0 || hasCredits && credits == expectedCredits
+	return child.ProjectID == parameters.ProjectID && child.Kind == filmStageGenerationKind(parameters.Stage) && binding != nil && binding.ProjectID == parameters.ProjectID &&
+		binding.ParentGenerationJobID == parentID && binding.Stage == parameters.Stage && binding.RequestHash == parameters.RequestHash && requestHash == parameters.RequestHash && quoteMatches
+}
+
+func filmGenerationJobCreditQuote(job store.GenerationJob) (int, bool) {
+	switch job.Kind {
+	case "image":
+		var parameters persistedImageJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.EstimatedCredits < 1 {
+			return 0, false
+		}
+		return parameters.EstimatedCredits, true
+	case "video", "audio":
+		var parameters persistedMediaJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.EstimatedCredits < 1 {
+			return 0, false
+		}
+		return parameters.EstimatedCredits, true
+	default:
+		return 0, false
+	}
 }
 
 func (s *Server) filmStageGenerationView(ctx context.Context, tenantID string, parent store.GenerationJob) store.GenerationJob {
@@ -545,6 +595,38 @@ func buildFilmGenerationTargetJob(stage string, shot filmShot, dialogue *filmDia
 		return store.GenerationJob{}, errors.New("film generation stage is unsupported")
 	}
 	return job, nil
+}
+
+func setFilmGenerationJobCreditQuote(job *store.GenerationJob, credits int) error {
+	if credits < 1 || credits > 1_000_000_000 {
+		return errors.New("Film generation credit quote is invalid")
+	}
+	switch job.Kind {
+	case "text":
+		var parameters persistedTextJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil {
+			return errors.New("Film text generation parameters are invalid")
+		}
+		parameters.EstimatedCredits = credits
+		job.Parameters, _ = json.Marshal(parameters)
+	case "image":
+		var parameters persistedImageJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil {
+			return errors.New("Film image generation parameters are invalid")
+		}
+		parameters.EstimatedCredits = credits
+		job.Parameters, _ = json.Marshal(parameters)
+	case "video", "audio":
+		var parameters persistedMediaJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil {
+			return errors.New("Film media generation parameters are invalid")
+		}
+		parameters.EstimatedCredits = credits
+		job.Parameters, _ = json.Marshal(parameters)
+	default:
+		return errors.New("Film generation kind is invalid")
+	}
+	return nil
 }
 
 func buildFilmGenerationSnapshot(document filmDocument, shot filmShot, providerID, model string, config filmGenerationConfig, now string) *filmGenerationSnapshot {
@@ -832,14 +914,9 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 	for index, target := range targets {
 		childJobIDs[index] = stableFilmID("job", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), filmGenerationTargetID(target))
 	}
-	parentJob, buildParentErr := buildFilmStageGenerationJob(document.ProjectID, stage, parentJobID, requestHash, now, childJobIDs)
-	if buildParentErr != nil {
-		writeFilmError(w, http.StatusInternalServerError, "generation_request_invalid", "Film stage parent job could not be created")
-		return
-	}
 	reservations := make([]store.FilmGenerationReservation, 0, len(targets)+1)
-	reservations = append(reservations, store.FilmGenerationReservation{Job: parentJob, Units: 0, UsageMeta: json.RawMessage(`{}`)})
-	for _, target := range targets {
+	childCredits := make([]int, len(targets))
+	for targetIndex, target := range targets {
 		shot := target.Shot
 		jobShot, jobConfig := shot, input.Config
 		if stage == "audio" {
@@ -870,6 +947,13 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 			return
 		}
+		unitCredits, creditErr := s.store.GetModelCreditCost(r.Context(), tenantID, selectedModel)
+		if creditErr != nil || unitCredits < 1 || unitCredits > 1_000_000_000 {
+			s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
+			writeFilmError(w, http.StatusServiceUnavailable, "billing_unavailable", "Film generation credit quote is unavailable")
+			return
+		}
+		childCredits[targetIndex] = unitCredits
 		capabilityVersion, generationMode := "", ""
 		if snapshot != nil {
 			mediaCatalog, catalogErr := s.buildMediaCapabilityCatalog(r.Context(), tenantID)
@@ -900,6 +984,10 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			writeFilmError(w, http.StatusUnprocessableEntity, "generation_request_invalid", buildErr.Error())
 			return
 		}
+		if quoteErr := setFilmGenerationJobCreditQuote(&job, unitCredits); quoteErr != nil {
+			writeFilmError(w, http.StatusInternalServerError, "generation_request_invalid", quoteErr.Error())
+			return
+		}
 		dialogueID := ""
 		if target.Dialogue != nil {
 			dialogueID = target.Dialogue.ID
@@ -917,14 +1005,23 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			return
 		} else {
 			meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind, "executor": serverExecutorMarker, "filmProjectId": document.ProjectID, "shotId": shot.ID, "dialogueId": dialogueID, "parentJobId": parentJobID})
-			reservations = append(reservations, store.FilmGenerationReservation{Job: job, Units: 1, UsageMeta: meta})
+			expectedCredits := unitCredits
+			reservations = append(reservations, store.FilmGenerationReservation{Job: job, Units: 1, UsageMeta: meta, ExpectedCredits: &expectedCredits})
 		}
 		title := "Generate " + stage + " for " + shot.Title
 		if target.Dialogue != nil {
 			title = "Generate dialogue audio for " + shot.Title
 		}
-		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, DialogueID: dialogueID, Title: title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, ParentGenerationJobID: parentJobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: buildFilmGenerationTargetSnapshotWithCapability(document, jobShot, target.Dialogue, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)})
+		taskSnapshot := buildFilmGenerationTargetSnapshotWithCapability(document, jobShot, target.Dialogue, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)
+		taskSnapshot.EstimatedCredits = unitCredits
+		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, DialogueID: dialogueID, Title: title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, ParentGenerationJobID: parentJobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: taskSnapshot})
 	}
+	parentJob, buildParentErr := buildFilmStageGenerationJob(document.ProjectID, stage, parentJobID, requestHash, now, childJobIDs, childCredits)
+	if buildParentErr != nil {
+		writeFilmError(w, http.StatusInternalServerError, "generation_request_invalid", "Film stage parent job could not be created")
+		return
+	}
+	reservations = append([]store.FilmGenerationReservation{{Job: parentJob, Units: 0, UsageMeta: json.RawMessage(`{}`)}}, reservations...)
 	if len(next.Tasks) > 1_000 {
 		s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 		writeFilmError(w, http.StatusUnprocessableEntity, "film_task_limit", "film task retention limit reached")
@@ -972,7 +1069,7 @@ func validFilmGenerationResult(ctx context.Context, server *Server, tenantID, st
 	if item.StorageKey == "" || item.Bytes <= 0 || item.MIMEType == "" {
 		return mediaGenerationItem{}, errors.New("generation result media metadata is invalid")
 	}
-	expectedPrefix := map[string]string{"storyboard": "image/", "first_frame": "image/", "audio": "audio/", "video": "video/"}[stage]
+	expectedPrefix := map[string]string{"storyboard": "image/", "first_frame": "image/", "last_frame": "image/", "audio": "audio/", "video": "video/"}[stage]
 	if !strings.HasPrefix(item.MIMEType, expectedPrefix) {
 		return mediaGenerationItem{}, errors.New("generation result media type does not match the stage")
 	}

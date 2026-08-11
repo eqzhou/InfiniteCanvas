@@ -51,10 +51,18 @@ describe("unified task center", () => {
   test("shows bounded Film parent progress and outcome counts without exposing raw results", () => {
     const items = buildTaskCenterItems([job({
       id: "parent", kind: "film-stage", status: "running",
-      parameters: { executor: "film-stage", stage: "video", childJobIds: ["a", "b", "c"] },
-      result: { progress: 0.5, total: 3, succeeded: 1, failed: 1, running: 1, privateProviderPayload: "must-not-leak" },
+      parameters: { executor: "film-stage", stage: "video", childJobIds: ["a", "b", "c"], estimatedCredits: 12 },
+      result: { progress: 0.5, total: 3, succeeded: 1, failed: 1, running: 1, actualCredits: 4, privateProviderPayload: "must-not-leak" },
     })]);
-    expect(items[0]).toMatchObject({ progress: 0.5, total: 3, succeeded: 1, failed: 1 });
+    expect(items[0]).toMatchObject({ progress: 0.5, total: 3, succeeded: 1, failed: 1, estimatedCredits: 12, actualCredits: 4 });
     expect(JSON.stringify(items)).not.toContain("must-not-leak");
+  });
+
+  test("shows the frozen quote and terminal net cost for Film text tasks", () => {
+    const items = buildTaskCenterItems([job({
+      id: "text-film", kind: "text", status: "succeeded",
+      parameters: { executor: "server", estimatedCredits: 7, film: { stage: "decompose", taskId: "task-text" } },
+    })]);
+    expect(items[0]).toMatchObject({ estimatedCredits: 7, actualCredits: 7 });
   });
 });

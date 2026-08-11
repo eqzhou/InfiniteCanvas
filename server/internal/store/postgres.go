@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 21
+const currentSchemaVersion = 22
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -258,7 +258,118 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 22 {
+		if err := migrateV22(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV22(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 22, `
+ALTER TABLE openboard_film_entities
+  ADD COLUMN IF NOT EXISTS aggregate_revision integer NOT NULL DEFAULT 1 CHECK (aggregate_revision > 0),
+  ADD COLUMN IF NOT EXISTS position integer NOT NULL DEFAULT 0 CHECK (position >= 0),
+  ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT '';
+UPDATE openboard_film_entities entity
+SET aggregate_revision=project.revision,
+    position=CASE WHEN COALESCE(entity.document->>'order','') ~ '^[0-9]+$'
+      THEN LEAST(2147483647,(entity.document->>'order')::numeric)::integer ELSE 0 END,
+    status=COALESCE(entity.document->>'status','')
+FROM openboard_film_projects project
+WHERE entity.tenant_id=project.tenant_id AND entity.project_id=project.project_id;
+UPDATE openboard_film_entities SET entity_type='stage_approval' WHERE entity_type='stage';
+INSERT INTO openboard_film_entities
+  (tenant_id,project_id,entity_type,entity_id,revision,aggregate_revision,position,status,document)
+SELECT tenant_id,project_id,'projection','projection',
+  CASE WHEN COALESCE(document->>'projectionRevision','') ~ '^[1-9][0-9]*$'
+    THEN LEAST(2147483647,(document->>'projectionRevision')::numeric)::integer ELSE 1 END,
+  revision,0,'',jsonb_build_object('revision',
+    CASE WHEN COALESCE(document->>'projectionRevision','') ~ '^[1-9][0-9]*$'
+      THEN LEAST(2147483647,(document->>'projectionRevision')::numeric)::integer ELSE 1 END)
+FROM openboard_film_projects
+ON CONFLICT (tenant_id,project_id,entity_type,entity_id) DO UPDATE
+SET revision=EXCLUDED.revision,aggregate_revision=EXCLUDED.aggregate_revision,
+    position=0,status='',document=EXCLUDED.document,updated_at=clock_timestamp();
+ALTER TABLE openboard_film_entities DROP CONSTRAINT IF EXISTS openboard_film_entities_type_check;
+ALTER TABLE openboard_film_entities ADD CONSTRAINT openboard_film_entities_type_check CHECK (entity_type IN (
+  'source','episode','scene','shot','dialogue','asset','stage_approval','task','quality_report',
+  'timeline','deliverable','adoption','entity_version','projection'
+));
+CREATE INDEX IF NOT EXISTS openboard_film_entities_status_idx
+  ON openboard_film_entities (tenant_id,project_id,entity_type,status,position,entity_id);
+CREATE INDEX IF NOT EXISTS openboard_film_entities_aggregate_revision_idx
+  ON openboard_film_entities (tenant_id,project_id,aggregate_revision);
+CREATE TABLE IF NOT EXISTS openboard_film_entity_relations (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  relation_type text NOT NULL CHECK (relation_type IN (
+    'scene_episode','shot_scene','dialogue_shot','asset_parent','asset_episode','asset_scene',
+    'asset_shot','shot_identity','shot_style','dialogue_character','dialogue_voice'
+  )),
+  source_type text NOT NULL,
+  source_id text NOT NULL,
+  target_type text NOT NULL,
+  target_id text NOT NULL,
+  position integer NOT NULL DEFAULT 0 CHECK (position >= 0),
+  aggregate_revision integer NOT NULL CHECK (aggregate_revision > 0),
+  PRIMARY KEY (tenant_id,project_id,relation_type,source_type,source_id,target_type,target_id),
+  FOREIGN KEY (tenant_id,project_id,source_type,source_id)
+    REFERENCES openboard_film_entities (tenant_id,project_id,entity_type,entity_id)
+    ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (tenant_id,project_id,target_type,target_id)
+    REFERENCES openboard_film_entities (tenant_id,project_id,entity_type,entity_id)
+    ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX IF NOT EXISTS openboard_film_entity_relations_source_idx
+  ON openboard_film_entity_relations (tenant_id,project_id,source_type,source_id,relation_type,position);
+CREATE INDEX IF NOT EXISTS openboard_film_entity_relations_target_idx
+  ON openboard_film_entity_relations (tenant_id,project_id,target_type,target_id,relation_type);
+INSERT INTO openboard_film_entity_relations
+  (tenant_id,project_id,relation_type,source_type,source_id,target_type,target_id,position,aggregate_revision)
+SELECT source.tenant_id,source.project_id,edge.relation_type,source.entity_type,source.entity_id,
+  edge.target_type,edge.target_id,edge.position,source.aggregate_revision
+FROM openboard_film_entities source
+CROSS JOIN LATERAL (
+  SELECT 'scene_episode', 'episode', source.document->>'episodeId', 0 WHERE source.entity_type='scene'
+  UNION ALL SELECT 'shot_scene', 'scene', source.document->>'sceneId', 0 WHERE source.entity_type='shot'
+  UNION ALL SELECT 'dialogue_shot', 'shot', source.document->>'shotId', 0 WHERE source.entity_type='dialogue'
+  UNION ALL SELECT 'asset_parent', 'asset', source.document->>'parentAssetId', 0
+    WHERE source.entity_type='asset' AND COALESCE(source.document->>'parentAssetId','')<>''
+  UNION ALL SELECT 'shot_style', 'asset', source.document->>'styleAssetId', 0
+    WHERE source.entity_type='shot' AND COALESCE(source.document->>'styleAssetId','')<>''
+  UNION ALL SELECT 'dialogue_character', 'asset', source.document->>'characterAssetId', 0
+    WHERE source.entity_type='dialogue' AND COALESCE(source.document->>'characterAssetId','')<>''
+  UNION ALL SELECT 'dialogue_voice', 'asset', source.document->>'voiceAssetId', 0
+    WHERE source.entity_type='dialogue' AND COALESCE(source.document->>'voiceAssetId','')<>''
+) edge(relation_type,target_type,target_id,position)
+JOIN openboard_film_entities target ON target.tenant_id=source.tenant_id AND target.project_id=source.project_id
+  AND target.entity_type=edge.target_type AND target.entity_id=edge.target_id
+ON CONFLICT DO NOTHING;
+INSERT INTO openboard_film_entity_relations
+  (tenant_id,project_id,relation_type,source_type,source_id,target_type,target_id,position,aggregate_revision)
+SELECT source.tenant_id,source.project_id,edge.relation_type,source.entity_type,source.entity_id,
+  edge.target_type,edge.target_id,edge.position,source.aggregate_revision
+FROM openboard_film_entities source
+CROSS JOIN LATERAL (
+  SELECT 'shot_identity','asset',item.value,item.ordinality::integer-1
+    FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(source.document->'identityVersionIds')='array' THEN source.document->'identityVersionIds' ELSE '[]'::jsonb END) WITH ORDINALITY item(value,ordinality)
+    WHERE source.entity_type='shot'
+  UNION ALL SELECT 'asset_episode','episode',item.value,item.ordinality::integer-1
+    FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(source.document->'episodeIds')='array' THEN source.document->'episodeIds' ELSE '[]'::jsonb END) WITH ORDINALITY item(value,ordinality)
+    WHERE source.entity_type='asset'
+  UNION ALL SELECT 'asset_scene','scene',item.value,item.ordinality::integer-1
+    FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(source.document->'sceneIds')='array' THEN source.document->'sceneIds' ELSE '[]'::jsonb END) WITH ORDINALITY item(value,ordinality)
+    WHERE source.entity_type='asset'
+  UNION ALL SELECT 'asset_shot','shot',item.value,item.ordinality::integer-1
+    FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(source.document->'shotIds')='array' THEN source.document->'shotIds' ELSE '[]'::jsonb END) WITH ORDINALITY item(value,ordinality)
+    WHERE source.entity_type='asset'
+) edge(relation_type,target_type,target_id,position)
+JOIN openboard_film_entities target ON target.tenant_id=source.tenant_id AND target.project_id=source.project_id
+  AND target.entity_type=edge.target_type AND target.entity_id=edge.target_id
+ON CONFLICT DO NOTHING;
+`)
 }
 
 func migrateV21(ctx context.Context, connection *pgxpool.Conn) error {
@@ -1359,55 +1470,28 @@ func (s *PostgresStore) GetFilmProject(ctx context.Context, tenantID, projectID 
 	return record, nil
 }
 
-func syncFilmEntityProjection(ctx context.Context, tx pgx.Tx, tenantID, projectID string, document []byte) error {
-	var aggregate map[string]json.RawMessage
-	if json.Unmarshal(document, &aggregate) != nil {
-		return ErrInvalidInput
+func syncFilmEntityProjection(ctx context.Context, tx pgx.Tx, tenantID, projectID string, aggregateRevision int, document []byte) error {
+	entities, relations, err := buildFilmRelationalProjection(document, aggregateRevision)
+	if err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM openboard_film_entities WHERE tenant_id=$1 AND project_id=$2`, tenantID, projectID); err != nil {
 		return err
 	}
-	collections := map[string]string{
-		"episodes": "episode", "scenes": "scene", "shots": "shot", "dialogues": "dialogue", "assets": "asset",
-		"stages": "stage", "tasks": "task", "qualityReports": "quality_report", "deliverables": "deliverable",
-		"adoptions": "adoption", "versions": "entity_version",
-	}
-	for field, entityType := range collections {
-		var values []json.RawMessage
-		if len(aggregate[field]) == 0 {
-			continue
-		}
-		if json.Unmarshal(aggregate[field], &values) != nil {
-			return ErrInvalidInput
-		}
-		for _, raw := range values {
-			var identity struct {
-				ID       string `json:"id"`
-				Revision int    `json:"revision"`
-			}
-			if json.Unmarshal(raw, &identity) != nil || identity.ID == "" || identity.Revision < 1 {
-				return ErrInvalidInput
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_entities (tenant_id,project_id,entity_type,entity_id,revision,document) VALUES ($1,$2,$3,$4,$5,$6)`, tenantID, projectID, entityType, identity.ID, identity.Revision, raw); err != nil {
-				return err
-			}
+	for _, entity := range entities {
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_entities
+			(tenant_id,project_id,entity_type,entity_id,revision,aggregate_revision,position,status,document)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, tenantID, projectID, entity.EntityType, entity.EntityID,
+			entity.Revision, entity.AggregateRevision, entity.Position, entity.Status, entity.Document); err != nil {
+			return err
 		}
 	}
-	for field, entityType := range map[string]string{"source": "source", "timeline": "timeline"} {
-		raw := aggregate[field]
-		if len(raw) == 0 {
-			continue
-		}
-		var identity struct {
-			Revision int `json:"revision"`
-		}
-		if json.Unmarshal(raw, &identity) != nil || identity.Revision < 0 {
-			return ErrInvalidInput
-		}
-		if identity.Revision == 0 {
-			identity.Revision = 1
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_entities (tenant_id,project_id,entity_type,entity_id,revision,document) VALUES ($1,$2,$3,$3,$4,$5)`, tenantID, projectID, entityType, identity.Revision, raw); err != nil {
+	for _, relation := range relations {
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_entity_relations
+			(tenant_id,project_id,relation_type,source_type,source_id,target_type,target_id,position,aggregate_revision)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, tenantID, projectID, relation.RelationType,
+			relation.SourceType, relation.SourceID, relation.TargetType, relation.TargetID,
+			relation.Position, relation.AggregateRevision); err != nil {
 			return err
 		}
 	}
@@ -1440,7 +1524,7 @@ func (s *PostgresStore) CreateFilmProject(ctx context.Context, tenantID, project
 	if err != nil {
 		return FilmRecord{}, err
 	}
-	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, record.Revision, document); err != nil {
 		return FilmRecord{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1491,7 +1575,7 @@ func (s *PostgresStore) CompareAndSwapFilmProject(
 	if err != nil {
 		return FilmRecord{}, err
 	}
-	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, record.Revision, document); err != nil {
 		return FilmRecord{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1657,7 +1741,7 @@ func (s *PostgresStore) createFilmGenerationBatchOnce(
 			return FilmRecord{}, err
 		}
 	}
-	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, record.Revision, document); err != nil {
 		return FilmRecord{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1720,7 +1804,7 @@ func (s *PostgresStore) RestoreFilmProject(
 	if err != nil {
 		return FilmRecord{}, err
 	}
-	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
+	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, record.Revision, document); err != nil {
 		return FilmRecord{}, err
 	}
 	var prior any
@@ -1795,7 +1879,7 @@ func (s *PostgresStore) RollbackFilmProject(
 		if err != nil {
 			return FilmRecord{}, false, err
 		}
-		if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, priorDocument); err != nil {
+		if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, record.Revision, priorDocument); err != nil {
 			return FilmRecord{}, false, err
 		}
 		record.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
@@ -2037,7 +2121,7 @@ func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, sna
 			(tenant_id,project_id,revision,document) VALUES ($1,$2,$3,$4)`, tenantID, film.ProjectID, revision, film.Document); err != nil {
 			return err
 		}
-		if err := syncFilmEntityProjection(ctx, tx, tenantID, film.ProjectID, film.Document); err != nil {
+		if err := syncFilmEntityProjection(ctx, tx, tenantID, film.ProjectID, revision, film.Document); err != nil {
 			return err
 		}
 	}
@@ -2938,6 +3022,9 @@ func (s *PostgresStore) DeleteGenerationJob(ctx context.Context, tenantID, id st
 	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
+	if err := rejectReferencedFilmStageChildren(ctx, tx, tenantID, []string{id}); err != nil {
+		return err
+	}
 	// Soft-delete: hide from history while preserving tombstone for multi-device sync/cleanup.
 	result, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs SET
 		status='deleted', error=CASE WHEN error='' THEN '已删除' ELSE error END,
@@ -2995,6 +3082,9 @@ func (s *PostgresStore) DeleteGenerationJobs(ctx context.Context, tenantID strin
 	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return 0, err
 	}
+	if err := rejectReferencedFilmStageChildren(ctx, tx, tenantID, unique); err != nil {
+		return 0, err
+	}
 	// Soft-delete selected history rows; cancel any active leases first.
 	result, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs SET
 		status='deleted', error=CASE WHEN status IN ('queued','running') THEN '已批量删除' WHEN error='' THEN '已删除' ELSE error END,
@@ -3008,6 +3098,27 @@ func (s *PostgresStore) DeleteGenerationJobs(ctx context.Context, tenantID strin
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+func rejectReferencedFilmStageChildren(ctx context.Context, tx pgx.Tx, tenantID string, deleting []string) error {
+	var referenced bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1
+		FROM openboard_generation_jobs parent
+		CROSS JOIN LATERAL jsonb_array_elements_text(
+			CASE WHEN jsonb_typeof(parent.parameters->'childJobIds') = 'array'
+				THEN parent.parameters->'childJobIds' ELSE '[]'::jsonb END
+		) AS child(id)
+		WHERE parent.tenant_id=$1 AND parent.kind='film-stage' AND parent.status <> 'deleted'
+			AND NOT (parent.id = ANY($2)) AND child.id = ANY($2)
+	)`, tenantID, deleting).Scan(&referenced)
+	if err != nil {
+		return err
+	}
+	if referenced {
+		return ErrConflict
+	}
+	return nil
 }
 
 func (s *PostgresStore) DeleteGenerationJobsForProject(ctx context.Context, tenantID, projectID string) (int64, error) {

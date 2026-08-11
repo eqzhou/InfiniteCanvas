@@ -90,6 +90,46 @@ describe("manuscript preflight", () => {
     expect(html).toContain("预检不会写入影视事实");
     expect(html).not.toContain("导入并拆解");
   });
+
+  test("explains why PDF import is unavailable without hiding other formats", () => {
+    const document = createFilmDocument("film-pdf-diagnostic", "2026-08-08T00:00:00.000Z");
+    const html = renderToStaticMarkup(<ManuscriptPanel
+      document={document}
+      capabilities={{
+        available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: false,
+        pdfDiagnostic: "pdftotext executable is unavailable", fileUploadImport: true, maxImportBytes: 50 * 1024 * 1024,
+        stageGeneration: true, generationJobs: true, generationStages: [], assetBundleExport: true,
+        mp4Export: false, mp4Diagnostic: "", agentOperations: [],
+      }}
+      manuscript=""
+      busy={false}
+      onDraft={() => {}}
+      onPreflight={async () => { throw new Error("unused"); }}
+      onImportText={async () => true}
+      onImportFile={async () => true}
+    />);
+
+    expect(html).toContain("PDF 导入不可用");
+    expect(html).toContain("pdftotext executable is unavailable");
+    expect(html).toContain("data-testid=\"film-format-md\"");
+  });
+
+  test("surfaces persisted import failures and blocks a persisted running import", () => {
+    const document = createFilmDocument("film-persisted-import", "2026-08-08T00:00:00.000Z");
+    document.source.importStatus = { id: "import-1", status: "running", format: "pdf", originalName: "script.pdf", startedAt: document.createdAt, updatedAt: document.createdAt };
+    const capabilities = {
+      available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: true,
+      fileUploadImport: true, maxImportBytes: 50 * 1024 * 1024, stageGeneration: true, generationJobs: true,
+      generationStages: [], assetBundleExport: true, mp4Export: false, mp4Diagnostic: "", agentOperations: [],
+    } as const;
+    const running = renderToStaticMarkup(<ManuscriptPanel document={document} capabilities={capabilities} manuscript="text" busy={false} onDraft={() => {}} onPreflight={async () => { throw new Error("unused"); }} onImportText={async () => true} onImportFile={async () => true} />);
+    expect(running).toContain("服务端正在解析 script.pdf");
+    expect(running).toContain("disabled=\"\"");
+
+    document.source.importStatus = { ...document.source.importStatus, status: "failed", completedAt: document.updatedAt, error: "PDF parser stopped" };
+    const failed = renderToStaticMarkup(<ManuscriptPanel document={document} capabilities={capabilities} manuscript="" busy={false} onDraft={() => {}} onPreflight={async () => { throw new Error("unused"); }} onImportText={async () => true} onImportFile={async () => true} />);
+    expect(failed).toContain("PDF parser stopped");
+  });
 });
 
 describe("AI episode script panel", () => {

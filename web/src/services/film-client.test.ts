@@ -6,6 +6,7 @@ import {
   resolveFilmStageSelection,
   listFilmGenerationJobs,
   loadFilmCapabilities,
+  loadFilmImportStatus,
   loadFilmStatus,
   normalizeFilmCapabilities,
   requestFilmStageRun,
@@ -25,6 +26,7 @@ import {
   listFilmDirectorCaptures,
   restoreFilmProduction,
   restoreFilmStructureVersion,
+  resolveFilmEntityRevision,
   updateFilmAsset,
 } from "./film-client";
 import { createFilmDocument } from "@/lib/film-document";
@@ -33,6 +35,23 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe("film client", () => {
+  test("resolves every persisted restorable entity revision without enabling unknown version types", () => {
+    const document = createFilmDocument("film-versions");
+    document.scenes = [{ id: "scene-1", revision: 3, episodeId: "episode-1", order: 0, heading: "Scene", synopsis: "", status: "draft" }];
+    document.shots = [{ id: "shot-1", revision: 4, sceneId: "scene-1", order: 0, title: "Shot", description: "Action", status: "draft", durationSeconds: 4, aspectRatio: "16:9", identityVersionIds: [] }];
+    document.dialogues = [{ id: "dialogue-1", revision: 5, shotId: "shot-1", order: 0, kind: "dialogue", text: "Line", status: "draft" }];
+    document.assets = [{ id: "asset-1", revision: 6, kind: "identity", title: "Hero", status: "draft" }];
+    document.timeline.revision = 7;
+
+    expect(resolveFilmEntityRevision(document, "scene", "scene-1")).toBe(3);
+    expect(resolveFilmEntityRevision(document, "shot", "shot-1")).toBe(4);
+    expect(resolveFilmEntityRevision(document, "dialogue", "dialogue-1")).toBe(5);
+    expect(resolveFilmEntityRevision(document, "asset", "asset-1")).toBe(6);
+    expect(resolveFilmEntityRevision(document, "timeline", "timeline")).toBe(7);
+    expect(resolveFilmEntityRevision(document, "unknown", "asset-1")).toBeUndefined();
+    expect(resolveFilmEntityRevision(document, "scene", "missing")).toBeUndefined();
+  });
+
   test("loads a bounded film response through authenticated API routing", async () => {
     const fetcher = mock(async (url: RequestInfo | URL) => new Response(JSON.stringify({
       data: {
@@ -47,6 +66,21 @@ describe("film client", () => {
 
     expect(status.document.projectId).toBe("film-1");
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/status");
+  });
+
+  test("loads and validates persisted manuscript parsing status", async () => {
+    const fetcher = mock(async () => new Response(JSON.stringify({ data: {
+      id: "import-1", status: "failed", format: "pdf", originalName: "script.pdf",
+      startedAt: "2026-08-11T01:00:00Z", updatedAt: "2026-08-11T01:00:01Z",
+      completedAt: "2026-08-11T01:00:01Z", error: "parsing was interrupted",
+    } }), { status: 200 }));
+    globalThis.fetch = fetcher as typeof fetch;
+
+    const status = await loadFilmImportStatus("film-1");
+
+    expect(status.status).toBe("failed");
+    expect(status.error).toContain("interrupted");
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/film/projects/film-1/source/import/status");
   });
 
   test("rejects unsafe project ids before a network request", async () => {

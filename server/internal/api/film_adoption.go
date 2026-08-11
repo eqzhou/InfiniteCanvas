@@ -89,6 +89,9 @@ func (s *Server) adoptFilmCanvasMedia(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	record, document, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
 		next := cloneFilmDocument(document)
+		if len(next.Versions) >= 1_000 {
+			return filmDocument{}, errors.New("film entity version limit reached")
+		}
 		adoption := filmMediaAdoption{
 			ID:       stableFilmID("adoption", document.ProjectID, input.TargetType, input.TargetID, input.TargetField, input.ExpectedRevision, input.SourceNodeID),
 			Revision: 1, TargetType: input.TargetType, TargetID: input.TargetID, TargetField: input.TargetField,
@@ -105,6 +108,11 @@ func (s *Server) adoptFilmCanvasMedia(w http.ResponseWriter, r *http.Request) {
 				if shot.Revision != input.ExpectedRevision {
 					return filmDocument{}, errors.New("adoption revision conflict")
 				}
+				snapshot, snapshotErr := json.Marshal(shot)
+				if snapshotErr != nil {
+					return filmDocument{}, snapshotErr
+				}
+				next.Versions = append(next.Versions, filmEntityVersion{ID: stableFilmID("version", "shot", shot.ID, shot.Revision, "canvas", input.SourceNodeID), EntityType: "shot", EntityID: shot.ID, Revision: shot.Revision, Snapshot: snapshot, Reason: "canvas:" + input.SourceNodeID, CreatedAt: now})
 				switch input.TargetField {
 				case "image":
 					shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID = input.StorageKey, digest, version, input.GenerationJobID
@@ -130,6 +138,11 @@ func (s *Server) adoptFilmCanvasMedia(w http.ResponseWriter, r *http.Request) {
 				if asset.Revision != input.ExpectedRevision {
 					return filmDocument{}, errors.New("adoption revision conflict")
 				}
+				snapshot, snapshotErr := json.Marshal(asset)
+				if snapshotErr != nil {
+					return filmDocument{}, snapshotErr
+				}
+				next.Versions = append(next.Versions, filmEntityVersion{ID: stableFilmID("version", "asset", asset.ID, asset.Revision, "canvas", input.SourceNodeID), EntityType: "asset", EntityID: asset.ID, Revision: asset.Revision, Snapshot: snapshot, Reason: "canvas:" + input.SourceNodeID, CreatedAt: now})
 				asset.MediaStorageKey, asset.MediaMIMEType, asset.MediaSHA256, asset.MediaObjectVersion = input.StorageKey, value.Metadata.ContentType, digest, version
 				asset.MediaProvenance, asset.Status, asset.Revision = "canvas:"+input.SourceNodeID, filmStatusNeedsReview, asset.Revision+1
 				next.Assets[index], found = asset, true
@@ -143,6 +156,18 @@ func (s *Server) adoptFilmCanvasMedia(w http.ResponseWriter, r *http.Request) {
 			return filmDocument{}, errors.New("film adoption history limit reached")
 		}
 		next.Adoptions = append(next.Adoptions, adoption)
+		changedStage := filmAssetInvalidationStage("")
+		if input.TargetType == "shot" {
+			changedStage = map[string]string{"image": "storyboard", "first_frame": "first_frame", "last_frame": "first_frame", "video": "video", "audio": "audio"}[input.TargetField]
+		} else {
+			for _, asset := range next.Assets {
+				if asset.ID == input.TargetID {
+					changedStage = filmAssetInvalidationStage(asset.Kind)
+					break
+				}
+			}
+		}
+		next = invalidateFilmStages(next, changedStage, now)
 		next.Revision++
 		next.UpdatedAt = now
 		return next, nil

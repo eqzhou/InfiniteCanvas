@@ -9,12 +9,36 @@ export type FilmEntityStatus =
 export type FilmAssetKind = "character" | "identity" | "location" | "prop" | "style" | "voice";
 export type FilmStageKind = "decompose" | "script" | "storyboard" | "first_frame" | "audio" | "video" | "compose" | "delivery";
 
+export type FilmStyleTemplate = {
+  id: string;
+  origin: "openboard-original";
+  title: string;
+  description: string;
+  stylePrompt: string;
+  aspectRatio: "16:9" | "9:16" | "2.39:1" | "1:1";
+  palette: readonly string[];
+  lighting: string;
+  cameraLanguage: string;
+};
+
 export type FilmSource = {
   revision: number;
   text: string;
   format: "text" | "txt" | "markdown" | "docx" | "pdf";
   originalName?: string;
   importedAt: string;
+  importStatus?: FilmSourceImportStatus;
+};
+
+export type FilmSourceImportStatus = {
+  id?: string;
+  status: "idle" | "running" | "succeeded" | "failed";
+  format?: "txt" | "markdown" | "docx" | "pdf";
+  originalName?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  error?: string;
 };
 
 export type FilmEpisode = {
@@ -314,7 +338,7 @@ export type FilmRepairProposal = {
 
 export type FilmEntityVersion = {
   id: string;
-  entityType: "scene" | "shot" | "asset" | "timeline";
+  entityType: "scene" | "shot" | "dialogue" | "asset" | "timeline";
   entityId: string;
   revision: number;
   snapshot: Record<string, unknown>;

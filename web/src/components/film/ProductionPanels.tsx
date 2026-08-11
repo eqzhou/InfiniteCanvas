@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
 
-import { filmEditorKey } from "@/lib/film-drafts";
 import { buildFilmProjectionDiffs, type FilmProjectionDiff } from "@/lib/film-document";
 import {
   cancelFilmGenerationJob,
@@ -27,6 +26,7 @@ import type { BoardProject } from "@/types/board";
 import { listMediaCapabilities, mediaOptionsForKind, type MediaCapabilityCatalog, type MediaKind } from "@/services/media-capabilities";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { executeFilmAgentRead, type FilmAgentReadTool } from "@/services/film-agent-client";
+import { EpisodeProductionViews } from "./EpisodeProductionViews";
 
 const stageLabels: Record<FilmStageKind, string> = { decompose: "拆解", script: "剧本", storyboard: "分镜", first_frame: "首帧", audio: "声音", video: "画面", compose: "合成", delivery: "交付" };
 
@@ -38,37 +38,7 @@ export function EpisodesPanel({ status, busy, onSaveEpisode, onSaveShot, onCreat
   onSaveDialogue: (dialogue: FilmDialogue, patch: Partial<FilmDialogue>) => void;
   onDeleteDialogue: (dialogue: FilmDialogue) => void;
 }) {
-  const { document } = status;
-  const identities = document.assets.filter((asset) => asset.kind === "identity");
-  const styles = document.assets.filter((asset) => asset.kind === "style");
-  return <WorkbenchSection id="episodes" title="分集、场景与镜头绑定 / Episodes & Shots" wide>
-    <div className="space-y-4">{document.episodes.map((episode) => <article key={filmEditorKey(episode.id, episode.revision)} className="rounded-xl border border-[var(--ob-line)] p-3">
-      <div className="flex gap-2"><input aria-label={`${episode.title} 集标题`} className="ob-input flex-1" defaultValue={episode.title} /><button type="button" className="ob-btn" disabled={busy} onClick={(event) => onSaveEpisode(episode.id, episode.revision, (event.currentTarget.previousElementSibling as HTMLInputElement).value)}><Save size={14} /> 保存集</button></div>
-      {document.scenes.filter((scene) => scene.episodeId === episode.id).map((scene) => <div key={scene.id} className="mt-3 rounded-lg bg-[var(--ob-canvas)] p-3"><strong className="text-sm">{scene.heading}</strong>
-        {document.shots.filter((shot) => shot.sceneId === scene.id).map((shot) => <ShotEditor key={filmEditorKey(shot.id, shot.revision)} shot={shot} dialogues={(document.dialogues ?? []).filter((dialogue) => dialogue.shotId === shot.id)} identities={identities.filter((identity) => (!identity.episodeIds?.length || identity.episodeIds.includes(episode.id)) && (!identity.sceneIds?.length || identity.sceneIds.includes(scene.id)) && (!identity.shotIds?.length || identity.shotIds.includes(shot.id)))} styles={styles} busy={busy} onSave={onSaveShot} onCreateDialogue={onCreateDialogue} onSaveDialogue={onSaveDialogue} onDeleteDialogue={onDeleteDialogue} />)}
-      </div>)}
-    </article>)}</div>
-    {!document.episodes.length ? <p className="text-sm text-[var(--ob-muted)]">导入原稿后会出现分集、场景与镜头。</p> : null}
-  </WorkbenchSection>;
-}
-
-function ShotEditor({ shot, dialogues, identities, styles, busy, onSave, onCreateDialogue, onSaveDialogue, onDeleteDialogue }: { shot: FilmShot; dialogues: FilmDialogue[]; identities: FilmStatus["document"]["assets"]; styles: FilmStatus["document"]["assets"]; busy: boolean; onSave: (shot: FilmShot, patch: Partial<FilmShot>) => void; onCreateDialogue: (shotId: string, kind: FilmDialogue["kind"], text: string) => void; onSaveDialogue: (dialogue: FilmDialogue, patch: Partial<FilmDialogue>) => void; onDeleteDialogue: (dialogue: FilmDialogue) => void }) {
-  const [description, setDescription] = useState(shot.description);
-  const [duration, setDuration] = useState(shot.durationSeconds);
-  const [style, setStyle] = useState(shot.styleAssetId ?? "");
-  const [identityIds, setIdentityIds] = useState(shot.identityVersionIds);
-  return <div className="mt-2 border-t border-[var(--ob-line)] pt-3" data-testid={`film-shot-${shot.id}`}>
-    <div className="grid gap-2 md:grid-cols-[1fr_100px_180px_auto]"><input aria-label={`${shot.title} 描述`} className="ob-input" value={description} onChange={(event) => setDescription(event.target.value)} /><input aria-label={`${shot.title} 秒数`} className="ob-input" type="number" min="0.1" max="900" step="0.1" value={duration} onChange={(event) => setDuration(Number(event.target.value))} /><select aria-label={`${shot.title} 风格绑定`} className="ob-input" value={style} onChange={(event) => setStyle(event.target.value)}><option value="">无风格</option>{styles.map((asset) => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select><button type="button" className="ob-btn" disabled={busy} onClick={() => onSave(shot, { description, durationSeconds: duration, styleAssetId: style, identityVersionIds: identityIds })}><Save size={14} /> 保存镜头</button></div>
-    <fieldset className="mt-2 flex flex-wrap gap-3"><legend className="text-xs text-[var(--ob-muted)]">角色身份版本</legend>{identities.map((asset) => <label key={asset.id} className="text-xs"><input type="checkbox" checked={identityIds.includes(asset.id)} onChange={(event) => setIdentityIds((current) => event.target.checked ? [...current, asset.id] : current.filter((id) => id !== asset.id))} /> {asset.title}</label>)}</fieldset>
-    <div className="mt-3 space-y-2"><div className="flex items-center"><strong className="mr-auto text-xs">对白 / 旁白</strong><button className="ob-btn" disabled={busy} onClick={() => onCreateDialogue(shot.id, "dialogue", "新对白")}>添加对白</button><button className="ob-btn ml-1" disabled={busy} onClick={() => onCreateDialogue(shot.id, "narration", "新旁白")}>添加旁白</button></div>{dialogues.map((dialogue) => <DialogueEditor key={filmEditorKey(dialogue.id, dialogue.revision)} dialogue={dialogue} busy={busy} onSave={onSaveDialogue} onDelete={onDeleteDialogue} />)}</div>
-  </div>;
-}
-
-function DialogueEditor({ dialogue, busy, onSave, onDelete }: { dialogue: FilmDialogue; busy: boolean; onSave: (dialogue: FilmDialogue, patch: Partial<FilmDialogue>) => void; onDelete: (dialogue: FilmDialogue) => void }) {
-  const [text, setText] = useState(dialogue.text);
-  const [kind, setKind] = useState(dialogue.kind);
-  const [emotion, setEmotion] = useState(dialogue.emotion ?? "");
-  return <div className="grid gap-2 rounded-lg border border-[var(--ob-line)] p-2 sm:grid-cols-[auto_minmax(7rem,0.6fr)_minmax(12rem,1.4fr)_auto_auto]"><select aria-label="对白类型" className="ob-input" value={kind} onChange={(event) => setKind(event.target.value as FilmDialogue["kind"])}><option value="dialogue">对白</option><option value="narration">旁白</option></select><input aria-label="情绪指导" className="ob-input" value={emotion} onChange={(event) => setEmotion(event.target.value)} placeholder="情绪，如克制、急促" /><input aria-label="对白文本" className="ob-input" value={text} onChange={(event) => setText(event.target.value)} /><button className="ob-btn" disabled={busy || !text.trim()} onClick={() => onSave(dialogue, { kind, emotion, text })}>保存</button><button className="ob-btn" disabled={busy} onClick={() => onDelete(dialogue)}>删除</button></div>;
+  return <EpisodeProductionViews status={status} busy={busy} onSaveEpisode={onSaveEpisode} onSaveShot={onSaveShot} onCreateDialogue={onCreateDialogue} onSaveDialogue={onSaveDialogue} onDeleteDialogue={onDeleteDialogue} />;
 }
 
 export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }: { status: FilmStatus; busy: boolean; onLegacyStage: (stage: FilmStage, action: "run" | "approve" | "reject") => void; onRun: (stage: FilmStageKind, request: FilmStageRunRequest) => Promise<boolean>; onSynced: (status: FilmStatus) => void }) {

@@ -19,6 +19,8 @@ export type TaskCenterItem = {
   total?: number;
   succeeded?: number;
   failed?: number;
+  estimatedCredits?: number;
+  actualCredits?: number;
 };
 
 export type TaskCenterFilters = { status?: GenerationStatus | ""; kind?: GenerationKind | ""; projectId?: string };
@@ -36,26 +38,36 @@ function filmBinding(parameters: Record<string, unknown>): { stage?: string; sho
   return { stage, shotId: boundedString(item.shotId), parentTaskId: boundedString(item.parentGenerationJobId ?? item.parentTaskId ?? item.taskId) };
 }
 
-function stageParentBinding(job: GenerationJob): { stage?: string; childJobIds: string[] } | null {
+function stageParentBinding(job: GenerationJob): { stage?: string; childJobIds: string[]; estimatedCredits?: number } | null {
   if (job.kind !== "film-stage") return null;
   const stage = boundedString(job.parameters.stage);
   const childJobIds = Array.isArray(job.parameters.childJobIds)
     ? job.parameters.childJobIds.slice(0, 1_000).map((value) => boundedString(value)).filter((value): value is string => Boolean(value))
     : [];
-  return { stage, childJobIds };
+  return { stage, childJobIds, estimatedCredits: boundedCount(job.parameters.estimatedCredits, 1_000_000_000) };
 }
 
 function boundedCount(value: unknown, maximum = 1_000_000): number | undefined {
   return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= maximum ? Number(value) : undefined;
 }
 
-function filmProgress(job: GenerationJob): Pick<TaskCenterItem, "progress" | "total" | "succeeded" | "failed"> {
+function filmProgress(job: GenerationJob): Pick<TaskCenterItem, "progress" | "total" | "succeeded" | "failed" | "actualCredits"> {
   if (job.kind !== "film-stage") return {};
   const progress = typeof job.result.progress === "number" && Number.isFinite(job.result.progress) ? Math.max(0, Math.min(1, job.result.progress)) : undefined;
   const total = boundedCount(job.result.total);
   const succeeded = boundedCount(job.result.succeeded, total);
   const failed = boundedCount(job.result.failed, total);
-  return { ...(progress !== undefined ? { progress } : {}), ...(total !== undefined ? { total } : {}), ...(succeeded !== undefined ? { succeeded } : {}), ...(failed !== undefined ? { failed } : {}) };
+  const actualCredits = boundedCount(job.result.actualCredits, 1_000_000_000);
+  return { ...(progress !== undefined ? { progress } : {}), ...(total !== undefined ? { total } : {}), ...(succeeded !== undefined ? { succeeded } : {}), ...(failed !== undefined ? { failed } : {}), ...(actualCredits !== undefined ? { actualCredits } : {}) };
+}
+
+function jobCredits(job: GenerationJob, parent: ReturnType<typeof stageParentBinding>): Pick<TaskCenterItem, "estimatedCredits" | "actualCredits"> {
+  const estimatedCredits = parent?.estimatedCredits ?? boundedCount(job.parameters.estimatedCredits, 1_000_000_000);
+  if (estimatedCredits === undefined) return {};
+  if (job.kind === "film-stage") return { estimatedCredits };
+  if (job.status === "succeeded") return { estimatedCredits, actualCredits: estimatedCredits };
+  if (job.status === "failed" || job.status === "cancelled" || job.status === "deleted") return { estimatedCredits, actualCredits: 0 };
+  return { estimatedCredits };
 }
 
 function aggregateStageStatus(children: readonly GenerationJob[], fallback: GenerationStatus): GenerationStatus {
@@ -92,7 +104,7 @@ export function buildTaskCenterItems(jobs: readonly GenerationJob[]): TaskCenter
       id: job.id, ...(job.projectId ? { projectId: job.projectId } : {}), kind: job.kind, status: job.status,
       source, ...(film?.stage ? { stage: film.stage } : {}), ...(film?.shotId ? { shotId: film.shotId } : {}),
       ...(film?.parentTaskId ? { parentTaskId: film.parentTaskId } : {}), title,
-      ...(job.error ? { error: job.error.slice(0, 500) } : {}), ...filmProgress(job), createdAt: job.createdAt, updatedAt: job.updatedAt, sourcePath,
+      ...(job.error ? { error: job.error.slice(0, 500) } : {}), ...jobCredits(job, parent), ...filmProgress(job), createdAt: job.createdAt, updatedAt: job.updatedAt, sourcePath,
     };
   });
   const byID = new Map(items.map((item) => [item.id, item]));

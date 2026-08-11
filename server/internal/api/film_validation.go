@@ -76,7 +76,23 @@ func validateFilmSource(source filmSource) error {
 	if source.Format != "text" && source.Format != "txt" && source.Format != "markdown" && source.Format != "docx" && source.Format != "pdf" {
 		return errors.New("film source format is unsupported")
 	}
+	if source.ImportStatus != nil && !validFilmSourceImportStatus(*source.ImportStatus) {
+		return errors.New("film source import status is invalid")
+	}
 	return nil
+}
+
+func validFilmSourceImportStatus(status filmSourceImportStatus) bool {
+	if !validProjectID(status.ID) || (status.Status != filmStatusRunning && status.Status != "succeeded" && status.Status != filmStatusFailed) ||
+		(status.Format != "txt" && status.Format != "markdown" && status.Format != "docx" && status.Format != "pdf") ||
+		!validFilmText(status.OriginalName, 255, true) || !validFilmText(status.WorkerInstanceID, 128, status.Status == filmStatusRunning) ||
+		!validFilmTimestamp(status.StartedAt) || !validFilmTimestamp(status.UpdatedAt) || !validFilmText(status.Error, 2_000, false) {
+		return false
+	}
+	if status.Status == filmStatusRunning {
+		return status.CompletedAt == "" && status.Error == ""
+	}
+	return validFilmTimestamp(status.CompletedAt) && (status.Status != filmStatusFailed || strings.TrimSpace(status.Error) != "")
 }
 
 func validateFilmStages(stages []filmStage) error {
@@ -569,7 +585,7 @@ func validFilmRepairStage(stage string, estimatedGenerations int) bool {
 	}
 }
 
-func validateFilmVersions(document filmDocument, shots map[string]filmShot, dialogues map[string]filmDialogue, assets map[string]filmAsset) error {
+func validateFilmVersions(document filmDocument) error {
 	if len(document.Versions) > 1_000 {
 		return errors.New("film entity version limit reached")
 	}
@@ -578,12 +594,102 @@ func validateFilmVersions(document filmDocument, shots map[string]filmShot, dial
 		if err := addUniqueFilmID(ids, version.ID, "entity version"); err != nil {
 			return err
 		}
-		validTarget := version.EntityType == "shot" && shots[version.EntityID].ID != "" || version.EntityType == "dialogue" && dialogues[version.EntityID].ID != "" || version.EntityType == "asset" && assets[version.EntityID].ID != "" || version.EntityType == "timeline" && version.EntityID == "timeline"
-		if !validTarget || version.Revision < 1 || len(version.Snapshot) == 0 || len(version.Snapshot) > maxProjectBytes || !json.Valid(version.Snapshot) || !validFilmText(version.Reason, 500, true) || !validFilmTimestamp(version.CreatedAt) {
+		validType := version.EntityType == "scene" || version.EntityType == "shot" || version.EntityType == "dialogue" || version.EntityType == "asset" || version.EntityType == "timeline"
+		if !validType || version.Revision < 1 || len(version.Snapshot) == 0 || len(version.Snapshot) > maxProjectBytes || !json.Valid(version.Snapshot) || !validFilmText(version.Reason, 500, true) || !validFilmTimestamp(version.CreatedAt) {
 			return fmt.Errorf("film entity version %s is invalid", version.ID)
+		}
+		if err := validateFilmVersionSnapshot(version); err != nil {
+			return fmt.Errorf("film entity version %s is invalid: %w", version.ID, err)
 		}
 	}
 	return nil
+}
+
+func validateFilmVersionSnapshot(version filmEntityVersion) error {
+	dependencyEpisode := func(id string) filmEpisode {
+		return filmEpisode{ID: id, Revision: 1, Order: 0, Title: "Historical dependency", Status: filmStatusDraft}
+	}
+	dependencyScene := func(id, episodeID string) filmScene {
+		return filmScene{ID: id, Revision: 1, EpisodeID: episodeID, Order: 0, Heading: "Historical dependency", Status: filmStatusDraft}
+	}
+	dependencyShot := func(id, sceneID string) filmShot {
+		return filmShot{ID: id, Revision: 1, SceneID: sceneID, Order: 0, Title: "Historical dependency", Description: "Historical dependency", Status: filmStatusDraft, DurationSeconds: 1, AspectRatio: "16:9"}
+	}
+	dependencyAsset := func(id, kind string) filmAsset {
+		return filmAsset{ID: id, Revision: 1, Kind: kind, Title: "Historical dependency", Status: filmStatusDraft}
+	}
+	validateEntities := func(candidate filmDocument) error {
+		_, _, _, _, err := validateFilmEntities(candidate)
+		return err
+	}
+	switch version.EntityType {
+	case "scene":
+		var snapshot filmScene
+		if json.Unmarshal(version.Snapshot, &snapshot) != nil || snapshot.ID != version.EntityID || snapshot.Revision != version.Revision {
+			return errors.New("scene snapshot identity does not match")
+		}
+		return validateEntities(filmDocument{Episodes: []filmEpisode{dependencyEpisode(snapshot.EpisodeID)}, Scenes: []filmScene{snapshot}})
+	case "shot":
+		var snapshot filmShot
+		if json.Unmarshal(version.Snapshot, &snapshot) != nil || snapshot.ID != version.EntityID || snapshot.Revision != version.Revision {
+			return errors.New("shot snapshot identity does not match")
+		}
+		assets := make([]filmAsset, 0, len(snapshot.IdentityVersionIDs)+1)
+		for _, id := range snapshot.IdentityVersionIDs {
+			assets = append(assets, dependencyAsset(id, "identity"))
+		}
+		if snapshot.StyleAssetID != "" {
+			assets = append(assets, dependencyAsset(snapshot.StyleAssetID, "style"))
+		}
+		return validateEntities(filmDocument{Episodes: []filmEpisode{dependencyEpisode("version-episode")}, Scenes: []filmScene{dependencyScene(snapshot.SceneID, "version-episode")}, Shots: []filmShot{snapshot}, Assets: assets})
+	case "dialogue":
+		var snapshot filmDialogue
+		if json.Unmarshal(version.Snapshot, &snapshot) != nil || snapshot.ID != version.EntityID || snapshot.Revision != version.Revision {
+			return errors.New("dialogue snapshot identity does not match")
+		}
+		assets := []filmAsset{}
+		if snapshot.CharacterAssetID != "" {
+			assets = append(assets, dependencyAsset(snapshot.CharacterAssetID, "character"))
+		}
+		if snapshot.VoiceAssetID != "" {
+			assets = append(assets, dependencyAsset(snapshot.VoiceAssetID, "voice"))
+		}
+		return validateEntities(filmDocument{Episodes: []filmEpisode{dependencyEpisode("version-episode")}, Scenes: []filmScene{dependencyScene("version-scene", "version-episode")}, Shots: []filmShot{dependencyShot(snapshot.ShotID, "version-scene")}, Dialogues: []filmDialogue{snapshot}, Assets: assets})
+	case "asset":
+		var snapshot filmAsset
+		if json.Unmarshal(version.Snapshot, &snapshot) != nil || snapshot.ID != version.EntityID || snapshot.Revision != version.Revision {
+			return errors.New("asset snapshot identity does not match")
+		}
+		candidate := filmDocument{Assets: []filmAsset{snapshot}}
+		if snapshot.ParentAssetID != "" {
+			candidate.Assets = append(candidate.Assets, dependencyAsset(snapshot.ParentAssetID, "character"))
+		}
+		episodeIDs := append([]string(nil), snapshot.EpisodeIDs...)
+		if len(episodeIDs) == 0 && (len(snapshot.SceneIDs) > 0 || len(snapshot.ShotIDs) > 0) {
+			episodeIDs = append(episodeIDs, "version-episode")
+		}
+		for _, id := range episodeIDs {
+			candidate.Episodes = append(candidate.Episodes, dependencyEpisode(id))
+		}
+		sceneIDs := append([]string(nil), snapshot.SceneIDs...)
+		if len(sceneIDs) == 0 && len(snapshot.ShotIDs) > 0 {
+			sceneIDs = append(sceneIDs, "version-scene")
+		}
+		for _, id := range sceneIDs {
+			candidate.Scenes = append(candidate.Scenes, dependencyScene(id, episodeIDs[0]))
+		}
+		for _, id := range snapshot.ShotIDs {
+			candidate.Shots = append(candidate.Shots, dependencyShot(id, sceneIDs[0]))
+		}
+		return validateEntities(candidate)
+	case "timeline":
+		var snapshot filmTimeline
+		if version.EntityID != "timeline" || json.Unmarshal(version.Snapshot, &snapshot) != nil || snapshot.Revision != version.Revision {
+			return errors.New("timeline snapshot identity does not match")
+		}
+		return validateFilmTimeline(snapshot)
+	}
+	return errors.New("version type is unsupported")
 }
 
 func validateFilmDeliverables(deliverables []filmDeliverable) error {
@@ -664,11 +770,7 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 	if err := validateFilmAdoptions(document, shots, assets); err != nil {
 		return err
 	}
-	dialogues := make(map[string]filmDialogue, len(document.Dialogues))
-	for _, dialogue := range document.Dialogues {
-		dialogues[dialogue.ID] = dialogue
-	}
-	if err := validateFilmVersions(document, shots, dialogues, assets); err != nil {
+	if err := validateFilmVersions(document); err != nil {
 		return err
 	}
 	for _, stage := range document.Stages {

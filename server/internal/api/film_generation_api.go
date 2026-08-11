@@ -406,6 +406,21 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 		}
 		retryJob.Parameters, _ = json.Marshal(parameters)
 	}
+	estimatedCredits, quoteErr := s.store.GetModelCreditCost(r.Context(), tenantIDFrom(r), retryJob.Model)
+	if quoteErr != nil || setFilmGenerationJobCreditQuote(&retryJob, estimatedCredits) != nil {
+		writeFilmError(w, http.StatusServiceUnavailable, "billing_unavailable", "Film generation retry credit quote is unavailable")
+		return
+	}
+	if retryTask.Snapshot != nil {
+		snapshot := *retryTask.Snapshot
+		snapshot.ProviderID, snapshot.Model, snapshot.EstimatedCredits = retryJob.ProviderID, retryJob.Model, estimatedCredits
+		retryTask.Snapshot = &snapshot
+	}
+	if retryTask.TextSnapshot != nil {
+		snapshot := *retryTask.TextSnapshot
+		snapshot.ProviderID, snapshot.Model, snapshot.EstimatedCredits = retryJob.ProviderID, retryJob.Model, estimatedCredits
+		retryTask.TextSnapshot = &snapshot
+	}
 	jobExists := false
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), retryJob.ID); getErr == nil {
 		binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: retryTask.Stage, ShotID: retryTask.ShotID, DialogueID: retryTask.DialogueID, TaskID: retryTask.ID, RequestHash: retryTask.RequestHash}
@@ -439,7 +454,7 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 	tenantID, userID := tenantIDFrom(r), userIDFrom(r)
 	meta, _ := json.Marshal(map[string]any{"jobId": retryJob.ID, "kind": retryJob.Kind, "executor": serverExecutorMarker, "filmProjectId": document.ProjectID, "shotId": task.ShotID})
 	if atomicBackend, ok := s.store.(store.FilmGenerationBatchStore); ok && !jobExists {
-		if _, err := atomicBackend.CreateFilmGenerationBatch(r.Context(), tenantID, userID, record.ProjectID, record.Revision, raw, []store.FilmGenerationReservation{{Job: retryJob, Units: 1, UsageMeta: meta}}); err != nil {
+		if _, err := atomicBackend.CreateFilmGenerationBatch(r.Context(), tenantID, userID, record.ProjectID, record.Revision, raw, []store.FilmGenerationReservation{{Job: retryJob, Units: 1, UsageMeta: meta, ExpectedCredits: &estimatedCredits}}); err != nil {
 			writeFilmTextBatchError(w, err)
 			return
 		}

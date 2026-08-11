@@ -86,26 +86,32 @@ test("creates a film, imports a manuscript, approves decomposition, validates, a
 test("preflights imports, edits a multitrack timeline, and surfaces revision conflicts", async ({ page }) => {
   await createFilmProject(page);
 
-  await expect(page.getByTestId("film-format-pdf")).toHaveAttribute("aria-disabled", "false");
-  await page.getByTestId("film-manuscript-file").setInputFiles({
-    name: "text-layer.pdf",
-    mimeType: "application/pdf",
-    buffer: textLayerPDF,
-  });
-  await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
+  const pdfEnabled = await page.getByTestId("film-format-pdf").getAttribute("aria-disabled") === "false";
+  if (pdfEnabled) {
+    await page.getByTestId("film-manuscript-file").setInputFiles({
+      name: "text-layer.pdf",
+      mimeType: "application/pdf",
+      buffer: textLayerPDF,
+    });
+    await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
 
-  await page.getByTestId("film-manuscript-file").setInputFiles({
-    name: "scan.pdf",
-    mimeType: "application/pdf",
-    buffer: pdfFixture(),
-  });
-  await expect(page.getByRole("alert").filter({ hasText: "请先 OCR" })).toBeVisible();
+    await page.getByTestId("film-manuscript-file").setInputFiles({
+      name: "scan.pdf",
+      mimeType: "application/pdf",
+      buffer: pdfFixture(),
+    });
+    await expect(page.getByRole("alert").filter({ hasText: "请先 OCR" })).toBeVisible();
+  } else {
+    await expect(page.getByTestId("film-pdf-diagnostic")).toContainText("PDF 导入不可用");
+  }
 
   await page.getByTestId("film-manuscript-file").setInputFiles({
     name: "workbench.md",
     mimeType: "text/markdown",
     buffer: Buffer.from("EPISODE 1\nINT. MIX STAGE - NIGHT\nA fader rises."),
   });
+  await expect(page.getByRole("region", { name: "原稿预检结果" })).toContainText("预检完成");
+  await page.getByRole("button", { name: "采用确定性拆解" }).click();
   await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
 
   await page.getByRole("button", { name: "添加 video 片段" }).click();

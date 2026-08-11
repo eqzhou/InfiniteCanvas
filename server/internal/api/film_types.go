@@ -12,11 +12,24 @@ const (
 )
 
 type filmSource struct {
-	Revision     int    `json:"revision"`
-	Text         string `json:"text"`
-	Format       string `json:"format"`
-	OriginalName string `json:"originalName,omitempty"`
-	ImportedAt   string `json:"importedAt"`
+	Revision     int                     `json:"revision"`
+	Text         string                  `json:"text"`
+	Format       string                  `json:"format"`
+	OriginalName string                  `json:"originalName,omitempty"`
+	ImportedAt   string                  `json:"importedAt"`
+	ImportStatus *filmSourceImportStatus `json:"importStatus,omitempty"`
+}
+
+type filmSourceImportStatus struct {
+	ID               string `json:"id,omitempty"`
+	Status           string `json:"status"`
+	Format           string `json:"format,omitempty"`
+	OriginalName     string `json:"originalName,omitempty"`
+	WorkerInstanceID string `json:"workerInstanceId,omitempty"`
+	StartedAt        string `json:"startedAt,omitempty"`
+	UpdatedAt        string `json:"updatedAt,omitempty"`
+	CompletedAt      string `json:"completedAt,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 type filmEpisode struct {

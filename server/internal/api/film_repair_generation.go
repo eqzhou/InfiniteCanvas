@@ -204,12 +204,15 @@ func (s *Server) prepareFilmRepairGeneration(r *http.Request, document filmDocum
 	if !allowed {
 		return preparedFilmRepairGeneration{}, errFilmRepairModelNotAllowed
 	}
-	parentJob, err := buildFilmStageGenerationJob(document.ProjectID, stage, parentJobID, requestHash, now, []string{childJobID})
+	parentJob, err := buildFilmStageGenerationJob(document.ProjectID, stage, parentJobID, requestHash, now, []string{childJobID}, []int{*input.ExpectedCredits})
 	if err != nil {
 		return preparedFilmRepairGeneration{}, err
 	}
 	childJob, err := buildFilmGenerationTargetJob(stage, jobShot, target.Dialogue, document.ProjectID, selectedProviderID, selectedModel, taskID, parentJobID, childJobID, requestHash, jobConfig, snapshot, now)
 	if err != nil {
+		return preparedFilmRepairGeneration{}, err
+	}
+	if err := setFilmGenerationJobCreditQuote(&childJob, *input.ExpectedCredits); err != nil {
 		return preparedFilmRepairGeneration{}, err
 	}
 	repairSnapshot := buildFilmGenerationTargetSnapshotWithCapability(patched, jobShot, target.Dialogue, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)

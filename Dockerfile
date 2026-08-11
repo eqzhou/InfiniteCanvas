@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM nginx:1.30-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1 AS runtime
 # The digest-pinned base is Alpine 3.23. Install its signed repository package
 # at an exact revision; do not fetch standalone media binaries.
-RUN apk add --no-cache dumb-init gettext ffmpeg=8.0.1-r1 \
+RUN apk add --no-cache dumb-init gettext ffmpeg=8.0.1-r1 poppler-utils=25.12.0-r1 bubblewrap=0.11.0-r2 \
     && mkdir -p /data/film-render /tmp/openboard /tmp/nginx/client_temp \
     && chown -R nginx:nginx /data /tmp/openboard /tmp/nginx
 
@@ -26,8 +26,9 @@ COPY --from=web-build /src/web/dist /usr/share/nginx/html
 COPY --from=server-build /openboard-server /usr/local/bin/openboard-server
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/entrypoint.sh /usr/local/bin/openboard-entrypoint
+COPY docker/pdf-sandbox.sh /usr/local/bin/openboard-pdf-sandbox
 
-RUN chmod 0555 /usr/local/bin/openboard-server /usr/local/bin/openboard-entrypoint \
+RUN chmod 0555 /usr/local/bin/openboard-server /usr/local/bin/openboard-entrypoint /usr/local/bin/openboard-pdf-sandbox \
     && chmod -R a=rX /usr/share/nginx/html /etc/nginx/nginx.conf
 
 USER nginx
@@ -39,6 +40,8 @@ ENV OPENBOARD_ADDR=127.0.0.1:8790 \
     OPENBOARD_ORIGINS=http://localhost:8080,http://127.0.0.1:8080 \
     OPENBOARD_FFMPEG_PATH=/usr/bin/ffmpeg \
     OPENBOARD_FFPROBE_PATH=/usr/bin/ffprobe \
+    OPENBOARD_PDFTOTEXT_PATH=/usr/bin/pdftotext \
+    OPENBOARD_PDF_SANDBOX_PATH=/usr/local/bin/openboard-pdf-sandbox \
     TMPDIR=/tmp/openboard
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \

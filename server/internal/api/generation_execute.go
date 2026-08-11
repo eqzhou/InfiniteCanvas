@@ -250,6 +250,7 @@ type persistedImageJobParameters struct {
 	Film                  *filmGenerationBinding     `json:"film,omitempty"`
 	CapabilityVersion     string                     `json:"capabilityVersion,omitempty"`
 	GenerationMode        string                     `json:"generationMode,omitempty"`
+	EstimatedCredits      int                        `json:"estimatedCredits,omitempty"`
 }
 
 type storedImageProvider struct {
@@ -849,7 +850,7 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		seen := make(map[string]struct{}, len(parameters.ChildJobIDs))
-		for _, childID := range parameters.ChildJobIDs {
+		for childIndex, childID := range parameters.ChildJobIDs {
 			if !validProjectID(childID) {
 				http.Error(w, "invalid film stage child job", http.StatusConflict)
 				return
@@ -858,6 +859,26 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 				continue
 			}
 			seen[childID] = struct{}{}
+			child, childErr := s.store.GetGenerationJob(r.Context(), tenantID, childID)
+			if errors.Is(childErr, store.ErrNotFound) && len(parameters.ChildCredits) == 0 {
+				continue
+			}
+			if childErr != nil {
+				if errors.Is(childErr, store.ErrNotFound) {
+					http.Error(w, "film stage child job is unavailable", http.StatusConflict)
+				} else {
+					http.Error(w, "failed to load film stage child job", http.StatusInternalServerError)
+				}
+				return
+			}
+			expectedCredits := 0
+			if len(parameters.ChildCredits) == len(parameters.ChildJobIDs) {
+				expectedCredits = parameters.ChildCredits[childIndex]
+			}
+			if !filmStageChildMatches(existing.ID, parameters, child, expectedCredits) {
+				http.Error(w, "film stage child job binding is invalid", http.StatusConflict)
+				return
+			}
 			if _, childErr := s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC()); childErr != nil {
 				http.Error(w, "failed to cancel film stage child job", http.StatusInternalServerError)
 				return

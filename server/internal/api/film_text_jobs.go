@@ -170,6 +170,11 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAllowedModel(w, r, input.Model) {
 		return
 	}
+	estimatedCredits, err := s.store.GetModelCreditCost(r.Context(), tenantIDFrom(r), input.Model)
+	if err != nil || estimatedCredits < 1 || estimatedCredits > 1_000_000_000 {
+		writeFilmError(w, http.StatusServiceUnavailable, "billing_unavailable", "Film text generation credit quote is unavailable")
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	sourceSHA := filmSourceSHA256(document.Source)
 	taskID := stableFilmID("task", document.ProjectID, stage, requestHash)
@@ -181,6 +186,7 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 		SystemPrompt: systemPrompt, SourceRevision: document.Source.Revision,
 		SourceSHA256: sourceSHA, FilmRevision: document.Revision, SharedChannel: channelSnapshot, Film: binding,
 		TargetEntityID: input.EpisodeID, TargetRevision: targetRevision, TargetSHA256: targetSHA,
+		EstimatedCredits: estimatedCredits,
 	})
 	if err != nil {
 		writeFilmError(w, http.StatusInternalServerError, "internal_error", "AI film task could not be encoded")
@@ -206,7 +212,7 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 			ProviderID: selectedProviderID, Model: input.Model, PromptVersion: promptVersion,
 			OutputSchema: outputSchema, TargetEntityID: input.EpisodeID, TargetRevision: targetRevision, TargetSHA256: targetSHA,
 			ScriptMode:           input.ScriptMode,
-			EstimatedGenerations: 1, CreatedAt: now,
+			EstimatedGenerations: 1, EstimatedCredits: estimatedCredits, CreatedAt: now,
 		},
 	})
 	currentStage.Status, currentStage.Error, currentStage.UpdatedAt = filmStatusRunning, "", now
@@ -227,7 +233,7 @@ func (s *Server) runFilmTextStage(w http.ResponseWriter, r *http.Request) {
 	if atomicBackend, ok := s.store.(store.FilmGenerationBatchStore); ok {
 		updated, err := atomicBackend.CreateFilmGenerationBatch(
 			r.Context(), tenantID, userID, record.ProjectID, record.Revision, raw,
-			[]store.FilmGenerationReservation{{Job: job, Units: 1, UsageMeta: meta}},
+			[]store.FilmGenerationReservation{{Job: job, Units: 1, UsageMeta: meta, ExpectedCredits: &estimatedCredits}},
 		)
 		if err != nil {
 			writeFilmTextBatchError(w, err)

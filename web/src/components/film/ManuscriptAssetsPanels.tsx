@@ -24,6 +24,9 @@ export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDr
     ["txt", "TXT", capabilities.plainTextImport], ["md", "MD", capabilities.markdownImport],
     ["docx", "DOCX", capabilities.docxImport], ["pdf", "PDF", capabilities.pdfImport],
   ] as const;
+  const persistedImport = document.source.importStatus;
+  const importRunning = persistedImport?.status === "running";
+  const controlsBusy = busy || importRunning;
   const accept = useMemo(() => formats.filter(([, , enabled]) => enabled).map(([extension]) => `.${extension}`).join(","), [capabilities]);
   const previewText = async (text: string, format: "text" | "txt" | "markdown", originalName?: string) => {
     setFileError("");
@@ -66,18 +69,21 @@ export function ManuscriptPanel({ document, capabilities, manuscript, busy, onDr
     <div className="mt-2 flex flex-wrap gap-1" aria-label="可用导入格式">
       {formats.map(([id, label, enabled]) => <span key={id} data-testid={`film-format-${id}`} aria-disabled={!enabled} className={`rounded-full border px-2 py-1 text-xs ${enabled ? "border-[var(--ob-line)]" : "opacity-40"}`}>{label}</span>)}
     </div>
+    {!capabilities.pdfImport && capabilities.pdfDiagnostic ? <p data-testid="film-pdf-diagnostic" className="mt-2 text-xs text-amber-500">PDF 导入不可用：{capabilities.pdfDiagnostic}</p> : null}
     <div className="mt-3 flex flex-wrap gap-2">
-      <button type="button" className="ob-btn ob-btn-primary" disabled={busy || parseState === "parsing" || !manuscript.trim()} onClick={() => void previewText(manuscript, "text")}><Send size={14} /> 预检原稿</button>
-      <button type="button" className="ob-btn" disabled={busy || !accept} onClick={() => fileRef.current?.click()}><FileUp size={14} /> 选择 TXT / MD / DOCX / PDF</button>
-      <input data-testid="film-manuscript-file" ref={fileRef} type="file" className="hidden" accept={accept} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void chooseFile(file); event.currentTarget.value = ""; }} />
+      <button type="button" className="ob-btn ob-btn-primary" disabled={controlsBusy || parseState === "parsing" || !manuscript.trim()} onClick={() => void previewText(manuscript, "text")}><Send size={14} /> 预检原稿</button>
+      <button type="button" className="ob-btn" disabled={controlsBusy || !accept} onClick={() => fileRef.current?.click()}><FileUp size={14} /> 选择 TXT / MD / DOCX / PDF</button>
+      <input data-testid="film-manuscript-file" ref={fileRef} type="file" className="hidden" disabled={controlsBusy} accept={accept} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void chooseFile(file); event.currentTarget.value = ""; }} />
     </div>
+    {importRunning ? <p role="status" className="mt-2 text-sm text-[var(--ob-muted)]">服务端正在解析 {persistedImport.originalName || "原稿"}，完成前不能重复导入…</p> : null}
+    {persistedImport?.status === "failed" && persistedImport.error ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">上次导入失败：{persistedImport.error}</p> : null}
     {parseState === "parsing" ? <p role="status" className="mt-2 text-sm text-[var(--ob-muted)]">文件上传中，正在解析…</p> : null}
     {fileError ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{fileError}</p> : null}
     {preflight ? <div className="mt-3 rounded-lg border border-[var(--ob-line)] p-3" role="region" aria-label="原稿预检结果">
       <div className="flex flex-wrap gap-2 text-xs"><strong>预检完成</strong><span>{preflight.episodeCount} 集</span><span>{preflight.sceneCount} 场</span><span>{preflight.characters} 字符</span><span>{preflight.lineCount} 行</span></div>
       <p className="mt-2 text-sm text-[var(--ob-muted)]">{preflight.summary}</p>
       {preflight.warnings.map((warning) => <p key={warning} className="mt-1 text-xs text-amber-500">{warning}</p>)}
-      <button type="button" className="ob-btn mt-3" disabled={busy} onClick={() => void onImportText(manuscript, preflight.format, preflightName)}>采用确定性拆解</button>
+      <button type="button" className="ob-btn mt-3" disabled={controlsBusy} onClick={() => void onImportText(manuscript, preflight.format, preflightName)}>采用确定性拆解</button>
       <p className="mt-2 text-xs text-[var(--ob-muted)]">确认导入后，也可以在 AI 故事拆解区生成另一份待审候选。</p>
     </div> : null}
     <p className="mt-2 text-xs text-[var(--ob-muted)]">预检不会写入影视事实。客户端文件上限 50 MiB；扫描型 PDF 若无文本，请先 OCR 后再导入。当前源修订 r{document.source.revision}</p>

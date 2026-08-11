@@ -146,9 +146,13 @@ test("PM2 rejects group-readable or world-readable secret files on POSIX", () =>
   assert.equal(hasUnsafeSecretFilePermissions(0o100644, "win32"), false);
 });
 
-test("the PM2 allowlist includes both bounded media executables", () => {
+test("the PM2 allowlist includes bounded media and PDF executables", () => {
   assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_FFMPEG_PATH"));
   assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_FFPROBE_PATH"));
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PDFTOTEXT_PATH"));
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PDFTOTEXT_TIMEOUT"));
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PDFTOTEXT_MAX_OUTPUT_BYTES"));
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PDF_SANDBOX_PATH"));
 });
 
 test("final capability overrides can clear stale inherited media paths", () => {

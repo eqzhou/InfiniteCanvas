@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -135,6 +136,10 @@ func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		ids[job.ID] = struct{}{}
 	}
+	if err := validateRestoredGenerationJobRelations(jobs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := s.store.ReplaceGenerationJobs(r.Context(), tenantIDFrom(r), jobs); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "active server generation jobs must finish or be cancelled before restore", http.StatusConflict)
 		return
@@ -247,8 +252,18 @@ func (s *Server) deleteGenerationJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if err := validateFilmStageDeletion(r.Context(), s.store, tenantIDFrom(r), map[string]struct{}{id: {}}); errors.Is(err, errFilmStageChildReferenced) {
+		http.Error(w, "Film stage child and parent must be deleted together", http.StatusConflict)
+		return
+	} else if err != nil {
+		http.Error(w, "failed to validate Film generation history", http.StatusInternalServerError)
+		return
+	}
 	if err := s.store.DeleteGenerationJob(r.Context(), tenantIDFrom(r), id); errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if errors.Is(err, store.ErrConflict) {
+		http.Error(w, "Film stage child and parent must be deleted together", http.StatusConflict)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to delete generation job", http.StatusInternalServerError)
@@ -318,7 +333,22 @@ func (s *Server) bulkDeleteGenerationJobs(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
+	deleting := make(map[string]struct{}, len(unique))
+	for _, id := range unique {
+		deleting[id] = struct{}{}
+	}
+	if err := validateFilmStageDeletion(r.Context(), s.store, tenantID, deleting); errors.Is(err, errFilmStageChildReferenced) {
+		http.Error(w, "Film stage children and parents must be deleted together", http.StatusConflict)
+		return
+	} else if err != nil {
+		http.Error(w, "failed to validate Film generation history", http.StatusInternalServerError)
+		return
+	}
 	deleted, err := s.store.DeleteGenerationJobs(r.Context(), tenantID, unique)
+	if errors.Is(err, store.ErrConflict) {
+		http.Error(w, "Film stage children and parents must be deleted together", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, "failed to bulk delete generation jobs", http.StatusInternalServerError)
 		return
@@ -423,7 +453,107 @@ func validGenerationJobFields(job store.GenerationJob) bool {
 	if job.Kind == "export" {
 		return validPersistedFilmExportJob(job)
 	}
+	if job.Kind == "film-stage" {
+		return validPersistedFilmStageJob(job)
+	}
 	return true
+}
+
+func validPersistedFilmStageJob(job store.GenerationJob) bool {
+	var parameters filmStageGenerationParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil {
+		return false
+	}
+	validStage := parameters.Stage == "storyboard" || parameters.Stage == "first_frame" || parameters.Stage == "last_frame" || parameters.Stage == "audio" || parameters.Stage == "video"
+	if parameters.Executor != "film-stage" || parameters.ProjectID != job.ProjectID || !validProjectID(parameters.ProjectID) || !validStage || !validFilmRequestHash(parameters.RequestHash) || len(parameters.ChildJobIDs) < 1 || len(parameters.ChildJobIDs) > 1_000 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(parameters.ChildJobIDs))
+	for _, childID := range parameters.ChildJobIDs {
+		if !validProjectID(childID) {
+			return false
+		}
+		if _, duplicate := seen[childID]; duplicate {
+			return false
+		}
+		seen[childID] = struct{}{}
+	}
+	if len(parameters.ChildCredits) == 0 {
+		return parameters.EstimatedCredits == 0
+	}
+	if len(parameters.ChildCredits) != len(parameters.ChildJobIDs) {
+		return false
+	}
+	total := 0
+	for _, credits := range parameters.ChildCredits {
+		if credits < 1 || credits > 1_000_000_000 || total > 1_000_000_000-credits {
+			return false
+		}
+		total += credits
+	}
+	return parameters.EstimatedCredits == total
+}
+
+func validateRestoredGenerationJobRelations(jobs []store.GenerationJob) error {
+	byID := make(map[string]store.GenerationJob, len(jobs))
+	for _, job := range jobs {
+		byID[job.ID] = job
+	}
+	for _, parent := range jobs {
+		if parent.Kind != "film-stage" {
+			continue
+		}
+		var parameters filmStageGenerationParameters
+		if json.Unmarshal(parent.Parameters, &parameters) != nil {
+			return errors.New("invalid Film stage generation history")
+		}
+		for childIndex, childID := range parameters.ChildJobIDs {
+			child, exists := byID[childID]
+			if !exists {
+				if len(parameters.ChildCredits) == len(parameters.ChildJobIDs) {
+					return errors.New("Film stage generation history is missing a frozen-credit child")
+				}
+				continue
+			}
+			expectedCredits := 0
+			if len(parameters.ChildCredits) == len(parameters.ChildJobIDs) {
+				expectedCredits = parameters.ChildCredits[childIndex]
+			}
+			if !filmStageChildMatches(parent.ID, parameters, child, expectedCredits) {
+				return errors.New("Film stage generation history has an invalid child binding")
+			}
+		}
+	}
+	return nil
+}
+
+var errFilmStageChildReferenced = errors.New("Film stage child is still referenced by its parent")
+
+func validateFilmStageDeletion(ctx context.Context, backend store.Store, tenantID string, deleting map[string]struct{}) error {
+	for page := 1; page <= 10_000; page++ {
+		result, err := backend.ListGenerationJobs(ctx, tenantID, store.GenerationJobQuery{Kind: "film-stage", Page: page, PageSize: 100})
+		if err != nil {
+			return err
+		}
+		for _, parent := range result.Items {
+			if _, deleted := deleting[parent.ID]; deleted {
+				continue
+			}
+			var parameters filmStageGenerationParameters
+			if json.Unmarshal(parent.Parameters, &parameters) != nil {
+				continue
+			}
+			for _, childID := range parameters.ChildJobIDs {
+				if _, deleted := deleting[childID]; deleted {
+					return errFilmStageChildReferenced
+				}
+			}
+		}
+		if page*result.PageSize >= result.Total || len(result.Items) == 0 {
+			return nil
+		}
+	}
+	return errors.New("Film stage generation history pagination limit reached")
 }
 
 func jsonObject(value json.RawMessage) bool {

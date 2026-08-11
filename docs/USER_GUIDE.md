@@ -349,6 +349,9 @@ SRT、资产包和 OpenBoard 其他服务不受影响。容器镜像已固定并
   条目、异常压缩比或展开超限的文件会被拒绝。
 - PDF 只提取已有文本层。扫描件或没有可用文本层的 PDF 会提示先 OCR；OpenBoard 不会
   在服务端静默做 OCR，也不会把任意 PDF 交给外部 Provider。
+- PDF 文本层由本机 Poppler `pdftotext` 在隔离临时目录中解析。容器已固定安装对应版本；
+  容器通过 Bubblewrap 禁网、只读挂载并限制资源。本地/PM2 必须通过
+  `OPENBOARD_PDF_SANDBOX_PATH` 指向可信的受限执行包装器；缺失时只关闭 PDF 导入并显示诊断。
 - 先在可信工具中完成 OCR，再导入新的带文本层 PDF；保留原件和 OCR 版本用于追溯。
 
 粘贴文本或选择 TXT/Markdown 后，先点“预检原稿”。预检只显示集数、场数、字符数、摘要

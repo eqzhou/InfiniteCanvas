@@ -408,6 +408,9 @@ func (m *memoryStore) CancelServerGenerationJob(_ context.Context, tenantID, id 
 func (m *memoryStore) DeleteGenerationJob(_ context.Context, tenantID, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if memoryFilmStageChildReferenced(m.jobs, tenantID, map[string]struct{}{id: {}}) {
+		return store.ErrConflict
+	}
 	key := tenantKey(tenantID, id)
 	job, ok := m.jobs[key]
 	if !ok {
@@ -431,6 +434,13 @@ func (m *memoryStore) DeleteGenerationJobs(_ context.Context, tenantID string, i
 	if len(ids) > 100 {
 		return 0, errors.New("too many generation job ids")
 	}
+	deleting := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		deleting[id] = struct{}{}
+	}
+	if memoryFilmStageChildReferenced(m.jobs, tenantID, deleting) {
+		return 0, store.ErrConflict
+	}
 	var deleted int64
 	for _, id := range ids {
 		key := tenantKey(tenantID, id)
@@ -447,6 +457,27 @@ func (m *memoryStore) DeleteGenerationJobs(_ context.Context, tenantID string, i
 		deleted++
 	}
 	return deleted, nil
+}
+
+func memoryFilmStageChildReferenced(jobs map[string]store.GenerationJob, tenantID string, deleting map[string]struct{}) bool {
+	for key, parent := range jobs {
+		if !strings.HasPrefix(key, tenantID+"\x00") || parent.Kind != "film-stage" || parent.Status == "deleted" {
+			continue
+		}
+		if _, deletingParent := deleting[parent.ID]; deletingParent {
+			continue
+		}
+		var parameters filmStageGenerationParameters
+		if json.Unmarshal(parent.Parameters, &parameters) != nil {
+			continue
+		}
+		for _, childID := range parameters.ChildJobIDs {
+			if _, deletingChild := deleting[childID]; deletingChild {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *memoryStore) DeleteGenerationJobsForProject(_ context.Context, tenantID, projectID string) (int64, error) {

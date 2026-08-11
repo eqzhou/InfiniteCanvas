@@ -1,6 +1,6 @@
 import { authFetch } from "@/services/auth-session";
 import { cancelServerGenerationJob, getGenerationJob } from "@/services/generation-jobs";
-import type { FilmAssetKind, FilmDialogue, FilmDocument, FilmProjectionCommit, FilmStageKind, FilmTask, FilmTimeline } from "@/types/film";
+import type { FilmAssetKind, FilmDialogue, FilmDocument, FilmProjectionCommit, FilmSourceImportStatus, FilmStageKind, FilmTask, FilmTimeline } from "@/types/film";
 
 export class FilmAPIError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -17,14 +17,14 @@ export type FilmStatus = {
 };
 
 export type FilmRestoreMediaProvenance =
-  | { kind: "shot"; entityId: string; field: "imageStorageKey" | "firstFrameStorageKey" | "audioStorageKey" | "videoStorageKey" }
+  | { kind: "shot"; entityId: string; field: "imageStorageKey" | "firstFrameStorageKey" | "lastFrameStorageKey" | "audioStorageKey" | "videoStorageKey" }
   | { kind: "scene"; entityId: string; field: "directorSource" }
   | { kind: "asset"; entityId: string; field: "mediaStorageKey" }
   | { kind: "dialogue"; entityId: string; field: "audioStorageKey" }
-  | { kind: "task"; entityId: string; field: `identity:${string}` | "style" | "storyboardDirectorSource" | "firstFrameDirectorSource" | `reference:${number}` }
+  | { kind: "task"; entityId: string; field: `identity:${string}` | "style" | "storyboardDirectorSource" | "firstFrameDirectorSource" | "lastFrameDirectorSource" | `reference:${number}` }
   | { kind: "timeline"; entityId: string; field: "source" }
   | { kind: "deliverable"; entityId: string; field: "storageKey" }
-  | { kind: "version"; entityId: string; field: "directorSource" | "imageStorageKey" | "firstFrameStorageKey" | "audioStorageKey" | "videoStorageKey" };
+  | { kind: "version"; entityId: string; field: "directorSource" | "imageStorageKey" | "firstFrameStorageKey" | "lastFrameStorageKey" | "audioStorageKey" | "videoStorageKey" | "mediaStorageKey" | `timeline:${string}:${string}` };
 
 export type FilmRestoreMedia = {
   storageKey: string;
@@ -42,6 +42,7 @@ export type FilmCapabilities = {
   markdownImport: boolean;
   docxImport: boolean;
   pdfImport: boolean;
+  pdfDiagnostic?: string;
   fileUploadImport: boolean;
   maxImportBytes: number;
   stageGeneration: boolean;
@@ -54,6 +55,16 @@ export type FilmCapabilities = {
 };
 
 export type FilmAgentOperation = "status" | "list" | "validate" | "run_stage" | "next_steps" | "approve_stage" | "apply_repair" | "export";
+
+export function resolveFilmEntityRevision(document: FilmDocument, entityType: string, entityId: string): number | undefined {
+  if (entityType === "scene") return document.scenes.find((scene) => scene.id === entityId)?.revision;
+  if (entityType === "shot") return document.shots.find((shot) => shot.id === entityId)?.revision;
+  if (entityType === "dialogue") return (document.dialogues ?? []).find((dialogue) => dialogue.id === entityId)?.revision;
+  if (entityType === "asset") return document.assets.find((asset) => asset.id === entityId)?.revision;
+  if (entityType === "timeline" && entityId === "timeline") return document.timeline.revision;
+  return undefined;
+}
+
 export type FilmGenerationJobStatus = "queued" | "running" | "needs_review" | "failed" | "canceled";
 export type FilmGenerationJob = {
   id: string;
@@ -160,6 +171,7 @@ export function normalizeFilmCapabilities(raw: RawFilmCapabilities | null | unde
     markdownImport: raw?.markdownImport ?? true,
     docxImport: raw?.docxImport ?? false,
     pdfImport: raw?.pdfImport ?? false,
+    pdfDiagnostic: typeof raw?.pdfDiagnostic === "string" ? raw.pdfDiagnostic : undefined,
     fileUploadImport: raw?.fileUploadImport ?? Boolean(raw?.docxImport || raw?.pdfImport),
     maxImportBytes: typeof (raw?.maxImportBytes ?? raw?.importMaxBytes) === "number" && Number(raw?.maxImportBytes ?? raw?.importMaxBytes) > 0
       ? Math.min(Number(raw?.maxImportBytes ?? raw?.importMaxBytes), DEFAULT_MAX_IMPORT_BYTES)
@@ -318,6 +330,22 @@ export function importFilmManuscriptFile(
   return requestFilm(projectId, "/source/import", { method: "POST", body });
 }
 
+export async function loadFilmImportStatus(projectId: string): Promise<FilmSourceImportStatus> {
+  const response = await authFetch(filmPath(projectId, "/source/import/status"));
+  const payload = await response.json().catch(() => null) as { data?: Partial<FilmSourceImportStatus>; error?: { code?: string; message?: string } } | null;
+  if (!response.ok) {
+    throw new FilmAPIError(response.status, payload?.error?.code ?? "film_import_status_failed", payload?.error?.message ?? "Film import status could not be loaded");
+  }
+  const status = payload?.data;
+  if (!status || !["idle", "running", "succeeded", "failed"].includes(status.status ?? "") ||
+    (status.format !== undefined && !["txt", "markdown", "docx", "pdf"].includes(status.format)) ||
+    (status.originalName !== undefined && typeof status.originalName !== "string") ||
+    (status.error !== undefined && typeof status.error !== "string")) {
+    throw new Error("Film import status response is invalid");
+  }
+  return status as FilmSourceImportStatus;
+}
+
 export function updateFilmEpisode(
   projectId: string,
   episodeId: string,
@@ -363,7 +391,14 @@ export function updateFilmShot(
 
 export function createFilmAsset(
   projectId: string,
-  input: { kind: FilmAssetKind; title: string; description?: string; parentAssetId?: string },
+  input: {
+    kind: FilmAssetKind;
+    title: string;
+    description?: string;
+    parentAssetId?: string;
+    stylePrompt?: string;
+    aspectRatio?: string;
+  },
 ): Promise<FilmStatus> {
   return requestFilm(projectId, "/assets", { method: "POST", body: JSON.stringify(input) });
 }

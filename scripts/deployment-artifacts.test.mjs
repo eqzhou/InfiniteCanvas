@@ -6,22 +6,35 @@ import test from "node:test";
 const root = new URL("..", import.meta.url).pathname;
 const read = (path) => readFileSync(join(root, path), "utf8");
 
-test("container pins distro FFmpeg and exposes exact executable paths", () => {
+test("container pins distro media and PDF tools and exposes exact executable paths", () => {
   const dockerfile = read("Dockerfile");
   assert.match(dockerfile, /ffmpeg=8\.0\.1-r1/);
+  assert.match(dockerfile, /poppler-utils=25\.12\.0-r1/);
+  assert.match(dockerfile, /bubblewrap=0\.11\.0-r2/);
   assert.match(dockerfile, /OPENBOARD_FFMPEG_PATH=\/usr\/bin\/ffmpeg/);
   assert.match(dockerfile, /OPENBOARD_FFPROBE_PATH=\/usr\/bin\/ffprobe/);
+  assert.match(dockerfile, /OPENBOARD_PDFTOTEXT_PATH=\/usr\/bin\/pdftotext/);
+  assert.match(dockerfile, /OPENBOARD_PDF_SANDBOX_PATH=\/usr\/local\/bin\/openboard-pdf-sandbox/);
   assert.doesNotMatch(dockerfile, /curl|wget.*ffmpeg/i);
   const notices = read("docs/THIRD_PARTY_NOTICES.md");
   assert.match(notices, /FFmpeg \| 8\.0\.1-r1/);
   assert.match(notices, /GPL-2\.0-or-later AND LGPL-2\.1-or-later/);
+  assert.match(notices, /Poppler utilities \| 25\.12\.0-r1/);
+  assert.match(notices, /Bubblewrap \| 0\.11\.0-r2/);
+  const sandbox = read("docker/pdf-sandbox.sh");
+  assert.match(sandbox, /--unshare-all/);
+  assert.match(sandbox, /--clearenv/);
+  assert.match(sandbox, /--ro-bind/);
 });
 
 test("compose forwards media controls and bounds temporary storage", () => {
   const compose = read("compose.yaml");
   assert.match(compose, /OPENBOARD_FFMPEG_PATH:/);
   assert.match(compose, /OPENBOARD_FFPROBE_PATH:/);
+  assert.match(compose, /OPENBOARD_PDFTOTEXT_PATH:/);
   assert.match(compose, /\/tmp:size=512m/);
+  assert.match(compose, /mem_limit: 2g/);
+  assert.match(compose, /pids_limit: 256/);
 });
 
 test("CI makes coverage, film Chromium, deployment, and container capability checks explicit", () => {
@@ -35,6 +48,8 @@ test("CI makes coverage, film Chromium, deployment, and container capability che
   assert.match(workflow, /audit:licenses/);
   assert.match(workflow, /audit:cleanroom/);
   assert.match(workflow, /OPENBOARD_FFPROBE_PATH/);
+  assert.match(workflow, /OPENBOARD_PDFTOTEXT_PATH/);
   assert.match(workflow, /apk list --installed ffmpeg/);
+  assert.match(workflow, /apk list --installed poppler-utils/);
   assert.doesNotMatch(workflow, /apk info -v ffmpeg/);
 });

@@ -31,6 +31,7 @@ type filmMemoryStore struct {
 	cleanupGenerations map[string]store.FilmCleanupGeneration
 	atomicBatchCalls   atomic.Int32
 	lastReservations   []store.FilmGenerationReservation
+	requireLiveContext bool
 }
 
 type filmMemoryWorkspaceToken struct {
@@ -358,7 +359,10 @@ func (m *filmMemoryStore) CompleteFilmCleanupGeneration(_ context.Context, tenan
 	return nil
 }
 
-func (m *filmMemoryStore) GetFilmProject(_ context.Context, tenantID, projectID string) (store.FilmRecord, error) {
+func (m *filmMemoryStore) GetFilmProject(ctx context.Context, tenantID, projectID string) (store.FilmRecord, error) {
+	if m.requireLiveContext && ctx.Err() != nil {
+		return store.FilmRecord{}, ctx.Err()
+	}
 	m.filmMu.Lock()
 	defer m.filmMu.Unlock()
 	record, ok := m.films[tenantKey(tenantID, projectID)]
@@ -381,7 +385,10 @@ func (m *filmMemoryStore) CreateFilmProject(_ context.Context, tenantID, project
 	return record, nil
 }
 
-func (m *filmMemoryStore) CompareAndSwapFilmProject(_ context.Context, tenantID, projectID string, expectedRevision int, document []byte) (store.FilmRecord, error) {
+func (m *filmMemoryStore) CompareAndSwapFilmProject(ctx context.Context, tenantID, projectID string, expectedRevision int, document []byte) (store.FilmRecord, error) {
+	if m.requireLiveContext && ctx.Err() != nil {
+		return store.FilmRecord{}, ctx.Err()
+	}
 	if m.casHook != nil {
 		m.casHook()
 	}
@@ -655,6 +662,10 @@ func TestFilmRepairRegenerationRequiresGenerationRequestAndCommitsAtomically(t *
 	if parentErr != nil || childErr != nil || parent.Kind != "film-stage" || child.Kind != "image" {
 		t.Fatalf("repair jobs parent=%#v/%v child=%#v/%v", parent, parentErr, child, childErr)
 	}
+	var childParameters persistedImageJobParameters
+	if json.Unmarshal(child.Parameters, &childParameters) != nil || childParameters.EstimatedCredits != lastTask.Snapshot.EstimatedCredits || childParameters.EstimatedCredits < 1 {
+		t.Fatalf("repair child did not freeze its exact credit quote: task=%#v parameters=%#v", lastTask.Snapshot, childParameters)
+	}
 	replayed := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", body)
 	if replayed.Code != http.StatusOK || backend.atomicBatchCalls.Load() != batchCalls+1 {
 		t.Fatalf("repair idempotent replay = %d batches=%d body=%s", replayed.Code, backend.atomicBatchCalls.Load(), replayed.Body.String())
@@ -895,7 +906,8 @@ func TestFilmCanvasMediaAdoptionBindsVerifiedTenantBlobAndProvenance(t *testing.
 	}
 	adopted := decodeFilmResponse(t, response)
 	if adopted.Shots[0].ImageStorageKey != "image:canvas-candidate" || adopted.Shots[0].Revision != document.Shots[0].Revision+1 ||
-		len(adopted.Adoptions) != 1 || adopted.Adoptions[0].SourceNodeID != "node-candidate" || adopted.Adoptions[0].SHA256 != sha256Hex(payload) {
+		len(adopted.Adoptions) != 1 || adopted.Adoptions[0].SourceNodeID != "node-candidate" || adopted.Adoptions[0].SHA256 != sha256Hex(payload) ||
+		len(adopted.Versions) != 1 || adopted.Versions[0].EntityType != "shot" || adopted.Versions[0].EntityID != document.Shots[0].ID {
 		t.Fatalf("adoption was not durably attributed: %#v %#v", adopted.Shots[0], adopted.Adoptions)
 	}
 	stale := request(t, handler, http.MethodPost, "/api/film/projects/film-api/projection/adopt", body)

@@ -175,6 +175,9 @@ func containsJSONSecret(value json.RawMessage) bool {
 
 func TestFilmAIDecomposeRunCreatesOneIdempotentTextJob(t *testing.T) {
 	backend, handler := filmAPIHandler(t)
+	if err := backend.PutModelCreditConfig(t.Context(), store.DefaultTenantID, store.ModelCreditConfig{DefaultCredits: 1, ModelCosts: []store.ModelCreditCost{{Model: "gpt-text", Credits: 7}}}); err != nil {
+		t.Fatal(err)
+	}
 	response := request(t, handler, http.MethodPut, "/api/film/projects/film-api/source/text", []byte(`{"revision":0,"text":"INT. STATION - NIGHT\nLin hears a signal."}`))
 	if response.Code != http.StatusOK {
 		t.Fatalf("source: %d %s", response.Code, response.Body.String())
@@ -201,7 +204,7 @@ func TestFilmAIDecomposeRunCreatesOneIdempotentTextJob(t *testing.T) {
 	task := created.Tasks[len(created.Tasks)-1]
 	if task.Stage != "decompose" || task.ShotID != "" || task.GenerationJobID == "" || task.TextSnapshot == nil ||
 		task.TextSnapshot.SourceRevision != document.Source.Revision || task.TextSnapshot.SourceSHA256 == "" ||
-		task.TextSnapshot.Model != "gpt-text" || task.TextSnapshot.PromptVersion != "film-decompose-v2" {
+		task.TextSnapshot.Model != "gpt-text" || task.TextSnapshot.PromptVersion != "film-decompose-v2" || task.TextSnapshot.EstimatedCredits != 7 {
 		t.Fatalf("text task did not freeze its inputs: %#v", task)
 	}
 	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
@@ -210,6 +213,10 @@ func TestFilmAIDecomposeRunCreatesOneIdempotentTextJob(t *testing.T) {
 	}
 	if bytes.Contains(job.Parameters, []byte("INT. STATION")) {
 		t.Fatalf("manuscript was duplicated into job parameters: %s", job.Parameters)
+	}
+	var parameters persistedTextJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.EstimatedCredits != 7 || len(backend.lastReservations) != 1 || backend.lastReservations[0].ExpectedCredits == nil || *backend.lastReservations[0].ExpectedCredits != 7 {
+		t.Fatalf("text generation did not freeze its exact credit quote: %#v %#v", parameters, backend.lastReservations)
 	}
 
 	second := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/decompose/run", body)

@@ -17,11 +17,13 @@ import (
 )
 
 const (
-	maxFilmRequestBytes    = 2 << 20
-	maxFilmSourceBytes     = 1 << 20
-	maxFilmEntities        = 10_000
-	maxFilmQualityIssues   = 10_000
-	maxFilmRepairProposals = 5_000
+	maxFilmRequestBytes       = 2 << 20
+	maxFilmSourceBytes        = 1 << 20
+	maxFilmEntities           = 10_000
+	maxFilmRelations          = 50_000
+	maxFilmRelationsPerEntity = 1_000
+	maxFilmQualityIssues      = 10_000
+	maxFilmRepairProposals    = 5_000
 )
 
 type filmRevisionRequest struct {
@@ -79,6 +81,7 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/source/preflight", server.preflightFilmSource)
 		r.Put("/source/text", server.putFilmSource)
 		r.Post("/source/import", server.importFilmSource)
+		r.Get("/source/import/status", server.getFilmImportStatus)
 		r.Post("/episodes", server.createFilmEpisode)
 		r.Put("/episodes/{entityId}", server.updateFilmEpisode)
 		r.Delete("/episodes/{entityId}", server.deleteFilmEpisode)
@@ -155,6 +158,14 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 		}
 	}
 	generationAvailable := generation["storyboard"] || generation["first_frame"] || generation["audio"] || generation["video"]
+	pdfImportAvailable := available
+	pdfDiagnostic := ""
+	if available {
+		if _, err := s.filmPDFTextCapability(); err != nil {
+			pdfImportAvailable = false
+			pdfDiagnostic = err.Error()
+		}
+	}
 	return map[string]any{
 		"available":         available,
 		"reason":            reason,
@@ -167,7 +178,8 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 		"package":           available,
 		"assetBundleExport": available,
 		"docxImport":        available,
-		"pdfImport":         available,
+		"pdfImport":         pdfImportAvailable,
+		"pdfDiagnostic":     pdfDiagnostic,
 		"importMaxBytes":    filmImportByteLimit(),
 		"mp4Export":         renderAvailable,
 		"mp4Diagnostic":     renderDiagnostic,
@@ -742,9 +754,18 @@ func (s *Server) putFilmTimeline(w http.ResponseWriter, r *http.Request) {
 		if input.Revision != document.Timeline.Revision {
 			return filmDocument{}, errors.New("timeline revision conflict")
 		}
+		if len(document.Versions) >= 1_000 {
+			return filmDocument{}, errors.New("film entity version limit reached")
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		snapshot, err := json.Marshal(document.Timeline)
+		if err != nil {
+			return filmDocument{}, err
+		}
+		document.Versions = append(document.Versions, filmEntityVersion{ID: stableFilmID("version", "timeline", document.Timeline.Revision, "edit"), EntityType: "timeline", EntityID: "timeline", Revision: document.Timeline.Revision, Snapshot: snapshot, Reason: "timeline-edit", CreatedAt: now})
 		input.Revision++
 		document.Timeline = input
-		return invalidateFilmStages(document, "compose", document.UpdatedAt), nil
+		return invalidateFilmStages(document, "compose", now), nil
 	})
 	if ok {
 		s.writeFilmDocument(w, r, http.StatusOK, record, document)

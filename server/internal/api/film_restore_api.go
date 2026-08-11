@@ -43,7 +43,53 @@ func filmRestoreTokenDigest(token string) (string, error) {
 }
 
 func validateFilmRestoreDocument(document filmDocument, projectID string) error {
-	return validateFilmAggregate(document, projectID)
+	validation := cloneFilmDocument(document)
+	normalizeSource := func(source *filmDirectorSource, target *string) {
+		if source == nil || strings.HasPrefix(source.StorageKey, "film:media:") {
+			return
+		}
+		key := "film:media:" + projectID + ":restore-validation:" + stableFilmID("director", source.StorageKey, source.SHA256)
+		source.StorageKey = key
+		if target != nil {
+			*target = key
+		}
+	}
+	for index := range validation.Scenes {
+		normalizeSource(validation.Scenes[index].DirectorSource, nil)
+	}
+	for index := range validation.Shots {
+		shot := &validation.Shots[index]
+		normalizeSource(shot.StoryboardDirectorSource, &shot.ImageStorageKey)
+		normalizeSource(shot.FirstFrameDirectorSource, &shot.FirstFrameStorageKey)
+		normalizeSource(shot.LastFrameDirectorSource, &shot.LastFrameStorageKey)
+	}
+	for index := range validation.Tasks {
+		if snapshot := validation.Tasks[index].Snapshot; snapshot != nil {
+			normalizeSource(snapshot.StoryboardDirectorSource, nil)
+			normalizeSource(snapshot.FirstFrameDirectorSource, nil)
+			normalizeSource(snapshot.LastFrameDirectorSource, nil)
+		}
+	}
+	for index := range validation.Versions {
+		version := &validation.Versions[index]
+		switch version.EntityType {
+		case "scene":
+			var scene filmScene
+			if json.Unmarshal(version.Snapshot, &scene) == nil {
+				normalizeSource(scene.DirectorSource, nil)
+				version.Snapshot, _ = json.Marshal(scene)
+			}
+		case "shot":
+			var shot filmShot
+			if json.Unmarshal(version.Snapshot, &shot) == nil {
+				normalizeSource(shot.StoryboardDirectorSource, &shot.ImageStorageKey)
+				normalizeSource(shot.FirstFrameDirectorSource, &shot.FirstFrameStorageKey)
+				normalizeSource(shot.LastFrameDirectorSource, &shot.LastFrameStorageKey)
+				version.Snapshot, _ = json.Marshal(shot)
+			}
+		}
+	}
+	return validateFilmAggregate(validation, projectID)
 }
 
 func (s *Server) restoreFilmProduction(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +141,11 @@ func (s *Server) restoreFilmProduction(w http.ResponseWriter, r *http.Request) {
 	}
 	cleanup := func() {
 		s.cleanupRestoredFilmBlobs(r.Context(), tenantIDFrom(r), userIDFrom(r), projectID, createdKeys)
+	}
+	if err := validateFilmAggregate(next, projectID); err != nil {
+		cleanup()
+		writeFilmOperationError(w, err)
+		return
 	}
 	raw, err := json.Marshal(next)
 	if err != nil || len(raw) > maxProjectBytes {

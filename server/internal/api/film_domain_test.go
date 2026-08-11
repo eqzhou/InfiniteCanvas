@@ -325,6 +325,44 @@ func TestFilmAggregateLimitsIncludeDecompositionEntities(t *testing.T) {
 	}
 }
 
+func TestFilmAggregateLimitsBoundRelationalProjectionFanout(t *testing.T) {
+	document := newFilmDocument("project-relation-limit")
+	document.Assets = []filmAsset{{
+		ID:         "identity-1",
+		Revision:   1,
+		Kind:       "identity",
+		EpisodeIDs: make([]string, maxFilmRelationsPerEntity+1),
+	}}
+	if err := validateFilmAggregateLimits(document); err == nil || !strings.Contains(err.Error(), "relation") {
+		t.Fatalf("aggregate relation fanout limit was not enforced: %v", err)
+	}
+}
+
+func TestFilmAggregateLimitsCountStructuralShotRelationsInFanout(t *testing.T) {
+	document := newFilmDocument("project-shot-relation-limit")
+	document.Shots = []filmShot{{
+		ID:                 "shot-1",
+		SceneID:            "scene-1",
+		IdentityVersionIDs: make([]string, maxFilmRelationsPerEntity-1),
+		StyleAssetID:       "style-1",
+	}}
+	if err := validateFilmAggregateLimits(document); err == nil || !strings.Contains(err.Error(), "relation") {
+		t.Fatalf("shot structural relations were not included in fanout: %v", err)
+	}
+}
+
+func TestFilmAggregateLimitsCountAssetParentInFanout(t *testing.T) {
+	document := newFilmDocument("project-asset-relation-limit")
+	document.Assets = []filmAsset{{
+		ID:            "asset-1",
+		ParentAssetID: "parent-1",
+		EpisodeIDs:    make([]string, maxFilmRelationsPerEntity),
+	}}
+	if err := validateFilmAggregateLimits(document); err == nil || !strings.Contains(err.Error(), "relation") {
+		t.Fatalf("asset parent relation was not included in fanout: %v", err)
+	}
+}
+
 func TestFilmDecompositionEnforcesCountersBeforeAppending(t *testing.T) {
 	tests := []struct {
 		name   string
