@@ -73,3 +73,10 @@ describe("Film production assistant", () => {
     expect(html).toContain("生成、审批、修复和导出需要确认");
   });
 });
+
+describe("Film production localization", () => {
+  test("keeps production controls free of hardcoded Chinese UI copy", async () => {
+    const source = await Bun.file(new URL("./ProductionPanels.tsx", import.meta.url)).text();
+    expect(source).not.toMatch(/[\u3400-\u9fff]/u);
+  });
+});
