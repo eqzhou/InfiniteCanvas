@@ -2235,6 +2235,27 @@ test("settings keeps provider configuration structured without responsive overfl
   }
 });
 
+test("interface language switches immediately and persists through reload", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByTitle("设置").click();
+  const settings = page.getByRole("dialog", { name: /设置|Settings/ });
+
+  await settings.getByRole("combobox", { name: /界面语言|Interface language/ }).selectOption("zh-CN");
+  await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+
+  await page.getByRole("dialog", { name: "设置" }).getByLabel("界面语言").selectOption("en-US");
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "关闭设置" }).click();
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
+  await page.getByTitle("设置").click();
+  await expect(page.getByRole("dialog", { name: "Settings" }).getByLabel("Interface language"))
+    .toHaveValue("en-US");
+});
+
 test("settings exports credential-free preferences and imports them into database storage", async ({ page }) => {
   await openFreshBoard(page, { requireProjectPanel: false });
   await page.getByTitle("设置").click();
