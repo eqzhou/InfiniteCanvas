@@ -7,18 +7,23 @@ import {
   structureAgentDiagnostics,
   type AgentDiagnosticFilter,
 } from "@/services/agent-diagnostics";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator, type AgentHelpMessageKey } from "@/i18n/messages/agent-help";
 
-const FILTERS: Array<{ id: AgentDiagnosticFilter; label: string }> = [
-  { id: "all", label: "全部" },
-  { id: "errors", label: "错误" },
-  { id: "warnings", label: "警告" },
-  { id: "activity", label: "活动" },
+const FILTERS: Array<{ id: AgentDiagnosticFilter; label: AgentHelpMessageKey }> = [
+  { id: "all", label: "agent.all" },
+  { id: "errors", label: "agent.errors" },
+  { id: "warnings", label: "agent.warnings" },
+  { id: "activity", label: "agent.activity" },
 ];
 
-export function AgentDiagnosticLog({ logs, title = "诊断信息" }: {
+export function AgentDiagnosticLog({ logs, title }: {
   logs: readonly string[];
   title?: string;
 }) {
+  const { locale, t: baseT } = useI18n();
+  const t = createAgentHelpTranslator(baseT, locale);
+  const resolvedTitle = title ?? t("agent.diagnostics");
   const [filter, setFilter] = useState<AgentDiagnosticFilter>("all");
   const [showJumpBottom, setShowJumpBottom] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -52,10 +57,10 @@ export function AgentDiagnosticLog({ logs, title = "诊断信息" }: {
     <section className="relative mb-2 overflow-hidden rounded-lg border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)]">
       <header className="sticky top-0 z-10 border-b border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-1.5">
         <div className="mb-1 flex items-center justify-between gap-2">
-          <strong className="text-[11px] font-medium">{title} · {entries.length}</strong>
-          <span className="text-[9px] text-[var(--ob-muted)]">原始 {logs.length}</span>
+          <strong className="text-[11px] font-medium">{resolvedTitle} · {entries.length}</strong>
+          <span className="text-[9px] text-[var(--ob-muted)]">{t("agent.rawCount", { count: logs.length })}</span>
         </div>
-        <div className="flex gap-1" aria-label={`${title}筛选`}>
+        <div className="flex gap-1" aria-label={t("agent.filterLabel", { title: resolvedTitle })}>
           {FILTERS.map((option) => (
             <button
               key={option.id}
@@ -67,7 +72,7 @@ export function AgentDiagnosticLog({ logs, title = "诊断信息" }: {
                 setFilter(option.id);
               }}
             >
-              {option.label}
+              {t(option.label)}
             </button>
           ))}
         </div>
@@ -75,7 +80,7 @@ export function AgentDiagnosticLog({ logs, title = "诊断信息" }: {
       <div
         ref={scrollRef}
         role="log"
-        aria-label={title}
+        aria-label={resolvedTitle}
         className="max-h-36 space-y-1 overflow-auto p-1.5 text-[10px]"
         onScroll={updateFollow}
       >
@@ -89,7 +94,7 @@ export function AgentDiagnosticLog({ logs, title = "诊断信息" }: {
             {entry.detail ? <pre className="mt-1 whitespace-pre-wrap break-words border-t border-[var(--ob-line)] pt-1 text-[9px] text-[var(--ob-muted)]">{entry.detail}</pre> : null}
           </details>
         )) : (
-          <p className="py-3 text-center text-[var(--ob-muted)]">当前筛选下没有日志</p>
+          <p className="py-3 text-center text-[var(--ob-muted)]">{t("agent.noFilteredLogs")}</p>
         )}
       </div>
       {showJumpBottom ? <AgentJumpToLatest onClick={() => jumpToBottom("smooth")} /> : null}

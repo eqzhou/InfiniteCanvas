@@ -18,6 +18,8 @@ import {
 } from "@/services/generation-activity";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { getSessionToken } from "@/services/auth-session";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 const CodexPanel = lazy(async () => {
   const module = await import("@/components/agent/CodexPanel");
@@ -34,6 +36,8 @@ function initialAgentToken(): string {
 }
 
 export function LocalAgentPanel() {
+  const { locale, t: baseT } = useI18n();
+  const t = createAgentHelpTranslator(baseT, locale);
   const show = useBoardStore((s) => s.showLocalAgent);
   const setShow = useBoardStore((s) => s.setShowLocalAgent);
   const config = useBoardStore((s) => s.config);
@@ -142,7 +146,7 @@ export function LocalAgentPanel() {
   return (
     <aside
       id="canvas-agent"
-      aria-label="画布 Agent"
+      aria-label={t("agent.canvasAgent")}
       className="ob-drawer fixed bottom-0 right-0 top-14 z-[60] flex w-full flex-col overflow-auto p-3 shadow-[var(--ob-elev-2)] sm:w-[420px] xl:static xl:h-full xl:w-[380px] xl:shrink-0"
     >
       <div className="mb-3 flex items-center gap-2">
@@ -151,13 +155,13 @@ export function LocalAgentPanel() {
         </span>
         <div className="min-w-0">
           <p className="ob-page-kicker !mb-0">Canvas runtime</p>
-          <strong className="text-sm font-semibold tracking-tight">画布 Agent</strong>
+          <strong className="text-sm font-semibold tracking-tight">{t("agent.canvasAgent")}</strong>
         </div>
         <button
           type="button"
           className="ob-icon-btn ml-auto h-8 w-8"
-          title="刷新"
-          aria-label="刷新 Agent 状态"
+          title={t("agent.refresh")}
+          aria-label={t("agent.refreshStatus")}
           onClick={() => void refresh()}
         >
           <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
@@ -165,8 +169,8 @@ export function LocalAgentPanel() {
         <button
           type="button"
           className="ob-icon-btn h-8 w-8"
-          aria-label="关闭画布 Agent"
-          title="关闭画布 Agent"
+          aria-label={t("agent.closeCanvasAgent")}
+          title={t("agent.closeCanvasAgent")}
           onClick={() => setShow(false)}
         >
           <Unplug size={14} />
@@ -174,7 +178,7 @@ export function LocalAgentPanel() {
       </div>
       <div className="mb-3 grid gap-2 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] p-2.5">
         <label className="grid gap-1 text-xs">
-          <span className="ob-label !mb-0">本地地址</span>
+          <span className="ob-label !mb-0">{t("agent.localAddress")}</span>
           <input
             type="url"
             inputMode="url"
@@ -188,7 +192,7 @@ export function LocalAgentPanel() {
           />
         </label>
         <label className="grid gap-1 text-xs">
-          <span className="ob-label !mb-0">连接令牌</span>
+          <span className="ob-label !mb-0">{t("agent.connectionToken")}</span>
           <input
             type="password"
             value={token}
@@ -206,20 +210,20 @@ export function LocalAgentPanel() {
           disabled={busy || !baseUrl.trim()}
           onClick={() => void connect()}
         >
-          <Link2 size={14} /> 连接
+          <Link2 size={14} /> {t("agent.connect")}
         </button>
       </div>
       {error ? (
         <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-2 text-xs text-[var(--ob-danger)]">
-          无法连接 Agent：{error}
+          {t("agent.connectionFailed", { message: error })}
           <br />
-          请运行 <code className="rounded bg-[color-mix(in_srgb,var(--ob-canvas)_70%,transparent)] px-1">cd server && go run ./cmd/server</code>
+          {t("agent.runServerHint")} <code className="rounded bg-[color-mix(in_srgb,var(--ob-canvas)_70%,transparent)] px-1">cd server && go run ./cmd/server</code>
         </p>
       ) : (
         <div className="space-y-2.5 text-xs">
           {syncError ? (
             <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-2 text-[var(--ob-danger)]">
-              Agent 同步失败：{syncError}
+              {t("agent.syncFailed", { message: syncError })}
             </p>
           ) : null}
           <div className="flex items-center gap-2">
@@ -229,13 +233,13 @@ export function LocalAgentPanel() {
               aria-hidden
             />
             <span className={status?.connected ? "font-medium text-[var(--ob-accent)]" : "text-[var(--ob-muted)]"}>
-              {status?.connected ? "已连接" : "未连接"}
+              {status?.connected ? t("agent.connected") : t("agent.disconnected")}
             </span>
           </div>
           {status?.message ? <p className="text-[var(--ob-muted)]">{status.message}</p> : null}
           {status?.bridges?.length ? (
             <div>
-              <span className="text-[var(--ob-muted)]">桥接</span>
+              <span className="text-[var(--ob-muted)]">{t("agent.bridge")}</span>
               <div className="mt-1 flex flex-wrap gap-1">
                 {status.bridges.map((b) => (
                   <span key={b} className="ob-chip">
@@ -247,7 +251,7 @@ export function LocalAgentPanel() {
           ) : null}
           {status?.tools?.length ? (
             <div>
-              <span className="text-[var(--ob-muted)]">工具</span>
+              <span className="text-[var(--ob-muted)]">{t("agent.tools")}</span>
               <ul className="mt-1 list-disc pl-4 text-[var(--ob-ink)]">
                 {status.tools.map((tool) => (
                   <li key={tool}>{tool}</li>
@@ -256,29 +260,29 @@ export function LocalAgentPanel() {
             </div>
           ) : (
             <p className="text-[var(--ob-muted)]">
-              当前服务未公布可用工具。
+              {t("agent.noTools")}
             </p>
           )}
           {runningGenerationTasks.length ? (
-            <section className="rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_45%,transparent)] p-2" aria-label="正在运行的生成任务">
+            <section className="rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_45%,transparent)] p-2" aria-label={t("agent.runningTasks")}>
               <div className="mb-1.5 flex items-center gap-1.5 font-medium text-[var(--ob-ink)]">
                 <LoaderCircle size={13} className="animate-spin text-[var(--ob-accent)]" />
-                生成任务 · {runningGenerationTasks.length}
+                {t("agent.generationTasks", { count: runningGenerationTasks.length })}
               </div>
               <ul className="space-y-1 text-[11px] text-[var(--ob-muted)]">
                 {runningGenerationTasks.slice(0, 4).map((task) => (
                   <li key={task.id} className="flex min-w-0 items-center gap-2">
                     <span className="ob-chip shrink-0 !px-1.5 !py-0 text-[10px]">
-                      {task.kind === "image" ? "图片" : task.kind === "video" ? "视频" : task.kind}
+                      {task.kind === "image" ? t("agent.image") : task.kind === "video" ? t("agent.video") : task.kind}
                     </span>
-                    <span className="min-w-0 flex-1 truncate" title={task.prompt}>{task.prompt || "无提示词"}</span>
-                    <span className="shrink-0">{task.surface === "image-workbench" ? "图片工作台" : task.surface === "video-workbench" ? "视频工作台" : "画布"}</span>
+                    <span className="min-w-0 flex-1 truncate" title={task.prompt}>{task.prompt || t("agent.noPrompt")}</span>
+                    <span className="shrink-0">{task.surface === "image-workbench" ? t("agent.imageWorkbench") : task.surface === "video-workbench" ? t("agent.videoWorkbench") : t("agent.canvas")}</span>
                   </li>
                 ))}
               </ul>
             </section>
           ) : null}
-          <div className="ob-segment mt-1 w-full" role="tablist" aria-label="Agent 会话">
+          <div className="ob-segment mt-1 w-full" role="tablist" aria-label={t("agent.sessions")}>
             <button
               type="button"
               role="tab"
@@ -298,10 +302,10 @@ export function LocalAgentPanel() {
               Claude
             </button>
             {status?.claude?.available === false ? (
-              <span className="ml-auto self-center px-1 text-[10px] text-[var(--ob-muted)]">未检测到 claude CLI</span>
+              <span className="ml-auto self-center px-1 text-[10px] text-[var(--ob-muted)]">{t("agent.claudeMissing")}</span>
             ) : null}
           </div>
-          <Suspense fallback={<div className="border-t border-[var(--ob-line)] pt-2 text-[var(--ob-muted)]">加载会话面板…</div>}>
+          <Suspense fallback={<div className="border-t border-[var(--ob-line)] pt-2 text-[var(--ob-muted)]">{t("agent.loadingPanel")}</div>}>
             {agentTab === "claude" ? (
               <ClaudePanel connection={connection} />
             ) : (

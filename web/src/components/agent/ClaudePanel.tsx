@@ -15,6 +15,8 @@ import { getRuntimeClientId } from "@/services/runtime-identity";
 import { AgentDiagnosticLog } from "@/components/agent/AgentDiagnosticLog";
 import { AgentJumpToLatest } from "@/components/agent/AgentJumpToLatest";
 import { AgentMarkdownMessage } from "@/components/agent/agent-markdown";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = "idle" | "running" | "completed" | "failed";
@@ -30,6 +32,8 @@ function eventText(event: ClaudeEvent): string | undefined {
 }
 
 export function ClaudePanel({ connection }: { connection: AgentConnection }) {
+  const { locale, t: baseT } = useI18n();
+  const t = useMemo(() => createAgentHelpTranslator(baseT, locale), [baseT, locale]);
   const [session, setSession] = useState<ClaudeSession | null>(null);
   const [text, setText] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -133,7 +137,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
           return;
         }
         if (event.type === "error") {
-          const message = eventText(event) ?? "Claude 运行出错";
+          const message = eventText(event) ?? t("agent.claudeRunError");
           setError(message);
           setTurnStatus("failed");
           turnStatusRef.current = "failed";
@@ -148,11 +152,11 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
       onError: (cause, willRetry) => {
         setLogs((current) => [
           ...current.slice(-99),
-          willRetry ? `事件流中断，重连中：${cause.message}` : cause.message,
+          willRetry ? t("agent.streamReconnecting", { message: cause.message }) : cause.message,
         ]);
       },
     });
-  }, [connection, session?.id]);
+  }, [connection, session?.id, t]);
 
   const start = async (fresh: boolean) => {
     setBusy(true);
@@ -210,7 +214,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
     if (!session) return;
     try {
       await interruptClaudeTurn(connection, session.id);
-      setLogs((current) => [...current.slice(-99), "已请求停止当前 turn"]);
+      setLogs((current) => [...current.slice(-99), t("agent.stopRequested")]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -232,8 +236,8 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
             <button
               type="button"
               className="ob-icon-btn ml-auto h-7 w-7"
-              title="新会话"
-              aria-label="新会话"
+              title={t("agent.newSession")}
+              aria-label={t("agent.newSession")}
               onClick={() => void start(true)}
               disabled={busy || turnStatus === "running"}
             >
@@ -242,8 +246,8 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
             <button
               type="button"
               className="ob-icon-btn h-7 w-7"
-              title="关闭 Claude 会话"
-              aria-label="关闭 Claude 会话"
+              title={t("agent.closeSession", { agent: "Claude" })}
+              aria-label={t("agent.closeSession", { agent: "Claude" })}
               disabled={turnStatus === "running"}
               onClick={() => {
                 void closeClaudeSession(connection, session.id)
@@ -262,7 +266,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
         ) : null}
       </div>
       <p className="mb-2 text-[11px] leading-relaxed text-[var(--ob-muted)]">
-        通过本机 Claude Code CLI（stream-json）会话；需已登录 `claude`，可选 MCP 驱动画布。
+        {t("agent.claudeDescription")}
       </p>
       {!session ? (
         <button
@@ -271,7 +275,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
           onClick={() => void start(false)}
           disabled={busy}
         >
-          启动 Claude 会话
+          {t("agent.startClaude")}
         </button>
       ) : (
         <>
@@ -289,7 +293,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
                     data-role={message.role}
                   >
                     <div className="ob-msg-meta">
-                      {message.role === "user" ? "你" : "Claude"}
+                      {message.role === "user" ? t("agent.you") : "Claude"}
                     </div>
                     {message.role === "assistant" ? (
                       <AgentMarkdownMessage text={message.text} />
@@ -300,8 +304,8 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
                 ))
               ) : (
                 <div className="grid place-items-center gap-1 py-8 text-center text-[var(--ob-muted)]">
-                  <span className="text-xs font-medium text-[var(--ob-ink)]">等待消息</span>
-                  <span className="text-[11px]">输入问题后发送，Claude 可驱动画布 MCP</span>
+                  <span className="text-xs font-medium text-[var(--ob-ink)]">{t("agent.waitingMessage")}</span>
+                  <span className="text-[11px]">{t("agent.claudeWaitingHint")}</span>
                 </div>
               )}
             </div>
@@ -309,7 +313,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               <AgentJumpToLatest onClick={() => scrollTranscriptToBottom("smooth")} />
             ) : null}
           </div>
-          <AgentDiagnosticLog logs={logs} title="运行日志" />
+          <AgentDiagnosticLog logs={logs} title={t("agent.runtimeLog")} />
           {error ? (
             <p className="mb-2 rounded-lg border border-[color-mix(in_srgb,var(--ob-danger)_28%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-danger)_8%,transparent)] px-2.5 py-1.5 text-[11px] text-[var(--ob-danger)]">
               {error}
@@ -319,7 +323,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
             <textarea
               disabled={busy || turnStatus === "running"}
               className="min-h-[56px] flex-1 resize-none border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)] disabled:opacity-50"
-              placeholder="向 Claude Code 提问…（可驱动画布 MCP）"
+              placeholder={t("agent.claudePlaceholder")}
               value={text}
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => {
@@ -330,15 +334,15 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               }}
             />
             {turnStatus === "running" ? (
-              <button type="button" className="ob-btn-danger rounded-lg p-2" title="停止" aria-label="停止" onClick={() => void stop()}>
+              <button type="button" className="ob-btn-danger rounded-lg p-2" title={t("agent.stop")} aria-label={t("agent.stop")} onClick={() => void stop()}>
                 <Square size={14} />
               </button>
             ) : (
               <button
                 type="button"
                 className="ob-btn-primary rounded-lg p-2 disabled:opacity-50"
-                title="发送"
-                aria-label="发送"
+                title={t("agent.send")}
+                aria-label={t("agent.send")}
                 disabled={!canSend}
                 onClick={() => void send()}
               >
@@ -357,7 +361,7 @@ export function ClaudePanel({ connection }: { connection: AgentConnection }) {
               }
               aria-hidden
             />
-            {turnStatus === "running" ? "生成中" : turnStatus === "failed" ? "已中断/失败" : turnStatus === "completed" ? "完成" : "空闲"}
+            {turnStatus === "running" ? t("agent.running") : turnStatus === "failed" ? t("agent.failed") : turnStatus === "completed" ? t("agent.completed") : t("agent.idle")}
           </div>
         </>
       )}

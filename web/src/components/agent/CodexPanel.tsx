@@ -74,6 +74,8 @@ import {
   type CodexTranscriptState,
 } from "@/services/codex-transcript";
 import { applyAgentComposerSuggestion, detectAgentComposerTrigger } from "@/lib/agent-composer";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 type Message = { id?: string; role: "user" | "assistant"; text: string };
 type TurnStatus = SharedTurnStatus;
@@ -112,13 +114,13 @@ function replayHistoryProgress(record: CodexHistoryRecord): {
   return { progress, logs: logs.slice(-100) };
 }
 
-function formatHistoryDate(value: string): string {
+function formatHistoryDate(value: string, locale?: string): string {
   const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : value;
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString(locale) : value;
 }
 
 
-async function insertAttachmentImageNodes(files: File[]): Promise<void> {
+async function insertAttachmentImageNodes(files: File[], title: string): Promise<void> {
   if (!files.length) return;
   const state = useBoardStore.getState();
   const project = state.getActive();
@@ -142,7 +144,7 @@ async function insertAttachmentImageNodes(files: File[]): Promise<void> {
       "config",
       { x: center.x + 220, y: center.y - 40 },
       {
-        title: "图片生成",
+        title,
         metadata: {
           generationMode: "image",
           prompt: "",
@@ -175,6 +177,8 @@ async function insertAttachmentImageNodes(files: File[]): Promise<void> {
 }
 
 export function CodexPanel({ connection }: { connection: AgentConnection }) {
+  const { locale, t: baseT } = useI18n();
+  const t = useMemo(() => createAgentHelpTranslator(baseT, locale), [baseT, locale]);
   const [session, setSession] = useState<CodexSession | null>(null);
   const [text, setText] = useState("");
   const [composerCursor, setComposerCursor] = useState(0);
@@ -475,7 +479,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     const source = subscribeCodexEvents(connection, sessionId, (event) => {
       if (sessionIdRef.current !== sessionId) return;
       setReconnecting(false);
-      setError((current) => current?.startsWith("Codex 事件流正在重连：") ? null : current);
+      const reconnectPrefix = t("agent.codexStreamReconnecting", { message: "" });
+      setError((current) => current?.startsWith(reconnectPrefix) ? null : current);
       if (event.method === "openboard/session_state") {
         const snapshot = event.data as CodexSession | undefined;
         if (!snapshot || snapshot.id !== sessionId || typeof snapshot.running !== "boolean") return;
@@ -541,8 +546,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     }, (streamError, recoverable) => {
       setReconnecting(recoverable);
       setError(recoverable
-        ? `Codex 事件流正在重连：${streamError.message}`
-        : `Codex 会话已结束：${streamError.message}`);
+        ? t("agent.codexStreamReconnecting", { message: streamError.message })
+        : t("agent.codexSessionEnded", { message: streamError.message }));
       if (recoverable) return;
       setTurnStatus("failed");
       turnStatusRef.current = "failed";
@@ -554,7 +559,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       });
     });
     return () => source.close();
-  }, [connection, sessionId, session?.threadId]);
+  }, [connection, sessionId, session?.threadId, t]);
 
   const loadHistory = async () => {
     setHistoryBusy(true);
@@ -711,11 +716,11 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     try {
       if (pendingFiles.length) {
         try {
-          await insertAttachmentImageNodes(pendingFiles);
+          await insertAttachmentImageNodes(pendingFiles, t("agent.imageGeneration"));
         } catch (cause) {
           setLogs((current) => [
             ...current.slice(-99),
-            `画布附件节点创建失败：${cause instanceof Error ? cause.message : String(cause)}`,
+            t("agent.attachmentNodeFailed", { message: cause instanceof Error ? cause.message : String(cause) }),
           ]);
         }
       }
@@ -764,7 +769,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
     sharedRevisionRef.current += 1;
     try {
       await interruptCodexTurn(connection, session.id);
-      setLogs((current) => [...current.slice(-99), "已请求停止当前 turn"]);
+      setLogs((current) => [...current.slice(-99), t("agent.stopRequested")]);
       const current = await getCodexSession(connection, CODEX_PROFILE);
       if (current && !current.running) {
         setSession(current);
@@ -789,8 +794,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
         <button
           type="button"
           className="ob-icon-btn ml-auto h-7 w-7"
-          title="历史记录"
-          aria-label="历史记录"
+          title={t("agent.history")}
+          aria-label={t("agent.history")}
           disabled={historyBusy}
           onClick={() => {
             const next = !historyOpen;
@@ -805,8 +810,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
             <button
               type="button"
               className="ob-icon-btn h-7 w-7"
-              title="新会话"
-              aria-label="新会话"
+              title={t("agent.newSession")}
+              aria-label={t("agent.newSession")}
               onClick={() => void start(true)}
               disabled={busy || turnStatus === "running"}
             >
@@ -815,8 +820,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
             <button
               type="button"
               className="ob-icon-btn h-7 w-7"
-              title="关闭 Codex 会话"
-              aria-label="关闭 Codex 会话"
+              title={t("agent.closeSession", { agent: "Codex" })}
+              aria-label={t("agent.closeSession", { agent: "Codex" })}
               disabled={busy || turnStatus === "running"}
               onClick={() => {
                 sharedRevisionRef.current += 1;
@@ -838,12 +843,12 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       {historyOpen ? (
         <section
           role="region"
-          aria-label="Codex 会话历史"
+          aria-label={t("agent.codexHistory")}
           className="mb-2 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_50%,transparent)] p-2.5"
         >
           <div className="mb-2 flex items-center justify-between gap-2">
-            <strong className="text-xs font-semibold">历史记录</strong>
-            <span className="text-[10px] text-[var(--ob-muted)]">{history.length} 个会话</span>
+            <strong className="text-xs font-semibold">{t("agent.history")}</strong>
+            <span className="text-[10px] text-[var(--ob-muted)]">{t("agent.sessionCount", { count: history.length })}</span>
           </div>
           {history.length ? (
             <div className="max-h-56 space-y-1.5 overflow-auto">
@@ -851,7 +856,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 <div key={record.id} className="flex min-w-0 items-start gap-1.5 rounded-lg border border-[var(--ob-line)] px-2 py-1.5">
                   <input
                     type="checkbox"
-                    aria-label={`选择会话 ${record.title}`}
+                    aria-label={t("agent.selectSession", { title: record.title })}
                     checked={historySelected.includes(record.id)}
                     onChange={(event) => {
                       const checked = event.currentTarget.checked;
@@ -863,22 +868,22 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                     <button
                       type="button"
                       className="block max-w-full truncate text-left text-[11px] font-medium text-[var(--ob-ink)] hover:underline"
-                      aria-label={`恢复 ${record.title}`}
-                      title={`恢复 ${record.title}`}
+                      aria-label={t("agent.restoreSession", { title: record.title })}
+                      title={t("agent.restoreSession", { title: record.title })}
                       disabled={historyBusy || turnStatus === "running"}
                       onClick={() => void restoreHistory(record)}
                     >
                       {record.title}
                     </button>
                     <div className="truncate text-[10px] text-[var(--ob-muted)]">
-                      {record.preview || "暂无回复"} · {formatHistoryDate(record.updatedAt)}
+                      {record.preview || t("agent.noReply")} · {formatHistoryDate(record.updatedAt, locale)}
                     </div>
                   </div>
                   <button
                     type="button"
                     className="ob-icon-btn h-6 w-6 shrink-0"
-                    title="删除会话"
-                    aria-label={`删除会话 ${record.title}`}
+                    title={t("agent.deleteSession")}
+                    aria-label={t("agent.deleteSessionNamed", { title: record.title })}
                     disabled={historyBusy || turnStatus === "running"}
                     onClick={() => void removeHistory(record.id)}
                   >
@@ -888,18 +893,18 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               ))}
             </div>
           ) : (
-            <p className="py-4 text-center text-[11px] text-[var(--ob-muted)]">暂无 Codex 会话历史</p>
+            <p className="py-4 text-center text-[11px] text-[var(--ob-muted)]">{t("agent.noHistory")}</p>
           )}
           <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] text-[var(--ob-muted)]">已选 {historySelected.length} 个</span>
+            <span className="text-[10px] text-[var(--ob-muted)]">{t("agent.selectedCount", { count: historySelected.length })}</span>
             <button
               type="button"
               className="ob-btn-danger px-2 py-1 text-[10px]"
-              aria-label={`删除选中 ${historySelected.length} 个会话`}
+              aria-label={t("agent.deleteSelectedSessions", { count: historySelected.length })}
               disabled={historyBusy || !historySelected.length || turnStatus === "running"}
               onClick={() => void removeSelectedHistory()}
             >
-              删除选中
+              {t("agent.deleteSelected")}
             </button>
           </div>
         </section>
@@ -916,7 +921,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           onClick={() => void start(false)}
           disabled={busy}
         >
-          {busy ? "连接中" : "启动 Codex 会话"}
+          {busy ? t("agent.connecting") : t("agent.startCodex")}
         </button>
       ) : (
         <>
@@ -924,7 +929,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
             <div
               ref={transcriptRef}
               role="log"
-              aria-label="Codex 消息记录"
+              aria-label={t("agent.codexTranscript")}
               aria-live="polite"
               className="max-h-56 space-y-2 overflow-auto rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_50%,transparent)] p-2.5 text-xs"
               onScroll={updateStickToBottom}
@@ -937,7 +942,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                     data-role={message.role}
                   >
                     <div className="ob-msg-meta">
-                      {message.role === "user" ? "你" : "Codex"}
+                      {message.role === "user" ? t("agent.you") : "Codex"}
                     </div>
                     {message.role === "assistant" ? (
                       <AgentMarkdownMessage text={message.text} />
@@ -948,8 +953,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 ))
               ) : (
                 <div className="grid place-items-center gap-1 py-8 text-center text-[var(--ob-muted)]">
-                  <span className="text-xs font-medium text-[var(--ob-ink)]">等待消息</span>
-                  <span className="text-[11px]">发送消息或附加图片继续会话</span>
+                  <span className="text-xs font-medium text-[var(--ob-ink)]">{t("agent.waitingMessage")}</span>
+                  <span className="text-[11px]">{t("agent.codexWaitingHint")}</span>
                 </div>
               )}
             </div>
@@ -971,7 +976,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               {previews.map((preview) => (
                 <div key={`${preview.file.name}-${preview.file.lastModified}`} className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
                   <img src={preview.url} alt={preview.file.name} className="h-full w-full object-cover" />
-                  <button type="button" title="移除附件" className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white" onClick={() => setFiles((current) => current.filter((file) => file !== preview.file))}><X size={11} /></button>
+                  <button type="button" title={t("agent.removeAttachment")} className="absolute right-0.5 top-0.5 rounded bg-black/60 p-0.5 text-white" onClick={() => setFiles((current) => current.filter((file) => file !== preview.file))}><X size={11} /></button>
                 </div>
               ))}
             </div>
@@ -988,10 +993,10 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               aria-hidden
             />
             {turnStatus === "running"
-              ? `处理中 · ${formatCodexElapsed(elapsedNow - (turnStartedAt ?? elapsedNow))} · 可随时停止`
-              : turnStatus === "completed" ? "已完成" : turnStatus === "failed" ? "失败" : "空闲"}
-            {reconnecting ? " · 事件流重连中" : ""}
-            {session.reused ? " · 连续 thread" : ""}
+              ? t("agent.processing", { elapsed: formatCodexElapsed(elapsedNow - (turnStartedAt ?? elapsedNow)) })
+              : turnStatus === "completed" ? t("agent.completed") : turnStatus === "failed" ? t("agent.errors") : t("agent.idle")}
+            {reconnecting ? t("agent.reconnectingSuffix") : ""}
+            {session.reused ? t("agent.reusedThreadSuffix") : ""}
           </div>
           <div className="ob-composer p-1.5">
             <CodexModelControls
@@ -1019,7 +1024,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
               }}
             />
             <div className="mb-1 flex items-center gap-1.5 px-1">
-              <label htmlFor="codex-permission-mode" className="text-[10px] text-[var(--ob-muted)]">权限</label>
+              <label htmlFor="codex-permission-mode" className="text-[10px] text-[var(--ob-muted)]">{t("agent.permission")}</label>
               <select
                 id="codex-permission-mode"
                 disabled={busy || turnStatus === "running"}
@@ -1027,7 +1032,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 onChange={(event) => {
                   const next = event.target.value as CodexPermissionMode;
                   if (next === "full-access" && !window.confirm(
-                    "完全访问允许 Codex 绕过沙箱并访问工作区之外的文件。确认只对下一次及后续发送启用？",
+                    t("agent.confirmFullAccess"),
                   )) {
                     event.currentTarget.value = permissionMode;
                     return;
@@ -1036,13 +1041,13 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 }}
                 className="min-w-0 flex-1 border-0 bg-transparent text-[10px] text-[var(--ob-ink)] outline-none disabled:opacity-50"
               >
-                <option value="read-only">只读（操作需审批）</option>
-                <option value="workspace-auto">工作区自动执行（无网络）</option>
-                <option value="full-access">完全访问（高风险）</option>
+                <option value="read-only">{t("agent.permissionReadOnly")}</option>
+                <option value="workspace-auto">{t("agent.permissionWorkspace")}</option>
+                <option value="full-access">{t("agent.permissionFull")}</option>
               </select>
             </div>
-            {composerReferences.length ? <div className="mb-1 flex flex-wrap gap-1 px-1">{composerReferences.map((reference) => <button key={`${reference.kind}:${reference.id}`} type="button" className="ob-chip text-[10px]" title="移除上下文引用" onClick={() => setComposerReferences((current) => current.filter((item) => item.kind !== reference.kind || item.id !== reference.id))}>{reference.kind === "skill" ? "/" : "@"}{reference.label} ×</button>)}</div> : null}
-            {composerTrigger && composerSuggestions.length ? <div role="listbox" aria-label={composerTrigger.kind === "skill" ? "Skill 建议" : "画布素材建议"} className="mb-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]">{composerSuggestions.map((suggestion) => <button key={`${suggestion.kind}:${suggestion.id}`} role="option" type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--ob-accent-soft)]" onMouseDown={(event) => event.preventDefault()} onClick={() => { const trigger = detectAgentComposerTrigger(text, composerCursor); if (!trigger) return; const next = applyAgentComposerSuggestion(text, trigger, suggestion, composerReferences); setText(next.text); setComposerReferences(next.references); setComposerCursor(next.cursor); requestAnimationFrame(() => { composerRef.current?.focus(); composerRef.current?.setSelectionRange(next.cursor, next.cursor); }); }}>{suggestion.kind === "skill" ? "/" : "@"}{suggestion.label}<span className="ml-2 text-[10px] text-[var(--ob-muted)]">{suggestion.id}</span></button>)}</div> : null}
+            {composerReferences.length ? <div className="mb-1 flex flex-wrap gap-1 px-1">{composerReferences.map((reference) => <button key={`${reference.kind}:${reference.id}`} type="button" className="ob-chip text-[10px]" title={t("agent.removeContext")} onClick={() => setComposerReferences((current) => current.filter((item) => item.kind !== reference.kind || item.id !== reference.id))}>{reference.kind === "skill" ? "/" : "@"}{reference.label} ×</button>)}</div> : null}
+            {composerTrigger && composerSuggestions.length ? <div role="listbox" aria-label={composerTrigger.kind === "skill" ? t("agent.skillSuggestions") : t("agent.canvasSuggestions")} className="mb-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]">{composerSuggestions.map((suggestion) => <button key={`${suggestion.kind}:${suggestion.id}`} role="option" type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--ob-accent-soft)]" onMouseDown={(event) => event.preventDefault()} onClick={() => { const trigger = detectAgentComposerTrigger(text, composerCursor); if (!trigger) return; const next = applyAgentComposerSuggestion(text, trigger, suggestion, composerReferences); setText(next.text); setComposerReferences(next.references); setComposerCursor(next.cursor); requestAnimationFrame(() => { composerRef.current?.focus(); composerRef.current?.setSelectionRange(next.cursor, next.cursor); }); }}>{suggestion.kind === "skill" ? "/" : "@"}{suggestion.label}<span className="ml-2 text-[10px] text-[var(--ob-muted)]">{suggestion.id}</span></button>)}</div> : null}
             <div className="flex items-end gap-1.5">
               <textarea
                 ref={composerRef}
@@ -1057,9 +1062,9 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                   }
                 }}
                 className="min-h-16 min-w-0 flex-1 resize-y border-0 bg-transparent px-1.5 py-1 text-xs outline-none placeholder:text-[var(--ob-muted)] disabled:opacity-50"
-                placeholder="发送消息；输入 / 选择 Skill，输入 @ 引用画布素材"
+                placeholder={t("agent.codexPlaceholder")}
               />
-              <label className="ob-icon-btn h-8 w-8 shrink-0 cursor-pointer" title="添加图片" aria-label="添加图片">
+              <label className="ob-icon-btn h-8 w-8 shrink-0 cursor-pointer" title={t("agent.addImage")} aria-label={t("agent.addImage")}>
                 <ImagePlus size={14} />
                 <input
                   disabled={busy || turnStatus === "running"}
@@ -1074,7 +1079,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 />
               </label>
               {turnStatus === "running" ? (
-                <button type="button" className="ob-btn-danger rounded-lg p-2" onClick={() => void stop()} title="停止" aria-label="停止">
+                <button type="button" className="ob-btn-danger rounded-lg p-2" onClick={() => void stop()} title={t("agent.stop")} aria-label={t("agent.stop")}>
                   <Square size={14} />
                 </button>
               ) : (
@@ -1082,8 +1087,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                   type="button"
                   className="ob-btn-primary rounded-lg p-2 disabled:opacity-50"
                   onClick={() => void send()}
-                  title="发送"
-                  aria-label="发送"
+                  title={t("agent.send")}
+                  aria-label={t("agent.send")}
                   disabled={busy || !text.trim()}
                 >
                   <Send size={14} />
@@ -1100,7 +1105,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
       ) : null}
       {approvals.map((pending, index) => {
         const params = pending.params as { command?: unknown; path?: unknown; tool?: unknown } | undefined;
-        const detail = typeof params?.command === "string" ? params.command : typeof params?.path === "string" ? params.path : typeof params?.tool === "string" ? params.tool : "需要确认的操作";
+        const detail = typeof params?.command === "string" ? params.command : typeof params?.path === "string" ? params.path : typeof params?.tool === "string" ? params.tool : t("agent.approvalFallback");
         const resolve = async (approve: boolean) => {
           if (!session || pending.id === undefined) return;
           try {
@@ -1112,10 +1117,10 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
         };
         return (
           <div key={codexApprovalKey(pending)} className="mt-2 rounded-xl border border-[color-mix(in_srgb,var(--ob-warning)_55%,var(--ob-line))] bg-[color-mix(in_srgb,var(--ob-warning)_8%,transparent)] p-2.5">
-            <div className="mb-1 text-xs font-semibold">Codex 请求审批</div>
+            <div className="mb-1 text-xs font-semibold">{t("agent.approvalTitle")}</div>
             <div className="mb-1 break-words text-[var(--ob-muted)]">{detail}</div>
-            <details><summary className="cursor-pointer text-[10px]">查看请求详情</summary><pre className="max-h-20 overflow-auto text-[10px]">{JSON.stringify(pending.params, null, 2)}</pre></details>
-            <div className="mt-2 flex gap-1.5"><button type="button" className="ob-btn-primary gap-1 rounded-lg px-2.5 py-1 text-xs" title="允许" onClick={() => void resolve(true)}><Check size={14} /> 允许</button><button type="button" className="ob-btn gap-1 text-xs" title="拒绝" onClick={() => void resolve(false)}><X size={14} /> 拒绝</button></div>
+            <details><summary className="cursor-pointer text-[10px]">{t("agent.approvalDetails")}</summary><pre className="max-h-20 overflow-auto text-[10px]">{JSON.stringify(pending.params, null, 2)}</pre></details>
+            <div className="mt-2 flex gap-1.5"><button type="button" className="ob-btn-primary gap-1 rounded-lg px-2.5 py-1 text-xs" title={t("agent.allow")} onClick={() => void resolve(true)}><Check size={14} /> {t("agent.allow")}</button><button type="button" className="ob-btn gap-1 text-xs" title={t("agent.deny")} onClick={() => void resolve(false)}><X size={14} /> {t("agent.deny")}</button></div>
           </div>
         );
       })}

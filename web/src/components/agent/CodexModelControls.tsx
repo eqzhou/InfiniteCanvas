@@ -1,4 +1,6 @@
 import type { CodexModel } from "@/services/local-agent";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 export function resolveCodexReasoningEffort(model: CodexModel, preferred = ""): string {
   if (!model.supportedReasoningEfforts.length) return "";
@@ -32,24 +34,26 @@ export function CodexModelControls({
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
 }) {
+  const { locale, t: baseT } = useI18n();
+  const t = createAgentHelpTranslator(baseT, locale);
   const selected = models.find((item) => item.model === model);
   if (!models.length) {
     return loading ? (
-      <p className="mb-1 px-1 text-[9px] text-[var(--ob-muted)]">正在读取当前账号模型…</p>
+      <p className="mb-1 px-1 text-[9px] text-[var(--ob-muted)]">{t("agent.loadingModels")}</p>
     ) : error ? (
       <p className="mb-1 px-1 text-[9px] text-[var(--ob-muted)]" title={error}>
-        模型目录暂不可用，将使用 Codex 默认设置
+        {t("agent.modelsUnavailable", { message: error })}
       </p>
     ) : (
-      <p className="mb-1 px-1 text-[9px] text-[var(--ob-muted)]">当前账号未返回可选模型，将使用 Codex 默认设置</p>
+      <p className="mb-1 px-1 text-[9px] text-[var(--ob-muted)]">{t("agent.noModels")}</p>
     );
   }
   return (
     <div className="mb-1 grid grid-cols-2 gap-1.5 px-1">
       <label className="min-w-0 text-[9px] text-[var(--ob-muted)]">
-        模型
+        {t("agent.model")}
         <select
-          aria-label="Codex 模型"
+          aria-label={t("agent.codexModel")}
           className="mt-0.5 w-full rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] px-1 py-0.5 text-[10px] text-[var(--ob-ink)]"
           disabled={disabled}
           value={model}
@@ -61,9 +65,9 @@ export function CodexModelControls({
         </select>
       </label>
       <label className="min-w-0 text-[9px] text-[var(--ob-muted)]">
-        推理强度
+        {t("agent.effort")}
         <select
-          aria-label="Codex 推理强度"
+          aria-label={t("agent.reasoningEffort")}
           className="mt-0.5 w-full rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] px-1 py-0.5 text-[10px] text-[var(--ob-ink)]"
           disabled={disabled || !selected?.supportedReasoningEfforts.length}
           value={effort}

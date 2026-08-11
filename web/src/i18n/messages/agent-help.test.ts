@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import { findHardcodedUserFacingChinese } from "../source-guard";
-import { agentHelpEnUS, agentHelpZhCN } from "./agent-help";
+import { agentHelpEnUS, agentHelpZhCN, createAgentHelpTranslator } from "./agent-help";
 
 const sourceRoot = path.resolve(import.meta.dir, "../..");
 
@@ -19,10 +19,18 @@ describe("agent, help, and authentication localization", () => {
     }
   });
 
+  test("uses the scoped English fallback until core registration is completed", () => {
+    const t = createAgentHelpTranslator(() => { throw new Error("not registered"); }, "en-US");
+    expect(t("agent.sessionCount", { count: 3 })).toBe("3 sessions");
+    expect(t("auth.login")).toBe("Sign in");
+    expect(t("help.title")).toBe("Help");
+  });
+
   test("keeps the migrated surfaces free of hardcoded visible Chinese", async () => {
     const files = [
       "components/agent/AgentDiagnosticLog.tsx",
       "components/agent/AgentJumpToLatest.tsx",
+      "components/agent/BrowserRuntime.tsx",
       "components/agent/ClaudePanel.tsx",
       "components/agent/CodexModelControls.tsx",
       "components/agent/CodexPanel.tsx",

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { getProvider } from "@/lib/ai-config";
 import { renderCanvasSnapshot } from "@/lib/canvas-export";
@@ -38,6 +38,8 @@ import {
   listAllGenerationJobs,
   updateGenerationJob,
 } from "@/services/generation-jobs";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator, type AgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 const RECONNECT_MAX_MS = 15_000;
 
@@ -65,6 +67,7 @@ async function executeRuntimeCommand(
   command: RuntimeCommand,
   connection: AgentConnection,
   navigate: (path: string) => void,
+  t: AgentHelpTranslator,
 ): Promise<unknown> {
   const state = useBoardStore.getState();
   const project = state.getActive();
@@ -103,7 +106,7 @@ async function executeRuntimeCommand(
       const content = stringValue(command.data.content, "text content", 512_000);
       const node = createNode("text", runtimePosition(command.data), {
         id: typeof command.data.id === "string" ? stringValue(command.data.id, "node id", 128) : undefined,
-        title: typeof command.data.title === "string" ? stringValue(command.data.title, "node title", 500) : "文本",
+        title: typeof command.data.title === "string" ? stringValue(command.data.title, "node title", 500) : t("agent.textNode"),
         metadata: { content, status: "success" },
       });
       state.updateActive((current) => ({ ...current, nodes: [...current.nodes, node] }));
@@ -118,7 +121,7 @@ async function executeRuntimeCommand(
       if (!channel) throw new Error("active image provider is required");
       const position = runtimePosition(command.data);
       const configNode = createNode("config", position, {
-        title: "图片生成",
+        title: t("agent.imageGeneration"),
         metadata: {
           prompt,
           generationMode: "image",
@@ -247,7 +250,7 @@ async function executeRuntimeCommand(
         ).length > 0) {
           stored = await updateGenerationJob(stored.id, {
             status: "failed",
-            error: "页面刷新后任务已中断，请重试",
+            error: t("agent.pageRefreshInterrupted"),
           });
           visible = true;
         }
@@ -270,6 +273,8 @@ async function executeRuntimeCommand(
 }
 
 export function BrowserRuntime() {
+  const { locale, t: baseT } = useI18n();
+  const t = useMemo(() => createAgentHelpTranslator(baseT, locale), [baseT, locale]);
   const location = useLocation();
   const navigate = useNavigate();
   const ready = useBoardStore((state) => state.ready);
@@ -296,14 +301,14 @@ export function BrowserRuntime() {
         const interrupted = findInterruptedGenerationJobs(jobs, getRuntimeOwnerId(), liveIds);
         await Promise.all(interrupted.map((job) => updateGenerationJob(job.id, {
           status: "failed",
-          error: "页面刷新后任务已中断，请重试",
+          error: t("agent.pageRefreshInterrupted"),
         })));
       }).catch(() => undefined);
     };
     recover();
     const timer = window.setInterval(recover, 60_000);
     return () => window.clearInterval(timer);
-  }, [ready]);
+  }, [ready, t]);
 
   useEffect(() => {
     if (!ready) return;
@@ -382,7 +387,7 @@ export function BrowserRuntime() {
                 socket?.send(cached);
                 return;
               }
-              const result = await executeRuntimeCommand(command, connection, navigate);
+              const result = await executeRuntimeCommand(command, connection, navigate, t);
               const response = JSON.stringify({ type: "result", id: command.id, ok: true, data: result ?? {} });
               responses.set(command.id, response);
               if (responses.size > 256) responses.delete(responses.keys().next().value!);
@@ -427,7 +432,7 @@ export function BrowserRuntime() {
       if (socketRef.current === socket) socketRef.current = null;
       setRuntimeClientId("");
     };
-  }, [baseUrl, connectionRevision, navigate, ready]);
+  }, [baseUrl, connectionRevision, navigate, ready, t]);
 
   useEffect(() => {
     const state = useBoardStore.getState();

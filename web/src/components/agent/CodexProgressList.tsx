@@ -2,6 +2,10 @@ import { useState } from "react";
 import { FolderOpen } from "lucide-react";
 import type { CodexProgressItem } from "@/services/codex-progress";
 import type { CodexProgressGroup } from "@/services/codex-progress-groups";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator, type AgentHelpTranslator } from "@/i18n/messages/agent-help";
+
+type Translator = AgentHelpTranslator;
 
 type CodexProgressListProps = {
   groups: readonly CodexProgressGroup[];
@@ -19,9 +23,11 @@ function statusDataAttr(status: CodexProgressItem["status"]): string {
 function ProgressRow({
   item,
   onRevealFile,
+  t,
 }: {
   item: CodexProgressItem;
   onRevealFile: (path: string) => void;
+  t: Translator;
 }) {
   return (
     <li className="flex min-w-0 items-start gap-1.5">
@@ -35,8 +41,8 @@ function ProgressRow({
         <button
           type="button"
           className="ob-icon-btn ml-auto h-6 w-6 shrink-0"
-          title="在文件管理器中定位"
-          aria-label={`在文件管理器中定位 ${item.path}`}
+          title={t("agent.revealFile")}
+          aria-label={t("agent.revealFileNamed", { path: item.path })}
           onClick={() => onRevealFile(item.path ?? "")}
         >
           <FolderOpen size={12} />
@@ -49,9 +55,11 @@ function ProgressRow({
 function CommandGroupRow({
   group,
   onRevealFile,
+  t,
 }: {
   group: Extract<CodexProgressGroup, { kind: "command-group" }>;
   onRevealFile: (path: string) => void;
+  t: Translator;
 }) {
   const [expanded, setExpanded] = useState(false);
   const groupStatus: CodexProgressItem["status"] =
@@ -65,16 +73,16 @@ function CommandGroupRow({
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="ob-status-dot" data-status={statusDataAttr(groupStatus)} aria-hidden />
-        <span className="font-medium text-[var(--ob-ink)]">运行命令 · {group.total}</span>
+        <span className="font-medium text-[var(--ob-ink)]">{t("agent.commandRuns", { count: group.total })}</span>
         <span className="text-[var(--ob-muted)]">
           {group.completed}/{group.total}
-          {group.failed > 0 ? ` · ${group.failed} 失败` : ""}
+          {group.failed > 0 ? t("agent.failedCount", { count: group.failed }) : ""}
         </span>
       </button>
       {expanded ? (
         <ol className="mt-1 space-y-1 border-l border-[var(--ob-line)] pl-2">
           {group.items.map((item) => (
-            <ProgressRow key={item.id} item={item} onRevealFile={onRevealFile} />
+            <ProgressRow key={item.id} item={item} onRevealFile={onRevealFile} t={t} />
           ))}
         </ol>
       ) : null}
@@ -90,6 +98,8 @@ export function CodexProgressList({
   onToggle,
   onRevealFile,
 }: CodexProgressListProps) {
+  const { locale, t: baseT } = useI18n();
+  const t = createAgentHelpTranslator(baseT, locale);
   if (totalCount === 0) return null;
   return (
     <details
@@ -98,14 +108,14 @@ export function CodexProgressList({
       onToggle={(event) => onToggle(event.currentTarget.open)}
     >
       <summary className="cursor-pointer text-[11px] font-medium">
-        任务进度 · {completedCount}/{totalCount}
+        {t("agent.taskProgress", { completed: completedCount, total: totalCount })}
       </summary>
       <ol className="mt-1 max-h-32 space-y-1 overflow-auto text-[10px]">
         {groups.map((group) =>
           group.kind === "item" ? (
-            <ProgressRow key={group.item.id} item={group.item} onRevealFile={onRevealFile} />
+            <ProgressRow key={group.item.id} item={group.item} onRevealFile={onRevealFile} t={t} />
           ) : (
-            <CommandGroupRow key={group.id} group={group} onRevealFile={onRevealFile} />
+            <CommandGroupRow key={group.id} group={group} onRevealFile={onRevealFile} t={t} />
           ),
         )}
       </ol>

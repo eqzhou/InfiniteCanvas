@@ -17,6 +17,8 @@ import {
   buildCodexSkillInvocationPrompt,
 } from "@/services/codex-skills";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 const SKILLS_CHANNEL = "openboard.codex.skills.v1";
 
@@ -31,6 +33,8 @@ function replaceSkill(skills: readonly CodexSkill[], next: CodexSkill): CodexSki
 }
 
 export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkillsPanelProps) {
+  const { locale, t: baseT } = useI18n();
+  const t = useMemo(() => createAgentHelpTranslator(baseT, locale), [baseT, locale]);
   const project = useBoardStore((state) => state.getActive());
   const [open, setOpen] = useState(false);
   const [skills, setSkills] = useState<CodexSkill[]>([]);
@@ -120,9 +124,9 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
     setSkillId(draft.id);
     setContent(draft.content);
     setVersion("");
-    setNotice("草稿已生成，请检查内容后保存");
+    setNotice(t("agent.draftReady"));
     setError("");
-  }, [goal, project]);
+  }, [goal, project, t]);
 
   const save = useCallback(async () => {
     setBusy(true);
@@ -136,14 +140,14 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
       setSelectedId(next.id);
       setCreating(false);
       setVersion(next.version);
-      setNotice("已保存");
+      setNotice(t("agent.saved"));
       broadcastChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
-  }, [broadcastChanged, connection, content, creating, skillId, version]);
+  }, [broadcastChanged, connection, content, creating, skillId, t, version]);
 
   const toggle = useCallback(async (skill: CodexSkill) => {
     setBusy(true);
@@ -159,10 +163,10 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
     } finally {
       setBusy(false);
     }
-  }, [broadcastChanged, connection, refresh, selectedId]);
+  }, [broadcastChanged, connection, refresh, selectedId, t]);
 
   const remove = useCallback(async (skill: CodexSkill) => {
-    if (!window.confirm(`确认删除 Skill「${skill.name}」？此操作不可撤销。`)) return;
+    if (!window.confirm(t("agent.confirmDeleteSkill", { name: skill.name }))) return;
     setBusy(true);
     setError("");
     try {
@@ -189,13 +193,13 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
       const detail = await invokeCodexSkill(connection, skill.id);
       const prompt = buildCodexSkillInvocationPrompt(detail, goal);
       await onInvoke(prompt);
-      setNotice(`已显式调用「${skill.name}」，请求已送入当前 Codex 会话`);
+      setNotice(t("agent.invokedSkill", { name: skill.name }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
-  }, [busy, canInvoke, connection, goal, onInvoke]);
+  }, [busy, canInvoke, connection, goal, onInvoke, t]);
 
   return (
     <section className="mb-2 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_50%,transparent)] p-2.5" aria-label="Codex Agent Skills">
@@ -207,13 +211,13 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
           aria-expanded={open}
           aria-controls="codex-skills-content"
         >
-          Agent Skills <span className="text-[10px] font-normal text-[var(--ob-muted)]">{skills.length} 个</span>
+          Agent Skills <span className="text-[10px] font-normal text-[var(--ob-muted)]">{t("agent.skillCount", { count: skills.length })}</span>
         </button>
-        <button type="button" className="ob-icon-btn h-6 w-6" title="刷新 Skills" aria-label="刷新 Skills" onClick={() => void refresh()} disabled={busy}>
+        <button type="button" className="ob-icon-btn h-6 w-6" title={t("agent.refreshSkills")} aria-label={t("agent.refreshSkills")} onClick={() => void refresh()} disabled={busy}>
           <RefreshCw size={12} />
         </button>
         <button type="button" className="ob-btn px-2 py-1 text-[10px]" onClick={beginCreate} disabled={busy}>
-          新建
+          {t("agent.new")}
         </button>
       </div>
       {open ? (
@@ -221,13 +225,13 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
           <div className="flex gap-1.5">
             <input
               className="ob-field min-w-0 flex-1 text-[11px]"
-              aria-label="草稿目标或对话补充"
+              aria-label={t("agent.draftGoal")}
               value={goal}
               onChange={(event) => setGoal(event.target.value)}
-              placeholder="草稿目标 / 对话补充（可选）"
+              placeholder={t("agent.draftGoalPlaceholder")}
             />
-            <button type="button" className="ob-btn gap-1 px-2 py-1 text-[10px]" title="从当前画布生成 Skill 草稿" onClick={generateDraft} disabled={busy}>
-              <Sparkles size={12} /> 草稿
+            <button type="button" className="ob-btn gap-1 px-2 py-1 text-[10px]" title={t("agent.generateSkillDraft")} onClick={generateDraft} disabled={busy}>
+              <Sparkles size={12} /> {t("agent.draft")}
             </button>
           </div>
           {skills.length ? (
@@ -236,22 +240,22 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
                 <div key={skill.id} className="flex items-center gap-1.5 rounded-lg border border-[var(--ob-line)] px-2 py-1.5">
                   <button type="button" className="min-w-0 flex-1 text-left" onClick={() => void selectSkill(skill)}>
                     <div className="truncate text-[11px] font-medium">{skill.name}</div>
-                    <div className="truncate text-[10px] text-[var(--ob-muted)]">{skill.id} · {skill.enabled ? "已启用" : "已停用"}</div>
+                    <div className="truncate text-[10px] text-[var(--ob-muted)]">{skill.id} · {skill.enabled ? t("agent.enabled") : t("agent.disabled")}</div>
                   </button>
-                  <button type="button" className="ob-icon-btn h-6 w-6" title={skill.enabled ? "停用 Skill" : "启用 Skill"} aria-label={`${skill.enabled ? "停用" : "启用"} ${skill.name}`} onClick={() => void toggle(skill)} disabled={busy}>
-                    <span className={`text-[10px] ${skill.enabled ? "text-[var(--ob-success)]" : "text-[var(--ob-muted)]"}`}>{skill.enabled ? "开" : "关"}</span>
+                  <button type="button" className="ob-icon-btn h-6 w-6" title={skill.enabled ? t("agent.disableSkill") : t("agent.enableSkill")} aria-label={skill.enabled ? t("agent.disableNamed", { name: skill.name }) : t("agent.enableNamed", { name: skill.name })} onClick={() => void toggle(skill)} disabled={busy}>
+                    <span className={`text-[10px] ${skill.enabled ? "text-[var(--ob-success)]" : "text-[var(--ob-muted)]"}`}>{skill.enabled ? t("agent.on") : t("agent.off")}</span>
                   </button>
-                  <button type="button" className="ob-icon-btn h-6 w-6" title="显式调用 Skill" aria-label={`显式调用 ${skill.name}`} onClick={() => void invoke(skill)} disabled={busy || !canInvoke || !skill.enabled}>
+                  <button type="button" className="ob-icon-btn h-6 w-6" title={t("agent.invokeSkill")} aria-label={t("agent.invokeNamed", { name: skill.name })} onClick={() => void invoke(skill)} disabled={busy || !canInvoke || !skill.enabled}>
                     <Play size={11} />
                   </button>
-                  <button type="button" className="ob-icon-btn h-6 w-6 text-[var(--ob-danger)]" title="删除 Skill" aria-label={`删除 ${skill.name}`} onClick={() => void remove(skill)} disabled={busy}>
+                  <button type="button" className="ob-icon-btn h-6 w-6 text-[var(--ob-danger)]" title={t("agent.deleteSkill")} aria-label={t("agent.deleteNamed", { name: skill.name })} onClick={() => void remove(skill)} disabled={busy}>
                     <Trash2 size={11} />
                   </button>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="py-2 text-center text-[10px] text-[var(--ob-muted)]">还没有 Skill；可先生成草稿。</p>
+            <p className="py-2 text-center text-[10px] text-[var(--ob-muted)]">{t("agent.noSkills")}</p>
           )}
           {editing ? (
             <div className="rounded-lg border border-[var(--ob-line)] p-2">
@@ -262,32 +266,32 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
                   value={skillId}
                   disabled={!creating || busy}
                   onChange={(event) => setSkillId(event.target.value)}
-                  placeholder="Skill id，例如 review-code"
+                  placeholder={t("agent.skillIdPlaceholder")}
                 />
-                <button type="button" className="ob-icon-btn h-6 w-6" title="关闭编辑器" aria-label="关闭编辑器" onClick={() => setEditing(false)} disabled={busy}>
+                <button type="button" className="ob-icon-btn h-6 w-6" title={t("agent.closeEditor")} aria-label={t("agent.closeEditor")} onClick={() => setEditing(false)} disabled={busy}>
                   <X size={12} />
                 </button>
               </div>
               <textarea
                 className="ob-field min-h-40 w-full resize-y font-mono text-[10px]"
-                aria-label="Skill 内容"
+                aria-label={t("agent.skillContent")}
                 value={content}
                 onChange={(event) => setContent(event.target.value)}
                 disabled={busy}
-                placeholder="SKILL.md 内容"
+                placeholder={t("agent.skillContentPlaceholder")}
               />
               <div className="mt-1.5 flex items-center justify-between gap-2">
-                <span className="text-[10px] text-[var(--ob-muted)]">保存前可编辑和检查草稿</span>
+                <span className="text-[10px] text-[var(--ob-muted)]">{t("agent.reviewBeforeSave")}</span>
                 <button type="button" className="ob-btn-primary gap-1 px-2 py-1 text-[10px]" onClick={() => void save()} disabled={busy || !skillId.trim() || !content.trim()}>
-                  <Save size={11} /> 保存
+                  <Save size={11} /> {t("agent.save")}
                 </button>
               </div>
             </div>
           ) : null}
-          {selected ? <p className="text-[10px] text-[var(--ob-muted)]">当前：{selected.name}</p> : null}
+          {selected ? <p className="text-[10px] text-[var(--ob-muted)]">{t("agent.currentSkill", { name: selected.name })}</p> : null}
           {notice ? <p className="text-[10px] text-[var(--ob-success)]">{notice}</p> : null}
           {error ? <p role="alert" className="text-[10px] text-[var(--ob-danger)]">{error}</p> : null}
-          {!canInvoke ? <p className="text-[10px] text-[var(--ob-muted)]">启动 Codex 会话后才能显式调用 Skill。</p> : null}
+          {!canInvoke ? <p className="text-[10px] text-[var(--ob-muted)]">{t("agent.startBeforeInvoke")}</p> : null}
         </div>
       ) : null}
     </section>

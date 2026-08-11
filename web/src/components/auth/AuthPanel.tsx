@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { AuthUser, SitePolicy } from "@/services/auth-session";
 import { DEFAULT_SITE_POLICY, getSitePolicy, login, register } from "@/services/auth-session";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 type AuthTab = "login" | "register";
 
@@ -11,6 +13,8 @@ type AuthPanelProps = {
 };
 
 export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
+  const { locale, t: baseT } = useI18n();
+  const t = createAgentHelpTranslator(baseT, locale);
   const [tab, setTab] = useState<AuthTab>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,7 +44,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
     event.preventDefault();
     if (busy) return;
     if (tab === "register" && !policy.allowRegister) {
-      setError("管理员已关闭开放注册");
+      setError(t("auth.registerClosed"));
       return;
     }
     setError(null);
@@ -61,10 +65,10 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
 
   const tabs: Array<{ id: AuthTab; label: string }> = policy.allowRegister
     ? [
-        { id: "login", label: "登录" },
-        { id: "register", label: "注册" },
+        { id: "login", label: t("auth.login") },
+        { id: "register", label: t("auth.register") },
       ]
-    : [{ id: "login", label: "登录" }];
+    : [{ id: "login", label: t("auth.login") }];
 
   return (
     <div className="flex min-h-full items-center justify-center p-4">
@@ -74,17 +78,17 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
             OB
           </span>
           <h1 className="text-xl font-semibold tracking-tight text-[var(--ob-ink)]">
-            OpenBoard 账号
+            {t("auth.accountTitle")}
           </h1>
           <p className="mt-1 text-sm text-[var(--ob-muted)]">
-            登录后同步画布、素材与生成历史，并返回刚才打开的页面
+            {t("auth.accountDescription")}
           </p>
         </div>
 
         {tabs.length > 1 ? (
           <div
             role="tablist"
-            aria-label="登录或注册"
+            aria-label={t("auth.loginOrRegister")}
             className="mb-5 grid grid-cols-2 gap-1 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-bg)] p-1"
           >
             {tabs.map((item) => (
@@ -109,14 +113,14 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
           </div>
         ) : (
           <p className="mb-5 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-bg)] px-3 py-2 text-center text-xs text-[var(--ob-muted)]">
-            {policyLoaded ? "当前站点仅允许登录，开放注册已由管理员关闭。" : "正在加载站点策略…"}
+            {policyLoaded ? t("auth.loginOnly") : t("auth.loadingPolicy")}
           </p>
         )}
 
         <form className="space-y-3" onSubmit={(event) => void submit(event)}>
           {tab === "register" ? (
             <label className="block space-y-1.5">
-              <span className="text-sm text-[var(--ob-muted)]">显示名称（可选）</span>
+              <span className="text-sm text-[var(--ob-muted)]">{t("auth.displayNameOptional")}</span>
               <input
                 className="ob-field"
                 type="text"
@@ -124,14 +128,14 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
                 autoComplete="nickname"
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="昵称"
+                placeholder={t("auth.nicknamePlaceholder")}
                 disabled={busy}
               />
             </label>
           ) : null}
 
           <label className="block space-y-1.5">
-            <span className="text-sm text-[var(--ob-muted)]">邮箱</span>
+            <span className="text-sm text-[var(--ob-muted)]">{t("auth.email")}</span>
             <input
               className="ob-field"
               type="email"
@@ -146,7 +150,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
           </label>
 
           <label className="block space-y-1.5">
-            <span className="text-sm text-[var(--ob-muted)]">密码</span>
+            <span className="text-sm text-[var(--ob-muted)]">{t("auth.password")}</span>
             <input
               className="ob-field"
               type="password"
@@ -156,7 +160,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
               minLength={6}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="至少 6 位"
+              placeholder={t("auth.passwordPlaceholder")}
               disabled={busy}
             />
           </label>
@@ -171,7 +175,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
           ) : null}
 
           <button type="submit" className="ob-btn-primary w-full" disabled={busy}>
-            {busy ? "请稍候…" : tab === "login" ? "登录" : "注册并登录"}
+            {busy ? t("auth.working") : tab === "login" ? t("auth.login") : t("auth.registerAndLogin")}
           </button>
         </form>
       </div>

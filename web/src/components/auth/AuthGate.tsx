@@ -21,6 +21,8 @@ import {
   usage,
 } from "@/services/auth-session";
 import { AuthPanel } from "@/components/auth/AuthPanel";
+import { useI18n } from "@/i18n/I18nProvider";
+import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
 type AuthStatus = "loading" | "open" | "authenticated" | "login_required";
 
@@ -151,6 +153,8 @@ export async function transitionWorkspaceIdentity(
 }
 
 export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCredentialsChanged }: AuthGateProps) {
+  const { locale, t: baseT } = useI18n();
+  const t = createAgentHelpTranslator(baseT, locale);
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [usageSnapshot, setUsageSnapshot] = useState<UsageSnapshot | null>(null);
@@ -287,7 +291,7 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
   if (status === "loading") {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--ob-muted)]">
-        正在检查登录状态…
+        {t("auth.checking")}
       </div>
     );
   }
@@ -302,7 +306,7 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
             </span>
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-[var(--ob-ink)]">OpenBoard</p>
-              <p className="truncate text-xs text-[var(--ob-muted)]">登录后继续使用画布与工作台</p>
+              <p className="truncate text-xs text-[var(--ob-muted)]">{t("auth.continueHint")}</p>
             </div>
           </header>
           <div className="min-h-0 flex-1">
