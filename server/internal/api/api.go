@@ -80,6 +80,11 @@ type Server struct {
 	workflowWG              sync.WaitGroup
 	workflowWorkersOnce     sync.Once
 	workflowWake            chan struct{}
+	comfyUIWorkerWG         sync.WaitGroup
+	comfyUIWG               sync.WaitGroup
+	comfyUIWorkersOnce      sync.Once
+	comfyUIWake             chan struct{}
+	comfyUIPollInterval     time.Duration
 	videoWorkerWG           sync.WaitGroup
 	videoWG                 sync.WaitGroup
 	videoWorkersOnce        sync.Once
@@ -197,6 +202,7 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/generation-jobs/video", s.createServerVideoJob)
 		r.Post("/generation-jobs/audio", s.createServerAudioJob)
 		r.Post("/generation-jobs/workflow", s.createServerWorkflowJob)
+		r.Post("/generation-jobs/comfyui", s.createComfyUIJob)
 		r.Post("/generation-jobs/{id}/cancel", s.cancelServerGenerationJob)
 		r.Get("/generation-jobs/{id}", s.getGenerationJob)
 		r.Put("/generation-jobs/{id}", s.updateGenerationJob)
@@ -306,6 +312,7 @@ func NewServer(dataDir string) *Server {
 		promptSchedulerRoot: promptSchedulerRoot,
 		stopPromptScheduler: stopPromptScheduler,
 		workflowWake:        make(chan struct{}, 1),
+		comfyUIWake:         make(chan struct{}, 1),
 		videoWake:           make(chan struct{}, 1),
 		audioWake:           make(chan struct{}, 1),
 		filmExportWake:      make(chan struct{}, 1),
@@ -390,6 +397,8 @@ func (s *Server) Close() {
 	s.generationWG.Wait()
 	s.workflowWorkerWG.Wait()
 	s.workflowWG.Wait()
+	s.comfyUIWorkerWG.Wait()
+	s.comfyUIWG.Wait()
 	s.videoWorkerWG.Wait()
 	s.videoWG.Wait()
 	s.audioWorkerWG.Wait()
@@ -410,6 +419,7 @@ func randomGenerationOwner() string {
 func MountServer(r chi.Router, s *Server) {
 	s.startPromptCatalogScheduler()
 	s.startAICallLogRetentionScheduler()
+	s.startComfyUIWorkers(1)
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.withE2ETenant)
 		r.Use(s.withSession)
@@ -492,6 +502,7 @@ func MountServer(r chi.Router, s *Server) {
 		r.Post("/generation-jobs/video", s.createServerVideoJob)
 		r.Post("/generation-jobs/audio", s.createServerAudioJob)
 		r.Post("/generation-jobs/workflow", s.createServerWorkflowJob)
+		r.Post("/generation-jobs/comfyui", s.createComfyUIJob)
 		r.Post("/generation-jobs/{id}/cancel", s.cancelServerGenerationJob)
 		r.Get("/generation-jobs/{id}", s.getGenerationJob)
 		r.Put("/generation-jobs/{id}", s.updateGenerationJob)

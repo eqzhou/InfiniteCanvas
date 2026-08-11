@@ -2847,6 +2847,7 @@ func generationJobConsumesQuota(kind string) bool {
 func validServerGenerationClaim(claim GenerationClaim) bool {
 	return ((claim.Kind == "text" || claim.Kind == "image" || claim.Kind == "video" || claim.Kind == "audio") && claim.Executor == "server") ||
 		(claim.Kind == "audio" && claim.Executor == "voice-clone") ||
+		((claim.Kind == "image" || claim.Kind == "video" || claim.Kind == "audio") && claim.Executor == "comfyui") ||
 		(claim.Kind == "workflow" && claim.Executor == "workflow") ||
 		(claim.Kind == "export" && claim.Executor == "film-export")
 }
@@ -3107,6 +3108,7 @@ func serverOwnedGenerationJob(job GenerationJob) bool {
 	}
 	return ((job.Kind == "text" || job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && value.Executor == "server") ||
 		(job.Kind == "audio" && value.Executor == "voice-clone") ||
+		((job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && value.Executor == "comfyui") ||
 		(job.Kind == "workflow" && value.Executor == "workflow") ||
 		(job.Kind == "export" && value.Executor == "film-export") ||
 		(job.Kind == "film-stage" && value.Executor == "film-stage")

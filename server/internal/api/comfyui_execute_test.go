@@ -303,9 +303,11 @@ func TestComfyUIWorkerRecoversPersistedPromptAfterRestartWithoutResubmit(t *test
 }
 
 func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	fixture := newComfyFixture(t)
 	backend := newMemoryStore()
 	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
 	defer server.Close()
 	router := chi.NewRouter()
 	MountServer(router, server)
@@ -313,6 +315,7 @@ func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testin
 	body, _ := json.Marshal(map[string]any{"id": "api-comfy", "projectId": "project-one", "manifest": manifest, "values": map[string]any{"prompt": "hello", "seed": 7, "width": 512, "height": 512}})
 	for attempt := 0; attempt < 2; attempt++ {
 		request := httptest.NewRequest(http.MethodPost, "/api/generation-jobs/comfyui", bytes.NewReader(body))
+		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
 		if attempt == 0 && response.Code != http.StatusAccepted || attempt == 1 && response.Code != http.StatusOK {
@@ -321,6 +324,7 @@ func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testin
 	}
 	mutated := bytes.Replace(body, []byte(`"prompt":"hello"`), []byte(`"prompt":"different"`), 1)
 	request := httptest.NewRequest(http.MethodPost, "/api/generation-jobs/comfyui", bytes.NewReader(mutated))
+	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusConflict {
@@ -331,6 +335,7 @@ func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testin
 	badManifest.BusinessMode = "text_to_video"
 	badBody, _ := json.Marshal(map[string]any{"id": "bad-kind", "manifest": badManifest, "values": map[string]any{"prompt": "hello"}})
 	request = httptest.NewRequest(http.MethodPost, "/api/generation-jobs/comfyui", bytes.NewReader(badBody))
+	request.Header.Set("Authorization", "Bearer test-token")
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {

@@ -603,6 +603,7 @@ func isServerGenerationJob(job store.GenerationJob) bool {
 	}
 	return ((job.Kind == "text" || job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && parameters.Executor == serverExecutorMarker) ||
 		(job.Kind == "audio" && parameters.Executor == voiceCloneExecutorMarker) ||
+		((job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && parameters.Executor == comfyUIExecutorMarker) ||
 		(job.Kind == "workflow" && parameters.Executor == "workflow") ||
 		(job.Kind == "export" && parameters.Executor == filmExportExecutorMarker) ||
 		(job.Kind == "film-stage" && parameters.Executor == "film-stage")

@@ -127,6 +127,10 @@ func validateLocalWorkflowManifest(manifest localWorkflowManifest) error {
 		}
 	}
 	seenOutputs := map[string]struct{}{}
+	expectedOutputKind, err := localWorkflowBusinessKind(manifest.BusinessMode)
+	if err != nil {
+		return err
+	}
 	for _, output := range manifest.Outputs {
 		if _, exists := nodes[output]; !exists {
 			return errors.New("local workflow output node is missing")
@@ -135,8 +139,46 @@ func validateLocalWorkflowManifest(manifest localWorkflowManifest) error {
 			return errors.New("local workflow outputs must be unique")
 		}
 		seenOutputs[output] = struct{}{}
+		for _, node := range manifest.Nodes {
+			if node.ID == output && localWorkflowSaveNodeKind(node.Type) != expectedOutputKind {
+				return errors.New("local workflow output type does not match business mode")
+			}
+		}
 	}
 	return nil
+}
+
+func localWorkflowBusinessKind(mode string) (string, error) {
+	switch mode {
+	case "text_to_image", "image_to_image":
+		return "image", nil
+	case "text_to_audio":
+		return "audio", nil
+	case "text_to_video", "first_frame_to_video", "first_last_frame_to_video", "reference_to_video":
+		return "video", nil
+	default:
+		return "", errors.New("local workflow business mode is unsupported")
+	}
+}
+
+func localWorkflowSaveNodeKind(nodeType string) string {
+	switch nodeType {
+	case "SaveImage":
+		return "image"
+	case "SaveVideo":
+		return "video"
+	case "SaveAudio":
+		return "audio"
+	default:
+		return ""
+	}
+}
+
+func localWorkflowOutputKind(manifest localWorkflowManifest) (string, error) {
+	if err := validateLocalWorkflowManifest(manifest); err != nil {
+		return "", err
+	}
+	return localWorkflowBusinessKind(manifest.BusinessMode)
 }
 
 func decodeLocalWorkflowManifest(raw []byte) (localWorkflowManifest, error) {
