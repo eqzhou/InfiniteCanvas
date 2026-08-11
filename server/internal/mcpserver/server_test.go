@@ -35,7 +35,7 @@ func TestInitializeAndListTools(t *testing.T) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
 		}
 	}
-	for _, name := range []string{"film.status", "film.list", "film.check", "film.proposals", "film.validate", "film.run_stage", "film.next_steps", "film.approve_stage", "film.apply_repair", "film.export"} {
+	for _, name := range []string{"film.status", "film.list", "film.check", "film.proposals", "film.validate", "film.run_stage", "film.next_steps", "film.approve_stage", "film.waive_stage", "film.apply_repair", "film.export"} {
 		if !strings.Contains(lines[1], `"`+name+`"`) {
 			t.Fatalf("tools response does not contain %s: %s", name, lines[1])
 		}

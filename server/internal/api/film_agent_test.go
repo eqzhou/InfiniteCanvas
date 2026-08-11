@@ -204,6 +204,30 @@ func TestFilmAgentHighImpactToolsRequireExplicitConfirmation(t *testing.T) {
 	}
 }
 
+func TestFilmAgentStageWaiverRequiresBoundConfirmation(t *testing.T) {
+	t.Setenv(filmStageWaiverFeatureEnv, "true")
+	_, handler := filmAPIHandler(t)
+	arguments := map[string]any{
+		"projectId": "film-api", "stage": "script", "revision": 1, "stageRevision": 1,
+		"reason": "External approved screenplay supplied.", "riskAccepted": true,
+	}
+	body, _ := json.Marshal(map[string]any{"tool": "film.waive_stage", "arguments": arguments})
+	unconfirmed := request(t, handler, http.MethodPost, "/api/agent/execute", body)
+	if unconfirmed.Code != http.StatusBadRequest || !bytes.Contains(bytes.ToLower(unconfirmed.Body.Bytes()), []byte("confirmation")) {
+		t.Fatalf("unconfirmed waiver accepted: %d %s", unconfirmed.Code, unconfirmed.Body.String())
+	}
+	confirmed := confirmFilmAgentArguments(t, handler, "film.waive_stage", arguments)
+	body, _ = json.Marshal(map[string]any{"tool": "film.waive_stage", "arguments": confirmed})
+	response := request(t, handler, http.MethodPost, "/api/agent/execute", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("confirmed waiver: %d %s", response.Code, response.Body.String())
+	}
+	current := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api/status", nil))
+	if len(current.StageWaivers) != 1 || current.StageWaivers[0].ActorID != "film-test-user" {
+		t.Fatalf("Agent waiver audit = %#v", current.StageWaivers)
+	}
+}
+
 func TestFilmAgentConfirmationIsBoundAndSingleUse(t *testing.T) {
 	_, handler := filmAPIHandler(t)
 	document := importFilmAgentSource(t, handler)
