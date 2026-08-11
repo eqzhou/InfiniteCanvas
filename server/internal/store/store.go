@@ -298,6 +298,82 @@ type FilmStore interface {
 	CompareAndSwapFilmProject(ctx context.Context, tenantID, projectID string, expectedRevision int, document []byte) (FilmRecord, error)
 }
 
+// VoiceIdentity is the mutable display record for a project voice. Generated
+// voice material lives in immutable VoiceIdentityVersion snapshots below.
+type VoiceIdentity struct {
+	ID               string `json:"id"`
+	ProjectID        string `json:"projectId"`
+	Revision         int    `json:"revision"`
+	Title            string `json:"title"`
+	Description      string `json:"description,omitempty"`
+	CurrentVersionID string `json:"currentVersionId,omitempty"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+}
+
+// VoiceSample references tenant-owned media without duplicating its bytes in
+// PostgreSQL. The digest and object version freeze the exact consented input.
+type VoiceSample struct {
+	ID                 string `json:"id"`
+	ProjectID          string `json:"projectId"`
+	VoiceIdentityID    string `json:"voiceIdentityId"`
+	Label              string `json:"label,omitempty"`
+	StorageKey         string `json:"storageKey"`
+	MIMEType           string `json:"mimeType"`
+	SHA256             string `json:"sha256"`
+	MediaObjectVersion string `json:"mediaObjectVersion,omitempty"`
+	CreatedAt          string `json:"createdAt"`
+}
+
+// VoiceConsent is append-only audit evidence. Accepted=false is intentionally
+// not persisted: absence of affirmative consent can never authorize cloning.
+type VoiceConsent struct {
+	ID                 string `json:"id"`
+	ProjectID          string `json:"projectId"`
+	VoiceIdentityID    string `json:"voiceIdentityId"`
+	Accepted           bool   `json:"accepted"`
+	RightsBasis        string `json:"rightsBasis"`
+	SubjectDisplayName string `json:"subjectDisplayName"`
+	TermsVersion       string `json:"termsVersion"`
+	ActorID            string `json:"actorId"`
+	AcceptedAt         string `json:"acceptedAt"`
+}
+
+// VoiceIdentityVersion freezes all clone inputs. Lifecycle fields may move
+// from queued/running to one terminal state, but snapshot fields never change.
+type VoiceIdentityVersion struct {
+	ID                 string   `json:"id"`
+	ProjectID          string   `json:"projectId"`
+	VoiceIdentityID    string   `json:"voiceIdentityId"`
+	Revision           int      `json:"revision"`
+	Status             string   `json:"status"`
+	SampleIDs          []string `json:"sampleIds"`
+	ConsentID          string   `json:"consentId"`
+	ProviderID         string   `json:"providerId"`
+	Model              string   `json:"model"`
+	ProviderVoiceID    string   `json:"providerVoiceId,omitempty"`
+	GenerationJobID    string   `json:"generationJobId"`
+	IdempotencyKeyHash string   `json:"-"`
+	Error              string   `json:"error,omitempty"`
+	CreatedAt          string   `json:"createdAt"`
+	UpdatedAt          string   `json:"updatedAt"`
+}
+
+// VoiceIdentityStore is an optional PostgreSQL capability. Every operation is
+// tenant and project scoped; samples, consents and versions are append-only.
+type VoiceIdentityStore interface {
+	CreateVoiceIdentity(ctx context.Context, tenantID, projectID string, value VoiceIdentity) (VoiceIdentity, error)
+	GetVoiceIdentity(ctx context.Context, tenantID, projectID, id string) (VoiceIdentity, error)
+	ListVoiceIdentities(ctx context.Context, tenantID, projectID string) ([]VoiceIdentity, error)
+	AddVoiceSample(ctx context.Context, tenantID, projectID string, value VoiceSample) (VoiceSample, error)
+	GetVoiceSample(ctx context.Context, tenantID, projectID, id string) (VoiceSample, error)
+	CreateVoiceConsent(ctx context.Context, tenantID, projectID string, value VoiceConsent) (VoiceConsent, error)
+	GetVoiceConsent(ctx context.Context, tenantID, projectID, id string) (VoiceConsent, error)
+	CreateVoiceCloneVersion(ctx context.Context, tenantID, projectID, idempotencyKeyHash string, value VoiceIdentityVersion) (VoiceIdentityVersion, bool, error)
+	ListVoiceIdentityVersions(ctx context.Context, tenantID, projectID, voiceIdentityID string) ([]VoiceIdentityVersion, error)
+	CompleteVoiceIdentityVersion(ctx context.Context, tenantID, projectID, versionID, jobID, status, providerVoiceID, message, updatedAt string) (VoiceIdentityVersion, error)
+}
+
 type FilmGenerationReservation struct {
 	Job       GenerationJob
 	Units     int

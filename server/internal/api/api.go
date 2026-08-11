@@ -59,6 +59,7 @@ type Server struct {
 	textExecutor            textExecutor
 	videoExecutor           videoExecutor
 	audioExecutor           audioExecutor
+	voiceCloneExecutor      voiceCloneExecutor
 	promptCatalogFetcher    promptCatalogFetchFunc
 	promptSchedulerOnce     sync.Once
 	logRetentionOnce        sync.Once
@@ -173,6 +174,7 @@ func Mount(r chi.Router, dataDir string) {
 		r.Get("/projects/{id}", s.getProject)
 		r.Delete("/projects/{id}", s.deleteProject)
 		mountFilmRoutes(r, s)
+		mountFilmVoiceRoutes(r, s)
 		r.Get("/state/{key}", s.getState)
 		r.Put("/state/{key}", s.putState)
 		r.Put("/blobs/{key}", s.putBlob)
@@ -284,6 +286,7 @@ func NewServer(dataDir string) *Server {
 		textExecutor:        providerTextExecutor{},
 		videoExecutor:       newHTTPVideoExecutor(),
 		audioExecutor:       newHTTPAudioExecutor(),
+		voiceCloneExecutor:  newHTTPVoiceCloneExecutor(),
 		filmCommandRunner:   execFilmCommandRunner{},
 		filmProbeRunner:     execFilmProbeRunner{},
 		filmRenderGlobal:    make(chan struct{}, 2),
@@ -466,6 +469,7 @@ func MountServer(r chi.Router, s *Server) {
 		r.Get("/projects/{id}", s.getProject)
 		r.Delete("/projects/{id}", s.deleteProject)
 		mountFilmRoutes(r, s)
+		mountFilmVoiceRoutes(r, s)
 		r.Get("/state/{key}", s.getState)
 		r.Put("/state/{key}", s.putState)
 		r.Put("/blobs/{key}", s.putBlob)

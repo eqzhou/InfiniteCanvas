@@ -548,18 +548,26 @@ func (s *Server) startAudioWorkers(count int) {
 	s.audioWorkersOnce.Do(func() {
 		for range count {
 			s.audioWorkerWG.Add(1)
-			go s.mediaWorkerLoop("audio", s.audioWake, &s.audioWorkerWG, &s.audioWG, s.executeClaimedAudioJob)
+			go s.mediaWorkerLoopFor("audio", serverExecutorMarker, s.audioWake, &s.audioWorkerWG, &s.audioWG, s.executeClaimedAudioJob)
+		}
+		if s.voiceCloneExecutor != nil {
+			s.audioWorkerWG.Add(1)
+			go s.mediaWorkerLoopFor("audio", voiceCloneExecutorMarker, s.audioWake, &s.audioWorkerWG, &s.audioWG, s.executeClaimedVoiceCloneJob)
 		}
 		s.notifyAudioWorkers()
 	})
 }
 
 func (s *Server) mediaWorkerLoop(kind string, wake <-chan struct{}, workerWG, activeWG *sync.WaitGroup, execute func(store.TenantGenerationJob)) {
+	s.mediaWorkerLoopFor(kind, serverExecutorMarker, wake, workerWG, activeWG, execute)
+}
+
+func (s *Server) mediaWorkerLoopFor(kind, executor string, wake <-chan struct{}, workerWG, activeWG *sync.WaitGroup, execute func(store.TenantGenerationJob)) {
 	defer workerWG.Done()
 	for {
 		now := time.Now().UTC()
 		claimed, err := s.store.ClaimServerGenerationJob(s.generationRoot,
-			store.GenerationClaim{Kind: kind, Executor: serverExecutorMarker}, randomGenerationOwner(), now, now.Add(generationLeaseDuration))
+			store.GenerationClaim{Kind: kind, Executor: executor}, randomGenerationOwner(), now, now.Add(generationLeaseDuration))
 		if err == nil {
 			activeWG.Add(1)
 			execute(claimed)

@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 22
+const currentSchemaVersion = 23
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -263,7 +263,104 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 23 {
+		if err := migrateV23(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV23(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 23, `
+CREATE TABLE IF NOT EXISTS openboard_film_voice_identities (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  id text NOT NULL,
+  revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+  title text NOT NULL CHECK (char_length(title) BETWEEN 1 AND 500),
+  description text NOT NULL DEFAULT '' CHECK (char_length(description) <= 5000),
+  current_version_id text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (tenant_id,project_id,id),
+  FOREIGN KEY (tenant_id,project_id) REFERENCES openboard_film_projects (tenant_id,project_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS openboard_film_voice_identities_project_idx
+  ON openboard_film_voice_identities (tenant_id,project_id,created_at,id);
+CREATE TABLE IF NOT EXISTS openboard_film_voice_samples (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  id text NOT NULL,
+  voice_identity_id text NOT NULL,
+  label text NOT NULL DEFAULT '' CHECK (char_length(label) <= 500),
+  storage_key text NOT NULL CHECK (char_length(storage_key) BETWEEN 1 AND 512),
+  mime_type text NOT NULL CHECK (mime_type LIKE 'audio/%' AND char_length(mime_type) <= 100),
+  sha256 text NOT NULL CHECK (sha256 ~ '^[a-f0-9]{64}$'),
+  media_object_version text NOT NULL DEFAULT '' CHECK (char_length(media_object_version) <= 512),
+  created_at timestamptz NOT NULL,
+  PRIMARY KEY (tenant_id,project_id,id),
+  FOREIGN KEY (tenant_id,project_id,voice_identity_id)
+    REFERENCES openboard_film_voice_identities (tenant_id,project_id,id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS openboard_film_voice_consents (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  id text NOT NULL,
+  voice_identity_id text NOT NULL,
+  accepted boolean NOT NULL CHECK (accepted),
+  rights_basis text NOT NULL CHECK (rights_basis IN ('self','licensed','authorized')),
+  subject_display_name text NOT NULL CHECK (char_length(subject_display_name) BETWEEN 1 AND 500),
+  terms_version text NOT NULL CHECK (char_length(terms_version) BETWEEN 1 AND 100),
+  actor_id text NOT NULL CHECK (char_length(actor_id) BETWEEN 1 AND 128),
+  accepted_at timestamptz NOT NULL,
+  PRIMARY KEY (tenant_id,project_id,id),
+  FOREIGN KEY (tenant_id,project_id,voice_identity_id)
+    REFERENCES openboard_film_voice_identities (tenant_id,project_id,id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS openboard_film_voice_versions (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  id text NOT NULL,
+  voice_identity_id text NOT NULL,
+  revision integer NOT NULL CHECK (revision > 0),
+  status text NOT NULL CHECK (status IN ('queued','running','ready','failed','canceled')),
+  consent_id text NOT NULL,
+  provider_id text NOT NULL CHECK (char_length(provider_id) BETWEEN 1 AND 128),
+  model text NOT NULL CHECK (char_length(model) BETWEEN 1 AND 500),
+  provider_voice_id text NOT NULL DEFAULT '' CHECK (char_length(provider_voice_id) <= 1000),
+  generation_job_id text NOT NULL CHECK (char_length(generation_job_id) BETWEEN 1 AND 128),
+  idempotency_key_hash text NOT NULL CHECK (idempotency_key_hash ~ '^[a-f0-9]{64}$'),
+  error text NOT NULL DEFAULT '' CHECK (char_length(error) <= 2000),
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (tenant_id,project_id,id),
+  UNIQUE (tenant_id,project_id,voice_identity_id,revision),
+  UNIQUE (tenant_id,project_id,idempotency_key_hash),
+  UNIQUE (tenant_id,generation_job_id),
+  FOREIGN KEY (tenant_id,project_id,voice_identity_id)
+    REFERENCES openboard_film_voice_identities (tenant_id,project_id,id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id,project_id,consent_id)
+    REFERENCES openboard_film_voice_consents (tenant_id,project_id,id) ON DELETE RESTRICT,
+  FOREIGN KEY (tenant_id,generation_job_id)
+    REFERENCES openboard_generation_jobs (tenant_id,id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS openboard_film_voice_version_samples (
+  tenant_id text NOT NULL,
+  project_id text NOT NULL,
+  version_id text NOT NULL,
+  sample_id text NOT NULL,
+  position integer NOT NULL CHECK (position >= 0),
+  PRIMARY KEY (tenant_id,project_id,version_id,sample_id),
+  UNIQUE (tenant_id,project_id,version_id,position),
+  FOREIGN KEY (tenant_id,project_id,version_id)
+    REFERENCES openboard_film_voice_versions (tenant_id,project_id,id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id,project_id,sample_id)
+    REFERENCES openboard_film_voice_samples (tenant_id,project_id,id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS openboard_film_voice_versions_identity_idx
+  ON openboard_film_voice_versions (tenant_id,project_id,voice_identity_id,revision DESC);
+`)
 }
 
 func migrateV22(ctx context.Context, connection *pgxpool.Conn) error {
@@ -2749,6 +2846,7 @@ func generationJobConsumesQuota(kind string) bool {
 
 func validServerGenerationClaim(claim GenerationClaim) bool {
 	return ((claim.Kind == "text" || claim.Kind == "image" || claim.Kind == "video" || claim.Kind == "audio") && claim.Executor == "server") ||
+		(claim.Kind == "audio" && claim.Executor == "voice-clone") ||
 		(claim.Kind == "workflow" && claim.Executor == "workflow") ||
 		(claim.Kind == "export" && claim.Executor == "film-export")
 }
@@ -2951,6 +3049,7 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 		), '{}'::jsonb), true) ELSE result END
 		WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running') AND
 		  ((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR
+		   (kind='audio' AND parameters->>'executor'='voice-clone') OR
 		   (kind='workflow' AND parameters->>'executor'='workflow') OR
 		   (kind='film-stage' AND parameters->>'executor'='film-stage') OR
 		   (kind='export' AND parameters->>'executor'='film-export'))
@@ -3007,6 +3106,7 @@ func serverOwnedGenerationJob(job GenerationJob) bool {
 		return false
 	}
 	return ((job.Kind == "text" || job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && value.Executor == "server") ||
+		(job.Kind == "audio" && value.Executor == "voice-clone") ||
 		(job.Kind == "workflow" && value.Executor == "workflow") ||
 		(job.Kind == "export" && value.Executor == "film-export") ||
 		(job.Kind == "film-stage" && value.Executor == "film-stage")
