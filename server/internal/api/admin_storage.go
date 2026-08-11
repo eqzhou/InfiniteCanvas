@@ -33,6 +33,7 @@ type adminStoragePoolProvider struct {
 	Weight                uint32 `json:"weight"`
 	Healthy               bool   `json:"healthy"`
 	AllowInsecureLoopback bool   `json:"allowInsecureLoopback,omitempty"`
+	AllowPrivate          bool   `json:"allowPrivate,omitempty"`
 	SecretConfigured      bool   `json:"secretConfigured"`
 	Kind                  string `json:"kind"`
 	ConfiguredSelectable  bool   `json:"configuredSelectable"`
@@ -93,8 +94,8 @@ func (s *Server) getAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 		status := statuses[provider.ID]
 		result = append(result, adminStoragePoolProvider{
 			ID: provider.ID, Endpoint: provider.Endpoint, Bucket: provider.Bucket, Region: provider.Region, Prefix: provider.Prefix,
-			Weight: provider.Weight, Healthy: provider.Healthy, AllowInsecureLoopback: provider.AllowInsecureLoopback,
-			SecretConfigured: secrets[provider.ID].AccessKeyID != "", Kind: "s3", ConfiguredSelectable: status.ConfiguredSelectable,
+			Weight: provider.Weight, Healthy: provider.Healthy, AllowInsecureLoopback: provider.AllowInsecureLoopback, AllowPrivate: provider.AllowPrivate,
+			SecretConfigured: validTenantStorageCredential(provider, secrets[provider.ID]), Kind: provider.Kind, ConfiguredSelectable: status.ConfiguredSelectable,
 			ProbeKnown: status.ProbeKnown, ProbeHealthy: status.ProbeHealthy, CapacityKnown: status.CapacityKnown,
 			TotalBytes: status.TotalBytes, AvailableBytes: status.AvailableBytes, Error: status.Error,
 		})
@@ -139,6 +140,10 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 	next := make([]tenantStoragePoolProvider, 0, len(current)+len(input))
 	seen := make(map[string]struct{}, len(input))
 	for _, raw := range input {
+		if strings.EqualFold(strings.TrimSpace(raw.Kind), "webdav") && !incrementFeatureEnabled(webDAVMediaFeatureEnv) {
+			http.Error(w, "WebDAV media storage is disabled", http.StatusNotFound)
+			return
+		}
 		provider, normalizeErr := normalizeTenantStoragePoolProvider(raw)
 		if normalizeErr != nil {
 			http.Error(w, "invalid storage provider", http.StatusBadRequest)
@@ -154,7 +159,7 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "deleted storage provider id is permanently reserved; create a new id", http.StatusConflict)
 				return
 			}
-			if previous.Endpoint != provider.Endpoint || previous.Bucket != provider.Bucket || previous.Prefix != provider.Prefix || previous.Region != provider.Region || previous.AllowInsecureLoopback != provider.AllowInsecureLoopback {
+			if previous.Kind != provider.Kind || previous.Endpoint != provider.Endpoint || previous.Bucket != provider.Bucket || previous.Prefix != provider.Prefix || previous.Region != provider.Region || previous.AllowInsecureLoopback != provider.AllowInsecureLoopback || previous.AllowPrivate != provider.AllowPrivate {
 				http.Error(w, "storage provider id cannot be rebound; create a new id", http.StatusConflict)
 				return
 			}
@@ -194,7 +199,7 @@ func (s *Server) putAdminStoragePoolSecret(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var input tenantStoragePoolCredential
-	if err := decodeAdminStorageJSON(r.Body, &input, maxObjectStorageSecret*3); err != nil || strings.TrimSpace(input.AccessKeyID) == "" || strings.TrimSpace(input.SecretAccessKey) == "" || len(input.AccessKeyID) > 256 || len(input.SecretAccessKey) > maxObjectStorageSecret || len(input.SessionToken) > maxObjectStorageSecret {
+	if err := decodeAdminStorageJSON(r.Body, &input, maxObjectStorageSecret*3); err != nil || len(input.AccessKeyID) > 256 || len(input.SecretAccessKey) > maxObjectStorageSecret || len(input.SessionToken) > maxObjectStorageSecret || len(input.Username) > 256 || len(input.Password) > maxObjectStorageSecret {
 		http.Error(w, "invalid storage credentials", http.StatusBadRequest)
 		return
 	}
@@ -210,14 +215,19 @@ func (s *Server) putAdminStoragePoolSecret(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	found := false
+	var selected tenantStoragePoolProvider
 	for _, provider := range providers {
 		if provider.ID == id && !provider.Deleted {
-			found = true
+			found, selected = true, provider
 			break
 		}
 	}
 	if !found {
 		http.Error(w, "storage provider not found", http.StatusNotFound)
+		return
+	}
+	if !validTenantStorageCredential(selected, input) {
+		http.Error(w, "invalid storage credentials", http.StatusBadRequest)
 		return
 	}
 	values, secretRaw, err := s.loadTenantStoragePoolSecrets(r.Context(), tenantID, providers)

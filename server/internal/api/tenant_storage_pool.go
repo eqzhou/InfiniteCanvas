@@ -20,6 +20,7 @@ const (
 
 type tenantStoragePoolProvider struct {
 	ID                    string `json:"id"`
+	Kind                  string `json:"kind,omitempty"`
 	Endpoint              string `json:"endpoint"`
 	Bucket                string `json:"bucket"`
 	Region                string `json:"region"`
@@ -27,6 +28,7 @@ type tenantStoragePoolProvider struct {
 	Weight                uint32 `json:"weight"`
 	Healthy               bool   `json:"healthy"`
 	AllowInsecureLoopback bool   `json:"allowInsecureLoopback,omitempty"`
+	AllowPrivate          bool   `json:"allowPrivate,omitempty"`
 	Deleted               bool   `json:"deleted,omitempty"`
 	SecretBindingID       string `json:"secretBindingId"`
 	SecretConfigured      bool   `json:"secretConfigured,omitempty"`
@@ -36,6 +38,8 @@ type tenantStoragePoolCredential struct {
 	AccessKeyID     string `json:"accessKeyId"`
 	SecretAccessKey string `json:"secretAccessKey"`
 	SessionToken    string `json:"sessionToken,omitempty"`
+	Username        string `json:"username,omitempty"`
+	Password        string `json:"password,omitempty"`
 }
 
 type tenantStoragePoolSecretsEnvelope struct {
@@ -45,10 +49,14 @@ type tenantStoragePoolSecretsEnvelope struct {
 
 func normalizeTenantStoragePoolProvider(raw tenantStoragePoolProvider) (tenantStoragePoolProvider, error) {
 	raw.ID = strings.TrimSpace(raw.ID)
+	raw.Kind = strings.ToLower(strings.TrimSpace(raw.Kind))
+	if raw.Kind == "" {
+		raw.Kind = "s3"
+	}
 	raw.Endpoint = strings.TrimRight(strings.TrimSpace(raw.Endpoint), "/")
 	raw.Bucket = strings.ToLower(strings.TrimSpace(raw.Bucket))
 	raw.Region = strings.TrimSpace(raw.Region)
-	if raw.Region == "" {
+	if raw.Region == "" && raw.Kind == "s3" {
 		raw.Region = "auto"
 	}
 	raw.Prefix = strings.Trim(strings.TrimSpace(raw.Prefix), "/")
@@ -59,20 +67,37 @@ func normalizeTenantStoragePoolProvider(raw tenantStoragePoolProvider) (tenantSt
 	if !blobStorageProviderIDPattern.MatchString(raw.ID) || raw.Weight > maxBlobStorageProviderWeight {
 		return tenantStoragePoolProvider{}, errInvalidBlobObjectConfig
 	}
-	// Validate every non-secret field through the hardened S3 constructor. Dummy
-	// credentials are never persisted or used for a request.
-	if _, err := newS3BlobObjectStore(S3BlobStorageConfig{
-		Endpoint: raw.Endpoint, Bucket: raw.Bucket, Region: raw.Region, Prefix: raw.Prefix,
-		AccessKeyID: "validation-only", SecretAccessKey: "validation-only",
-		AllowInsecureLoopback: raw.AllowInsecureLoopback,
-	}); err != nil {
+	switch raw.Kind {
+	case "s3":
+		if raw.AllowPrivate {
+			return tenantStoragePoolProvider{}, errInvalidBlobObjectConfig
+		}
+		if _, err := newS3BlobObjectStore(S3BlobStorageConfig{Endpoint: raw.Endpoint, Bucket: raw.Bucket, Region: raw.Region, Prefix: raw.Prefix, AccessKeyID: "validation-only", SecretAccessKey: "validation-only", AllowInsecureLoopback: raw.AllowInsecureLoopback}); err != nil {
+			return tenantStoragePoolProvider{}, errInvalidBlobObjectConfig
+		}
+	case "webdav":
+		raw.Bucket, raw.Region = "", ""
+		if _, err := newWebDAVBlobObjectStore(WebDAVBlobStorageConfig{Endpoint: raw.Endpoint, Prefix: raw.Prefix, Username: raw.ID, Password: raw.ID, AllowPrivate: raw.AllowPrivate, AllowInsecureLoopback: raw.AllowInsecureLoopback}); err != nil {
+			return tenantStoragePoolProvider{}, errInvalidBlobObjectConfig
+		}
+	default:
 		return tenantStoragePoolProvider{}, errInvalidBlobObjectConfig
 	}
 	return raw, nil
 }
 
 func tenantStoragePoolAAD(tenantID string, provider tenantStoragePoolProvider) []byte {
+	if provider.Kind == "webdav" {
+		return []byte(strings.Join([]string{"tenant-storage-pool-webdav-v1", tenantID, provider.ID, provider.SecretBindingID, provider.Endpoint, provider.Prefix, boolString(provider.AllowPrivate), boolString(provider.AllowInsecureLoopback)}, "\x00"))
+	}
 	return []byte(strings.Join([]string{"tenant-storage-pool-v1", tenantID, provider.ID, provider.SecretBindingID, provider.Endpoint, provider.Bucket, provider.Region, provider.Prefix, boolString(provider.AllowInsecureLoopback)}, "\x00"))
+}
+
+func validTenantStorageCredential(provider tenantStoragePoolProvider, credential tenantStoragePoolCredential) bool {
+	if provider.Kind == "webdav" {
+		return strings.TrimSpace(credential.Username) != "" && credential.Password != "" && credential.AccessKeyID == "" && credential.SecretAccessKey == "" && credential.SessionToken == ""
+	}
+	return strings.TrimSpace(credential.AccessKeyID) != "" && strings.TrimSpace(credential.SecretAccessKey) != "" && credential.Username == "" && credential.Password == ""
 }
 
 func (s *Server) processBlobProviderIDExists(id string) bool {
@@ -151,7 +176,7 @@ func (s *Server) decryptTenantStoragePoolSecretsRaw(tenantID string, providers [
 		}
 		plain, openErr := s.secrets.Open(nil, nonce, ciphertext, tenantStoragePoolAAD(tenantID, provider))
 		var credential tenantStoragePoolCredential
-		if openErr != nil || len(plain) > maxObjectStorageSecret*3 || json.Unmarshal(plain, &credential) != nil || strings.TrimSpace(credential.AccessKeyID) == "" || strings.TrimSpace(credential.SecretAccessKey) == "" {
+		if openErr != nil || len(plain) > maxObjectStorageSecret*3 || json.Unmarshal(plain, &credential) != nil || !validTenantStorageCredential(provider, credential) {
 			continue
 		}
 		result[id] = credential
@@ -212,10 +237,22 @@ func (s *Server) tenantStoragePool(ctx context.Context, tenantID string) (blobOb
 		if !configured {
 			continue
 		}
-		storage := S3BlobStorageConfig{Endpoint: provider.Endpoint, Bucket: provider.Bucket, Region: provider.Region, Prefix: provider.Prefix, AccessKeyID: credential.AccessKeyID, SecretAccessKey: credential.SecretAccessKey, SessionToken: credential.SessionToken, AllowInsecureLoopback: provider.AllowInsecureLoopback}
-		objects, buildErr := newS3BlobObjectStore(storage)
-		if buildErr != nil {
-			return nil, buildErr
+		var objects blobObjectStore
+		var destination, fingerprint string
+		if provider.Kind == "webdav" {
+			webdav, buildErr := newWebDAVBlobObjectStore(WebDAVBlobStorageConfig{Endpoint: provider.Endpoint, Prefix: provider.Prefix, Username: credential.Username, Password: credential.Password, AllowPrivate: provider.AllowPrivate, AllowInsecureLoopback: provider.AllowInsecureLoopback})
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			objects, destination = webdav, webDAVBlobStorageDestination(webdav)
+			fingerprint = strings.Join([]string{provider.Endpoint, provider.Prefix, credential.Username, boolString(provider.AllowPrivate)}, "\x00")
+		} else {
+			storage := S3BlobStorageConfig{Endpoint: provider.Endpoint, Bucket: provider.Bucket, Region: provider.Region, Prefix: provider.Prefix, AccessKeyID: credential.AccessKeyID, SecretAccessKey: credential.SecretAccessKey, SessionToken: credential.SessionToken, AllowInsecureLoopback: provider.AllowInsecureLoopback}
+			s3store, buildErr := newS3BlobObjectStore(storage)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			objects, destination, fingerprint = s3store, s3BlobStorageDestination(s3store), objectStorageFingerprint(storage)
 		}
 		health := blobStorageProviderUnhealthy
 		if provider.Healthy && !provider.Deleted {
@@ -224,8 +261,8 @@ func (s *Server) tenantStoragePool(ctx context.Context, tenantID string) (blobOb
 				tenantSelectable = true
 			}
 		}
-		configs = append(configs, blobStorageProviderConfig{ID: provider.ID, Destination: s3BlobStorageDestination(objects), Weight: provider.Weight, Health: health, Store: objects})
-		fingerprintParts = append(fingerprintParts, strings.Join([]string{provider.ID, objectStorageFingerprint(storage), boolString(provider.Healthy), boolString(provider.Deleted)}, "\x1e"))
+		configs = append(configs, blobStorageProviderConfig{ID: provider.ID, Destination: destination, Weight: provider.Weight, Health: health, Store: objects})
+		fingerprintParts = append(fingerprintParts, strings.Join([]string{provider.ID, provider.Kind, fingerprint, boolString(provider.Healthy), boolString(provider.Deleted)}, "\x1e"))
 	}
 	// Keep process routes in the same resolver so pre-existing process-pool
 	// placements remain readable after a tenant pool is enabled. They become

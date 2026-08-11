@@ -225,7 +225,7 @@ func TestTenantWebDAVStoragePoolIsFeatureGatedEncryptedAndSelectable(t *testing.
 		t.Fatalf("read=%#v err=%v", loaded, err)
 	}
 	listed := request(t, router, http.MethodGet, "/api/admin/storage-pool", nil)
-	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(`"kind":"webdav"`)) || bytes.Contains(listed.Body.Bytes(), []byte("dav-user")) {
+	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(`"kind": "webdav"`)) || bytes.Contains(listed.Body.Bytes(), []byte("dav-user")) {
 		t.Fatalf("list=%d %s", listed.Code, listed.Body.String())
 	}
 }
