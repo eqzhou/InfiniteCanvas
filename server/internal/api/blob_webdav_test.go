@@ -193,6 +193,47 @@ func TestWebDAVBlobObjectStoreCreatesParentCollectionsBeforePut(t *testing.T) {
 	}
 }
 
+func TestWebDAVBlobObjectStoreCreatesCollectionsFromRootEndpoint(t *testing.T) {
+	collections := map[string]bool{"/": true}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCOL":
+			if !collections[path.Dir(r.URL.Path)] {
+				http.Error(w, "parent collection missing", http.StatusConflict)
+				return
+			}
+			if collections[r.URL.Path] {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			collections[r.URL.Path] = true
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodPut:
+			if !collections[path.Dir(r.URL.Path)] {
+				http.Error(w, "parent collection missing", http.StatusConflict)
+				return
+			}
+			w.Header().Set("ETag", `"v1"`)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer upstream.Close()
+
+	objectStore, err := newWebDAVBlobObjectStore(WebDAVBlobStorageConfig{
+		Endpoint: upstream.URL, Username: "dav-user", Password: "dav-pass",
+		Prefix: "openboard", AllowInsecureLoopback: true, HTTPClient: upstream.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := blobObject{Data: []byte("pixels"), Metadata: blobMetadata{ContentType: "image/png"}}
+	if _, err := objectStore.Put(t.Context(), "tenant-a", "nested/image", value, blobVersionAbsent); err != nil {
+		t.Fatalf("put from root endpoint: %v", err)
+	}
+}
+
 func TestWebDAVBlobObjectStoreRejectsUnsafeEndpoints(t *testing.T) {
 	tests := []WebDAVBlobStorageConfig{
 		{Endpoint: "http://dav.example.com/root", Username: "u", Password: "p"},
