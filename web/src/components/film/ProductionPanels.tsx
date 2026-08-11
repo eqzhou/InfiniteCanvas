@@ -26,6 +26,7 @@ import type { FilmDialogue, FilmShot, FilmStage, FilmStageKind } from "@/types/f
 import type { BoardProject } from "@/types/board";
 import { listMediaCapabilities, mediaOptionsForKind, type MediaCapabilityCatalog, type MediaKind } from "@/services/media-capabilities";
 import { WorkbenchSection } from "./WorkbenchSection";
+import { executeFilmAgentRead, type FilmAgentReadTool } from "@/services/film-agent-client";
 
 const stageLabels: Record<FilmStageKind, string> = { decompose: "拆解", script: "剧本", storyboard: "分镜", first_frame: "首帧", audio: "声音", video: "画面", compose: "合成", delivery: "交付" };
 
@@ -44,7 +45,7 @@ export function EpisodesPanel({ status, busy, onSaveEpisode, onSaveShot, onCreat
     <div className="space-y-4">{document.episodes.map((episode) => <article key={filmEditorKey(episode.id, episode.revision)} className="rounded-xl border border-[var(--ob-line)] p-3">
       <div className="flex gap-2"><input aria-label={`${episode.title} 集标题`} className="ob-input flex-1" defaultValue={episode.title} /><button type="button" className="ob-btn" disabled={busy} onClick={(event) => onSaveEpisode(episode.id, episode.revision, (event.currentTarget.previousElementSibling as HTMLInputElement).value)}><Save size={14} /> 保存集</button></div>
       {document.scenes.filter((scene) => scene.episodeId === episode.id).map((scene) => <div key={scene.id} className="mt-3 rounded-lg bg-[var(--ob-canvas)] p-3"><strong className="text-sm">{scene.heading}</strong>
-        {document.shots.filter((shot) => shot.sceneId === scene.id).map((shot) => <ShotEditor key={filmEditorKey(shot.id, shot.revision)} shot={shot} dialogues={(document.dialogues ?? []).filter((dialogue) => dialogue.shotId === shot.id)} identities={identities} styles={styles} busy={busy} onSave={onSaveShot} onCreateDialogue={onCreateDialogue} onSaveDialogue={onSaveDialogue} onDeleteDialogue={onDeleteDialogue} />)}
+        {document.shots.filter((shot) => shot.sceneId === scene.id).map((shot) => <ShotEditor key={filmEditorKey(shot.id, shot.revision)} shot={shot} dialogues={(document.dialogues ?? []).filter((dialogue) => dialogue.shotId === shot.id)} identities={identities.filter((identity) => (!identity.episodeIds?.length || identity.episodeIds.includes(episode.id)) && (!identity.sceneIds?.length || identity.sceneIds.includes(scene.id)) && (!identity.shotIds?.length || identity.shotIds.includes(shot.id)))} styles={styles} busy={busy} onSave={onSaveShot} onCreateDialogue={onCreateDialogue} onSaveDialogue={onSaveDialogue} onDeleteDialogue={onDeleteDialogue} />)}
       </div>)}
     </article>)}</div>
     {!document.episodes.length ? <p className="text-sm text-[var(--ob-muted)]">导入原稿后会出现分集、场景与镜头。</p> : null}
@@ -66,7 +67,8 @@ function ShotEditor({ shot, dialogues, identities, styles, busy, onSave, onCreat
 function DialogueEditor({ dialogue, busy, onSave, onDelete }: { dialogue: FilmDialogue; busy: boolean; onSave: (dialogue: FilmDialogue, patch: Partial<FilmDialogue>) => void; onDelete: (dialogue: FilmDialogue) => void }) {
   const [text, setText] = useState(dialogue.text);
   const [kind, setKind] = useState(dialogue.kind);
-  return <div className="flex gap-2 rounded-lg border border-[var(--ob-line)] p-2"><select aria-label="对白类型" className="ob-input" value={kind} onChange={(event) => setKind(event.target.value as FilmDialogue["kind"])}><option value="dialogue">对白</option><option value="narration">旁白</option></select><input aria-label="对白文本" className="ob-input flex-1" value={text} onChange={(event) => setText(event.target.value)} /><button className="ob-btn" disabled={busy || !text.trim()} onClick={() => onSave(dialogue, { kind, text })}>保存</button><button className="ob-btn" disabled={busy} onClick={() => onDelete(dialogue)}>删除</button></div>;
+  const [emotion, setEmotion] = useState(dialogue.emotion ?? "");
+  return <div className="grid gap-2 rounded-lg border border-[var(--ob-line)] p-2 sm:grid-cols-[auto_minmax(7rem,0.6fr)_minmax(12rem,1.4fr)_auto_auto]"><select aria-label="对白类型" className="ob-input" value={kind} onChange={(event) => setKind(event.target.value as FilmDialogue["kind"])}><option value="dialogue">对白</option><option value="narration">旁白</option></select><input aria-label="情绪指导" className="ob-input" value={emotion} onChange={(event) => setEmotion(event.target.value)} placeholder="情绪，如克制、急促" /><input aria-label="对白文本" className="ob-input" value={text} onChange={(event) => setText(event.target.value)} /><button className="ob-btn" disabled={busy || !text.trim()} onClick={() => onSave(dialogue, { kind, emotion, text })}>保存</button><button className="ob-btn" disabled={busy} onClick={() => onDelete(dialogue)}>删除</button></div>;
 }
 
 export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }: { status: FilmStatus; busy: boolean; onLegacyStage: (stage: FilmStage, action: "run" | "approve" | "reject") => void; onRun: (stage: FilmStageKind, request: FilmStageRunRequest) => Promise<boolean>; onSynced: (status: FilmStatus) => void }) {
@@ -149,7 +151,7 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced }
   for (let index = status.document.tasks.length - 1; index >= 0; index -= 1) {
     const task = status.document.tasks[index];
     if (!task.generationJobId) continue;
-    const scope = `${task.stage}:${task.shotId || "text"}`;
+    const scope = `${task.stage}:${task.dialogueId || task.shotId || "text"}`;
     if (latestTaskScopes.has(scope)) continue;
     latestTaskScopes.add(scope);
     latestGenerationJobIds.add(task.generationJobId);
@@ -191,6 +193,7 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
     ...status.document.shots.flatMap((shot) => ([
       { key: `shot:${shot.id}:image`, label: `${shot.title} · 分镜`, revision: shot.revision },
       { key: `shot:${shot.id}:first_frame`, label: `${shot.title} · 首帧`, revision: shot.revision },
+      { key: `shot:${shot.id}:last_frame`, label: `${shot.title} · 尾帧`, revision: shot.revision },
       { key: `shot:${shot.id}:video`, label: `${shot.title} · 视频`, revision: shot.revision },
       { key: `shot:${shot.id}:audio`, label: `${shot.title} · 音频`, revision: shot.revision },
     ])),
@@ -200,8 +203,8 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
     const node = candidates.find((item) => item.id === candidateId);
     const selected = targets.find((item) => item.key === target);
     if (!node?.metadata.storageKey || !selected) throw new Error("请选择候选媒体和目标");
-    const [targetType, targetId, targetField] = selected.key.split(":") as ["shot" | "asset", string, "image" | "first_frame" | "video" | "audio" | "media"];
-    if (targetType === "shot" && node.type !== (targetField === "first_frame" ? "image" : targetField)) throw new Error("候选媒体类型与镜头目标不匹配");
+    const [targetType, targetId, targetField] = selected.key.split(":") as ["shot" | "asset", string, "image" | "first_frame" | "last_frame" | "video" | "audio" | "media"];
+    if (targetType === "shot" && node.type !== (targetField === "first_frame" || targetField === "last_frame" ? "image" : targetField)) throw new Error("候选媒体类型与镜头目标不匹配");
     await onAdopt({ targetType, targetId, targetField, expectedRevision: selected.revision, sourceNodeId: node.id, storageKey: node.metadata.storageKey, ...(node.metadata.generationJobId ? { generationJobId: node.metadata.generationJobId } : {}) });
   };
   const loadDirectorCaptures = async () => {
@@ -219,7 +222,7 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
     }
     const shotId = targetId;
     const shot = status.document.shots.find((item) => item.id === shotId);
-    if (!shot || !directorCaptures.some((capture) => capture.id === directorCaptureId) || (targetField !== "storyboard" && targetField !== "first_frame")) throw new Error("请选择 Director 拍摄版本和镜头目标");
+    if (!shot || !directorCaptures.some((capture) => capture.id === directorCaptureId) || (targetField !== "storyboard" && targetField !== "first_frame" && targetField !== "last_frame")) throw new Error("请选择 Director 拍摄版本和镜头目标");
     await onAdoptDirector({ shotId, expectedRevision: shot.revision, captureId: directorCaptureId, targetField });
   };
   return <WorkbenchSection id="projection" title="画布投影同步 / Projection">
@@ -247,8 +250,8 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
       <p className="mt-1 text-xs text-[var(--ob-muted)]">服务端会验证拍摄版本属于当前影视项目，并复制为稳定媒体；临时拍摄记录删除后不会影响正式镜头。</p>
       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <select aria-label="Director 拍摄版本" className="ob-input" value={directorCaptureId} onChange={(event) => setDirectorCaptureId(event.target.value)}><option value="">选择已验证的拍摄版本</option>{directorCaptures.map((capture) => <option key={capture.id} value={capture.id}>{capture.cameraName} · {capture.width}×{capture.height} · {new Date(capture.createdAt).toLocaleString()}</option>)}</select>
-        <select aria-label="Director 采用目标" className="ob-input" value={directorTarget} onChange={(event) => setDirectorTarget(event.target.value)}><option value="">选择场景或镜头目标</option>{status.document.scenes.map((scene) => <option key={`scene:${scene.id}`} value={`scene:${scene.id}:scene`}>{scene.heading} · 正式场景版本</option>)}{status.document.shots.flatMap((shot) => [<option key={`${shot.id}:storyboard`} value={`shot:${shot.id}:storyboard`}>{shot.title} · 分镜</option>, <option key={`${shot.id}:first_frame`} value={`shot:${shot.id}:first_frame`}>{shot.title} · 首帧</option>])}</select>
-        <button className="ob-btn" disabled={busy || !directorCaptureId || !directorTarget} onClick={() => void adoptDirector().catch((cause) => setError(String(cause)))}>采用为场景 / 分镜 / 首帧</button>
+        <select aria-label="Director 采用目标" className="ob-input" value={directorTarget} onChange={(event) => setDirectorTarget(event.target.value)}><option value="">选择场景或镜头目标</option>{status.document.scenes.map((scene) => <option key={`scene:${scene.id}`} value={`scene:${scene.id}:scene`}>{scene.heading} · 正式场景版本</option>)}{status.document.shots.flatMap((shot) => [<option key={`${shot.id}:storyboard`} value={`shot:${shot.id}:storyboard`}>{shot.title} · 分镜</option>, <option key={`${shot.id}:first_frame`} value={`shot:${shot.id}:first_frame`}>{shot.title} · 首帧</option>, <option key={`${shot.id}:last_frame`} value={`shot:${shot.id}:last_frame`}>{shot.title} · 尾帧</option>])}</select>
+        <button className="ob-btn" disabled={busy || !directorCaptureId || !directorTarget} onClick={() => void adoptDirector().catch((cause) => setError(String(cause)))}>采用为场景 / 分镜 / 首帧 / 尾帧</button>
       </div>
     </div> : null}
     {error ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{error}</p> : null}
@@ -258,6 +261,21 @@ export function ProjectionPanel({ project, status, busy, onStatus, onRefreshCanv
 }
 
 export function AgentPanel({ status, onValidate }: { status: FilmStatus; onValidate: () => void }) {
-  const labels = { status: "查看制作状态", list: "列出制作资源", validate: "运行规则检查", run_stage: "运行阶段", next_steps: "建议下一步", approve_stage: "确认后批准阶段", apply_repair: "确认后应用修复", export: "确认后创建交付物" };
-  return <WorkbenchSection id="agent" title="安全 Agent 入口"><ul className="space-y-2">{status.capabilities.agentOperations.map((operation) => <li key={operation} className="rounded-lg border border-[var(--ob-line)] p-2 text-sm">{labels[operation]}</li>)}</ul>{status.capabilities.agentOperations.includes("validate") ? <button className="ob-btn mt-3" onClick={onValidate}>运行质量检查</button> : null}<p className="mt-2 text-xs text-[var(--ob-muted)]">读取可直接执行；批准、修复与导出声明为高影响操作，由 Agent 宿主要求用户确认并继续执行同一领域 API。</p></WorkbenchSection>;
+  const [result, setResult] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const approved = status.document.stages.filter((stage) => stage.status === "approved").length;
+  const total = status.document.stages.length;
+  const issues = status.document.qualityReports.at(-1)?.issues.length ?? 0;
+  const nextStage = status.document.stages.find((stage) => stage.status !== "approved");
+  const runRead = (tool: FilmAgentReadTool) => {
+    setBusy(true); setError("");
+    void executeFilmAgentRead(tool, status.document.projectId).then((value) => setResult(JSON.stringify(value, null, 2).slice(0, 4_000))).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setBusy(false));
+  };
+  return <WorkbenchSection id="agent" title="制片助理控制台">
+    <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-lg border border-[var(--ob-line)] p-3 text-sm"><strong>阶段进度</strong><p className="mt-1">{approved}/{total} 已批准</p></div><div className="rounded-lg border border-[var(--ob-line)] p-3 text-sm"><strong>当前阻塞</strong><p className="mt-1">{nextStage ? `${stageLabels[nextStage.id]} · ${nextStage.status}` : "无"}</p></div><div className="rounded-lg border border-[var(--ob-line)] p-3 text-sm"><strong>质量问题 {issues}</strong><p className="mt-1">{issues ? "需要检查修复提案" : "暂无已知问题"}</p></div></div>
+    <div className="mt-3 flex flex-wrap gap-2">{status.capabilities.agentOperations.includes("status") ? <button className="ob-btn" disabled={busy} onClick={() => runRead("film.status")}>查看制作状态</button> : null}{status.capabilities.agentOperations.includes("next_steps") ? <button className="ob-btn" disabled={busy} onClick={() => runRead("film.next_steps")}>建议下一步</button> : null}{status.capabilities.agentOperations.includes("validate") ? <button className="ob-btn" disabled={busy} onClick={onValidate}>运行质量检查</button> : null}</div>
+    <p className="mt-3 text-xs text-[var(--ob-muted)]">读取检查可直接执行；生成、审批、修复和导出需要确认，并继续使用上方阶段、质量与交付区域的同一领域 API。</p>
+    {result ? <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--ob-surface-2)] p-3 text-xs">{result}</pre> : null}{error ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{error}</p> : null}
+  </WorkbenchSection>;
 }

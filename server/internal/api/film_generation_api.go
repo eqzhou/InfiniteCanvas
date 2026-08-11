@@ -11,16 +11,17 @@ import (
 )
 
 type filmGenerationJobView struct {
-	ID        string  `json:"id"`
-	ParentID  string  `json:"parentJobId,omitempty"`
-	ShotID    string  `json:"shotId,omitempty"`
-	Stage     string  `json:"stage"`
-	Status    string  `json:"status"`
-	Title     string  `json:"title"`
-	Progress  float64 `json:"progress,omitempty"`
-	Error     string  `json:"error,omitempty"`
-	CreatedAt string  `json:"createdAt"`
-	UpdatedAt string  `json:"updatedAt"`
+	ID         string  `json:"id"`
+	ParentID   string  `json:"parentJobId,omitempty"`
+	ShotID     string  `json:"shotId,omitempty"`
+	DialogueID string  `json:"dialogueId,omitempty"`
+	Stage      string  `json:"stage"`
+	Status     string  `json:"status"`
+	Title      string  `json:"title"`
+	Progress   float64 `json:"progress,omitempty"`
+	Error      string  `json:"error,omitempty"`
+	CreatedAt  string  `json:"createdAt"`
+	UpdatedAt  string  `json:"updatedAt"`
 }
 
 func stableFilmJobError(status string) string {
@@ -40,9 +41,22 @@ func filmJobView(task filmTask, job store.GenerationJob) filmGenerationJobView {
 		status = "canceled"
 	}
 	return filmGenerationJobView{
-		ID: job.ID, ParentID: task.ID, ShotID: task.ShotID, Stage: task.Stage,
+		ID: job.ID, ParentID: task.ParentGenerationJobID, ShotID: task.ShotID, DialogueID: task.DialogueID, Stage: task.Stage,
 		Status: status, Title: task.Title, Progress: task.Progress, Error: stableFilmJobError(job.Status),
 		CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
+	}
+}
+
+func filmStageJobView(stage string, job store.GenerationJob) filmGenerationJobView {
+	var result filmStageGenerationResult
+	_ = json.Unmarshal(job.Result, &result)
+	status := job.Status
+	if status == "cancelled" {
+		status = "canceled"
+	}
+	return filmGenerationJobView{
+		ID: job.ID, Stage: stage, Status: status, Title: "Generate " + stage,
+		Progress: result.Progress, Error: stableFilmJobError(job.Status), CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 	}
 }
 
@@ -51,8 +65,12 @@ func (s *Server) listFilmGenerationJobs(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	items := make([]filmGenerationJobView, 0, len(document.Tasks))
+	items := make([]filmGenerationJobView, 0, len(document.Tasks)*2)
 	parents := make([]filmTask, 0, len(document.Tasks))
+	childrenByParent := make(map[string][]store.GenerationJob)
+	stageByParent := make(map[string]string)
+	childViews := make([]filmGenerationJobView, 0, len(document.Tasks))
+	parentOrder := make([]string, 0)
 	for _, task := range document.Tasks {
 		if task.GenerationJobID == "" {
 			continue
@@ -60,9 +78,28 @@ func (s *Server) listFilmGenerationJobs(w http.ResponseWriter, r *http.Request) 
 		job, err := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), task.GenerationJobID)
 		if err == nil {
 			parents = append(parents, task)
-			items = append(items, filmJobView(task, job))
+			childViews = append(childViews, filmJobView(task, job))
+			if task.ParentGenerationJobID != "" {
+				if _, exists := childrenByParent[task.ParentGenerationJobID]; !exists {
+					parentOrder = append(parentOrder, task.ParentGenerationJobID)
+					stageByParent[task.ParentGenerationJobID] = task.Stage
+				}
+				childrenByParent[task.ParentGenerationJobID] = append(childrenByParent[task.ParentGenerationJobID], job)
+			}
 		}
 	}
+	for _, parentID := range parentOrder {
+		parent, err := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), parentID)
+		if err != nil {
+			continue
+		}
+		aggregated, err := aggregateFilmStageGenerationJob(parent, childrenByParent[parentID])
+		if err != nil {
+			continue
+		}
+		items = append(items, filmStageJobView(stageByParent[parentID], aggregated))
+	}
+	items = append(items, childViews...)
 	writeJSON(w, map[string]any{"data": map[string]any{"tasks": parents, "generationJobs": items}})
 }
 
@@ -80,7 +117,7 @@ func findFilmTaskByJob(document filmDocument, jobID string) (int, filmTask, erro
 
 func latestFilmTaskIndex(document filmDocument, task filmTask) int {
 	if task.ShotID != "" {
-		return latestFilmStageTasks(document, task.Stage)[task.ShotID]
+		return latestFilmStageTasks(document, task.Stage)[filmTaskTargetID(task)]
 	}
 	for index := len(document.Tasks) - 1; index >= 0; index-- {
 		candidate := document.Tasks[index]
@@ -98,7 +135,7 @@ func setFilmTaskFromJob(s *Server, r *http.Request, document *filmDocument, task
 	if task.Status == filmStatusCanceled {
 		return errors.New("canceled film task cannot be synchronized")
 	}
-	binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: task.Stage, ShotID: task.ShotID, TaskID: task.ID, RequestHash: task.RequestHash}
+	binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: task.Stage, ShotID: task.ShotID, DialogueID: task.DialogueID, TaskID: task.ID, ParentGenerationJobID: task.ParentGenerationJobID, RequestHash: task.RequestHash}
 	if !matchingFilmGenerationJob(job, binding) {
 		return errors.New("generation job binding is invalid")
 	}
@@ -121,14 +158,25 @@ func setFilmTaskFromJob(s *Server, r *http.Request, document *filmDocument, task
 			task.Status, task.Progress, task.Error = filmStatusFailed, 0, "Generation result is unavailable or invalid"
 			break
 		}
-		for index, shot := range document.Shots {
-			if shot.ID != task.ShotID {
-				continue
+		if task.DialogueID != "" {
+			for index, dialogue := range document.Dialogues {
+				if dialogue.ID != task.DialogueID || dialogue.ShotID != task.ShotID {
+					continue
+				}
+				dialogue.AudioStorageKey, dialogue.AudioSHA256, dialogue.AudioObjectVersion, dialogue.AudioGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, job.ID
+				dialogue.Status, dialogue.Revision = filmStatusNeedsReview, dialogue.Revision+1
+				document.Dialogues[index] = dialogue
 			}
-			setFilmShotMediaBinding(&shot, task.Stage, item, job.ID)
-			shot.MediaMIMEType, shot.Status = item.MIMEType, filmStatusNeedsReview
-			shot.Revision++
-			document.Shots[index] = shot
+		} else {
+			for index, shot := range document.Shots {
+				if shot.ID != task.ShotID {
+					continue
+				}
+				setFilmShotMediaBinding(&shot, task.Stage, item, job.ID)
+				shot.MediaMIMEType, shot.Status = item.MIMEType, filmStatusNeedsReview
+				shot.Revision++
+				document.Shots[index] = shot
+			}
 		}
 		task.Status, task.Progress, task.Error = filmStatusNeedsReview, 1, ""
 	default:
@@ -137,7 +185,7 @@ func setFilmTaskFromJob(s *Server, r *http.Request, document *filmDocument, task
 	task.Revision++
 	task.UpdatedAt = now
 	document.Tasks[taskIndex] = task
-	stageIndex, stage, err := findFilmStage(*document, task.Stage)
+	stageIndex, stage, err := findFilmStage(*document, filmRepairLifecycleStage(task.Stage))
 	if err != nil {
 		return err
 	}
@@ -164,7 +212,7 @@ func setFilmTextTaskFromJob(document *filmDocument, taskIndex int, task filmTask
 	if latestFilmTaskIndex(*document, task) != taskIndex {
 		return errors.New("generation job is historical and cannot update the current film text task")
 	}
-	binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: task.Stage, TaskID: task.ID, RequestHash: task.RequestHash}
+	binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: task.Stage, TaskID: task.ID, ParentGenerationJobID: task.ParentGenerationJobID, RequestHash: task.RequestHash}
 	if !matchingFilmGenerationJob(job, binding) {
 		return errors.New("generation job binding is invalid")
 	}
@@ -184,7 +232,7 @@ func setFilmTextTaskFromJob(document *filmDocument, taskIndex int, task filmTask
 	task.Revision++
 	task.UpdatedAt = now
 	document.Tasks[taskIndex] = task
-	stageIndex, stage, err := findFilmStage(*document, task.Stage)
+	stageIndex, stage, err := findFilmStage(*document, filmRepairLifecycleStage(task.Stage))
 	if err != nil {
 		return err
 	}
@@ -277,7 +325,7 @@ func retryFilmJobClone(job store.GenerationJob, task filmTask, projectID string,
 	if err != nil {
 		return store.GenerationJob{}, filmTask{}, err
 	}
-	binding := &filmGenerationBinding{ProjectID: projectID, Stage: task.Stage, ShotID: task.ShotID, TaskID: newTaskID, RequestHash: requestHash}
+	binding := &filmGenerationBinding{ProjectID: projectID, Stage: task.Stage, ShotID: task.ShotID, DialogueID: task.DialogueID, TaskID: newTaskID, RequestHash: requestHash}
 	if job.Kind == "text" {
 		var parameters persistedTextJobParameters
 		if json.Unmarshal(job.Parameters, &parameters) != nil || validatePersistedTextJob(job, parameters) != nil || parameters.Film == nil {
@@ -303,7 +351,7 @@ func retryFilmJobClone(job store.GenerationJob, task filmTask, projectID string,
 	job.ID, job.Status, job.Result, job.Error = newJobID, "queued", json.RawMessage(`{}`), ""
 	job.CreatedAt, job.UpdatedAt, job.LeaseOwner, job.LeaseExpiresAt = now, now, "", ""
 	retryTask := filmTask{
-		ID: newTaskID, Revision: 1, Stage: task.Stage, ShotID: task.ShotID, Title: task.Title,
+		ID: newTaskID, Revision: 1, Stage: task.Stage, ShotID: task.ShotID, DialogueID: task.DialogueID, Title: task.Title,
 		Status: filmStatusRunning, CreatedAt: now, UpdatedAt: now, GenerationJobID: newJobID,
 		IdempotencyKey: "retry:" + job.ID, RequestHash: requestHash, Snapshot: task.Snapshot, TextSnapshot: task.TextSnapshot,
 	}
@@ -360,7 +408,7 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 	}
 	jobExists := false
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), retryJob.ID); getErr == nil {
-		binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: retryTask.Stage, ShotID: retryTask.ShotID, TaskID: retryTask.ID, RequestHash: retryTask.RequestHash}
+		binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: retryTask.Stage, ShotID: retryTask.ShotID, DialogueID: retryTask.DialogueID, TaskID: retryTask.ID, RequestHash: retryTask.RequestHash}
 		if !matchingFilmGenerationJob(existing, binding) {
 			writeFilmError(w, http.StatusConflict, "generation_job_conflict", "generation retry job id belongs to another request")
 			return

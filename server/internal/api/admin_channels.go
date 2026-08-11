@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -85,7 +86,16 @@ func (s *Server) getSharedChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-const maxAdminChannelModels = 200
+const (
+	maxAdminChannelModels            = 200
+	maxAdminMediaCapabilities        = 200
+	maxAdminMediaCapabilityValues    = 64
+	maxAdminMediaCapabilityValueSize = 100
+	maxAdminMediaReferences          = 16
+	maxAdminMediaDurationSeconds     = 900
+)
+
+var adminMediaSizePattern = regexp.MustCompile(`^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|\d{3,4}p|[1248][kK]|auto|adaptive)$`)
 
 func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string) {
 	item.ID = strings.TrimSpace(item.ID)
@@ -136,7 +146,146 @@ func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string)
 			return adminChannelPublic{}, "invalid channel model"
 		}
 	}
+	capabilities, message := normalizeAdminMediaCapabilities(item)
+	if message != "" {
+		return adminChannelPublic{}, message
+	}
+	item.MediaCapabilities = capabilities
 	return item, ""
+}
+
+func normalizeAdminMediaCapabilities(channel adminChannelPublic) ([]adminMediaCapability, string) {
+	if len(channel.MediaCapabilities) == 0 {
+		return nil, ""
+	}
+	if len(channel.MediaCapabilities) > maxAdminMediaCapabilities {
+		return nil, "too many media capabilities"
+	}
+	seen := make(map[string]struct{}, len(channel.MediaCapabilities))
+	clean := make([]adminMediaCapability, 0, len(channel.MediaCapabilities))
+	for _, raw := range channel.MediaCapabilities {
+		capability := adminMediaCapability{
+			Model:         strings.TrimSpace(raw.Model),
+			Kind:          strings.ToLower(strings.TrimSpace(raw.Kind)),
+			MaxReferences: raw.MaxReferences,
+		}
+		if capability.Model == "" || len(capability.Model) > 500 || !adminMediaCapabilityModelAllowed(channel, capability.Model) {
+			return nil, "invalid media capability model"
+		}
+		if capability.Kind != "image" && capability.Kind != "video" && capability.Kind != "audio" {
+			return nil, "invalid media capability kind"
+		}
+		key := capability.Kind + "\x00" + strings.ToLower(capability.Model)
+		if _, exists := seen[key]; exists {
+			return nil, "duplicate media capability"
+		}
+		seen[key] = struct{}{}
+
+		var message string
+		capability.Modes, message = normalizeAdminMediaModes(raw.Modes, capability.Kind)
+		if message != "" {
+			return nil, message
+		}
+		capability.Sizes, message = normalizeAdminMediaStrings(raw.Sizes)
+		if message != "" {
+			return nil, "invalid media capability sizes"
+		}
+		capability.Durations, message = normalizeAdminMediaDurations(raw.Durations)
+		if message != "" {
+			return nil, message
+		}
+		if capability.MaxReferences < 0 || capability.MaxReferences > maxAdminMediaReferences || (capability.Kind == "audio" && capability.MaxReferences != 0) {
+			return nil, "invalid media capability reference limit"
+		}
+		clean = append(clean, capability)
+	}
+	return clean, ""
+}
+
+func adminMediaCapabilityModelAllowed(channel adminChannelPublic, model string) bool {
+	for _, allowed := range channel.Models {
+		if strings.EqualFold(allowed, model) {
+			return true
+		}
+	}
+	for _, fallback := range []string{channel.DefaultImageModel, channel.DefaultVideoModel, channel.DefaultAudioModel} {
+		if fallback != "" && strings.EqualFold(fallback, model) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAdminMediaModes(values []string, kind string) ([]string, string) {
+	if len(values) == 0 || len(values) > maxAdminMediaCapabilityValues {
+		return nil, "invalid media capability modes"
+	}
+	allowed := map[string]string{
+		"text_to_image": "image", "image_to_image": "image",
+		"text_to_video": "video", "image_to_video": "video",
+		"text_to_audio": "audio",
+	}
+	seen := make(map[string]struct{}, len(values))
+	clean := make([]string, 0, len(values))
+	for _, raw := range values {
+		mode := strings.ToLower(strings.TrimSpace(raw))
+		if allowed[mode] != kind {
+			return nil, "invalid media capability mode"
+		}
+		if _, exists := seen[mode]; exists {
+			continue
+		}
+		seen[mode] = struct{}{}
+		clean = append(clean, mode)
+	}
+	return clean, ""
+}
+
+func normalizeAdminMediaStrings(values []string) ([]string, string) {
+	if len(values) == 0 {
+		return nil, ""
+	}
+	if len(values) > maxAdminMediaCapabilityValues {
+		return nil, "too many values"
+	}
+	seen := make(map[string]struct{}, len(values))
+	clean := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		value = strings.ReplaceAll(value, "X", "x")
+		if value == "" || len(value) > maxAdminMediaCapabilityValueSize || !adminMediaSizePattern.MatchString(value) {
+			return nil, "invalid value"
+		}
+		key := strings.ToLower(value)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		clean = append(clean, value)
+	}
+	return clean, ""
+}
+
+func normalizeAdminMediaDurations(values []int) ([]int, string) {
+	if len(values) == 0 {
+		return nil, ""
+	}
+	if len(values) > maxAdminMediaCapabilityValues {
+		return nil, "too many media capability durations"
+	}
+	seen := make(map[int]struct{}, len(values))
+	clean := make([]int, 0, len(values))
+	for _, value := range values {
+		if value < 1 || value > maxAdminMediaDurationSeconds {
+			return nil, "invalid media capability duration"
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		clean = append(clean, value)
+	}
+	return clean, ""
 }
 
 // cleanAdminChannelModels trims blanks and keeps first-seen order so routing and

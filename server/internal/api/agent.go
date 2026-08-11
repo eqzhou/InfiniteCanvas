@@ -3,18 +3,151 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/openboard/openboard/server/internal/store"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 const maxAgentRequestBytes = 32 << 20
+const agentConfirmationTTL = 2 * time.Minute
+const maxAgentConfirmations = 4096
+const maxAgentConfirmationsPerScope = 64
+
+type agentConfirmationRecord struct {
+	Scope     agentScope
+	Digest    string
+	ExpiresAt time.Time
+}
+
+func highImpactFilmAgentTool(tool string) bool {
+	switch tool {
+	case "film.validate", "film.run_stage", "film.approve_stage", "film.apply_repair", "film.export":
+		return true
+	default:
+		return false
+	}
+}
+
+func effectiveAgentScope(scope agentScope) agentScope {
+	if scope.tenantID == "" {
+		scope.tenantID = store.DefaultTenantID
+	}
+	if scope.userID == "" {
+		scope.userID = "local-process"
+	}
+	return scope
+}
+
+func agentConfirmationDigest(tool string, arguments json.RawMessage) (string, error) {
+	var values map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(arguments))
+	decoder.UseNumber()
+	if decoder.Decode(&values) != nil || ensureJSONEOF(decoder) != nil || values == nil {
+		return "", errors.New("confirmation arguments are invalid")
+	}
+	delete(values, "confirmationToken")
+	projectID, _ := values["projectId"].(string)
+	projectID = strings.TrimSpace(projectID)
+	if !validProjectID(projectID) {
+		return "", errors.New("confirmation projectId is invalid")
+	}
+	canonical, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(append([]byte(tool+"\x00"+projectID+"\x00"), canonical...))
+	return hex.EncodeToString(hash[:]), nil
+}
+
+func (s *Server) issueAgentConfirmation(w http.ResponseWriter, r *http.Request) {
+	user, authenticated := authUserFrom(r.Context())
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	_, trustedOrigin := s.runtimeOrigins[origin]
+	if !authenticated || strings.TrimSpace(user.ID) == "" || !trustedOrigin ||
+		!strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-origin") {
+		writeToolError(w, http.StatusForbidden, "interactive user confirmation is required")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request agentRequest
+	if decoder.Decode(&request) != nil || ensureJSONEOF(decoder) != nil || !highImpactFilmAgentTool(request.Tool) {
+		writeToolError(w, http.StatusBadRequest, "invalid confirmation request")
+		return
+	}
+	digest, err := agentConfirmationDigest(request.Tool, request.Arguments)
+	if err != nil {
+		writeToolError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(agentConfirmationTTL)
+	scope := effectiveAgentScope(requestAgentScope(r))
+	s.agentConfirmationMu.Lock()
+	scopeCount := 0
+	for existingToken, record := range s.agentConfirmations {
+		if now.After(record.ExpiresAt) {
+			delete(s.agentConfirmations, existingToken)
+			continue
+		}
+		if record.Scope == scope {
+			scopeCount++
+		}
+	}
+	if len(s.agentConfirmations) >= maxAgentConfirmations || scopeCount >= maxAgentConfirmationsPerScope {
+		s.agentConfirmationMu.Unlock()
+		writeToolError(w, http.StatusTooManyRequests, "too many pending confirmations")
+		return
+	}
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		s.agentConfirmationMu.Unlock()
+		writeToolError(w, http.StatusInternalServerError, "failed to issue confirmation")
+		return
+	}
+	token := hex.EncodeToString(random)
+	s.agentConfirmations[token] = agentConfirmationRecord{Scope: scope, Digest: digest, ExpiresAt: expiresAt}
+	s.agentConfirmationMu.Unlock()
+	writeJSON(w, map[string]any{"token": token, "expiresAt": expiresAt.Format(time.RFC3339Nano)})
+}
+
+func (s *Server) consumeAgentConfirmation(scope agentScope, tool string, arguments json.RawMessage) error {
+	if !highImpactFilmAgentTool(tool) {
+		return nil
+	}
+	var values struct {
+		Token string `json:"confirmationToken"`
+	}
+	if json.Unmarshal(arguments, &values) != nil || len(values.Token) != 64 {
+		return badToolRequest("a valid one-time confirmation token is required")
+	}
+	digest, err := agentConfirmationDigest(tool, arguments)
+	if err != nil {
+		return badToolRequest(err.Error())
+	}
+	s.agentConfirmationMu.Lock()
+	record, found := s.agentConfirmations[values.Token]
+	if found {
+		delete(s.agentConfirmations, values.Token)
+	}
+	s.agentConfirmationMu.Unlock()
+	if !found || record.Scope != effectiveAgentScope(scope) || record.Digest != digest || time.Now().UTC().After(record.ExpiresAt) {
+		return badToolRequest("a valid one-time confirmation token is required")
+	}
+	return nil
+}
 
 type agentRequest struct {
 	Tool      string          `json:"tool"`
@@ -22,7 +155,8 @@ type agentRequest struct {
 }
 
 type projectArguments struct {
-	ProjectID string `json:"projectId"`
+	ProjectID         string `json:"projectId"`
+	ConfirmationToken string `json:"confirmationToken,omitempty"`
 }
 
 type addNodeArguments struct {
@@ -105,6 +239,9 @@ func (s *Server) executeTool(ctx context.Context, scope agentScope, tool string,
 			return nil, fmt.Errorf("decode browser runtime result: %w", err)
 		}
 		return decoded, nil
+	}
+	if err := s.consumeAgentConfirmation(scope, tool, arguments); err != nil {
+		return nil, err
 	}
 	tenantID := scope.tenantID
 	if tenantID == "" {

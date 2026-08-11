@@ -17,7 +17,7 @@ const maxGenerationJobBytes = 1 << 20
 const maxGenerationRestoreBytes = 32 << 20
 const maxGenerationRestoreItems = 10_000
 
-var generationKinds = map[string]bool{"text": true, "image": true, "video": true, "audio": true, "workflow": true, "export": true}
+var generationKinds = map[string]bool{"text": true, "image": true, "video": true, "audio": true, "workflow": true, "export": true, "film-stage": true}
 var generationStatuses = map[string]bool{
 	"queued": true, "running": true, "succeeded": true, "failed": true, "cancelled": true, "deleted": true,
 }
@@ -54,6 +54,9 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "failed to list generation jobs", http.StatusInternalServerError)
 		return
+	}
+	for index, job := range result.Items {
+		result.Items[index] = s.filmStageGenerationView(r.Context(), tenantIDFrom(r), job)
 	}
 	writeJSON(w, publicGenerationJobPage(result))
 }
@@ -164,6 +167,7 @@ func (s *Server) getGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
 		return
 	}
+	job = s.filmStageGenerationView(r.Context(), tenantIDFrom(r), job)
 	writeJSON(w, publicGenerationJob(job))
 }
 

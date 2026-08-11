@@ -13,6 +13,7 @@ import {
   requestFilmAIScript,
   applyFilmAICandidate,
   applyFilmAIScriptCandidate,
+  applyFilmRepair,
   requestFilmExport,
   retryFilmGenerationJob,
   waitForFilmGenerationStage,
@@ -23,6 +24,7 @@ import {
   bindFilmDirectorScene,
   listFilmDirectorCaptures,
   restoreFilmProduction,
+  restoreFilmStructureVersion,
   updateFilmAsset,
 } from "./film-client";
 import { createFilmDocument } from "@/lib/film-document";
@@ -207,12 +209,12 @@ describe("film client", () => {
     }) as typeof fetch;
 
     await requestFilmAIScript("film-script", {
-      revision: 2, episodeId: "episode-1", providerId: "shared-text", model: "gpt-text", idempotencyKey: "script-1",
+      revision: 2, episodeId: "episode-1", scriptMode: "literal", providerId: "shared-text", model: "gpt-text", idempotencyKey: "script-1",
     });
     await applyFilmAIScriptCandidate("film-script", "script-candidate-1", 4);
 
     expect(requests).toEqual([
-      { url: "/api/film/projects/film-script/stages/script/run", body: { revision: 2, mode: "ai", episodeId: "episode-1", providerId: "shared-text", model: "gpt-text", idempotencyKey: "script-1" } },
+      { url: "/api/film/projects/film-script/stages/script/run", body: { revision: 2, mode: "ai", episodeId: "episode-1", scriptMode: "literal", providerId: "shared-text", model: "gpt-text", idempotencyKey: "script-1" } },
       { url: "/api/film/projects/film-script/ai-script-candidates/script-candidate-1/apply", body: { revision: 4 } },
     ]);
   });
@@ -347,6 +349,28 @@ describe("film client", () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
+  test("uses durable generation parent jobs instead of duplicating legacy film tasks", async () => {
+    const film = createFilmDocument("film-durable-parent", "2026-08-08T00:00:00.000Z");
+    const task = {
+      id: "task-durable", revision: 1, stage: "storyboard" as const, title: "Legacy task projection",
+      status: "running" as const, progress: 0.2, generationJobId: "child-durable",
+      parentGenerationJobId: "parent-durable", shotId: "shot-durable",
+      createdAt: film.createdAt, updatedAt: film.updatedAt,
+    };
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({ data: {
+      tasks: [task],
+      generationJobs: [
+        { id: "parent-durable", stage: "storyboard", status: "running", title: "Generate storyboard", progress: 0.2, createdAt: film.createdAt, updatedAt: film.updatedAt },
+        { id: "child-durable", parentJobId: "parent-durable", shotId: "shot-durable", stage: "storyboard", status: "running", title: "Shot child", progress: 0.2, createdAt: film.createdAt, updatedAt: film.updatedAt },
+      ],
+    } }), { status: 200 })) as typeof fetch;
+
+    const jobs = await listFilmGenerationJobs("film-durable-parent");
+
+    expect(jobs.map((job) => job.id)).toEqual(["parent-durable", "child-durable"]);
+    expect(jobs[1]).toMatchObject({ parentJobId: "parent-durable", shotId: "shot-durable" });
+  });
+
   test("updates versioned assets using compare-and-swap revision", async () => {
     const film = createFilmDocument("film-1", "2026-08-08T00:00:00.000Z");
     const fetcher = mock(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
@@ -362,6 +386,32 @@ describe("film client", () => {
     });
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ revision: 4, parentAssetId: "character-1" });
+  });
+
+  test("restores a complete story structure using the aggregate revision", async () => {
+    const film = createFilmDocument("film-restore-structure", "2026-08-08T00:00:00.000Z");
+    const fetcher = mock(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ data: film, meta: { recordRevision: 5 } }), { status: 200 }));
+    globalThis.fetch = fetcher as typeof fetch;
+
+    await restoreFilmStructureVersion("film-restore-structure", "structure-v1", 12);
+
+    expect(String(fetcher.mock.calls[0]?.[0])).toContain("/structure-versions/structure-v1/restore");
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ revision: 12 });
+  });
+
+  test("sends explicit frozen generation input when applying a generative repair", async () => {
+    const film = createFilmDocument("film-repair", "2026-08-08T00:00:00.000Z");
+    let body: unknown;
+    globalThis.fetch = mock(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: film, meta: { recordRevision: 2 } }), { status: 202 });
+    }) as typeof fetch;
+
+    await applyFilmRepair("film-repair", "repair-1", 3, {
+      providerId: "shared-image", model: "image-v2", config: { size: "1024x1024" }, idempotencyKey: "repair-pass-1", expectedCredits: 20,
+    });
+
+    expect(body).toEqual({ revision: 3, approved: true, providerId: "shared-image", model: "image-v2", config: { size: "1024x1024" }, idempotencyKey: "repair-pass-1", expectedCredits: 20 });
   });
 
   test("refreshes and commits the real server projection contract", async () => {

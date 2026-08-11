@@ -53,11 +53,76 @@ type filmGenerationRunRequest struct {
 }
 
 type filmGenerationBinding struct {
-	ProjectID   string `json:"projectId"`
-	Stage       string `json:"stage"`
-	ShotID      string `json:"shotId"`
-	TaskID      string `json:"taskId"`
-	RequestHash string `json:"requestHash"`
+	ProjectID             string `json:"projectId"`
+	Stage                 string `json:"stage"`
+	ShotID                string `json:"shotId"`
+	DialogueID            string `json:"dialogueId,omitempty"`
+	TaskID                string `json:"taskId"`
+	ParentGenerationJobID string `json:"parentGenerationJobId,omitempty"`
+	RequestHash           string `json:"requestHash"`
+}
+
+type filmGenerationTarget struct {
+	Shot     filmShot
+	Dialogue *filmDialogue
+}
+
+func filmGenerationTargets(document filmDocument, stage string, shots []filmShot) []filmGenerationTarget {
+	if stage != "audio" {
+		targets := make([]filmGenerationTarget, len(shots))
+		for index, shot := range shots {
+			targets[index] = filmGenerationTarget{Shot: shot}
+		}
+		return targets
+	}
+	targets := make([]filmGenerationTarget, 0, len(document.Dialogues))
+	for _, shot := range shots {
+		dialogues := make([]filmDialogue, 0)
+		for _, dialogue := range document.Dialogues {
+			if dialogue.ShotID == shot.ID {
+				dialogues = append(dialogues, dialogue)
+			}
+		}
+		sort.SliceStable(dialogues, func(i, j int) bool { return dialogues[i].Order < dialogues[j].Order })
+		for index := range dialogues {
+			dialogue := dialogues[index]
+			targets = append(targets, filmGenerationTarget{Shot: shot, Dialogue: &dialogue})
+		}
+	}
+	return targets
+}
+
+func filmGenerationTargetID(target filmGenerationTarget) string {
+	if target.Dialogue != nil {
+		return target.Dialogue.ID
+	}
+	return target.Shot.ID
+}
+
+func filmTaskTargetID(task filmTask) string {
+	if task.DialogueID != "" {
+		return task.DialogueID
+	}
+	return task.ShotID
+}
+
+type filmStageGenerationParameters struct {
+	Executor    string   `json:"executor"`
+	ProjectID   string   `json:"projectId"`
+	Stage       string   `json:"stage"`
+	RequestHash string   `json:"requestHash"`
+	ChildJobIDs []string `json:"childJobIds"`
+}
+
+type filmStageGenerationResult struct {
+	Outcome   string  `json:"outcome"`
+	Total     int     `json:"total"`
+	Queued    int     `json:"queued"`
+	Running   int     `json:"running"`
+	Succeeded int     `json:"succeeded"`
+	Failed    int     `json:"failed"`
+	Cancelled int     `json:"cancelled"`
+	Progress  float64 `json:"progress"`
 }
 
 func validFilmIdempotencyKey(value string) bool {
@@ -75,7 +140,7 @@ func validFilmIdempotencyKey(value string) bool {
 
 func filmStageGenerationKind(stage string) string {
 	switch stage {
-	case "storyboard", "first_frame":
+	case "storyboard", "first_frame", "last_frame":
 		return "image"
 	case "audio", "video":
 		return stage
@@ -172,7 +237,7 @@ func validateFilmGenerationConfig(stage string, config filmGenerationConfig) err
 			return errors.New("generation config contains an invalid reference storage key")
 		}
 	}
-	if (stage == "storyboard" || stage == "first_frame") && config.Size != "" && !imageSizePattern.MatchString(config.Size) {
+	if (stage == "storyboard" || stage == "first_frame" || stage == "last_frame") && config.Size != "" && !imageSizePattern.MatchString(config.Size) {
 		return errors.New("storyboard size is invalid")
 	}
 	if stage == "video" && (config.Seconds < 0 || config.Seconds > 15) {
@@ -182,28 +247,169 @@ func validateFilmGenerationConfig(stage string, config filmGenerationConfig) err
 }
 
 func filmGenerationRequestHash(projectID, stage string, shots []filmShot, input filmGenerationRunRequest) (string, error) {
-	shotIDs := make([]string, len(shots))
+	targets := make([]filmGenerationTarget, len(shots))
 	for index, shot := range shots {
-		shotIDs[index] = shot.ID
+		targets[index] = filmGenerationTarget{Shot: shot}
+	}
+	return filmGenerationTargetRequestHash(projectID, stage, targets, input)
+}
+
+func filmGenerationTargetRequestHash(projectID, stage string, targets []filmGenerationTarget, input filmGenerationRunRequest) (string, error) {
+	shotIDs := make([]string, len(targets))
+	dialogues := make([]filmDialogue, 0, len(targets))
+	for index, target := range targets {
+		shotIDs[index] = target.Shot.ID
+		if target.Dialogue != nil {
+			dialogues = append(dialogues, *target.Dialogue)
+		}
 	}
 	canonical := struct {
 		ProjectID      string               `json:"projectId"`
 		Stage          string               `json:"stage"`
 		ShotIDs        []string             `json:"shotIds"`
+		Dialogues      []filmDialogue       `json:"dialogues,omitempty"`
 		ProviderID     string               `json:"providerId"`
 		Model          string               `json:"model"`
 		Config         filmGenerationConfig `json:"config"`
 		IdempotencyKey string               `json:"idempotencyKey"`
-	}{projectID, stage, shotIDs, strings.TrimSpace(input.ProviderID), strings.TrimSpace(input.Model), input.Config, strings.TrimSpace(input.IdempotencyKey)}
+	}{projectID, stage, shotIDs, dialogues, strings.TrimSpace(input.ProviderID), strings.TrimSpace(input.Model), input.Config, strings.TrimSpace(input.IdempotencyKey)}
 	return hashGenerationInput(canonical)
 }
 
-func findFilmIdempotentTasks(document filmDocument, stage, idempotencyKey, requestHash string, shots []filmShot) ([]filmTask, bool, error) {
-	wanted := make(map[string]struct{}, len(shots))
-	for _, shot := range shots {
-		wanted[shot.ID] = struct{}{}
+func buildFilmStageGenerationJob(projectID, stage, parentJobID, requestHash, now string, childJobIDs []string) (store.GenerationJob, error) {
+	parameters, err := json.Marshal(filmStageGenerationParameters{
+		Executor: "film-stage", ProjectID: projectID, Stage: stage, RequestHash: requestHash,
+		ChildJobIDs: append([]string(nil), childJobIDs...),
+	})
+	if err != nil {
+		return store.GenerationJob{}, err
 	}
-	found := make(map[string]filmTask, len(shots))
+	result, err := json.Marshal(filmStageGenerationResult{Outcome: "queued", Total: len(childJobIDs), Queued: len(childJobIDs)})
+	if err != nil {
+		return store.GenerationJob{}, err
+	}
+	return store.GenerationJob{
+		ID: parentJobID, ProjectID: projectID, Kind: "film-stage", Status: "queued",
+		Prompt: "", Parameters: parameters, Result: result, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+func aggregateFilmStageGenerationJob(parent store.GenerationJob, children []store.GenerationJob) (store.GenerationJob, error) {
+	var parameters filmStageGenerationParameters
+	if parent.Kind != "film-stage" || json.Unmarshal(parent.Parameters, &parameters) != nil || parameters.Executor != "film-stage" || len(parameters.ChildJobIDs) == 0 || len(children) != len(parameters.ChildJobIDs) {
+		return store.GenerationJob{}, errors.New("Film stage parent job is invalid")
+	}
+	if parent.Status == "cancelled" || parent.Status == "canceled" || parent.Status == "deleted" {
+		return parent, nil
+	}
+	byID := make(map[string]store.GenerationJob, len(children))
+	for _, child := range children {
+		byID[child.ID] = child
+	}
+	result := filmStageGenerationResult{Total: len(parameters.ChildJobIDs)}
+	progressUnits := 0.0
+	latestUpdatedAt := parent.UpdatedAt
+	for _, childID := range parameters.ChildJobIDs {
+		child, ok := byID[childID]
+		if !ok {
+			return store.GenerationJob{}, errors.New("Film stage child job is unavailable")
+		}
+		if child.UpdatedAt > latestUpdatedAt {
+			latestUpdatedAt = child.UpdatedAt
+		}
+		switch child.Status {
+		case "queued":
+			result.Queued++
+		case "running":
+			result.Running++
+			progressUnits += 0.5
+		case "succeeded":
+			result.Succeeded++
+			progressUnits++
+		case "failed":
+			result.Failed++
+			progressUnits++
+		case "cancelled", "canceled":
+			result.Cancelled++
+			progressUnits++
+		default:
+			return store.GenerationJob{}, errors.New("Film stage child job status is invalid")
+		}
+	}
+	result.Progress = progressUnits / float64(result.Total)
+	switch {
+	case result.Queued == result.Total:
+		parent.Status, result.Outcome = "queued", "queued"
+	case result.Queued+result.Running > 0:
+		parent.Status, result.Outcome = "running", "running"
+	case result.Succeeded == result.Total:
+		parent.Status, result.Outcome = "succeeded", "succeeded"
+	case result.Cancelled == result.Total:
+		parent.Status, result.Outcome = "cancelled", "cancelled"
+	case result.Succeeded > 0 || (result.Failed > 0 && result.Cancelled > 0):
+		parent.Status, result.Outcome = "failed", "partial_failure"
+	default:
+		parent.Status, result.Outcome = "failed", "failed"
+	}
+	parent.Error = ""
+	if parent.Status == "failed" {
+		parent.Error = "One or more Film generation jobs failed"
+	}
+	parent.Result, _ = json.Marshal(result)
+	parent.UpdatedAt = latestUpdatedAt
+	return parent, nil
+}
+
+func (s *Server) filmStageGenerationView(ctx context.Context, tenantID string, parent store.GenerationJob) store.GenerationJob {
+	if parent.Kind != "film-stage" {
+		return parent
+	}
+	var parameters filmStageGenerationParameters
+	if json.Unmarshal(parent.Parameters, &parameters) != nil || len(parameters.ChildJobIDs) == 0 || len(parameters.ChildJobIDs) > 1_000 {
+		return parent
+	}
+	children := make([]store.GenerationJob, 0, len(parameters.ChildJobIDs))
+	for _, childID := range parameters.ChildJobIDs {
+		child, err := s.store.GetGenerationJob(ctx, tenantID, childID)
+		if err != nil {
+			return parent
+		}
+		children = append(children, child)
+	}
+	aggregated, err := aggregateFilmStageGenerationJob(parent, children)
+	if err != nil {
+		return parent
+	}
+	return aggregated
+}
+
+func orderedFilmVideoReferences(shot filmShot, configured []string) []string {
+	ordered := make([]string, 0, len(configured)+2)
+	seen := make(map[string]struct{}, len(configured)+2)
+	appendUnique := func(key string) {
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		ordered = append(ordered, key)
+	}
+	appendUnique(shot.FirstFrameStorageKey)
+	appendUnique(shot.LastFrameStorageKey)
+	for _, key := range configured {
+		appendUnique(key)
+	}
+	return ordered
+}
+
+func findFilmIdempotentTasks(document filmDocument, stage, idempotencyKey, requestHash string, targets []filmGenerationTarget) ([]filmTask, bool, error) {
+	wanted := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		wanted[filmGenerationTargetID(target)] = struct{}{}
+	}
+	found := make(map[string]filmTask, len(targets))
 	for _, task := range document.Tasks {
 		if task.Stage != stage || task.IdempotencyKey != idempotencyKey {
 			continue
@@ -211,8 +417,8 @@ func findFilmIdempotentTasks(document filmDocument, stage, idempotencyKey, reque
 		if task.RequestHash != requestHash {
 			return nil, false, errors.New("idempotency key belongs to a different generation request")
 		}
-		if _, ok := wanted[task.ShotID]; ok {
-			found[task.ShotID] = task
+		if _, ok := wanted[filmTaskTargetID(task)]; ok {
+			found[filmTaskTargetID(task)] = task
 		}
 	}
 	if len(found) == 0 {
@@ -222,14 +428,14 @@ func findFilmIdempotentTasks(document filmDocument, stage, idempotencyKey, reque
 		return nil, false, errors.New("idempotent generation request is incomplete; sync before retrying")
 	}
 	result := make([]filmTask, 0, len(found))
-	for _, shot := range shots {
-		result = append(result, found[shot.ID])
+	for _, target := range targets {
+		result = append(result, found[filmGenerationTargetID(target)])
 	}
 	return result, true, nil
 }
 
 func (s *Server) validateFilmGenerationReferences(ctx context.Context, tenantID, stage string, keys []string) error {
-	if stage == "storyboard" || stage == "first_frame" {
+	if stage == "storyboard" || stage == "first_frame" || stage == "last_frame" {
 		for _, key := range keys {
 			if _, err := s.readTenantImageBlobContext(ctx, tenantID, key); err != nil {
 				return errors.New("storyboard references must be tenant-owned PNG or JPEG media")
@@ -260,7 +466,7 @@ func (s *Server) filmGenerationProvider(ctx context.Context, tenantID, stage, pr
 				continue
 			}
 			switch stage {
-			case "storyboard", "first_frame":
+			case "storyboard", "first_frame", "last_frame":
 				model = channel.DefaultImageModel
 			case "video":
 				model = channel.DefaultVideoModel
@@ -275,12 +481,20 @@ func (s *Server) filmGenerationProvider(ctx context.Context, tenantID, stage, pr
 	return providerID, model
 }
 
-func buildFilmGenerationJob(stage string, shot filmShot, projectID, providerID, model, taskID, jobID, requestHash string, config filmGenerationConfig, shared *generationChannelSnapshot, now string) (store.GenerationJob, error) {
-	binding := &filmGenerationBinding{ProjectID: projectID, Stage: stage, ShotID: shot.ID, TaskID: taskID, RequestHash: requestHash}
+func buildFilmGenerationJob(stage string, shot filmShot, projectID, providerID, model, taskID, parentJobID, jobID, requestHash string, config filmGenerationConfig, shared *generationChannelSnapshot, now string) (store.GenerationJob, error) {
+	return buildFilmGenerationTargetJob(stage, shot, nil, projectID, providerID, model, taskID, parentJobID, jobID, requestHash, config, shared, now)
+}
+
+func buildFilmGenerationTargetJob(stage string, shot filmShot, dialogue *filmDialogue, projectID, providerID, model, taskID, parentJobID, jobID, requestHash string, config filmGenerationConfig, shared *generationChannelSnapshot, now string) (store.GenerationJob, error) {
+	dialogueID := ""
+	if dialogue != nil {
+		dialogueID = dialogue.ID
+	}
+	binding := &filmGenerationBinding{ProjectID: projectID, Stage: stage, ShotID: shot.ID, DialogueID: dialogueID, TaskID: taskID, ParentGenerationJobID: parentJobID, RequestHash: requestHash}
 	prompt := strings.TrimSpace(shot.Description)
 	job := store.GenerationJob{ID: jobID, ProjectID: projectID, Kind: filmStageGenerationKind(stage), Status: "queued", Prompt: prompt, ProviderID: providerID, Model: model, Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now}
 	switch stage {
-	case "storyboard", "first_frame":
+	case "storyboard", "first_frame", "last_frame":
 		size := config.Size
 		if size == "" {
 			size = "1024x1024"
@@ -317,7 +531,9 @@ func buildFilmGenerationJob(stage string, shot filmShot, projectID, providerID, 
 		if format == "" {
 			format = "mp3"
 		}
-		if strings.TrimSpace(shot.Subtitle) != "" {
+		if dialogue != nil {
+			job.Prompt = strings.TrimSpace(dialogue.Text)
+		} else if strings.TrimSpace(shot.Subtitle) != "" {
 			job.Prompt = strings.TrimSpace(shot.Subtitle)
 		}
 		parameters, err := json.Marshal(persistedMediaJobParameters{Executor: serverExecutorMarker, RequestHash: requestHash, Voice: voice, Format: format, Speed: config.Speed, Instructions: config.Instructions, SharedChannel: shared, Film: binding})
@@ -336,14 +552,22 @@ func buildFilmGenerationSnapshot(document filmDocument, shot filmShot, providerI
 }
 
 func buildFilmGenerationSnapshotWithCapability(document filmDocument, shot filmShot, providerID, model string, config filmGenerationConfig, now, capabilityVersion, generationMode string) *filmGenerationSnapshot {
+	return buildFilmGenerationTargetSnapshotWithCapability(document, shot, nil, providerID, model, config, now, capabilityVersion, generationMode)
+}
+
+func buildFilmGenerationTargetSnapshotWithCapability(document filmDocument, shot filmShot, dialogue *filmDialogue, providerID, model string, config filmGenerationConfig, now, capabilityVersion, generationMode string) *filmGenerationSnapshot {
 	identities := make([]filmAsset, 0, len(shot.IdentityVersionIDs))
 	wanted := make(map[string]struct{}, len(shot.IdentityVersionIDs))
 	for _, id := range shot.IdentityVersionIDs {
 		wanted[id] = struct{}{}
 	}
 	var style *filmAsset
+	scenes := make(map[string]filmScene, len(document.Scenes))
+	for _, scene := range document.Scenes {
+		scenes[scene.ID] = scene
+	}
 	for _, asset := range document.Assets {
-		if _, ok := wanted[asset.ID]; ok && asset.Kind == "identity" {
+		if _, ok := wanted[asset.ID]; ok && filmIdentityAppliesToShot(asset, shot, scenes) {
 			identities = append(identities, asset)
 		}
 		if shot.StyleAssetID != "" && asset.ID == shot.StyleAssetID && asset.Kind == "style" {
@@ -353,6 +577,9 @@ func buildFilmGenerationSnapshotWithCapability(document filmDocument, shot filmS
 	}
 	sort.SliceStable(identities, func(i, j int) bool { return identities[i].ID < identities[j].ID })
 	prompt := strings.TrimSpace(shot.Description)
+	if dialogue != nil {
+		prompt = strings.TrimSpace(dialogue.Text)
+	}
 	if strings.TrimSpace(shot.Subtitle) != "" && config.Format != "" {
 		prompt = strings.TrimSpace(shot.Subtitle)
 	}
@@ -365,25 +592,47 @@ func buildFilmGenerationSnapshotWithCapability(document filmDocument, shot filmS
 		return &copy
 	}
 	return &filmGenerationSnapshot{
-		ShotRevision: shot.Revision, Prompt: prompt, ProviderID: providerID, Model: model,
+		ShotRevision: shot.Revision, DialogueVersion: dialogue, Prompt: prompt, ProviderID: providerID, Model: model,
 		CapabilityVersion: capabilityVersion, GenerationMode: generationMode,
 		Config: config, IdentityVersions: identities, StyleVersion: style,
 		StoryboardDirectorSource: cloneDirectorSource(shot.StoryboardDirectorSource),
 		FirstFrameDirectorSource: cloneDirectorSource(shot.FirstFrameDirectorSource),
+		LastFrameDirectorSource:  cloneDirectorSource(shot.LastFrameDirectorSource),
 		ReferenceStorageKeys:     append([]string(nil), config.ReferenceStorageKeys...),
 		EstimatedGenerations:     1, EstimatedCredits: 1, CreatedAt: now,
 	}
 }
 
+func filmDialogueAudioInputs(document filmDocument, target filmGenerationTarget, config filmGenerationConfig) (filmShot, filmGenerationConfig) {
+	shot := target.Shot
+	if target.Dialogue == nil {
+		return filmAudioInputs(document, shot, config)
+	}
+	dialogue := *target.Dialogue
+	shot.Subtitle = strings.TrimSpace(dialogue.Text)
+	if config.Voice == "" && dialogue.VoiceAssetID != "" {
+		for _, asset := range document.Assets {
+			if asset.ID == dialogue.VoiceAssetID && asset.Kind == "voice" {
+				config.Voice = asset.Voice
+				break
+			}
+		}
+	}
+	if config.Instructions == "" && strings.TrimSpace(dialogue.Emotion) != "" {
+		config.Instructions = "Emotion direction: " + strings.TrimSpace(dialogue.Emotion)
+	}
+	return shot, config
+}
+
 func filmGenerationMode(stage string, shot filmShot, config filmGenerationConfig) string {
 	switch stage {
-	case "storyboard", "first_frame":
+	case "storyboard", "first_frame", "last_frame":
 		if len(config.ReferenceStorageKeys) > 0 || shot.StoryboardDirectorSource != nil || shot.FirstFrameDirectorSource != nil {
 			return "image_to_image"
 		}
 		return "text_to_image"
 	case "video":
-		if len(config.ReferenceStorageKeys) > 0 || shot.FirstFrameStorageKey != "" {
+		if len(config.ReferenceStorageKeys) > 0 || shot.FirstFrameStorageKey != "" || shot.LastFrameStorageKey != "" {
 			return "image_to_video"
 		}
 		return "text_to_video"
@@ -412,6 +661,17 @@ func filmAudioInputs(document filmDocument, shot filmShot, config filmGeneration
 					break
 				}
 			}
+		}
+	}
+	if config.Instructions == "" {
+		directions := make([]string, 0, len(dialogues))
+		for _, dialogue := range dialogues {
+			if emotion := strings.TrimSpace(dialogue.Emotion); emotion != "" {
+				directions = append(directions, emotion)
+			}
+		}
+		if len(directions) > 0 {
+			config.Instructions = "Emotion direction: " + strings.Join(directions, "; ")
 		}
 	}
 	if len(lines) > 0 {
@@ -461,6 +721,8 @@ func filmGenerationStoreError(err error) error {
 		return &toolError{status: http.StatusForbidden, message: "account is unavailable"}
 	case errors.Is(err, store.ErrGone):
 		return &toolError{status: http.StatusGone, message: "generation job was previously deleted"}
+	case errors.Is(err, store.ErrUnauthorized):
+		return &toolError{status: http.StatusUnauthorized, message: "login required for billable generation"}
 	default:
 		return err
 	}
@@ -468,7 +730,7 @@ func filmGenerationStoreError(err error) error {
 
 func (s *Server) notifyFilmGenerationWorkers(stage string) {
 	switch stage {
-	case "storyboard", "first_frame":
+	case "storyboard", "first_frame", "last_frame":
 		s.notifyGenerationWorkers()
 	case "audio":
 		s.notifyAudioWorkers()
@@ -505,7 +767,7 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		writeFilmOperationError(w, err)
 		return
 	}
-	backend, record, document, ok := s.loadFilmProduction(w, r, true)
+	_, record, document, ok := s.loadFilmProduction(w, r, true)
 	if !ok {
 		return
 	}
@@ -523,12 +785,17 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 		writeFilmOperationError(w, err)
 		return
 	}
-	requestHash, err := filmGenerationRequestHash(document.ProjectID, stage, shots, input)
+	targets := filmGenerationTargets(document, stage, shots)
+	if stage == "audio" && len(targets) == 0 {
+		writeFilmError(w, http.StatusUnprocessableEntity, "dialogue_required", "audio generation requires at least one dialogue in the selected shots")
+		return
+	}
+	requestHash, err := filmGenerationTargetRequestHash(document.ProjectID, stage, targets, input)
 	if err != nil {
 		writeFilmError(w, http.StatusBadRequest, "generation_request_invalid", "film generation request is invalid")
 		return
 	}
-	if _, replay, replayErr := findFilmIdempotentTasks(document, stage, strings.TrimSpace(input.IdempotencyKey), requestHash, shots); replayErr != nil {
+	if _, replay, replayErr := findFilmIdempotentTasks(document, stage, strings.TrimSpace(input.IdempotencyKey), requestHash, targets); replayErr != nil {
 		writeFilmError(w, http.StatusConflict, "idempotency_conflict", replayErr.Error())
 		return
 	} else if replay {
@@ -554,30 +821,41 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	next := cloneFilmDocument(document)
-	createdJobs := make([]string, 0, len(shots))
-	reservations := make([]store.FilmGenerationReservation, 0, len(shots))
+	createdJobs := make([]string, 0, len(targets))
 	atomicBackend, atomicBatch := s.store.(store.FilmGenerationBatchStore)
-	for _, shot := range shots {
+	if !atomicBatch {
+		writeFilmError(w, http.StatusServiceUnavailable, "film_generation_atomic_store_required", "Film media generation requires atomic task persistence")
+		return
+	}
+	parentJobID := stableFilmID("job-stage", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey))
+	childJobIDs := make([]string, len(targets))
+	for index, target := range targets {
+		childJobIDs[index] = stableFilmID("job", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), filmGenerationTargetID(target))
+	}
+	parentJob, buildParentErr := buildFilmStageGenerationJob(document.ProjectID, stage, parentJobID, requestHash, now, childJobIDs)
+	if buildParentErr != nil {
+		writeFilmError(w, http.StatusInternalServerError, "generation_request_invalid", "Film stage parent job could not be created")
+		return
+	}
+	reservations := make([]store.FilmGenerationReservation, 0, len(targets)+1)
+	reservations = append(reservations, store.FilmGenerationReservation{Job: parentJob, Units: 0, UsageMeta: json.RawMessage(`{}`)})
+	for _, target := range targets {
+		shot := target.Shot
 		jobShot, jobConfig := shot, input.Config
 		if stage == "audio" {
-			jobShot, jobConfig = filmAudioInputs(document, shot, jobConfig)
+			jobShot, jobConfig = filmDialogueAudioInputs(document, target, jobConfig)
 		}
-		if stage == "video" && shot.FirstFrameStorageKey != "" {
-			found := false
-			for _, key := range jobConfig.ReferenceStorageKeys {
-				found = found || key == shot.FirstFrameStorageKey
-			}
-			if !found {
-				jobConfig.ReferenceStorageKeys = append(append([]string(nil), jobConfig.ReferenceStorageKeys...), shot.FirstFrameStorageKey)
-			}
+		if stage == "video" && (shot.FirstFrameStorageKey != "" || shot.LastFrameStorageKey != "") {
+			jobConfig.ReferenceStorageKeys = orderedFilmVideoReferences(shot, jobConfig.ReferenceStorageKeys)
 			if err := s.validateFilmGenerationReferences(r.Context(), tenantID, stage, jobConfig.ReferenceStorageKeys); err != nil {
 				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 				writeFilmOperationError(w, err)
 				return
 			}
 		}
-		taskID := stableFilmID("task", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), shot.ID)
-		jobID := stableFilmID("job", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), shot.ID)
+		targetID := filmGenerationTargetID(target)
+		taskID := stableFilmID("task", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), targetID)
+		jobID := stableFilmID("job", document.ProjectID, stage, strings.TrimSpace(input.IdempotencyKey), targetID)
 		selectedProviderID, snapshot, snapshotErr := s.snapshotGenerationChannel(r.Context(), tenantID, filmStageGenerationKind(stage), jobID, providerID, model)
 		if snapshotErr != nil {
 			s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
@@ -604,11 +882,8 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			for _, capability := range mediaCatalog.Models {
 				if capability.ChannelID == selectedProviderID && capability.Model == selectedModel && capability.Kind == kind {
 					generationMode = filmGenerationMode(stage, jobShot, jobConfig)
-					for _, mode := range capability.Modes {
-						if mode == generationMode {
-							capabilityVersion = mediaCatalog.Version
-							break
-						}
+					if validateMediaCapabilityRequest(capability, generationMode, jobConfig) == nil {
+						capabilityVersion = mediaCatalog.Version
 					}
 					break
 				}
@@ -619,13 +894,17 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		job, buildErr := buildFilmGenerationJob(stage, jobShot, document.ProjectID, selectedProviderID, selectedModel, taskID, jobID, requestHash, jobConfig, snapshot, now)
+		job, buildErr := buildFilmGenerationTargetJob(stage, jobShot, target.Dialogue, document.ProjectID, selectedProviderID, selectedModel, taskID, parentJobID, jobID, requestHash, jobConfig, snapshot, now)
 		if buildErr != nil {
 			s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 			writeFilmError(w, http.StatusUnprocessableEntity, "generation_request_invalid", buildErr.Error())
 			return
 		}
-		binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: stage, ShotID: shot.ID, TaskID: taskID, RequestHash: requestHash}
+		dialogueID := ""
+		if target.Dialogue != nil {
+			dialogueID = target.Dialogue.ID
+		}
+		binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: stage, ShotID: shot.ID, DialogueID: dialogueID, TaskID: taskID, ParentGenerationJobID: parentJobID, RequestHash: requestHash}
 		if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, jobID); getErr == nil {
 			if !matchingFilmGenerationJob(existing, binding) {
 				s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
@@ -637,25 +916,14 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 			writeFilmError(w, http.StatusInternalServerError, "generation_storage_error", "generation job state is unavailable")
 			return
 		} else {
-			meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind, "executor": serverExecutorMarker, "filmProjectId": document.ProjectID, "shotId": shot.ID})
-			if atomicBatch {
-				reservations = append(reservations, store.FilmGenerationReservation{Job: job, Units: 1, UsageMeta: meta})
-			} else {
-				createErr := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, 1, meta)
-				if createErr != nil {
-					s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
-					mapped := filmGenerationStoreError(createErr)
-					if errors.Is(createErr, store.ErrConflict) {
-						writeFilmError(w, http.StatusConflict, "generation_job_conflict", "generation job id belongs to another request")
-					} else {
-						writeFilmOperationError(w, mapped)
-					}
-					return
-				}
-				createdJobs = append(createdJobs, jobID)
-			}
+			meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind, "executor": serverExecutorMarker, "filmProjectId": document.ProjectID, "shotId": shot.ID, "dialogueId": dialogueID, "parentJobId": parentJobID})
+			reservations = append(reservations, store.FilmGenerationReservation{Job: job, Units: 1, UsageMeta: meta})
 		}
-		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, Title: "Generate " + stage + " for " + shot.Title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: buildFilmGenerationSnapshotWithCapability(document, jobShot, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)})
+		title := "Generate " + stage + " for " + shot.Title
+		if target.Dialogue != nil {
+			title = "Generate dialogue audio for " + shot.Title
+		}
+		next.Tasks = append(next.Tasks, filmTask{ID: taskID, Revision: 1, Stage: stage, ShotID: shot.ID, DialogueID: dialogueID, Title: title, Status: filmStatusRunning, Progress: 0, CreatedAt: now, UpdatedAt: now, GenerationJobID: jobID, ParentGenerationJobID: parentJobID, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), RequestHash: requestHash, Snapshot: buildFilmGenerationTargetSnapshotWithCapability(document, jobShot, target.Dialogue, selectedProviderID, selectedModel, jobConfig, now, capabilityVersion, generationMode)})
 	}
 	if len(next.Tasks) > 1_000 {
 		s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
@@ -675,16 +943,14 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 	}
 	var updated store.FilmRecord
 	var saveErr error
-	if atomicBatch && len(reservations) > 0 {
+	if len(reservations) > 0 {
 		updated, saveErr = atomicBackend.CreateFilmGenerationBatch(r.Context(), tenantID, userIDFrom(r), record.ProjectID, record.Revision, raw, reservations)
-	} else {
-		updated, saveErr = backend.CompareAndSwapFilmProject(r.Context(), tenantID, record.ProjectID, record.Revision, raw)
 	}
 	if saveErr != nil {
 		s.compensateUnreferencedFilmJobs(r.Context(), tenantID, document.ProjectID, createdJobs)
 		if errors.Is(saveErr, store.ErrConflict) {
 			writeFilmError(w, http.StatusConflict, "revision_conflict", "Film production changed; reload before retrying")
-		} else if atomicBatch && (errors.Is(saveErr, store.ErrQuotaExceeded) || errors.Is(saveErr, store.ErrInsufficientCredits) || errors.Is(saveErr, store.ErrBanned) || errors.Is(saveErr, store.ErrGone)) {
+		} else if errors.Is(saveErr, store.ErrQuotaExceeded) || errors.Is(saveErr, store.ErrInsufficientCredits) || errors.Is(saveErr, store.ErrBanned) || errors.Is(saveErr, store.ErrGone) || errors.Is(saveErr, store.ErrUnauthorized) {
 			writeFilmOperationError(w, filmGenerationStoreError(saveErr))
 		} else {
 			writeFilmError(w, http.StatusInternalServerError, "film_storage_error", "Film production could not be saved")
@@ -728,6 +994,8 @@ func setFilmShotMediaBinding(shot *filmShot, stage string, item mediaGenerationI
 		shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, generationJobID
 	case "first_frame":
 		shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, generationJobID
+	case "last_frame":
+		shot.LastFrameStorageKey, shot.LastFrameSHA256, shot.LastFrameObjectVersion, shot.LastFrameGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, generationJobID
 	case "audio":
 		shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, generationJobID
 	case "video":
@@ -739,7 +1007,7 @@ func latestFilmStageTasks(document filmDocument, stage string) map[string]int {
 	latest := map[string]int{}
 	for index, task := range document.Tasks {
 		if task.Stage == stage && task.ShotID != "" {
-			latest[task.ShotID] = index
+			latest[filmTaskTargetID(task)] = index
 		}
 	}
 	return latest
@@ -760,7 +1028,21 @@ func filmStageHasBoundMedia(document filmDocument, stage string) bool {
 				return false
 			}
 		case "audio":
-			if shot.AudioStorageKey == "" {
+			// Dialogue audio is authoritative for scripted shots. Shot-level audio
+			// remains a backwards-compatible fallback for imported legacy projects.
+			if shot.AudioStorageKey != "" {
+				break
+			}
+			hasDialogue := false
+			for _, dialogue := range document.Dialogues {
+				if dialogue.ShotID == shot.ID {
+					hasDialogue = true
+					if dialogue.AudioStorageKey == "" {
+						return false
+					}
+				}
+			}
+			if !hasDialogue && shot.AudioStorageKey == "" {
 				return false
 			}
 		case "video":
@@ -797,7 +1079,7 @@ func (s *Server) syncFilmStage(w http.ResponseWriter, r *http.Request) {
 	active, failed, changed := false, false, false
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tenantID := tenantIDFrom(r)
-	for shotID, taskIndex := range latest {
+	for _, taskIndex := range latest {
 		task := next.Tasks[taskIndex]
 		if task.Status == filmStatusCanceled {
 			failed = true
@@ -811,7 +1093,7 @@ func (s *Server) syncFilmStage(w http.ResponseWriter, r *http.Request) {
 			}
 			failed = true
 		} else {
-			binding := filmGenerationBinding{ProjectID: next.ProjectID, Stage: stage, ShotID: shotID, TaskID: task.ID, RequestHash: task.RequestHash}
+			binding := filmGenerationBinding{ProjectID: next.ProjectID, Stage: stage, ShotID: task.ShotID, DialogueID: task.DialogueID, TaskID: task.ID, ParentGenerationJobID: task.ParentGenerationJobID, RequestHash: task.RequestHash}
 			if !matchingFilmGenerationJob(job, binding) {
 				task.Status, task.Error, task.Progress = filmStatusFailed, "Generation job binding is invalid", 0
 				failed, changed = true, true
@@ -834,18 +1116,30 @@ func (s *Server) syncFilmStage(w http.ResponseWriter, r *http.Request) {
 						failed, changed = true, true
 						break
 					}
-					for shotIndex, shot := range next.Shots {
-						if shot.ID != shotID {
-							continue
-						}
-						before := shot
-						setFilmShotMediaBinding(&shot, stage, item, job.ID)
-						shot.MediaMIMEType, shot.Status = item.MIMEType, filmStatusNeedsReview
-						if shot.ImageStorageKey != before.ImageStorageKey || shot.FirstFrameStorageKey != before.FirstFrameStorageKey || shot.AudioStorageKey != before.AudioStorageKey ||
-							shot.VideoStorageKey != before.VideoStorageKey || shot.MediaMIMEType != before.MediaMIMEType || shot.Status != before.Status {
-							shot.Revision++
-							next.Shots[shotIndex] = shot
+					if task.DialogueID != "" {
+						for dialogueIndex, dialogue := range next.Dialogues {
+							if dialogue.ID != task.DialogueID || dialogue.ShotID != task.ShotID {
+								continue
+							}
+							dialogue.AudioStorageKey, dialogue.AudioSHA256, dialogue.AudioObjectVersion, dialogue.AudioGenerationJobID = item.StorageKey, item.SHA256, item.ObjectVersion, job.ID
+							dialogue.Status, dialogue.Revision = filmStatusNeedsReview, dialogue.Revision+1
+							next.Dialogues[dialogueIndex] = dialogue
 							changed = true
+						}
+					} else {
+						for shotIndex, shot := range next.Shots {
+							if shot.ID != task.ShotID {
+								continue
+							}
+							before := shot
+							setFilmShotMediaBinding(&shot, stage, item, job.ID)
+							shot.MediaMIMEType, shot.Status = item.MIMEType, filmStatusNeedsReview
+							if shot.ImageStorageKey != before.ImageStorageKey || shot.FirstFrameStorageKey != before.FirstFrameStorageKey || shot.LastFrameStorageKey != before.LastFrameStorageKey || shot.AudioStorageKey != before.AudioStorageKey ||
+								shot.VideoStorageKey != before.VideoStorageKey || shot.MediaMIMEType != before.MediaMIMEType || shot.Status != before.Status {
+								shot.Revision++
+								next.Shots[shotIndex] = shot
+								changed = true
+							}
 						}
 					}
 					if task.Status != filmStatusNeedsReview || task.Progress != 1 || task.Error != "" {

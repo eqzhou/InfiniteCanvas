@@ -83,12 +83,7 @@ func applyFilmAIScriptCandidate(document filmDocument, candidateID string, expec
 		return filmDocument{}, err
 	}
 	next := cloneFilmDocument(document)
-	next.StructureVersions = append(next.StructureVersions, filmStructureVersion{
-		ID: stableFilmID("structure", document.ProjectID, candidate.ID, document.Revision), Revision: 1, CandidateID: candidate.ID,
-		Episodes: append([]filmEpisode(nil), document.Episodes...), Scenes: append([]filmScene(nil), document.Scenes...),
-		Shots: append([]filmShot(nil), document.Shots...), Dialogues: append([]filmDialogue(nil), document.Dialogues...),
-		Assets: append([]filmAsset(nil), document.Assets...), CreatedAt: now,
-	})
+	next.StructureVersions = append(next.StructureVersions, snapshotFilmStructure(document, stableFilmID("structure", document.ProjectID, candidate.ID, document.Revision), candidate.ID, now))
 	if len(next.StructureVersions) > 100 {
 		return filmDocument{}, errors.New("film structure version retention limit reached")
 	}
@@ -143,7 +138,7 @@ func applyFilmAIScriptCandidate(document filmDocument, candidateID string, expec
 			shotID := stableFilmID("shot", sceneID, sourceShot.Key)
 			shots = append(shots, filmShot{ID: shotID, Revision: 1, SceneID: sceneID, Order: shotOrder, Title: sourceShot.Title, Description: sourceShot.Description, Status: filmStatusDraft, DurationSeconds: sourceShot.DurationSeconds, AspectRatio: document.AspectRatio, IdentityVersionIDs: []string{}})
 			for dialogueOrder, sourceDialogue := range sourceShot.Dialogues {
-				dialogues = append(dialogues, filmDialogue{ID: stableFilmID("dialogue", shotID, dialogueOrder, sourceDialogue.Text), Revision: 1, ShotID: shotID, Order: dialogueOrder, Kind: sourceDialogue.Kind, CharacterAssetID: characterIDs[strings.TrimSpace(sourceDialogue.Speaker)], Text: sourceDialogue.Text, Status: filmStatusDraft})
+				dialogues = append(dialogues, filmDialogue{ID: stableFilmID("dialogue", shotID, dialogueOrder, sourceDialogue.Text), Revision: 1, ShotID: shotID, Order: dialogueOrder, Kind: sourceDialogue.Kind, CharacterAssetID: characterIDs[strings.TrimSpace(sourceDialogue.Speaker)], Emotion: sourceDialogue.Emotion, Text: sourceDialogue.Text, Status: filmStatusDraft})
 			}
 		}
 	}
@@ -157,6 +152,7 @@ func applyFilmAIScriptCandidate(document filmDocument, candidateID string, expec
 		}
 	}
 	next.Scenes, next.Shots, next.Dialogues = scenes, shots, dialogues
+	next = pruneFilmIdentityScopes(next)
 	updated := next.ScriptCandidates[candidateIndex]
 	updated.Revision++
 	updated.Status = filmAICandidateApplied

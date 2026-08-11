@@ -25,6 +25,15 @@ func adminConfigRevision(value any) string {
 }
 
 // adminChannelPublic is a tenant-shared channel template without secrets.
+type adminMediaCapability struct {
+	Model         string   `json:"model"`
+	Kind          string   `json:"kind"`
+	Modes         []string `json:"modes"`
+	Sizes         []string `json:"sizes,omitempty"`
+	Durations     []int    `json:"durations,omitempty"`
+	MaxReferences int      `json:"maxReferences"`
+}
+
 type adminChannelPublic struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -36,13 +45,14 @@ type adminChannelPublic struct {
 	TimeoutSeconds int    `json:"timeoutSeconds"`
 	// Models is the optional per-channel allow list used by shared-auto routing.
 	// Empty means "no model restriction" and only protocol capability applies.
-	Models            []string `json:"models,omitempty"`
-	DefaultTextModel  string   `json:"defaultTextModel"`
-	DefaultImageModel string   `json:"defaultImageModel"`
-	DefaultVideoModel string   `json:"defaultVideoModel"`
-	DefaultAudioModel string   `json:"defaultAudioModel,omitempty"`
-	SecretConfigured  bool     `json:"secretConfigured"`
-	SecretBindingID   string   `json:"secretBindingId,omitempty"`
+	Models            []string               `json:"models,omitempty"`
+	DefaultTextModel  string                 `json:"defaultTextModel"`
+	DefaultImageModel string                 `json:"defaultImageModel"`
+	DefaultVideoModel string                 `json:"defaultVideoModel"`
+	DefaultAudioModel string                 `json:"defaultAudioModel,omitempty"`
+	MediaCapabilities []adminMediaCapability `json:"mediaCapabilities,omitempty"`
+	SecretConfigured  bool                   `json:"secretConfigured"`
+	SecretBindingID   string                 `json:"secretBindingId,omitempty"`
 }
 
 var adminIdempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$`)

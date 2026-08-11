@@ -214,6 +214,24 @@ func TestCancelTextServerGenerationJobRefundsAndRemovesCredential(t *testing.T) 
 	}
 }
 
+func TestCancelFilmStageParentJobInPostgres(t *testing.T) {
+	backend := openRefundTestStore(t)
+	fixture := seedRefundFixture(t, backend, fmt.Sprintf("cancel-film-stage-%d", time.Now().UnixNano()))
+	if _, err := backend.pool.Exec(t.Context(), `UPDATE openboard_generation_jobs
+		SET kind='film-stage', parameters='{"executor":"film-stage","childJobIds":[]}'::jsonb
+		WHERE tenant_id=$1 AND id=$2`, fixture.tenantID, fixture.jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.pool.Exec(t.Context(), `DELETE FROM openboard_credit_logs WHERE tenant_id=$1 AND job_id=$2`, fixture.tenantID, fixture.jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := backend.CancelServerGenerationJob(t.Context(), fixture.tenantID, fixture.jobID, time.Now().UTC())
+	if err != nil || job.Kind != "film-stage" || job.Status != "cancelled" {
+		t.Fatalf("cancel film-stage parent: job=%#v err=%v", job, err)
+	}
+}
+
 func TestWorkspaceGenerationReplacementRejectsActiveTextServerJob(t *testing.T) {
 	backend := openRefundTestStore(t)
 	fixture := seedRefundFixture(t, backend, fmt.Sprintf("protect-text-%d", time.Now().UnixNano()))

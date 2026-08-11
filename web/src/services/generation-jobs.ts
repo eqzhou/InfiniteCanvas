@@ -99,7 +99,9 @@ export function usesServerGenerationJobs(): boolean {
 }
 
 export function isServerOwnedGenerationJob(job: GenerationJob): boolean {
-	return job.parameters.executor === "server" || job.parameters.executor === "workflow";
+	return job.parameters.executor === "server" || job.parameters.executor === "workflow" ||
+		(job.kind === "film-stage" && job.parameters.executor === "film-stage") ||
+		(job.kind === "export" && job.parameters.executor === "film-export");
 }
 
 function validatePagination(page: number, pageSize: number): void {
@@ -146,7 +148,7 @@ export function findInterruptedGenerationJobs(
 }
 
 export function validateGenerationJob(job: GenerationJob): GenerationJob {
-	const kinds = new Set<GenerationKind>(["image", "video", "audio", "workflow", "export"]);
+	const kinds = new Set<GenerationKind>(["text", "image", "video", "audio", "workflow", "export", "film-stage"]);
   const statuses = new Set<GenerationStatus>(["queued", "running", "succeeded", "failed", "cancelled", "deleted"]);
   if (!ID.test(job.id) || (job.projectId && !ID.test(job.projectId)) || !kinds.has(job.kind) ||
     !statuses.has(job.status) || job.prompt.length > 100_000 || (job.providerId?.length ?? 0) > 500 ||

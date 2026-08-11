@@ -470,7 +470,7 @@ export type ClipboardPayload = {
   edges: BoardEdge[];
 };
 
-export type GenerationKind = "image" | "video" | "audio" | "workflow" | "export";
+export type GenerationKind = "text" | "image" | "video" | "audio" | "workflow" | "export" | "film-stage";
 export type GenerationStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "deleted";
 export type GenerationJob = {
   id: string;

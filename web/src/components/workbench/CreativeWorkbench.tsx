@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { ImagePlus, PanelBottom, PanelLeft, RefreshCw, Square, Trash2, Video } from "lucide-react";
 import type { GenerationJob } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
@@ -52,6 +52,8 @@ import { DraggableWorkflowEntry } from "@/components/workbench/DraggableWorkflow
 import { KlingVideoControls, type KlingWorkbenchOptions } from "@/components/workbench/KlingVideoControls";
 import { validateKlingVideoParameters } from "@/lib/kling-video";
 import { mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
+import { listMediaCapabilities, type MediaCapability, type MediaCapabilityCatalog } from "@/services/media-capabilities";
+import { adoptFilmCanvasMedia } from "@/services/film-client";
 import { resolveWorkbenchRunChannel } from "@/lib/workbench-provider";
 import {
   estimateCredits,
@@ -91,6 +93,12 @@ import {
 } from "@/lib/reference-files";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
+	const [searchParams] = useSearchParams();
+	const filmAssetTarget = kind === "image" ? {
+		projectId: searchParams.get("filmProjectId") ?? "",
+		assetId: searchParams.get("assetId") ?? "",
+		revision: Number(searchParams.get("assetRevision") ?? 0),
+	} : null;
   const config = useBoardStore((state) => state.config);
   const assets = useBoardStore((state) => state.assets);
   const project = useBoardStore((state) => state.getActive());
@@ -98,6 +106,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const persistNow = useBoardStore((state) => state.persistNow);
   const setConfig = useBoardStore((state) => state.setConfig);
 	const sharedChannels = useSharedChannels();
+	const [mediaCatalog, setMediaCatalog] = useState<MediaCapabilityCatalog | null>(null);
 	const channelChoices = useMemo(() => mergeSharedChannelChoices(config.channels, sharedChannels), [config.channels, sharedChannels]);
   const [channelId, setChannelId] = useState(config.activeSharedChannelId ?? config.activeChannelId ?? config.channels[0]?.id ?? "");
   const channel = channelChoices.find((item) => item.id === channelId) ?? (channelId ? undefined : config.channels[0]);
@@ -107,7 +116,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     provider?.model,
     provider?.models,
   ));
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(() => searchParams.get("prompt") ?? "");
   const [size, setSize] = useState(config.imageSize);
   const [imageAspect, setImageAspect] = useState<ImageAspectSelection>(() => imageAspectForSize(config.imageSize));
   const [customImageSize, setCustomImageSize] = useState(config.imageSize);
@@ -176,10 +185,54 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		(references.length > 0 || selectedAssetIds.length > 0);
   const estimateUnits = kind === "image" ? Math.max(1, Math.min(100, count || 1)) : 1;
   const sharedChannelSelected = sharedChannels.some((candidate) => candidate.id === channelId);
+	const sharedCapabilities = useMemo(() => {
+		if (!sharedChannelSelected || !mediaCatalog) return [];
+		return mediaCatalog.models.filter((item) => item.kind === kind &&
+			(channelId === "shared-auto" || item.channelId === channelId));
+	}, [channelId, kind, mediaCatalog, sharedChannelSelected]);
+	const sharedModelOptions = useMemo(() => [...new Set(sharedCapabilities.map((item) => item.model))], [sharedCapabilities]);
+  const sharedCapability = sharedCapabilities.find((item) => item.model === model);
+	const sharedImageSizes = kind === "image" ? sharedCapability?.sizes ?? [] : [];
   const estimateGenerationMode = kind === "image"
     ? (references.length > 0 || selectedAssetIds.length > 0 ? "image_to_image" : "text_to_image")
     : (references.length > 0 || selectedAssetIds.length > 0 || klingOptions.elements.length > 0 ? "image_to_video" : "text_to_video");
   const preferredModel = config.preferredModels?.[channelId]?.[kind];
+	const adoptAssetResult = useCallback(async (completedJob: GenerationJob, items: WorkbenchResultItem[]) => {
+		if (!filmAssetTarget?.projectId || !filmAssetTarget.assetId || !Number.isSafeInteger(filmAssetTarget.revision) || filmAssetTarget.revision < 1) return;
+		const first = items.find((item) => item.storageKey);
+		if (!first?.storageKey) throw new Error("生成结果没有可采用的持久媒体");
+		await adoptFilmCanvasMedia(filmAssetTarget.projectId, {
+			targetType: "asset", targetId: filmAssetTarget.assetId, targetField: "media",
+			expectedRevision: filmAssetTarget.revision, sourceNodeId: `workbench-${completedJob.id.slice(0, 100)}`,
+			storageKey: first.storageKey, generationJobId: completedJob.id,
+		});
+	}, [filmAssetTarget?.assetId, filmAssetTarget?.projectId, filmAssetTarget?.revision]);
+
+	useEffect(() => {
+		let active = true;
+		void listMediaCapabilities().then((catalog) => { if (active) setMediaCatalog(catalog); }).catch((cause) => {
+			if (active) setError(cause instanceof Error ? cause.message : String(cause));
+		});
+		return () => { active = false; };
+	}, []);
+
+	useEffect(() => {
+		if (!sharedChannelSelected || !mediaCatalog) return;
+		if (!sharedModelOptions.length) {
+			setModel("");
+			return;
+		}
+		if (!sharedModelOptions.includes(model)) setModel(sharedModelOptions[0]);
+	}, [mediaCatalog, model, sharedChannelSelected, sharedModelOptions]);
+
+	useEffect(() => {
+		if (!sharedChannelSelected || kind !== "image" || !sharedImageSizes.length) return;
+		if (!sharedImageSizes.includes(size)) {
+			setSize(sharedImageSizes[0]);
+			setCustomImageSize(sharedImageSizes[0]);
+			setImageAspect(imageAspectForSize(sharedImageSizes[0]));
+		}
+	}, [kind, sharedChannelSelected, sharedImageSizes, size]);
 
   useEffect(() => {
     const resolved = resolvePreferredModel(preferredModel, provider?.model, provider?.models);
@@ -205,6 +258,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 
   useEffect(() => {
     if (kind !== "image") return;
+		if (sharedChannelSelected && sharedImageSizes.length) return;
     const normalized = normalizeImageAspectForProvider(imageAspect, provider?.protocol, model);
     if (normalized !== imageAspect) {
       setImageAspect(normalized);
@@ -218,7 +272,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     if (imageAspect !== "custom") {
       setSize(resolveImageSizeForAspect(imageAspect, provider?.protocol, model));
     }
-  }, [imageAspect, kind, model, provider?.protocol]);
+  }, [imageAspect, kind, model, provider?.protocol, sharedChannelSelected, sharedImageSizes.length]);
 
   useEffect(() => {
     if (kind !== "image") return;
@@ -444,6 +498,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       return;
     }
 		const runProvider = runChannel ? getProvider(runChannel, kind) : undefined;
+		const runSharedCapability: MediaCapability | undefined = sharedChannelSelected
+			? sharedCapabilities.find((item) => item.model === runModel)
+			: undefined;
+		if (sharedChannelSelected && !runSharedCapability) {
+			setError("该共享渠道未发布当前媒体模型能力，请刷新渠道配置");
+			return;
+		}
 		const effectiveVideoRatio = kind === "video"
 			? normalizeVideoRatioForProvider(String(source?.parameters.ratio ?? ratio), runProvider?.protocol, runModel)
 			: "";
@@ -522,7 +583,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             serverReferencesSupported = false;
           }
         }
-        for (const file of references) {
+		for (const file of references) {
 			serverReferencesSupported = serverReferencesSupported && (kind === "image"
 				? ["image/png", "image/jpeg"].includes(file.type)
 				: runProvider?.protocol === "apimart"
@@ -534,6 +595,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
           referenceData.push(await blobToDataUrl(file));
         }
       }
+		if (runSharedCapability) {
+			const mode = kind === "image"
+				? (referenceStorageKeys.length ? "image_to_image" : "text_to_image")
+				: (referenceStorageKeys.length || klingOptions.elements.length ? "image_to_video" : "text_to_video");
+			if (!runSharedCapability.modes.includes(mode)) throw new Error("当前共享模型不支持所选生成模式");
+			if (referenceStorageKeys.length > runSharedCapability.maxReferences) throw new Error(`当前共享模型最多支持 ${runSharedCapability.maxReferences} 个参考素材`);
+		}
 		runOnServer = runOnServer && serverReferencesSupported;
 		const ownerClientId = runOnServer ? "" : getRuntimeOwnerId();
 		const rawParameters: Record<string, unknown> = {
@@ -653,6 +721,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 			});
 			if (completed.status === "failed") throw new Error(completed.error || `${kind === "image" ? "图片" : "视频"}生成失败`);
 			if (completed.status === "cancelled" || completed.status === "deleted") return;
+			const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
+			await adoptAssetResult(completed, completedItems);
 			await refresh();
 			return;
 		}
@@ -726,7 +796,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         }
       }
       if (!items.length) throw new Error("模型服务没有返回生成结果");
-      await updateGenerationJob(job.id, { status: "succeeded", result: { items } });
+		const completedJob = await updateGenerationJob(job.id, { status: "succeeded", result: { items } });
+		await adoptAssetResult(completedJob, items);
       completeGenerationActivity(job.id, "succeeded");
       await refresh();
     } catch (cause) {
@@ -897,7 +968,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             </label>
             <label className="block">
               <span className="ob-label">模型</span>
-              {provider?.models?.length ? (
+              {(sharedChannelSelected ? sharedModelOptions : provider?.models)?.length ? (
                 <select
                   className="ob-field cursor-pointer"
                   value={model}
@@ -906,7 +977,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     rememberModel(event.target.value);
                   }}
                 >
-                  {provider.models.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {(sharedChannelSelected ? sharedModelOptions : provider?.models ?? []).map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
               ) : (
                 <input
@@ -956,7 +1027,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                       setImageAspect(imageAspectForSize(next));
                     }}
                   >
-                    {optionsWithCurrentValue(sizeOptions, size).map((option) => (
+                    {optionsWithCurrentValue(sharedImageSizes.length ? sharedImageSizes.map((value) => ({ value, label: value })) : sizeOptions, size).map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
@@ -1016,26 +1087,31 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="ob-label">秒数</span>
-                  <input
-                    type="number"
-                    min={4}
-                    max={15}
-                    disabled={smartDuration}
-                    className="ob-field"
-                    value={seconds}
-                    onChange={(event) => setSeconds(Number(event.target.value) || 5)}
-                  />
+                  {sharedCapability?.durations.length ? <select
+					aria-label="视频秒数"
+					className="ob-field cursor-pointer"
+					value={seconds}
+					onChange={(event) => setSeconds(Number(event.target.value))}
+				  >{sharedCapability.durations.map((value) => <option key={value} value={value}>{value} 秒</option>)}</select> : <input
+					type="number"
+					min={4}
+					max={15}
+					disabled={smartDuration}
+					className="ob-field"
+					value={seconds}
+					onChange={(event) => setSeconds(Number(event.target.value) || 5)}
+				  />}
                 </label>
                 <label className="block">
                   <span className="ob-label">比例</span>
-                  {videoCapability?.aspectRatios.length ? (
+                  {sharedCapability?.ratios.length || videoCapability?.aspectRatios.length ? (
                     <select
                       aria-label="视频比例"
                       className="ob-field cursor-pointer"
                       value={ratio}
                       onChange={(event) => setRatio(event.target.value)}
                     >
-                      {optionsWithCurrentVideoValue(videoRatioOptions, ratio).map((option) => (
+                      {optionsWithCurrentVideoValue(sharedCapability?.ratios.map((value) => ({ value, label: value })) ?? videoRatioOptions, ratio).map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -1048,7 +1124,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                       onChange={(event) => setRatio(event.target.value)}
                     />
                   )}
-                  {!videoCapability?.aspectRatios.length ? (
+                  {!sharedCapability?.ratios.length && !videoCapability?.aspectRatios.length ? (
                     <datalist id="video-ratio-options">
                       {videoRatioOptions.map((option) => <option key={option.value} value={option.value} />)}
                     </datalist>
@@ -1056,14 +1132,14 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 </label>
                 <label className="block">
                   <span className="ob-label">清晰度</span>
-                  {videoCapability?.resolutions?.length ? (
+                  {sharedCapability?.resolutions.length || videoCapability?.resolutions?.length ? (
                     <select
                       aria-label="视频清晰度"
                       className="ob-field cursor-pointer"
                       value={resolution}
                       onChange={(event) => setResolution(event.target.value)}
                     >
-                      {optionsWithCurrentVideoValue(videoResolutionOptions, resolution).map((option) => (
+                      {optionsWithCurrentVideoValue(sharedCapability?.resolutions.map((value) => ({ value, label: value })) ?? videoResolutionOptions, resolution).map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -1076,7 +1152,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                       onChange={(event) => setResolution(event.target.value)}
                     />
                   )}
-                  {!videoCapability?.resolutions?.length ? (
+                  {!sharedCapability?.resolutions.length && !videoCapability?.resolutions?.length ? (
                     <datalist id="video-resolution-options">
                       {videoResolutionOptions.map((option) => <option key={option.value} value={option.value} />)}
                     </datalist>

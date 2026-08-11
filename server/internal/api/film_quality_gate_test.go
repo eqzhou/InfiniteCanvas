@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -105,4 +106,39 @@ func TestFilmQualityChecksFormalDirectorSceneMedia(t *testing.T) {
 		}
 	}
 	t.Fatalf("missing Director scene media issue: %#v", report.Issues)
+}
+
+func TestFilmQualityUsesFFprobeForRealVideoDurationAndAspect(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_FFMPEG_PATH", executable)
+	t.Setenv("OPENBOARD_FFPROBE_PATH", executable)
+	server := NewServerWithStore(t.TempDir(), newFilmMemoryStore())
+	t.Cleanup(server.Close)
+	server.filmCommandRunner = &countingFilmCommandRunner{}
+	server.filmProbeRunner = &fakeFilmProbeRunner{result: []byte(`{"streams":[{"codec_type":"video","width":720,"height":1280,"duration":"9","bit_rate":"1000","nb_frames":"120"}],"format":{"duration":"9","bit_rate":"1000"}}`)}
+	video := []byte("bounded-video")
+	key := "film:media:quality-probe:video"
+	if err := server.storeTenantBlobConditional(t.Context(), "tenant", "", key, "video/mp4", video, blobVersionAbsent); err != nil {
+		t.Fatal(err)
+	}
+	document := newFilmDocument("quality-probe")
+	document.Episodes = []filmEpisode{{ID: "episode", Revision: 1, Title: "Episode", Status: filmStatusDraft}}
+	document.Scenes = []filmScene{{ID: "scene", Revision: 1, EpisodeID: "episode", Heading: "INT. ROOM", Status: filmStatusDraft}}
+	document.Shots = []filmShot{{ID: "shot", Revision: 1, SceneID: "scene", Title: "Shot", Description: "Action", Status: filmStatusDraft, DurationSeconds: 4, AspectRatio: "16:9", VideoStorageKey: key, VideoSHA256: sha256Hex(video)}}
+	report, err := server.validateFilmDocumentWithMedia(t.Context(), "tenant", document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := map[string]bool{"media_duration_mismatch": false, "media_aspect_mismatch": false}
+	for _, issue := range report.Issues {
+		if _, ok := wanted[issue.Code]; ok {
+			wanted[issue.Code] = true
+		}
+	}
+	if !wanted["media_duration_mismatch"] || !wanted["media_aspect_mismatch"] {
+		t.Fatalf("FFprobe mismatches not reported: %#v", report.Issues)
+	}
 }

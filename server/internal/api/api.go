@@ -109,6 +109,8 @@ type Server struct {
 	filmQualityMu           sync.Mutex
 	filmTenantQuality       map[string]int
 	filmQualityStarts       map[string][]time.Time
+	agentConfirmationMu     sync.Mutex
+	agentConfirmations      map[string]agentConfirmationRecord
 }
 
 func Mount(r chi.Router, dataDir string) {
@@ -119,6 +121,7 @@ func Mount(r chi.Router, dataDir string) {
 		r.Post("/e2e/tenant", s.ensureE2ETenant)
 		r.Get("/agent/status", s.agentStatus)
 		r.Post("/agent/execute", s.executeAgentTool)
+		r.Post("/agent/confirm", s.issueAgentConfirmation)
 		r.Post("/runtime/ticket", s.runtimeTicket)
 		r.Get("/runtime/ws", s.runtimeSocket)
 		r.Post("/runtime/command", s.runtimeCommand)
@@ -284,6 +287,7 @@ func NewServer(dataDir string) *Server {
 		filmQualityGlobal:   make(chan struct{}, 4),
 		filmTenantQuality:   make(map[string]int),
 		filmQualityStarts:   make(map[string][]time.Time),
+		agentConfirmations:  make(map[string]agentConfirmationRecord),
 		generationCancels:   make(map[string]context.CancelFunc),
 		generationRoot:      generationRoot,
 		stopGeneration:      stopGeneration,
@@ -409,6 +413,7 @@ func MountServer(r chi.Router, s *Server) {
 		r.Get("/auth/usage", s.usage)
 		r.Get("/agent/status", s.agentStatus)
 		r.Post("/agent/execute", s.executeAgentTool)
+		r.Post("/agent/confirm", s.issueAgentConfirmation)
 		r.Post("/runtime/ticket", s.runtimeTicket)
 		r.Get("/runtime/ws", s.runtimeSocket)
 		r.Post("/runtime/command", s.runtimeCommand)

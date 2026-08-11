@@ -84,6 +84,7 @@ func (s *Server) authorizedFilmMedia(ctx context.Context, tenantID string, docum
 		for _, binding := range []mediaBinding{
 			{shot: shot, stage: "storyboard", key: shot.ImageStorageKey},
 			{shot: shot, stage: "first_frame", key: shot.FirstFrameStorageKey},
+			{shot: shot, stage: "last_frame", key: shot.LastFrameStorageKey},
 			{shot: shot, stage: "video", key: shot.VideoStorageKey},
 			{shot: shot, stage: "audio", key: shot.AudioStorageKey},
 		} {
@@ -205,6 +206,14 @@ func (s *Server) buildFilmAssetBundle(ctx context.Context, tenantID string, docu
 }
 
 func filmClipStorageKey(document filmDocument, trackKind string, clip filmTimelineClip) string {
+	if strings.HasPrefix(clip.Source, "dialogue:") && trackKind == "dialogue" {
+		id := strings.TrimPrefix(clip.Source, "dialogue:")
+		for _, dialogue := range document.Dialogues {
+			if dialogue.ID == id {
+				return dialogue.AudioStorageKey
+			}
+		}
+	}
 	if strings.HasPrefix(clip.Source, "shot:") {
 		id := strings.TrimPrefix(clip.Source, "shot:")
 		for _, shot := range document.Shots {

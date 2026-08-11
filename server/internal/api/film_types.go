@@ -59,6 +59,10 @@ type filmShot struct {
 	FirstFrameSHA256          string              `json:"firstFrameSha256,omitempty"`
 	FirstFrameObjectVersion   string              `json:"firstFrameObjectVersion,omitempty"`
 	FirstFrameGenerationJobID string              `json:"firstFrameGenerationJobId,omitempty"`
+	LastFrameStorageKey       string              `json:"lastFrameStorageKey,omitempty"`
+	LastFrameSHA256           string              `json:"lastFrameSha256,omitempty"`
+	LastFrameObjectVersion    string              `json:"lastFrameObjectVersion,omitempty"`
+	LastFrameGenerationJobID  string              `json:"lastFrameGenerationJobId,omitempty"`
 	VideoStorageKey           string              `json:"videoStorageKey,omitempty"`
 	VideoSHA256               string              `json:"videoSha256,omitempty"`
 	VideoObjectVersion        string              `json:"videoObjectVersion,omitempty"`
@@ -72,6 +76,7 @@ type filmShot struct {
 	MediaProvenance           string              `json:"mediaProvenance,omitempty"`
 	StoryboardDirectorSource  *filmDirectorSource `json:"storyboardDirectorSource,omitempty"`
 	FirstFrameDirectorSource  *filmDirectorSource `json:"firstFrameDirectorSource,omitempty"`
+	LastFrameDirectorSource   *filmDirectorSource `json:"lastFrameDirectorSource,omitempty"`
 }
 
 type filmDirectorSource struct {
@@ -91,25 +96,28 @@ type filmDirectorSource struct {
 }
 
 type filmAsset struct {
-	ID                 string `json:"id"`
-	Revision           int    `json:"revision"`
-	Kind               string `json:"kind"`
-	Title              string `json:"title"`
-	Status             string `json:"status"`
-	ParentAssetID      string `json:"parentAssetId,omitempty"`
-	Description        string `json:"description"`
-	MediaStorageKey    string `json:"mediaStorageKey,omitempty"`
-	MediaMIMEType      string `json:"mediaMimeType,omitempty"`
-	MediaSHA256        string `json:"mediaSha256,omitempty"`
-	MediaObjectVersion string `json:"mediaObjectVersion,omitempty"`
-	MediaProvenance    string `json:"mediaProvenance,omitempty"`
-	Voice              string `json:"voice,omitempty"`
-	StylePrompt        string `json:"stylePrompt,omitempty"`
-	AspectRatio        string `json:"aspectRatio,omitempty"`
-	AgeStage           string `json:"ageStage,omitempty"`
-	Costume            string `json:"costume,omitempty"`
-	StoryPeriod        string `json:"storyPeriod,omitempty"`
-	IsDefault          bool   `json:"isDefault,omitempty"`
+	ID                 string   `json:"id"`
+	Revision           int      `json:"revision"`
+	Kind               string   `json:"kind"`
+	Title              string   `json:"title"`
+	Status             string   `json:"status"`
+	ParentAssetID      string   `json:"parentAssetId,omitempty"`
+	Description        string   `json:"description"`
+	MediaStorageKey    string   `json:"mediaStorageKey,omitempty"`
+	MediaMIMEType      string   `json:"mediaMimeType,omitempty"`
+	MediaSHA256        string   `json:"mediaSha256,omitempty"`
+	MediaObjectVersion string   `json:"mediaObjectVersion,omitempty"`
+	MediaProvenance    string   `json:"mediaProvenance,omitempty"`
+	Voice              string   `json:"voice,omitempty"`
+	StylePrompt        string   `json:"stylePrompt,omitempty"`
+	AspectRatio        string   `json:"aspectRatio,omitempty"`
+	AgeStage           string   `json:"ageStage,omitempty"`
+	Costume            string   `json:"costume,omitempty"`
+	StoryPeriod        string   `json:"storyPeriod,omitempty"`
+	IsDefault          bool     `json:"isDefault,omitempty"`
+	EpisodeIDs         []string `json:"episodeIds,omitempty"`
+	SceneIDs           []string `json:"sceneIds,omitempty"`
+	ShotIDs            []string `json:"shotIds,omitempty"`
 }
 
 type filmDialogue struct {
@@ -120,6 +128,7 @@ type filmDialogue struct {
 	Kind                 string `json:"kind"`
 	CharacterAssetID     string `json:"characterAssetId,omitempty"`
 	VoiceAssetID         string `json:"voiceAssetId,omitempty"`
+	Emotion              string `json:"emotion,omitempty"`
 	Text                 string `json:"text"`
 	Status               string `json:"status"`
 	AudioStorageKey      string `json:"audioStorageKey,omitempty"`
@@ -136,22 +145,53 @@ type filmStage struct {
 	Error     string `json:"error,omitempty"`
 }
 
+type filmStoryRelationship struct {
+	CharacterAssetID        string `json:"characterAssetId"`
+	RelatedCharacterAssetID string `json:"relatedCharacterAssetId"`
+	Relation                string `json:"relation"`
+	Description             string `json:"description,omitempty"`
+}
+
+type filmStoryBeat struct {
+	ID          string `json:"id"`
+	EpisodeID   string `json:"episodeId"`
+	Order       int    `json:"order"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+type filmCharacterArc struct {
+	CharacterAssetID string `json:"characterAssetId"`
+	Summary          string `json:"summary"`
+}
+
+type filmStoryBible struct {
+	Summary       string                  `json:"summary,omitempty"`
+	Theme         string                  `json:"theme,omitempty"`
+	Timeline      []string                `json:"timeline,omitempty"`
+	Relationships []filmStoryRelationship `json:"relationships,omitempty"`
+	Beats         []filmStoryBeat         `json:"beats,omitempty"`
+	CharacterArcs []filmCharacterArc      `json:"characterArcs,omitempty"`
+}
+
 type filmTask struct {
-	ID              string                      `json:"id"`
-	Revision        int                         `json:"revision"`
-	Stage           string                      `json:"stage"`
-	ShotID          string                      `json:"shotId,omitempty"`
-	Title           string                      `json:"title"`
-	Status          string                      `json:"status"`
-	Progress        float64                     `json:"progress"`
-	CreatedAt       string                      `json:"createdAt"`
-	UpdatedAt       string                      `json:"updatedAt"`
-	GenerationJobID string                      `json:"generationJobId,omitempty"`
-	IdempotencyKey  string                      `json:"idempotencyKey,omitempty"`
-	RequestHash     string                      `json:"requestHash,omitempty"`
-	Error           string                      `json:"error,omitempty"`
-	Snapshot        *filmGenerationSnapshot     `json:"snapshot,omitempty"`
-	TextSnapshot    *filmTextGenerationSnapshot `json:"textSnapshot,omitempty"`
+	ID                    string                      `json:"id"`
+	Revision              int                         `json:"revision"`
+	Stage                 string                      `json:"stage"`
+	ShotID                string                      `json:"shotId,omitempty"`
+	DialogueID            string                      `json:"dialogueId,omitempty"`
+	Title                 string                      `json:"title"`
+	Status                string                      `json:"status"`
+	Progress              float64                     `json:"progress"`
+	CreatedAt             string                      `json:"createdAt"`
+	UpdatedAt             string                      `json:"updatedAt"`
+	GenerationJobID       string                      `json:"generationJobId,omitempty"`
+	ParentGenerationJobID string                      `json:"parentGenerationJobId,omitempty"`
+	IdempotencyKey        string                      `json:"idempotencyKey,omitempty"`
+	RequestHash           string                      `json:"requestHash,omitempty"`
+	Error                 string                      `json:"error,omitempty"`
+	Snapshot              *filmGenerationSnapshot     `json:"snapshot,omitempty"`
+	TextSnapshot          *filmTextGenerationSnapshot `json:"textSnapshot,omitempty"`
 }
 
 type filmTextGenerationSnapshot struct {
@@ -161,6 +201,7 @@ type filmTextGenerationSnapshot struct {
 	Model                string `json:"model"`
 	PromptVersion        string `json:"promptVersion"`
 	OutputSchema         string `json:"outputSchema"`
+	ScriptMode           string `json:"scriptMode,omitempty"`
 	TargetEntityID       string `json:"targetEntityId,omitempty"`
 	TargetRevision       int    `json:"targetRevision,omitempty"`
 	TargetSHA256         string `json:"targetSha256,omitempty"`
@@ -215,6 +256,7 @@ type filmStructureVersion struct {
 	ID          string         `json:"id"`
 	Revision    int            `json:"revision"`
 	CandidateID string         `json:"candidateId"`
+	Story       filmStoryBible `json:"story"`
 	Episodes    []filmEpisode  `json:"episodes"`
 	Scenes      []filmScene    `json:"scenes"`
 	Shots       []filmShot     `json:"shots"`
@@ -228,6 +270,7 @@ type filmStructureVersion struct {
 // are changed later, so an approved result can be reproduced and audited.
 type filmGenerationSnapshot struct {
 	ShotRevision             int                  `json:"shotRevision"`
+	DialogueVersion          *filmDialogue        `json:"dialogueVersion,omitempty"`
 	Prompt                   string               `json:"prompt"`
 	ProviderID               string               `json:"providerId"`
 	Model                    string               `json:"model"`
@@ -238,6 +281,7 @@ type filmGenerationSnapshot struct {
 	StyleVersion             *filmAsset           `json:"styleVersion,omitempty"`
 	StoryboardDirectorSource *filmDirectorSource  `json:"storyboardDirectorSource,omitempty"`
 	FirstFrameDirectorSource *filmDirectorSource  `json:"firstFrameDirectorSource,omitempty"`
+	LastFrameDirectorSource  *filmDirectorSource  `json:"lastFrameDirectorSource,omitempty"`
 	ReferenceStorageKeys     []string             `json:"referenceStorageKeys"`
 	EstimatedGenerations     int                  `json:"estimatedGenerations"`
 	EstimatedCredits         int                  `json:"estimatedCredits,omitempty"`
@@ -251,6 +295,7 @@ type filmQualityIssue struct {
 	TargetType string `json:"targetType"`
 	TargetID   string `json:"targetId"`
 	Message    string `json:"message"`
+	MediaKind  string `json:"mediaKind,omitempty"`
 }
 
 type filmRepairProposal struct {
@@ -266,6 +311,7 @@ type filmRepairProposal struct {
 	AffectedTargets      []string       `json:"affectedTargets,omitempty"`
 	EstimatedGenerations int            `json:"estimatedGenerations,omitempty"`
 	EstimatedCredits     int            `json:"estimatedCredits,omitempty"`
+	RegenerationStage    string         `json:"regenerationStage,omitempty"`
 }
 
 type filmEntityVersion struct {
@@ -366,6 +412,7 @@ type filmDocument struct {
 	UpdatedAt          string                  `json:"updatedAt"`
 	AspectRatio        string                  `json:"aspectRatio"`
 	Source             filmSource              `json:"source"`
+	Story              filmStoryBible          `json:"story,omitempty"`
 	Episodes           []filmEpisode           `json:"episodes"`
 	Scenes             []filmScene             `json:"scenes"`
 	Shots              []filmShot              `json:"shots"`
@@ -400,7 +447,42 @@ func decodeFilmDocument(raw json.RawMessage) (filmDocument, error) {
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return filmDocument{}, err
 	}
-	return migrateFilmDocumentTopology(document), nil
+	document = migrateFilmDocumentTopology(document)
+	return migrateFilmRepairRegenerationStages(document), nil
+}
+
+func migrateFilmRepairRegenerationStages(document filmDocument) filmDocument {
+	shots := make(map[string]filmShot, len(document.Shots))
+	for _, shot := range document.Shots {
+		shots[shot.ID] = shot
+	}
+	dialogues := make(map[string]struct{}, len(document.Dialogues))
+	for _, dialogue := range document.Dialogues {
+		dialogues[dialogue.ID] = struct{}{}
+	}
+	for reportIndex := range document.QualityReports {
+		issues := make(map[string]filmQualityIssue, len(document.QualityReports[reportIndex].Issues))
+		for _, issue := range document.QualityReports[reportIndex].Issues {
+			issues[issue.ID] = issue
+		}
+		for repairIndex := range document.QualityReports[reportIndex].Repairs {
+			repair := &document.QualityReports[reportIndex].Repairs[repairIndex]
+			if repair.EstimatedGenerations == 0 || repair.RegenerationStage != "" {
+				continue
+			}
+			if repair.TargetType == "dialogue" {
+				if _, exists := dialogues[repair.TargetID]; exists {
+					repair.RegenerationStage = "audio"
+				}
+			} else {
+				repair.RegenerationStage = filmRepairRegenerationStage(issues[repair.IssueID], shots[repair.TargetID])
+			}
+			if repair.RegenerationStage == "" {
+				repair.RegenerationStage = "storyboard"
+			}
+		}
+	}
+	return document
 }
 
 func migrateFilmDocumentTopology(document filmDocument) filmDocument {

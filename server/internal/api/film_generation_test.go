@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -129,6 +131,73 @@ func TestSelectFilmGenerationShotsSupportsEpisodeRangeAndOrderZero(t *testing.T)
 	}
 }
 
+func TestFilmAudioGenerationCreatesOneFrozenTargetPerDialogue(t *testing.T) {
+	document := newFilmDocument("film-dialogue-audio")
+	shot := filmShot{ID: "shot-1", Revision: 2, SceneID: "scene-1", Order: 1, Title: "Exchange", Description: "Two people speak", Status: filmStatusDraft, DurationSeconds: 4, AspectRatio: "16:9"}
+	document.Shots = []filmShot{shot}
+	document.Assets = []filmAsset{
+		{ID: "voice-a", Revision: 1, Kind: "voice", Title: "A", Status: filmStatusApproved, Voice: "voice-alpha"},
+		{ID: "voice-b", Revision: 1, Kind: "voice", Title: "B", Status: filmStatusApproved, Voice: "voice-beta"},
+	}
+	document.Dialogues = []filmDialogue{
+		{ID: "dialogue-b", Revision: 3, ShotID: shot.ID, Order: 2, Kind: "dialogue", VoiceAssetID: "voice-b", Emotion: "angry", Text: "Second line", Status: filmStatusDraft},
+		{ID: "dialogue-a", Revision: 2, ShotID: shot.ID, Order: 1, Kind: "dialogue", VoiceAssetID: "voice-a", Emotion: "calm", Text: "First line", Status: filmStatusDraft},
+	}
+	targets := filmGenerationTargets(document, "audio", document.Shots)
+	if len(targets) != 2 || targets[0].Dialogue == nil || targets[0].Dialogue.ID != "dialogue-a" || targets[1].Dialogue == nil || targets[1].Dialogue.ID != "dialogue-b" {
+		t.Fatalf("dialogue targets are not independently ordered: %#v", targets)
+	}
+	for _, target := range targets {
+		jobShot, config := filmDialogueAudioInputs(document, target, filmGenerationConfig{Format: "mp3"})
+		job, err := buildFilmGenerationTargetJob("audio", jobShot, target.Dialogue, document.ProjectID, "audio-provider", "tts", "task-1", "parent-1", "job-1", strings.Repeat("a", 64), config, nil, document.UpdatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, _ := filmJobBinding(job)
+		if binding == nil || binding.DialogueID != target.Dialogue.ID || job.Prompt != target.Dialogue.Text || config.Voice == "" || !strings.Contains(config.Instructions, target.Dialogue.Emotion) {
+			t.Fatalf("dialogue job did not freeze voice/emotion/text independently: target=%#v job=%#v binding=%#v config=%#v", target, job, binding, config)
+		}
+	}
+	hashA, _ := filmGenerationTargetRequestHash(document.ProjectID, "audio", targets, filmGenerationRunRequest{Model: "tts", IdempotencyKey: "audio-pass"})
+	changed := targets
+	changed[0].Dialogue.Text = "Changed line"
+	hashB, _ := filmGenerationTargetRequestHash(document.ProjectID, "audio", changed, filmGenerationRunRequest{Model: "tts", IdempotencyKey: "audio-pass"})
+	if hashA == hashB {
+		t.Fatal("dialogue edits did not invalidate the idempotent audio request")
+	}
+}
+
+func TestFilmVideoReferencesKeepFirstAndLastFramesInSemanticOrder(t *testing.T) {
+	shot := filmShot{FirstFrameStorageKey: "film/first.png", LastFrameStorageKey: "film/last.png"}
+	got := orderedFilmVideoReferences(shot, []string{"film/style.png", "film/last.png"})
+	want := []string{"film/first.png", "film/last.png", "film/style.png"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("video references = %#v, want %#v", got, want)
+	}
+}
+
+func TestFilmDialogueRepairGenerationUsesDialogueAsTaskAndJobTarget(t *testing.T) {
+	document, err := decomposeFilmSource(newFilmDocument("dialogue-repair"), "INT. ROOM - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialogue := filmDialogue{ID: "dialogue-repair-target", Revision: 2, ShotID: document.Shots[0].ID, Order: 0, Text: "Try again", Status: filmStatusDraft}
+	document.Dialogues = []filmDialogue{dialogue}
+	repair := filmRepairProposal{TargetType: "dialogue", TargetID: dialogue.ID, RegenerationStage: "audio"}
+	target, err := filmRepairGenerationTarget(document, repair)
+	if err != nil || target.Dialogue == nil || target.Dialogue.ID != dialogue.ID || filmGenerationTargetID(target) != dialogue.ID {
+		t.Fatalf("dialogue repair target = %#v err=%v", target, err)
+	}
+	job, err := buildFilmGenerationTargetJob("audio", target.Shot, target.Dialogue, document.ProjectID, "provider", "voice-model", "task", "parent", "job", strings.Repeat("a", 64), filmGenerationConfig{Format: "mp3"}, nil, document.UpdatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, _ := filmJobBinding(job)
+	if binding == nil || binding.DialogueID != dialogue.ID || job.Prompt != dialogue.Text {
+		t.Fatalf("dialogue repair job lost its target: job=%#v binding=%#v", job, binding)
+	}
+}
+
 func TestFilmGenerationRunCreatesExistingServerJobIdempotently(t *testing.T) {
 	backend, handler := filmAPIHandler(t)
 	document := prepareFilmGenerationStage(t, handler)
@@ -176,6 +245,166 @@ func TestFilmGenerationRunCreatesExistingServerJobIdempotently(t *testing.T) {
 	}
 }
 
+func TestFilmGenerationRunCreatesDurableParentJobInAtomicBatch(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run",
+		filmGenerationRunBody(t, document.Stages[2].Revision, document.Shots[0].ID, "parent-job-pass"))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("run Film stage: %d %s", response.Code, response.Body.String())
+	}
+	created := decodeFilmResponse(t, response)
+	task := created.Tasks[len(created.Tasks)-1]
+
+	var taskJSON map[string]json.RawMessage
+	rawTask, _ := json.Marshal(task)
+	if json.Unmarshal(rawTask, &taskJSON) != nil || len(taskJSON["parentGenerationJobId"]) == 0 {
+		t.Fatalf("Film task has no durable parent generation job binding: %s", rawTask)
+	}
+	var parentID string
+	if json.Unmarshal(taskJSON["parentGenerationJobId"], &parentID) != nil || parentID == "" || parentID == task.ID || parentID == task.GenerationJobID {
+		t.Fatalf("Film task parent binding is not a distinct generation job: task=%#v parent=%q", task, parentID)
+	}
+	parent, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, parentID)
+	if err != nil || parent.Kind != "film-stage" || parent.Status != "queued" || parent.ProjectID != "film-api" {
+		t.Fatalf("durable Film stage parent = %#v err=%v", parent, err)
+	}
+	child, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var childParameters struct {
+		Film struct {
+			ParentGenerationJobID string `json:"parentGenerationJobId"`
+		} `json:"film"`
+	}
+	if json.Unmarshal(child.Parameters, &childParameters) != nil || childParameters.Film.ParentGenerationJobID != parentID {
+		t.Fatalf("child generation binding does not point to parent %q: %s", parentID, child.Parameters)
+	}
+	if backend.atomicBatchCalls.Load() != 1 {
+		t.Fatalf("parent and child were not created in one Film batch transaction: %d calls", backend.atomicBatchCalls.Load())
+	}
+}
+
+func TestAggregateFilmStageGenerationJobDerivesTerminalAndPartialStates(t *testing.T) {
+	now := "2026-08-11T01:00:00Z"
+	parent, err := buildFilmStageGenerationJob("film-api", "storyboard", "job-parent", strings.Repeat("a", 64), now, []string{"job-a", "job-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		statuses   []string
+		wantStatus string
+		wantResult filmStageGenerationResult
+	}{
+		{name: "queued", statuses: []string{"queued", "queued"}, wantStatus: "queued", wantResult: filmStageGenerationResult{Outcome: "queued", Total: 2, Queued: 2, Progress: 0}},
+		{name: "running", statuses: []string{"succeeded", "running"}, wantStatus: "running", wantResult: filmStageGenerationResult{Outcome: "running", Total: 2, Running: 1, Succeeded: 1, Progress: 0.75}},
+		{name: "succeeded", statuses: []string{"succeeded", "succeeded"}, wantStatus: "succeeded", wantResult: filmStageGenerationResult{Outcome: "succeeded", Total: 2, Succeeded: 2, Progress: 1}},
+		{name: "failed", statuses: []string{"failed", "failed"}, wantStatus: "failed", wantResult: filmStageGenerationResult{Outcome: "failed", Total: 2, Failed: 2, Progress: 1}},
+		{name: "cancelled", statuses: []string{"cancelled", "cancelled"}, wantStatus: "cancelled", wantResult: filmStageGenerationResult{Outcome: "cancelled", Total: 2, Cancelled: 2, Progress: 1}},
+		{name: "partial failure", statuses: []string{"succeeded", "failed"}, wantStatus: "failed", wantResult: filmStageGenerationResult{Outcome: "partial_failure", Total: 2, Succeeded: 1, Failed: 1, Progress: 1}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			children := make([]store.GenerationJob, len(test.statuses))
+			for index, status := range test.statuses {
+				children[index] = store.GenerationJob{ID: []string{"job-a", "job-b"}[index], Status: status, UpdatedAt: now}
+			}
+			got, err := aggregateFilmStageGenerationJob(parent, children)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != test.wantStatus {
+				t.Fatalf("aggregate status = %q, want %q", got.Status, test.wantStatus)
+			}
+			var result filmStageGenerationResult
+			if json.Unmarshal(got.Result, &result) != nil || result != test.wantResult {
+				t.Fatalf("aggregate result = %#v, want %#v", result, test.wantResult)
+			}
+		})
+	}
+}
+
+func TestFilmGenerationJobViewsAggregateWithoutMutatingParentOnRead(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	run := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run",
+		filmGenerationRunBody(t, document.Stages[2].Revision, document.Shots[0].ID, "parent-list-pass"))
+	created := decodeFilmResponse(t, run)
+	task := created.Tasks[len(created.Tasks)-1]
+	child, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.Status = "running"
+	if err := backend.PutGenerationJob(t.Context(), store.DefaultTenantID, child); err != nil {
+		t.Fatal(err)
+	}
+
+	listed := request(t, handler, http.MethodGet, "/api/film/projects/film-api/generation-jobs", nil)
+	var contract struct {
+		Data struct {
+			GenerationJobs []filmGenerationJobView `json:"generationJobs"`
+		} `json:"data"`
+	}
+	if listed.Code != http.StatusOK || json.Unmarshal(listed.Body.Bytes(), &contract) != nil || len(contract.Data.GenerationJobs) != 2 {
+		t.Fatalf("real parent/child list = %d %s", listed.Code, listed.Body.String())
+	}
+	parentView, childView := contract.Data.GenerationJobs[0], contract.Data.GenerationJobs[1]
+	if parentView.ID != task.ParentGenerationJobID || parentView.ParentID != "" || parentView.Status != "running" || childView.ID != task.GenerationJobID || childView.ParentID != task.ParentGenerationJobID {
+		t.Fatalf("real parent/child tree is incorrect: parent=%#v child=%#v task=%#v", parentView, childView, task)
+	}
+	parent, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.ParentGenerationJobID)
+	if err != nil || parent.Status != "queued" {
+		t.Fatalf("parent read unexpectedly mutated storage = %#v err=%v", parent, err)
+	}
+	global := request(t, handler, http.MethodGet, "/api/generation-jobs/"+task.ParentGenerationJobID, nil)
+	var globalJob store.GenerationJob
+	if global.Code != http.StatusOK || json.Unmarshal(global.Body.Bytes(), &globalJob) != nil || globalJob.Status != "running" {
+		t.Fatalf("global parent view was not aggregated: %d %s", global.Code, global.Body.String())
+	}
+}
+
+func TestCancelFilmStageParentCascadesAndCannotBeRevivedByAggregation(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	created := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run",
+		filmGenerationRunBody(t, document.Stages[2].Revision, document.Shots[0].ID, "parent-cancel-pass")))
+	task := created.Tasks[len(created.Tasks)-1]
+	canceled := request(t, handler, http.MethodPost, "/api/generation-jobs/"+task.ParentGenerationJobID+"/cancel", nil)
+	if canceled.Code != http.StatusOK {
+		t.Fatalf("cancel parent: %d %s", canceled.Code, canceled.Body.String())
+	}
+	child, _ := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if child.Status != "cancelled" {
+		t.Fatalf("child was not cancelled with parent: %#v", child)
+	}
+	view := request(t, handler, http.MethodGet, "/api/generation-jobs/"+task.ParentGenerationJobID, nil)
+	var parentView store.GenerationJob
+	if view.Code != http.StatusOK || json.Unmarshal(view.Body.Bytes(), &parentView) != nil || parentView.Status != "cancelled" {
+		t.Fatalf("cancelled parent was revived: %d %s", view.Code, view.Body.String())
+	}
+}
+
+func TestCancelFilmStageParentReportsChildCancellationFailure(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	created := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run",
+		filmGenerationRunBody(t, document.Stages[2].Revision, document.Shots[0].ID, "parent-cancel-child-failure")))
+	task := created.Tasks[len(created.Tasks)-1]
+	backend.generationCancelErrors = map[string]error{tenantKey(store.DefaultTenantID, task.GenerationJobID): errors.New("database unavailable")}
+
+	canceled := request(t, handler, http.MethodPost, "/api/generation-jobs/"+task.ParentGenerationJobID+"/cancel", nil)
+	if canceled.Code != http.StatusInternalServerError {
+		t.Fatalf("child cancellation failure was hidden: %d %s", canceled.Code, canceled.Body.String())
+	}
+	parent, _ := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.ParentGenerationJobID)
+	if parent.Status != "queued" {
+		t.Fatalf("parent was cancelled before its child: %#v", parent)
+	}
+}
+
 func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T) {
 	backend, handler := filmAPIHandler(t)
 	document := prepareFilmGenerationStage(t, handler)
@@ -194,7 +423,7 @@ func TestFilmGenerationJobAPIsSyncAndRetryWithoutForgingCompletion(t *testing.T)
 			GenerationJobs []filmGenerationJobView `json:"generationJobs"`
 		} `json:"data"`
 	}
-	if json.Unmarshal(listed.Body.Bytes(), &contract) != nil || contract.Data.Tasks == nil || contract.Data.GenerationJobs == nil || len(contract.Data.Tasks) == 0 || len(contract.Data.GenerationJobs) == 0 || contract.Data.GenerationJobs[0].ParentID == "" {
+	if json.Unmarshal(listed.Body.Bytes(), &contract) != nil || contract.Data.Tasks == nil || contract.Data.GenerationJobs == nil || len(contract.Data.Tasks) == 0 || len(contract.Data.GenerationJobs) < 2 || contract.Data.GenerationJobs[0].ParentID != "" || contract.Data.GenerationJobs[1].ParentID == "" {
 		t.Fatalf("job hierarchy is ambiguous: %s", listed.Body.String())
 	}
 	var topLevel map[string]json.RawMessage
@@ -278,22 +507,26 @@ func TestCancelFilmGenerationJobSynchronizesAlreadySucceededJob(t *testing.T) {
 func TestFilmAgentGenerationStageQueuesRealJobAndRequiresProviderInputs(t *testing.T) {
 	backend, handler := filmAPIHandler(t)
 	document := prepareFilmGenerationStage(t, handler)
+	missingArguments := confirmFilmAgentArguments(t, handler, "film.run_stage", map[string]any{
+		"projectId": "film-api", "stage": "storyboard", "revision": document.Stages[2].Revision,
+	})
 	missingBody, _ := json.Marshal(map[string]any{
 		"tool":      "film.run_stage",
-		"arguments": map[string]any{"projectId": "film-api", "stage": "storyboard", "revision": document.Stages[2].Revision},
+		"arguments": missingArguments,
 	})
 	missing := request(t, handler, http.MethodPost, "/api/agent/execute", missingBody)
 	if missing.Code != http.StatusBadRequest || !bytes.Contains(bytes.ToLower(missing.Body.Bytes()), []byte("provider")) {
 		t.Fatalf("agent generation missing provider/model was not clearly rejected: %d %s", missing.Code, missing.Body.String())
 	}
 
+	arguments := confirmFilmAgentArguments(t, handler, "film.run_stage", map[string]any{
+		"projectId": "film-api", "stage": "storyboard", "revision": document.Stages[2].Revision,
+		"shotIds": []string{document.Shots[0].ID}, "providerId": "provider-agent", "model": "model-agent",
+		"config": map[string]any{"size": "1024x1024"}, "idempotencyKey": "agent-board-pass",
+	})
 	body, _ := json.Marshal(map[string]any{
-		"tool": "film.run_stage",
-		"arguments": map[string]any{
-			"projectId": "film-api", "stage": "storyboard", "revision": document.Stages[2].Revision,
-			"shotIds": []string{document.Shots[0].ID}, "providerId": "provider-agent", "model": "model-agent",
-			"config": map[string]any{"size": "1024x1024"}, "idempotencyKey": "agent-board-pass",
-		},
+		"tool":      "film.run_stage",
+		"arguments": arguments,
 	})
 	response := request(t, handler, http.MethodPost, "/api/agent/execute", body)
 	if response.Code != http.StatusOK {
@@ -577,5 +810,22 @@ func TestFilmGenerationSyncCannotReadAnotherTenantJob(t *testing.T) {
 	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/sync", syncBody)
 	if response.Code != http.StatusOK || decodeFilmResponse(t, response).Shots[0].ImageStorageKey != "" {
 		t.Fatalf("cross-tenant job was bound: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFilmAudioInputsFreezeDialogueEmotionUnlessExplicitlyOverridden(t *testing.T) {
+	document := newFilmDocument("film-emotion")
+	shot := filmShot{ID: "shot-emotion"}
+	document.Dialogues = []filmDialogue{
+		{ID: "dialogue-1", ShotID: shot.ID, Order: 0, Text: "Wait.", Emotion: "controlled fear"},
+		{ID: "dialogue-2", ShotID: shot.ID, Order: 1, Text: "Run!", Emotion: "urgent"},
+	}
+	prepared, config := filmAudioInputs(document, shot, filmGenerationConfig{})
+	if prepared.Subtitle != "Wait.\nRun!" || config.Instructions != "Emotion direction: controlled fear; urgent" {
+		t.Fatalf("audio inputs did not freeze emotional direction: shot=%#v config=%#v", prepared, config)
+	}
+	_, explicit := filmAudioInputs(document, shot, filmGenerationConfig{Instructions: "whispered"})
+	if explicit.Instructions != "whispered" {
+		t.Fatalf("explicit audio direction was overwritten: %#v", explicit)
 	}
 }

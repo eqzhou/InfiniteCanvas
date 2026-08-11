@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 20
+const currentSchemaVersion = 21
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -253,7 +253,21 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 21 {
+		if err := migrateV21(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func migrateV21(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 21, `
+ALTER TABLE openboard_generation_jobs DROP CONSTRAINT IF EXISTS openboard_generation_jobs_kind_check_v6;
+ALTER TABLE openboard_generation_jobs
+  ADD CONSTRAINT openboard_generation_jobs_kind_check_v7
+  CHECK (kind IN ('text','image','video','audio','workflow','export','film-stage'));
+`)
 }
 
 func migrateV20(ctx context.Context, connection *pgxpool.Conn) error {
@@ -953,12 +967,25 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 // EnsureE2ETenant creates an isolated tenant used only by the explicitly gated
 // browser-test harness. Product code never calls this method directly.
 func (s *PostgresStore) EnsureE2ETenant(ctx context.Context, tenantID string) error {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
 INSERT INTO openboard_tenants (id, name, plan, storage_quota_bytes, generation_quota_monthly)
 VALUES ($1, 'Browser E2E', 'free', $2, $3)
 ON CONFLICT (id) DO NOTHING`,
-		tenantID, defaultStorageQuotaBytes, defaultGenerationQuotaMonthly)
-	return err
+		tenantID, defaultStorageQuotaBytes, defaultGenerationQuotaMonthly); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO openboard_users (id,tenant_id,email,password_hash,display_name,role,credits,status)
+VALUES ($1,$2,$3,'','Browser E2E owner','owner',0,'active')
+ON CONFLICT (id) DO NOTHING`, tenantID+"-user", tenantID, tenantID+"@e2e.invalid"); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func projectCacheKey(tenantID, id string) string {
@@ -1509,6 +1536,13 @@ func (s *PostgresStore) createFilmGenerationBatchOnce(
 	if expectedRevision < 1 || !json.Valid(document) || len(reservations) == 0 || len(reservations) > 1_000 {
 		return FilmRecord{}, ErrInvalidInput
 	}
+	if strings.TrimSpace(userID) == "" {
+		for _, reservation := range reservations {
+			if generationJobConsumesQuota(reservation.Job.Kind) {
+				return FilmRecord{}, ErrUnauthorized
+			}
+		}
+	}
 	type preparedReservation struct {
 		reservation FilmGenerationReservation
 		created     time.Time
@@ -1607,22 +1641,20 @@ func (s *PostgresStore) createFilmGenerationBatchOnce(
 		if !generationJobConsumesQuota(job.Kind) {
 			continue
 		}
-		var userArg any
-		if userID != "" {
-			userArg = userID
-		}
 		if _, err := tx.Exec(ctx, `INSERT INTO openboard_usage_events (tenant_id,user_id,kind,units,meta)
-			VALUES ($1,$2,'generation',$3,$4)`, tenantID, userArg, reservation.Units, reservation.UsageMeta); err != nil {
+			VALUES ($1,$2,'generation',$3,$4)`, tenantID, userID, reservation.Units, reservation.UsageMeta); err != nil {
 			return FilmRecord{}, err
 		}
-		if userID != "" {
-			cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
-			if err != nil {
-				return FilmRecord{}, err
-			}
-			if err := s.reserveCreditsTx(ctx, tx, tenantID, userID, job.ID, job.Model, cost*reservation.Units, reservation.UsageMeta); err != nil {
-				return FilmRecord{}, err
-			}
+		cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
+		if err != nil {
+			return FilmRecord{}, err
+		}
+		totalCredits := cost * reservation.Units
+		if reservation.ExpectedCredits != nil && *reservation.ExpectedCredits != totalCredits {
+			return FilmRecord{}, ErrConflict
+		}
+		if err := s.reserveCreditsTx(ctx, tx, tenantID, userID, job.ID, job.Model, totalCredits, reservation.UsageMeta); err != nil {
+			return FilmRecord{}, err
 		}
 	}
 	if err := syncFilmEntityProjection(ctx, tx, tenantID, projectID, document); err != nil {
@@ -2552,6 +2584,9 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 		return ErrGone
 	}
 	billableGeneration := generationJobConsumesQuota(job.Kind)
+	if billableGeneration && strings.TrimSpace(userID) == "" {
+		return ErrUnauthorized
+	}
 	if billableGeneration && units < 1 {
 		units = 1
 	}
@@ -2603,23 +2638,17 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 		if generationQuotaExceeded(used, units, quota) {
 			return ErrQuotaExceeded
 		}
-		var userArg any
-		if userID != "" {
-			userArg = userID
-		}
 		if _, err := tx.Exec(ctx, `INSERT INTO openboard_usage_events (tenant_id,user_id,kind,units,meta)
-		VALUES ($1,$2,'generation',$3,$4)`, tenantID, userArg, units, usageMeta); err != nil {
+		VALUES ($1,$2,'generation',$3,$4)`, tenantID, userID, units, usageMeta); err != nil {
 			return err
 		}
-		if userID != "" {
-			cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
-			if err != nil {
-				return err
-			}
-			amount := cost * units
-			if err := s.reserveCreditsTx(ctx, tx, tenantID, userID, job.ID, job.Model, amount, usageMeta); err != nil {
-				return err
-			}
+		cost, err := s.modelCreditCostTx(ctx, tx, tenantID, job.Model)
+		if err != nil {
+			return err
+		}
+		amount := cost * units
+		if err := s.reserveCreditsTx(ctx, tx, tenantID, userID, job.ID, job.Model, amount, usageMeta); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(ctx)
@@ -2839,6 +2868,7 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 		WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running') AND
 		  ((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR
 		   (kind='workflow' AND parameters->>'executor'='workflow') OR
+		   (kind='film-stage' AND parameters->>'executor'='film-stage') OR
 		   (kind='export' AND parameters->>'executor'='film-export'))
 		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
 		parameters, result, error, created_at, updated_at`, tenantID, id, now))
@@ -2894,7 +2924,8 @@ func serverOwnedGenerationJob(job GenerationJob) bool {
 	}
 	return ((job.Kind == "text" || job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && value.Executor == "server") ||
 		(job.Kind == "workflow" && value.Executor == "workflow") ||
-		(job.Kind == "export" && value.Executor == "film-export")
+		(job.Kind == "export" && value.Executor == "film-export") ||
+		(job.Kind == "film-stage" && value.Executor == "film-stage")
 }
 
 func (s *PostgresStore) DeleteGenerationJob(ctx context.Context, tenantID, id string) error {

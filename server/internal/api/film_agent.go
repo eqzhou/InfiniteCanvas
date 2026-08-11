@@ -21,54 +21,57 @@ type filmAgentResourceArguments struct {
 }
 
 type filmAgentStageArguments struct {
-	ProjectID      string                `json:"projectId"`
-	Stage          string                `json:"stage"`
-	Revision       int                   `json:"revision"`
-	ShotIDs        []string              `json:"shotIds,omitempty"`
-	ProviderID     string                `json:"providerId,omitempty"`
-	Model          string                `json:"model,omitempty"`
-	Config         *filmGenerationConfig `json:"config,omitempty"`
-	IdempotencyKey string                `json:"idempotencyKey,omitempty"`
+	ProjectID         string                `json:"projectId"`
+	Stage             string                `json:"stage"`
+	Revision          int                   `json:"revision"`
+	EpisodeID         string                `json:"episodeId,omitempty"`
+	ScriptMode        string                `json:"scriptMode,omitempty"`
+	ShotIDs           []string              `json:"shotIds,omitempty"`
+	ProviderID        string                `json:"providerId,omitempty"`
+	Model             string                `json:"model,omitempty"`
+	Config            *filmGenerationConfig `json:"config,omitempty"`
+	IdempotencyKey    string                `json:"idempotencyKey,omitempty"`
+	ConfirmationToken string                `json:"confirmationToken"`
 }
 
 type filmAgentRepairArguments struct {
-	ProjectID string `json:"projectId"`
-	RepairID  string `json:"repairId"`
-	Revision  int    `json:"revision"`
-	Approved  bool   `json:"approved"`
+	ProjectID         string                `json:"projectId"`
+	RepairID          string                `json:"repairId"`
+	Revision          int                   `json:"revision"`
+	Approved          bool                  `json:"approved"`
+	ProviderID        string                `json:"providerId,omitempty"`
+	Model             string                `json:"model,omitempty"`
+	Config            *filmGenerationConfig `json:"config,omitempty"`
+	IdempotencyKey    string                `json:"idempotencyKey,omitempty"`
+	ExpectedCredits   *int                  `json:"expectedCredits,omitempty"`
+	ConfirmationToken string                `json:"confirmationToken"`
 }
 type filmAgentExportArguments struct {
-	ProjectID      string `json:"projectId"`
-	Kind           string `json:"kind"`
-	Revision       int    `json:"revision"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	ProjectID         string `json:"projectId"`
+	Kind              string `json:"kind"`
+	Revision          int    `json:"revision"`
+	IdempotencyKey    string `json:"idempotencyKey"`
+	ConfirmationToken string `json:"confirmationToken"`
 }
 
-func (s *Server) runFilmGenerationStageForAgent(ctx context.Context, tenantID string, args filmAgentStageArguments) (filmDocument, error) {
-	if strings.TrimSpace(args.ProviderID) == "" || strings.TrimSpace(args.Model) == "" || args.Config == nil || !validFilmIdempotencyKey(args.IdempotencyKey) {
-		return filmDocument{}, badToolRequest("generation stages require providerId, model, config, and a valid idempotencyKey")
-	}
-	input := filmGenerationRunRequest{
-		Revision: args.Revision, ShotIDs: append([]string(nil), args.ShotIDs...), ProviderID: args.ProviderID,
-		Model: args.Model, Config: *args.Config, IdempotencyKey: args.IdempotencyKey,
-	}
-	body, err := json.Marshal(input)
-	if err != nil {
-		return filmDocument{}, badToolRequest("generation stage parameters are invalid")
-	}
+func filmAgentRequestContext(ctx context.Context, tenantID, projectID, stage string) context.Context {
 	routeContext := chi.NewRouteContext()
-	routeContext.URLParams.Add("projectId", args.ProjectID)
-	routeContext.URLParams.Add("stageId", args.Stage)
+	routeContext.URLParams.Add("projectId", projectID)
+	if stage != "" {
+		routeContext.URLParams.Add("stageId", stage)
+	}
 	requestContext := context.WithValue(ctx, chi.RouteCtxKey, routeContext)
 	if user, ok := authUserFrom(requestContext); ok {
 		user.TenantID = tenantID
-		requestContext = context.WithValue(requestContext, authUserKey, user)
-	} else if tenantID != store.DefaultTenantID {
-		requestContext = context.WithValue(requestContext, authUserKey, store.AuthUser{TenantID: tenantID})
+		return context.WithValue(requestContext, authUserKey, user)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/film/projects/"+args.ProjectID+"/stages/"+args.Stage+"/run", bytes.NewReader(body)).WithContext(requestContext)
-	recorder := httptest.NewRecorder()
-	s.runFilmGenerationStage(recorder, request)
+	if tenantID != store.DefaultTenantID {
+		return context.WithValue(requestContext, authUserKey, store.AuthUser{TenantID: tenantID})
+	}
+	return requestContext
+}
+
+func decodeFilmAgentResponse(recorder *httptest.ResponseRecorder, fallback string) (filmDocument, error) {
 	response := recorder.Result()
 	defer response.Body.Close()
 	var payload struct {
@@ -83,11 +86,62 @@ func (s *Server) runFilmGenerationStageForAgent(ctx context.Context, tenantID st
 	if response.StatusCode >= http.StatusBadRequest {
 		message := payload.Error.Message
 		if message == "" {
-			message = "film generation stage failed"
+			message = fallback
 		}
 		return filmDocument{}, &toolError{status: response.StatusCode, message: message}
 	}
 	return payload.Data, nil
+}
+
+func (s *Server) runFilmTextStageForAgent(ctx context.Context, tenantID string, args filmAgentStageArguments) (filmDocument, error) {
+	args.ProviderID = strings.TrimSpace(args.ProviderID)
+	args.Model = strings.TrimSpace(args.Model)
+	args.IdempotencyKey = strings.TrimSpace(args.IdempotencyKey)
+	args.EpisodeID = strings.TrimSpace(args.EpisodeID)
+	if args.ProviderID == "" {
+		return filmDocument{}, badToolRequest("AI film text stages require providerId")
+	}
+	if args.Model == "" {
+		return filmDocument{}, badToolRequest("AI film text stages require model")
+	}
+	if !validFilmIdempotencyKey(args.IdempotencyKey) {
+		return filmDocument{}, badToolRequest("AI film text stages require a valid idempotencyKey")
+	}
+	if args.Stage == "script" && !validProjectID(args.EpisodeID) {
+		return filmDocument{}, badToolRequest("AI film script stage requires episodeId")
+	}
+	input := filmTextRunRequest{
+		Revision: args.Revision, Mode: "ai", ProviderID: args.ProviderID, Model: args.Model,
+		IdempotencyKey: args.IdempotencyKey, EpisodeID: args.EpisodeID, ScriptMode: args.ScriptMode,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return filmDocument{}, badToolRequest("AI film text stage parameters are invalid")
+	}
+	requestContext := filmAgentRequestContext(ctx, tenantID, args.ProjectID, args.Stage)
+	request := httptest.NewRequest(http.MethodPost, "/api/film/projects/"+args.ProjectID+"/stages/"+args.Stage+"/run", bytes.NewReader(body)).WithContext(requestContext)
+	recorder := httptest.NewRecorder()
+	s.runFilmTextStage(recorder, request)
+	return decodeFilmAgentResponse(recorder, "AI film text stage failed")
+}
+
+func (s *Server) runFilmGenerationStageForAgent(ctx context.Context, tenantID string, args filmAgentStageArguments) (filmDocument, error) {
+	if strings.TrimSpace(args.ProviderID) == "" || strings.TrimSpace(args.Model) == "" || args.Config == nil || !validFilmIdempotencyKey(args.IdempotencyKey) {
+		return filmDocument{}, badToolRequest("generation stages require providerId, model, config, and a valid idempotencyKey")
+	}
+	input := filmGenerationRunRequest{
+		Revision: args.Revision, ShotIDs: append([]string(nil), args.ShotIDs...), ProviderID: args.ProviderID,
+		Model: args.Model, Config: *args.Config, IdempotencyKey: args.IdempotencyKey,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return filmDocument{}, badToolRequest("generation stage parameters are invalid")
+	}
+	requestContext := filmAgentRequestContext(ctx, tenantID, args.ProjectID, args.Stage)
+	request := httptest.NewRequest(http.MethodPost, "/api/film/projects/"+args.ProjectID+"/stages/"+args.Stage+"/run", bytes.NewReader(body)).WithContext(requestContext)
+	recorder := httptest.NewRecorder()
+	s.runFilmGenerationStage(recorder, request)
+	return decodeFilmAgentResponse(recorder, "film generation stage failed")
 }
 
 func (s *Server) loadFilmForAgent(ctx context.Context, tenantID, projectID string) (store.FilmStore, store.FilmRecord, filmDocument, error) {
@@ -172,6 +226,9 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 		if err := decodeToolArguments(raw, &args); err != nil {
 			return nil, err
 		}
+		if args.Stage == "decompose" || args.Stage == "script" {
+			return s.runFilmTextStageForAgent(ctx, tenantID, args)
+		}
 		if filmStageGenerationKind(args.Stage) != "" {
 			return s.runFilmGenerationStageForAgent(ctx, tenantID, args)
 		}
@@ -211,6 +268,27 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 		backend, record, document, err := s.loadFilmForAgent(ctx, tenantID, args.ProjectID)
 		if err != nil {
 			return nil, err
+		}
+		selectedRepair, found := findFilmRepairProposal(document, args.RepairID)
+		if !found {
+			return nil, badToolRequest("repair not found")
+		}
+		if selectedRepair.EstimatedGenerations > 0 {
+			input := filmRepairApplyRequest{
+				Revision: args.Revision, Approved: true, ProviderID: strings.TrimSpace(args.ProviderID), Model: strings.TrimSpace(args.Model),
+				Config: args.Config, IdempotencyKey: strings.TrimSpace(args.IdempotencyKey), ExpectedCredits: args.ExpectedCredits,
+			}
+			body, marshalErr := json.Marshal(input)
+			if marshalErr != nil {
+				return nil, badToolRequest("generative repair parameters are invalid")
+			}
+			requestContext := filmAgentRequestContext(ctx, tenantID, args.ProjectID, "")
+			routeContext := chi.RouteContext(requestContext)
+			routeContext.URLParams.Add("repairId", args.RepairID)
+			request := httptest.NewRequest(http.MethodPost, "/api/film/projects/"+args.ProjectID+"/repairs/"+args.RepairID+"/apply", bytes.NewReader(body)).WithContext(requestContext)
+			recorder := httptest.NewRecorder()
+			s.applyFilmRepairProposal(recorder, request)
+			return decodeFilmAgentResponse(recorder, "film generative repair failed")
 		}
 		for reportIndex := range document.QualityReports {
 			for repairIndex := range document.QualityReports[reportIndex].Repairs {

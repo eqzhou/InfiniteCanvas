@@ -30,6 +30,7 @@ type filmAILocation struct {
 type filmAIDialogue struct {
 	Kind         string `json:"kind"`
 	CharacterKey string `json:"characterKey"`
+	Emotion      string `json:"emotion,omitempty"`
 	Text         string `json:"text"`
 }
 
@@ -56,18 +57,41 @@ type filmAIEpisode struct {
 	Scenes   []filmAIScene `json:"scenes"`
 }
 
+type filmAIStoryRelationship struct {
+	FromCharacterKey string `json:"fromCharacterKey"`
+	ToCharacterKey   string `json:"toCharacterKey"`
+	Relation         string `json:"relation"`
+	Description      string `json:"description"`
+}
+
+type filmAIStoryBeat struct {
+	Key         string `json:"key"`
+	EpisodeKey  string `json:"episodeKey"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+type filmAICharacterArc struct {
+	CharacterKey string `json:"characterKey"`
+	Summary      string `json:"summary"`
+}
+
 type filmAIDecomposition struct {
-	Summary    string            `json:"summary"`
-	Theme      string            `json:"theme"`
-	Characters []filmAICharacter `json:"characters"`
-	Locations  []filmAILocation  `json:"locations"`
-	Timeline   []string          `json:"timeline"`
-	Episodes   []filmAIEpisode   `json:"episodes"`
+	Summary       string                    `json:"summary"`
+	Theme         string                    `json:"theme"`
+	Characters    []filmAICharacter         `json:"characters"`
+	Locations     []filmAILocation          `json:"locations"`
+	Timeline      []string                  `json:"timeline"`
+	Relationships []filmAIStoryRelationship `json:"relationships,omitempty"`
+	Beats         []filmAIStoryBeat         `json:"beats,omitempty"`
+	CharacterArcs []filmAICharacterArc      `json:"characterArcs,omitempty"`
+	Episodes      []filmAIEpisode           `json:"episodes"`
 }
 
 type filmAIScriptDialogue struct {
 	Kind    string `json:"kind"`
 	Speaker string `json:"speaker"`
+	Emotion string `json:"emotion,omitempty"`
 	Text    string `json:"text"`
 }
 
@@ -151,6 +175,41 @@ func validateFilmAIDecomposition(candidate filmAIDecomposition) error {
 			return errors.New("AI timeline event is invalid")
 		}
 	}
+	entities += len(candidate.Relationships) + len(candidate.Beats) + len(candidate.CharacterArcs)
+	if len(candidate.Relationships) > maxFilmEntities || len(candidate.Beats) > maxFilmEntities || len(candidate.CharacterArcs) > maxFilmEntities || entities > maxFilmEntities {
+		return errors.New("AI story graph exceeds entity limits")
+	}
+	for _, relationship := range candidate.Relationships {
+		if _, ok := characters[relationship.FromCharacterKey]; !ok {
+			return errors.New("AI relationship references an unavailable character")
+		}
+		if _, ok := characters[relationship.ToCharacterKey]; !ok {
+			return errors.New("AI relationship references an unavailable character")
+		}
+		if !validFilmAIString(relationship.Relation, 500, true) || !validFilmAIString(relationship.Description, 2_000, false) {
+			return errors.New("AI relationship is invalid")
+		}
+	}
+	episodeKeys := make(map[string]struct{}, len(candidate.Episodes))
+	for _, episode := range candidate.Episodes {
+		episodeKeys[episode.Key] = struct{}{}
+	}
+	for _, beat := range candidate.Beats {
+		if err := addFilmAIKey(seen, "beat", beat.Key); err != nil {
+			return err
+		}
+		if _, ok := episodeKeys[beat.EpisodeKey]; !ok {
+			return errors.New("AI story beat references an unavailable episode")
+		}
+		if !validFilmAIString(beat.Title, 500, true) || !validFilmAIString(beat.Description, 2_000, false) {
+			return errors.New("AI story beat is invalid")
+		}
+	}
+	for _, arc := range candidate.CharacterArcs {
+		if _, ok := characters[arc.CharacterKey]; !ok || !validFilmAIString(arc.Summary, 4_000, true) {
+			return errors.New("AI character arc is invalid")
+		}
+	}
 	for _, episode := range candidate.Episodes {
 		entities++
 		if err := addFilmAIKey(seen, "episode", episode.Key); err != nil {
@@ -186,7 +245,7 @@ func validateFilmAIDecomposition(candidate filmAIDecomposition) error {
 				}
 				for _, dialogue := range shot.Dialogues {
 					entities++
-					if entities > maxFilmEntities || (dialogue.Kind != "dialogue" && dialogue.Kind != "narration") || !validFilmAIString(dialogue.Text, 10_000, true) {
+					if entities > maxFilmEntities || (dialogue.Kind != "dialogue" && dialogue.Kind != "narration") || !validFilmAIString(dialogue.Emotion, 500, false) || !validFilmAIString(dialogue.Text, 10_000, true) {
 						return errors.New("AI dialogue is invalid")
 					}
 					if dialogue.Kind == "dialogue" {
@@ -229,7 +288,7 @@ func validateFilmAIScript(candidate filmAIScript) error {
 			for _, dialogue := range shot.Dialogues {
 				entities++
 				if entities > maxFilmEntities || (dialogue.Kind != "dialogue" && dialogue.Kind != "narration") ||
-					!validFilmAIString(dialogue.Speaker, 500, false) || !validFilmAIString(dialogue.Text, 10_000, true) ||
+					!validFilmAIString(dialogue.Speaker, 500, false) || !validFilmAIString(dialogue.Emotion, 500, false) || !validFilmAIString(dialogue.Text, 10_000, true) ||
 					(dialogue.Kind == "narration" && dialogue.Speaker != "") {
 					return errors.New("AI script dialogue is invalid")
 				}

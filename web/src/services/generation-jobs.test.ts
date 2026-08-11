@@ -5,6 +5,7 @@ import {
   findInterruptedGenerationJobs,
   findUnreferencedGenerationStorageKeys,
   generationRequestError,
+  isServerOwnedGenerationJob,
   paginateGenerationJobs,
   selectGenerationJobsForNodeCleanup,
   selectGenerationJobsForProject,
@@ -14,7 +15,7 @@ import {
 } from "./generation-jobs";
 import type { GenerationJob } from "@/types/board";
 
-const job = (id: string, createdAt: string, kind: "image" | "video" | "audio" = "image"): GenerationJob => ({
+const job = (id: string, createdAt: string, kind: GenerationJob["kind"] = "image"): GenerationJob => ({
   id,
   kind,
   status: "succeeded",
@@ -26,6 +27,27 @@ const job = (id: string, createdAt: string, kind: "image" | "video" | "audio" = 
 });
 
 describe("generation job pagination", () => {
+  test("accepts durable Film text jobs in the shared task contract", () => {
+    const parsed = validateGenerationJob({
+      ...job("film-text", "2026-08-11T00:00:00.000Z"),
+      kind: "text",
+      parameters: { executor: "server", operation: "film_decompose" },
+    });
+    expect(parsed.kind).toBe("text");
+  });
+
+  test("accepts durable Film stage parent jobs in the shared task contract", () => {
+    const parsed = validateGenerationJob({
+      ...job("film-parent", "2026-08-11T00:00:00.000Z"),
+      projectId: "film-project-1",
+      kind: "film-stage",
+      status: "running",
+      prompt: "",
+      parameters: { film: { stage: "storyboard" } },
+    });
+    expect(parsed.kind).toBe("film-stage");
+  });
+
   test("surfaces the server's refusal reason instead of a bare status", () => {
     // A tenant allow-list refusal explains what to change; collapsing it to
     // "HTTP 403" leaves the user with no idea why generation was blocked.
@@ -135,6 +157,17 @@ describe("generation job recovery", () => {
 			new Set(),
 			Date.parse("2026-07-19T00:10:00Z"),
 		)).toEqual([]);
+	});
+
+	test("recognizes Film stage and export workers as server-owned", () => {
+		expect(isServerOwnedGenerationJob({
+			...job("film-stage", "2026-07-05T00:00:00Z", "film-stage"),
+			parameters: { executor: "film-stage" },
+		})).toBe(true);
+		expect(isServerOwnedGenerationJob({
+			...job("film-export", "2026-07-05T00:00:00Z", "export"),
+			parameters: { executor: "film-export" },
+		})).toBe(true);
 	});
 
 

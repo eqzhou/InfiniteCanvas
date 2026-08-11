@@ -63,7 +63,12 @@ func (value filmProbeNumber) number() (float64, error) {
 }
 
 type filmProbeResult struct {
-	Streams []struct {
+	// Newer FFprobe versions emit these empty top-level arrays even when
+	// -show_entries does not request their fields. Keep strict decoding while
+	// rejecting actual programs/groups below.
+	Programs     []json.RawMessage `json:"programs"`
+	StreamGroups []json.RawMessage `json:"stream_groups"`
+	Streams      []struct {
 		CodecType string          `json:"codec_type"`
 		Width     int             `json:"width"`
 		Height    int             `json:"height"`
@@ -77,6 +82,12 @@ type filmProbeResult struct {
 	} `json:"format"`
 }
 
+type filmProbeMetadata struct {
+	Duration float64
+	Width    int
+	Height   int
+}
+
 func optionalFilmProbeNumber(value filmProbeNumber) (float64, error) {
 	if value == "" || value == "N/A" {
 		return 0, nil
@@ -85,48 +96,57 @@ func optionalFilmProbeNumber(value filmProbeNumber) (float64, error) {
 }
 
 func (s *Server) probeFilmInput(ctx context.Context, probePath, inputPath, expectedKind string, expectedDuration float64) error {
+	_, err := s.probeFilmInputMetadata(ctx, probePath, inputPath, expectedKind, expectedDuration)
+	return err
+}
+
+func (s *Server) probeFilmInputMetadata(ctx context.Context, probePath, inputPath, expectedKind string, expectedDuration float64) (filmProbeMetadata, error) {
 	if !validFilmFFmpegPath(probePath) || !safeFilmMediaPath(inputPath) || (expectedKind != "video" && expectedKind != "audio") || expectedDuration <= 0 || expectedDuration > maxFilmTimelineDuration {
-		return errFilmFFprobeFailed
+		return filmProbeMetadata{}, errFilmFFprobeFailed
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	args := []string{"-hide_banner", "-v", "error", "-probesize", "1048576", "-analyzeduration", "2000000", "-protocol_whitelist", "file,pipe", "-threads", "1", "-show_entries", "format=duration,bit_rate:stream=codec_type,width,height,duration,bit_rate,nb_frames", "-of", "json", inputPath}
 	raw, err := s.filmProbeRunner.Probe(probeCtx, probePath, args)
 	if err != nil || len(raw) == 0 || len(raw) > maxFilmProbeOutput {
-		return errFilmFFprobeFailed
+		return filmProbeMetadata{}, errFilmFFprobeFailed
 	}
 	var result filmProbeResult
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&result) != nil || ensureJSONEOF(decoder) != nil || len(result.Streams) == 0 || len(result.Streams) > maxFilmProbeStreams {
-		return errFilmFFprobeFailed
+	if decoder.Decode(&result) != nil || ensureJSONEOF(decoder) != nil || len(result.Programs) != 0 || len(result.StreamGroups) != 0 || len(result.Streams) == 0 || len(result.Streams) > maxFilmProbeStreams {
+		return filmProbeMetadata{}, errFilmFFprobeFailed
 	}
 	duration, err := optionalFilmProbeNumber(result.Format.Duration)
 	if err != nil || duration <= 0 || duration > maxFilmTimelineDuration || duration > expectedDuration+60 {
-		return errFilmFFprobeFailed
+		return filmProbeMetadata{}, errFilmFFprobeFailed
 	}
 	bitrate, err := optionalFilmProbeNumber(result.Format.BitRate)
 	if err != nil || int64(bitrate) > maxFilmInputBitrate {
-		return errFilmFFprobeFailed
+		return filmProbeMetadata{}, errFilmFFprobeFailed
 	}
 	found, totalFrames, pixelFrames := false, int64(0), float64(0)
+	metadata := filmProbeMetadata{Duration: duration}
 	for _, stream := range result.Streams {
 		if stream.CodecType != "video" && stream.CodecType != "audio" && stream.CodecType != "subtitle" {
-			return errFilmFFprobeFailed
+			return filmProbeMetadata{}, errFilmFFprobeFailed
 		}
 		if stream.CodecType == expectedKind {
 			found = true
 		}
 		if stream.CodecType == "video" && (stream.Width < 1 || stream.Height < 1 || stream.Width > 3840 || stream.Height > 2160) {
-			return errFilmFFprobeFailed
+			return filmProbeMetadata{}, errFilmFFprobeFailed
+		}
+		if stream.CodecType == "video" && metadata.Width == 0 {
+			metadata.Width, metadata.Height = stream.Width, stream.Height
 		}
 		streamBitrate, numberErr := optionalFilmProbeNumber(stream.BitRate)
 		if numberErr != nil || int64(streamBitrate) > maxFilmInputBitrate {
-			return errFilmFFprobeFailed
+			return filmProbeMetadata{}, errFilmFFprobeFailed
 		}
 		frames, numberErr := optionalFilmProbeNumber(stream.Frames)
 		if numberErr != nil || frames > float64(maxFilmInputFrames) {
-			return errFilmFFprobeFailed
+			return filmProbeMetadata{}, errFilmFFprobeFailed
 		}
 		totalFrames += int64(frames)
 		if stream.CodecType == "video" {
@@ -137,7 +157,7 @@ func (s *Server) probeFilmInput(ctx context.Context, probePath, inputPath, expec
 		}
 	}
 	if !found || totalFrames > maxFilmInputFrames || pixelFrames > maxFilmPixelFrameBudget {
-		return errFilmFFprobeFailed
+		return filmProbeMetadata{}, errFilmFFprobeFailed
 	}
-	return nil
+	return metadata, nil
 }

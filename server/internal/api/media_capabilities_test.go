@@ -15,7 +15,10 @@ import (
 func TestMediaCapabilityCatalogDerivesOnlyEnabledSharedChannelDefaults(t *testing.T) {
 	_, _, router := sharedChannelHandler(t)
 	channels, _ := json.Marshal([]adminChannelPublic{
-		{ID: "media-main", Name: "Media", BaseURL: "https://secret.example/v1", Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "gpt-image-1", DefaultVideoModel: "video-1", Models: []string{"gpt-image-1", "video-1", "unknown-model"}},
+		{ID: "media-main", Name: "Media", BaseURL: "https://secret.example/v1", Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "gpt-image-1", DefaultVideoModel: "video-1", Models: []string{"gpt-image-1", "video-1", "unknown-model"}, MediaCapabilities: []adminMediaCapability{
+			{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image"}, Sizes: []string{"1024x1024"}},
+			{Model: "video-1", Kind: "video", Modes: []string{"text_to_video"}, Durations: []int{5}},
+		}},
 		{ID: "disabled", Name: "Disabled", BaseURL: "https://disabled.example", Protocol: "openai", Enabled: false, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "hidden-image"},
 	})
 	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
@@ -41,6 +44,77 @@ func TestMediaCapabilityCatalogDerivesOnlyEnabledSharedChannelDefaults(t *testin
 	}
 }
 
+func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndNeverGuessesUnknownDefaults(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	channels, _ := json.Marshal([]adminChannelPublic{
+		{
+			ID: "explicit", Name: "Explicit", BaseURL: "https://explicit.example/v1", Protocol: "apimart",
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+			DefaultImageModel: "doubao-seedream-5-0-pro", Models: []string{"doubao-seedream-5-0-pro", "custom-video"},
+			MediaCapabilities: []adminMediaCapability{
+				{Model: "doubao-seedream-5-0-pro", Kind: "image", Modes: []string{"text_to_image"}, Sizes: []string{"1:1"}, MaxReferences: 0},
+				{Model: "custom-video", Kind: "video", Modes: []string{"text_to_video", "image_to_video"}, Durations: []int{5, 10}, MaxReferences: 2},
+			},
+		},
+		{
+			ID: "registered", Name: "Registered", BaseURL: "https://registered.example/v1", Protocol: "apimart",
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+			DefaultVideoModel: "doubao-seedance-2.0", Models: []string{"doubao-seedance-2.0"},
+		},
+		{
+			ID: "unknown", Name: "Unknown", BaseURL: "https://unknown.example/v1", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+			DefaultImageModel: "brand-new-image", Models: []string{"brand-new-image"},
+		},
+	})
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	for _, id := range []string{"explicit", "registered", "unknown"} {
+		if got := putSharedChannelSecret(t, router, id, "sk-private-"+id); got.Code != http.StatusNoContent {
+			t.Fatalf("put %s secret: %d %s", id, got.Code, got.Body.String())
+		}
+	}
+
+	response := request(t, router, http.MethodGet, "/api/media-capabilities", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("catalog: %d %s", response.Code, response.Body.String())
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("brand-new-image")) || bytes.Contains(response.Body.Bytes(), []byte("sk-private")) || bytes.Contains(response.Body.Bytes(), []byte("explicit.example")) {
+		t.Fatalf("catalog guessed or leaked sensitive data: %s", response.Body.String())
+	}
+	var catalog mediaCapabilityCatalog
+	if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Models) != 3 {
+		t.Fatalf("models = %#v", catalog.Models)
+	}
+	var explicitImage, explicitVideo, registeredVideo *mediaModelCapability
+	for index := range catalog.Models {
+		capability := &catalog.Models[index]
+		switch capability.ChannelID + "/" + capability.Model {
+		case "explicit/doubao-seedream-5-0-pro":
+			explicitImage = capability
+		case "explicit/custom-video":
+			explicitVideo = capability
+		case "registered/doubao-seedance-2.0":
+			registeredVideo = capability
+		}
+	}
+	if explicitImage == nil || !reflect.DeepEqual(explicitImage.Modes, []string{"text_to_image"}) || explicitImage.MaxReferences != 0 || !reflect.DeepEqual(explicitImage.Sizes, []string{"1:1"}) {
+		t.Fatalf("explicit capability did not override registry: %#v", explicitImage)
+	}
+	if explicitVideo == nil || explicitVideo.MaxReferences != 2 || !reflect.DeepEqual(explicitVideo.Durations, []int{5, 10}) {
+		t.Fatalf("explicit non-default capability missing: %#v", explicitVideo)
+	}
+	if registeredVideo == nil || registeredVideo.MaxReferences != 9 || len(registeredVideo.Durations) != 11 ||
+		!reflect.DeepEqual(registeredVideo.Ratios, []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}) ||
+		!reflect.DeepEqual(registeredVideo.Resolutions, []string{"480p", "720p", "1080p", "4k"}) {
+		t.Fatalf("registered default capability missing: %#v", registeredVideo)
+	}
+}
+
 func TestMediaCapabilityUsesRegisteredProviderModelLimits(t *testing.T) {
 	channel := adminChannelPublic{ID: "apimart", Name: "API Mart", Protocol: "apimart"}
 	image := capabilityForChannelDefault(channel, "image", "doubao-seedream-5-0-pro")
@@ -48,7 +122,9 @@ func TestMediaCapabilityUsesRegisteredProviderModelLimits(t *testing.T) {
 		t.Fatalf("image capability ignored provider registry: %#v", image)
 	}
 	video := capabilityForChannelDefault(channel, "video", "doubao-seedance-2.0")
-	if video.MaxReferences != 9 || !reflect.DeepEqual(video.Durations, []int{5, 15}) {
+	if video.MaxReferences != 9 || len(video.Durations) != 11 || video.Durations[5] != 10 ||
+		!reflect.DeepEqual(video.Ratios, []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}) ||
+		!reflect.DeepEqual(video.Resolutions, []string{"480p", "720p", "1080p", "4k"}) {
 		t.Fatalf("video capability ignored provider registry: %#v", video)
 	}
 }
@@ -68,6 +144,7 @@ func TestSharedImageJobFreezesCatalogVersionAndRejectsUnlistedModels(t *testing.
 		ID: "shared-image", Name: "Shared image", BaseURL: "https://shared.example/v1", Protocol: "openai",
 		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
 		DefaultImageModel: "gpt-image-1", Models: []string{"gpt-image-1"},
+		MediaCapabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image", "image_to_image"}, Sizes: []string{"1024x1024"}, MaxReferences: 16}},
 	}})
 	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
@@ -107,6 +184,10 @@ func TestSharedVideoAndAudioJobsFreezeCatalogResolution(t *testing.T) {
 		ID: "shared-media", Name: "Shared media", BaseURL: "https://shared.example/v1", Protocol: "openai",
 		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
 		DefaultVideoModel: "video-main", DefaultAudioModel: "audio-main", Models: []string{"video-main", "audio-main"},
+		MediaCapabilities: []adminMediaCapability{
+			{Model: "video-main", Kind: "video", Modes: []string{"text_to_video", "image_to_video"}, Durations: []int{5}, MaxReferences: 1},
+			{Model: "audio-main", Kind: "audio", Modes: []string{"text_to_audio"}},
+		},
 	}})
 	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
@@ -140,6 +221,7 @@ func TestBillingEstimateUsesTheSameSharedMediaCatalogVersion(t *testing.T) {
 		ID: "billing-image", Name: "Billing image", BaseURL: "https://shared.example/v1", Protocol: "openai",
 		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
 		DefaultImageModel: "gpt-image-1", Models: []string{"gpt-image-1"},
+		MediaCapabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image"}, Sizes: []string{"1024x1024"}}},
 	}})
 	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
@@ -170,5 +252,25 @@ func TestBillingEstimateUsesTheSameSharedMediaCatalogVersion(t *testing.T) {
 	rejected := request(t, router, http.MethodGet, "/api/billing/estimate?model=unlisted&units=1&providerId=billing-image&kind=image&mode=text_to_image", nil)
 	if rejected.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("unlisted estimate accepted: %d %s", rejected.Code, rejected.Body.String())
+	}
+}
+
+func TestMediaCapabilityRequestEnforcesConfiguredLimits(t *testing.T) {
+	capability := mediaModelCapability{Modes: []string{"image_to_video"}, Ratios: []string{"16:9"}, Resolutions: []string{"720p"}, Durations: []int{5, 6, 7, 8, 9, 10}, MaxReferences: 1}
+	valid := filmGenerationConfig{Ratio: "16:9", Resolution: "720p", Seconds: 7, ReferenceStorageKeys: []string{"image:one"}}
+	if err := validateMediaCapabilityRequest(capability, "image_to_video", valid); err != nil {
+		t.Fatalf("valid capability request rejected: %v", err)
+	}
+	for name, config := range map[string]filmGenerationConfig{
+		"references": {Ratio: "16:9", Resolution: "720p", Seconds: 5, ReferenceStorageKeys: []string{"image:one", "image:two"}},
+		"ratio":      {Ratio: "9:16", Resolution: "720p", Seconds: 5, ReferenceStorageKeys: []string{"image:one"}},
+		"resolution": {Ratio: "16:9", Resolution: "2160p", Seconds: 5, ReferenceStorageKeys: []string{"image:one"}},
+		"duration":   {Ratio: "16:9", Resolution: "720p", Seconds: 11, ReferenceStorageKeys: []string{"image:one"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateMediaCapabilityRequest(capability, "image_to_video", config); err == nil {
+				t.Fatal("capability limit was bypassed")
+			}
+		})
 	}
 }

@@ -36,9 +36,20 @@ func TestOnlyProviderGenerationConsumesQuotaAndCredits(t *testing.T) {
 			t.Fatalf("%s should consume generation quota", kind)
 		}
 	}
-	for _, kind := range []string{"export", "workflow"} {
+	for _, kind := range []string{"export", "workflow", "film-stage"} {
 		if generationJobConsumesQuota(kind) {
 			t.Fatalf("%s should not consume model generation quota", kind)
+		}
+	}
+}
+
+func TestFilmStageGenerationJobsAreDurableButNeverClaimable(t *testing.T) {
+	if currentSchemaVersion != 21 {
+		t.Fatalf("Film stage parent jobs require PostgreSQL schema v21, got v%d", currentSchemaVersion)
+	}
+	for _, executor := range []string{"film-stage", "server", "workflow", "film-export"} {
+		if validServerGenerationClaim(GenerationClaim{Kind: "film-stage", Executor: executor}) {
+			t.Fatalf("Film stage parent job became worker-claimable with executor %q", executor)
 		}
 	}
 }

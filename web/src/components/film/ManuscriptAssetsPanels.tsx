@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import { FileUp, Plus, Save, Send, Sparkles } from "lucide-react";
+import { Link } from "react-router";
 
 import { preflightFilmImport } from "@/lib/film-import";
 import { filmEditorKey } from "@/lib/film-drafts";
@@ -92,7 +93,7 @@ const candidateStatusLabels = {
   applied: "已采用",
 } as const;
 
-export function AIDecompositionPanel({ document, busy, channels, channelId, model, onChannel, onModel, onRun, onApply }: {
+export function AIDecompositionPanel({ document, busy, channels, channelId, model, onChannel, onModel, onRun, onApply, onRestoreStructure }: {
   document: FilmDocument;
   busy: boolean;
   channels: AIChannelChoice[];
@@ -102,6 +103,7 @@ export function AIDecompositionPanel({ document, busy, channels, channelId, mode
   onModel: (model: string) => void;
   onRun: () => void;
   onApply: (candidateId: string) => void;
+  onRestoreStructure?: (versionId: string) => void;
 }) {
   const selectedChannel = channels.find((channel) => channel.id === channelId);
   const candidates = [...(document.aiCandidates ?? [])].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -139,23 +141,27 @@ export function AIDecompositionPanel({ document, busy, channels, channelId, mode
           <p className="mt-2 text-sm">{candidate.decomposition.summary}</p>
           {candidate.decomposition.theme ? <p className="mt-1 text-xs text-[var(--ob-muted)]">主题：{candidate.decomposition.theme}</p> : null}
           <p className="mt-2 text-xs text-[var(--ob-muted)]">{candidate.decomposition.characters.length} 角色 · {candidate.decomposition.locations.length} 场景资产 · {candidate.decomposition.episodes.length} 集 · {counts.scenes} 场 · {counts.shots} 镜头</p>
+          <p className="mt-1 text-xs text-[var(--ob-muted)]">{candidate.decomposition.relationships?.length ?? 0} 条人物关系 · {candidate.decomposition.beats?.length ?? 0} 个故事节拍 · {candidate.decomposition.characterArcs?.length ?? 0} 条人物弧光</p>
           {candidate.status === "ready" ? <button type="button" className="ob-btn mt-3" disabled={busy} onClick={() => onApply(candidate.id)}>采用这个候选</button> : null}
         </li>;
       })}
     </ul>}
+    {(document.structureVersions ?? []).length ? <div className="mt-4 border-t border-[var(--ob-line)] pt-3"><h3 className="text-sm font-medium">历史故事结构</h3><p className="mt-1 text-xs text-[var(--ob-muted)]">恢复会先归档当前结构，不覆盖历史版本，并按当前项目修订进行冲突检查。</p>{[...(document.structureVersions ?? [])].reverse().slice(0, 10).map((version) => <div key={version.id} className="mt-2 flex items-center gap-2 text-xs"><span className="mr-auto">{version.episodes.length} 集 · {version.scenes.length} 场 · {version.shots.length} 镜头 · {new Date(version.createdAt).toLocaleString()}</span><button type="button" className="ob-btn" disabled={busy || !onRestoreStructure} onClick={() => onRestoreStructure?.(version.id)}>恢复此结构</button></div>)}</div> : null}
   </WorkbenchSection>;
 }
 
-export function AIScriptPanel({ document, busy, channels, channelId, model, episodeId, onChannel, onModel, onEpisode, onRun, onApply }: {
+export function AIScriptPanel({ document, busy, channels, channelId, model, episodeId, scriptMode, onChannel, onModel, onEpisode, onScriptMode, onRun, onApply }: {
   document: FilmDocument;
   busy: boolean;
   channels: AIChannelChoice[];
   channelId: string;
   model: string;
   episodeId: string;
+  scriptMode: "adaptive" | "literal" | "shooting";
   onChannel: (channelId: string) => void;
   onModel: (model: string) => void;
   onEpisode: (episodeId: string) => void;
+  onScriptMode: (mode: "adaptive" | "literal" | "shooting") => void;
   onRun: () => void;
   onApply: (candidateId: string) => void;
 }) {
@@ -163,11 +169,16 @@ export function AIScriptPanel({ document, busy, channels, channelId, model, epis
   const decomposeApproved = document.stages.find((stage) => stage.id === "decompose")?.status === "approved";
   const candidates = [...(document.scriptCandidates ?? [])].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   return <WorkbenchSection id="ai-script" title="AI 分集剧本 / Episode Script">
-    <div className="grid gap-2 sm:grid-cols-3">
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
       <label className="text-xs text-[var(--ob-muted)]">目标分集
         <select aria-label="剧本目标分集" className="ob-input mt-1 w-full" value={episodeId} onChange={(event) => onEpisode(event.target.value)}>
           {!document.episodes.length ? <option value="">暂无分集</option> : null}
           {[...document.episodes].sort((left, right) => left.order - right.order).map((episode) => <option key={episode.id} value={episode.id}>{episode.order + 1}. {episode.title}</option>)}
+        </select>
+      </label>
+      <label className="text-xs text-[var(--ob-muted)]">改编模式
+        <select aria-label="剧本改编模式" className="ob-input mt-1 w-full" value={scriptMode} onChange={(event) => onScriptMode(event.target.value as "adaptive" | "literal" | "shooting")}>
+          <option value="adaptive">自适应改编</option><option value="literal">忠实原稿</option><option value="shooting">拍摄稿</option>
         </select>
       </label>
       <label className="text-xs text-[var(--ob-muted)]">共享文字渠道
@@ -202,7 +213,7 @@ export function AIScriptPanel({ document, busy, channels, channelId, model, epis
   </WorkbenchSection>;
 }
 
-function AssetEditor({ asset, characters, busy, onSave }: { asset: FilmAsset; characters: FilmAsset[]; busy: boolean; onSave: (asset: FilmAsset, patch: Partial<FilmAsset>) => void }) {
+function AssetEditor({ projectId, asset, characters, episodes, scenes, shots, busy, onSave }: { projectId: string; asset: FilmAsset; characters: FilmAsset[]; episodes: FilmDocument["episodes"]; scenes: FilmDocument["scenes"]; shots: FilmDocument["shots"]; busy: boolean; onSave: (asset: FilmAsset, patch: Partial<FilmAsset>) => void }) {
   const [title, setTitle] = useState(asset.title);
   const [description, setDescription] = useState(asset.description);
   const [detail, setDetail] = useState(asset.stylePrompt ?? asset.voice ?? "");
@@ -211,13 +222,17 @@ function AssetEditor({ asset, characters, busy, onSave }: { asset: FilmAsset; ch
   const [costume, setCostume] = useState(asset.costume ?? "");
   const [storyPeriod, setStoryPeriod] = useState(asset.storyPeriod ?? "");
   const [isDefault, setIsDefault] = useState(asset.isDefault ?? false);
+  const [episodeIds, setEpisodeIds] = useState(asset.episodeIds ?? []);
+  const [sceneIds, setSceneIds] = useState(asset.sceneIds ?? []);
+  const [shotIds, setShotIds] = useState(asset.shotIds ?? []);
+  const selectedValues = (event: ChangeEvent<HTMLSelectElement>) => Array.from(event.currentTarget.selectedOptions, (option) => option.value);
   return <li data-testid={`film-asset-${asset.id}`} data-revision={asset.revision} className="rounded-lg border border-[var(--ob-line)] p-3">
     <div className="mb-2 flex items-center justify-between"><strong className="text-xs uppercase tracking-wide">{asset.kind}</strong><span className="text-xs text-[var(--ob-muted)]">r{asset.revision}</span></div>
     <input aria-label="资产名称编辑" className="ob-input w-full" value={title} onChange={(event) => setTitle(event.target.value)} />
     <textarea aria-label="资产描述" className="ob-input mt-2 min-h-20 w-full" value={description} onChange={(event) => setDescription(event.target.value)} />
     {asset.kind === "style" || asset.kind === "voice" ? <input aria-label={asset.kind === "style" ? "风格提示" : "声音身份"} className="ob-input mt-2 w-full" value={detail} onChange={(event) => setDetail(event.target.value)} /> : null}
-    {asset.kind === "identity" ? <div className="mt-2 grid gap-2 sm:grid-cols-2"><select aria-label="所属角色" className="ob-input" value={parentAssetId} onChange={(event) => setParent(event.target.value)}><option value="">未绑定角色</option>{characters.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><input aria-label="年龄阶段" className="ob-input" value={ageStage} onChange={(event) => setAgeStage(event.target.value)} placeholder="年龄阶段" /><input aria-label="长期造型" className="ob-input" value={costume} onChange={(event) => setCostume(event.target.value)} placeholder="服装 / 长期造型" /><input aria-label="剧情时期" className="ob-input" value={storyPeriod} onChange={(event) => setStoryPeriod(event.target.value)} placeholder="剧情时期" /><label className="text-xs"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} /> 默认身份</label></div> : null}
-    <button type="button" className="ob-btn mt-2" disabled={busy || !title.trim()} onClick={() => onSave(asset, { title, description, parentAssetId, ...(asset.kind === "style" ? { stylePrompt: detail } : {}), ...(asset.kind === "voice" ? { voice: detail } : {}), ...(asset.kind === "identity" ? { ageStage, costume, storyPeriod, isDefault } : {}) })}><Save size={14} /> 保存资产</button>
+    {asset.kind === "identity" ? <div className="mt-2 grid gap-2 sm:grid-cols-2"><select aria-label="所属角色" className="ob-input" value={parentAssetId} onChange={(event) => setParent(event.target.value)}><option value="">未绑定角色</option>{characters.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><input aria-label="年龄阶段" className="ob-input" value={ageStage} onChange={(event) => setAgeStage(event.target.value)} placeholder="年龄阶段" /><input aria-label="长期造型" className="ob-input" value={costume} onChange={(event) => setCostume(event.target.value)} placeholder="服装 / 长期造型" /><input aria-label="剧情时期" className="ob-input" value={storyPeriod} onChange={(event) => setStoryPeriod(event.target.value)} placeholder="剧情时期" /><label className="text-xs"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} /> 默认身份</label><label className="text-xs text-[var(--ob-muted)]">适用分集（留空为全部）<select multiple aria-label="身份适用分集" className="ob-input mt-1 h-24 w-full" value={episodeIds} onChange={(event) => setEpisodeIds(selectedValues(event))}>{episodes.map((item) => <option key={item.id} value={item.id}>{item.order + 1}. {item.title}</option>)}</select></label><label className="text-xs text-[var(--ob-muted)]">适用场景（留空为全部）<select multiple aria-label="身份适用场景" className="ob-input mt-1 h-24 w-full" value={sceneIds} onChange={(event) => setSceneIds(selectedValues(event))}>{scenes.map((item) => <option key={item.id} value={item.id}>{item.heading}</option>)}</select></label><label className="text-xs text-[var(--ob-muted)] sm:col-span-2">适用镜头（留空为全部）<select multiple aria-label="身份适用镜头" className="ob-input mt-1 h-24 w-full" value={shotIds} onChange={(event) => setShotIds(selectedValues(event))}>{shots.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div> : null}
+    <div className="mt-2 flex flex-wrap gap-2"><button type="button" className="ob-btn" disabled={busy || !title.trim()} onClick={() => onSave(asset, { title, description, parentAssetId, ...(asset.kind === "style" ? { stylePrompt: detail } : {}), ...(asset.kind === "voice" ? { voice: detail } : {}), ...(asset.kind === "identity" ? { ageStage, costume, storyPeriod, isDefault, episodeIds, sceneIds, shotIds } : {}) })}><Save size={14} /> 保存资产</button>{asset.kind !== "voice" ? <Link className="ob-btn" to={`/workbench/image?filmProjectId=${encodeURIComponent(projectId)}&assetId=${encodeURIComponent(asset.id)}&assetRevision=${asset.revision}&prompt=${encodeURIComponent([asset.title, asset.description, asset.stylePrompt].filter(Boolean).join(", "))}`}><Sparkles size={14} /> 生成并采用</Link> : null}</div>
   </li>;
 }
 
@@ -233,6 +248,7 @@ export function AssetsPanel({ status, busy, onCreate, onSave }: { status: FilmSt
       <button className="ob-btn" disabled={busy || !title.trim()}><Plus size={14} /> 添加资产</button>
       {kind === "identity" ? <select aria-label="新身份所属角色" className="ob-input sm:col-span-2" value={parent} onChange={(event) => setParent(event.target.value)}><option value="">选择角色</option>{characters.map((asset) => <option key={asset.id} value={asset.id}>{asset.title}</option>)}</select> : null}
     </form>
-    <ul className="mt-4 grid gap-2 sm:grid-cols-2">{status.document.assets.map((asset) => <AssetEditor key={filmEditorKey(asset.id, asset.revision)} asset={asset} characters={characters} busy={busy} onSave={onSave} />)}</ul>
+    <p className="mt-2 text-xs text-[var(--ob-muted)]">视觉资产可进入统一图片工作台生成；成功结果会通过 GenerationJob 来源校验后自动形成新资产版本。声音资产继续使用配音模型与逐对白绑定。</p>
+    <ul className="mt-4 grid gap-2 sm:grid-cols-2">{status.document.assets.map((asset) => <AssetEditor key={filmEditorKey(asset.id, asset.revision)} projectId={status.document.projectId} asset={asset} characters={characters} episodes={status.document.episodes} scenes={status.document.scenes} shots={status.document.shots} busy={busy} onSave={onSave} />)}</ul>
   </WorkbenchSection>;
 }

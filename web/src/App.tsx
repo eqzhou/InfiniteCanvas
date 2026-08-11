@@ -48,6 +48,7 @@ const WorkflowWorkbenchPage = lazyNamed(
   "WorkflowWorkbenchPage",
 );
 const FilmWorkbenchPage = lazyNamed(() => import("@/pages/FilmWorkbenchPage"), "FilmWorkbenchPage");
+const TaskCenterPage = lazyNamed(() => import("@/pages/TaskCenterPage"), "TaskCenterPage");
 
 export function App() {
   const hydrate = useBoardStore((s) => s.hydrate);
@@ -193,6 +194,7 @@ export function App() {
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/workbench/workflows" element={<WorkflowWorkbenchPage />} />
                 <Route path="/film/:projectId" element={<FilmWorkbenchPage />} />
+                <Route path="/tasks" element={<TaskCenterPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Suspense>

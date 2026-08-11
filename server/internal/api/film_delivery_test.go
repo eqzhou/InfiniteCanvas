@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -470,6 +472,81 @@ func TestFilmMP4CapabilityRequiresFFprobe(t *testing.T) {
 	}
 }
 
+func TestFilmRendererProducesARealPlayableMP4(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is not installed")
+	}
+	ffprobePath, _ := exec.LookPath("ffprobe")
+	if resolved, resolveErr := filepath.EvalSymlinks(ffmpegPath); resolveErr == nil {
+		ffmpegPath = resolved
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(ffprobePath); resolveErr == nil {
+		ffprobePath = resolved
+	}
+	t.Setenv("OPENBOARD_FFMPEG_PATH", ffmpegPath)
+	t.Setenv("OPENBOARD_FFPROBE_PATH", ffprobePath)
+	inputPath := filepath.Join(t.TempDir(), "source.mp4")
+	command := exec.Command(ffmpegPath, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=320x180:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", inputPath)
+	if output, runErr := command.CombinedOutput(); runErr != nil {
+		t.Skipf("local ffmpeg cannot create the test fixture: %v %s", runErr, output)
+	}
+	input, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, backend, handler := filmAPIServerHandler(t)
+	storageKey := "upload:film-real-render-source"
+	upload := requestWithHeaders(t, handler, http.MethodPut, "/api/blobs/"+storageKey, input, map[string]string{"Content-Type": "video/mp4"})
+	if upload.Code != http.StatusNoContent {
+		t.Fatalf("upload fixture: %d %s", upload.Code, upload.Body.String())
+	}
+	value, err := server.readTenantBlob(t.Context(), store.DefaultTenantID, storageKey, int64(len(input))+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := backend.GetFilmProject(t.Context(), store.DefaultTenantID, "film-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := decodeFilmDocument(record.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot := filmShot{ID: "shot-real-render", Revision: 1, SceneID: "scene-real-render", Order: 0, Title: "Blue frame", Description: "Blue frame", Status: filmStatusApproved, DurationSeconds: 1, AspectRatio: "16:9", VideoStorageKey: storageKey, VideoSHA256: sha256Hex(input), VideoObjectVersion: blobIdentityVersion(value), MediaMIMEType: "video/mp4", MediaProvenance: "restore"}
+	document.Shots = []filmShot{shot}
+	document.Timeline = filmTimeline{Revision: 1, Width: 640, Height: 360, FrameRate: 24, Tracks: []filmTimelineTrack{
+		{ID: "video-track", Revision: 1, Kind: "video", Title: "Video", Clips: []filmTimelineClip{{ID: "clip-1", Revision: 1, Source: "shot:" + shot.ID, Order: 0, Start: 0, End: 1, Volume: 1, Transition: "cut"}}},
+		{ID: "dialogue-track", Revision: 1, Kind: "dialogue", Title: "Dialogue"},
+		{ID: "music-track", Revision: 1, Kind: "music", Title: "Music"},
+		{ID: "sfx-track", Revision: 1, Kind: "sfx", Title: "SFX"},
+		{ID: "subtitle-track", Revision: 1, Kind: "subtitle", Title: "Subtitles"},
+	}}
+	raw, _ := json.Marshal(document)
+	if _, err := backend.CompareAndSwapFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, record.Revision, raw); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := server.renderFilmMP4(t.Context(), store.DefaultTenantID, document, ffmpegPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rendered) < 1024 || !bytes.Contains(rendered[:min(len(rendered), 64)], []byte("ftyp")) {
+		t.Fatalf("renderer did not return an MP4 container: %d bytes", len(rendered))
+	}
+	outputPath := filepath.Join(t.TempDir(), "rendered.mp4")
+	if err := os.WriteFile(outputPath, rendered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := exec.Command(ffprobePath, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height:format=duration", "-of", "json", outputPath)
+	probeOutput, probeErr := probe.CombinedOutput()
+	if probeErr != nil || !bytes.Contains(probeOutput, []byte(`"codec_name": "h264"`)) || !bytes.Contains(probeOutput, []byte(`"width": 640`)) || !bytes.Contains(probeOutput, []byte(`"height": 360`)) {
+		t.Fatalf("rendered output is not a playable 640x360 H.264 video: err=%v probe=%s", probeErr, probeOutput)
+	}
+}
+
 func TestFilmFFprobeRejectsMaliciousOrExcessiveContainer(t *testing.T) {
 	probe := &fakeFilmProbeRunner{result: []byte(`{"streams":[{"codec_type":"video","width":7680,"height":4320,"duration":"7200","bit_rate":"999999999","nb_frames":"999999999"}],"format":{"duration":"7200","bit_rate":"999999999"}}`)}
 	server := NewServerWithStore(t.TempDir(), newFilmMemoryStore())
@@ -496,6 +573,16 @@ func TestFilmFFprobeRejectsProbeFailureAndMalformedMetadata(t *testing.T) {
 	server.filmProbeRunner = &fakeFilmProbeRunner{result: []byte(`{"streams":[{"codec_type":"attachment"}],"format":{"duration":"1"}}`)}
 	if err := server.probeFilmInput(t.Context(), "/usr/bin/ffprobe", "/private/input.mp4", "video", 4); !errors.Is(err, errFilmFFprobeFailed) {
 		t.Fatalf("malformed metadata = %v", err)
+	}
+}
+
+func TestFilmFFprobeReturnsBoundedDurationAndDimensions(t *testing.T) {
+	server := NewServerWithStore(t.TempDir(), newFilmMemoryStore())
+	t.Cleanup(server.Close)
+	server.filmProbeRunner = &fakeFilmProbeRunner{result: []byte(`{"streams":[{"codec_type":"video","width":1280,"height":720,"duration":"5","bit_rate":"1000","nb_frames":"120"}],"format":{"duration":"5","bit_rate":"1000"}}`)}
+	metadata, err := server.probeFilmInputMetadata(t.Context(), "/usr/bin/ffprobe", "/private/input.mp4", "video", 5)
+	if err != nil || metadata.Duration != 5 || metadata.Width != 1280 || metadata.Height != 720 {
+		t.Fatalf("probe metadata = %#v err=%v", metadata, err)
 	}
 }
 

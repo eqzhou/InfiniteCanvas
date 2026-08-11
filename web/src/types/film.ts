@@ -39,7 +39,7 @@ export type FilmScene = {
 
 export type FilmDirectorSource = {
   revision: number;
-  targetField: "scene" | "storyboard" | "first_frame";
+  targetField: "scene" | "storyboard" | "first_frame" | "last_frame";
   captureId: string;
   directorNodeId: string;
   cameraId: string;
@@ -73,6 +73,10 @@ export type FilmShot = {
   firstFrameSha256?: string;
   firstFrameObjectVersion?: string;
   firstFrameGenerationJobId?: string;
+  lastFrameStorageKey?: string;
+  lastFrameSha256?: string;
+  lastFrameObjectVersion?: string;
+  lastFrameGenerationJobId?: string;
   videoStorageKey?: string;
   videoSha256?: string;
   videoObjectVersion?: string;
@@ -85,6 +89,7 @@ export type FilmShot = {
   mediaMimeType?: string;
   storyboardDirectorSource?: FilmDirectorSource;
   firstFrameDirectorSource?: FilmDirectorSource;
+  lastFrameDirectorSource?: FilmDirectorSource;
 };
 
 export type FilmDialogue = {
@@ -95,6 +100,7 @@ export type FilmDialogue = {
   kind: "dialogue" | "narration";
   characterAssetId?: string;
   voiceAssetId?: string;
+  emotion?: string;
   text: string;
   status: FilmEntityStatus;
   audioStorageKey?: string;
@@ -122,6 +128,9 @@ export type FilmAsset = {
   costume?: string;
   storyPeriod?: string;
   isDefault?: boolean;
+  episodeIds?: string[];
+  sceneIds?: string[];
+  shotIds?: string[];
 };
 
 export type FilmStage = {
@@ -143,6 +152,7 @@ export type FilmTask = {
   updatedAt: string;
   generationJobId?: string;
   shotId?: string;
+  dialogueId?: string;
   idempotencyKey?: string;
   requestHash?: string;
   error?: string;
@@ -159,6 +169,7 @@ export type FilmTextGenerationSnapshot = {
   generationMode?: "text_to_image" | "image_to_image" | "text_to_video" | "image_to_video" | "text_to_audio";
   promptVersion: string;
   outputSchema: string;
+  scriptMode?: "adaptive" | "literal" | "shooting";
   targetEntityId?: string;
   targetRevision?: number;
   targetSha256?: string;
@@ -167,7 +178,7 @@ export type FilmTextGenerationSnapshot = {
   createdAt: string;
 };
 
-export type FilmAIDialogue = { kind: "dialogue" | "narration"; characterKey: string; text: string };
+export type FilmAIDialogue = { kind: "dialogue" | "narration"; characterKey: string; emotion?: string; text: string };
 export type FilmAIShot = { key: string; title: string; description: string; durationSeconds: number; dialogues: FilmAIDialogue[] };
 export type FilmAIScene = { key: string; heading: string; synopsis: string; locationKey: string; shots: FilmAIShot[] };
 export type FilmAIEpisode = { key: string; title: string; synopsis: string; scenes: FilmAIScene[] };
@@ -177,7 +188,32 @@ export type FilmAIDecomposition = {
 	characters: Array<{ key: string; name: string; description: string }>;
 	locations: Array<{ key: string; name: string; description: string }>;
 	timeline: string[];
+	relationships?: Array<{ fromCharacterKey: string; toCharacterKey: string; relation: string; description: string }>;
+	beats?: Array<{ key: string; episodeKey: string; title: string; description: string }>;
+	characterArcs?: Array<{ characterKey: string; summary: string }>;
 	episodes: FilmAIEpisode[];
+};
+
+export type FilmStoryBible = {
+  summary?: string;
+  theme?: string;
+  timeline?: string[];
+  relationships?: Array<{ characterAssetId: string; relatedCharacterAssetId: string; relation: string; description?: string }>;
+  beats?: Array<{ id: string; episodeId: string; order: number; title: string; description?: string }>;
+  characterArcs?: Array<{ characterAssetId: string; summary: string }>;
+};
+
+export type FilmStructureVersion = {
+  id: string;
+  revision: number;
+  candidateId: string;
+  story: FilmStoryBible;
+  episodes: FilmEpisode[];
+  scenes: FilmScene[];
+  shots: FilmShot[];
+  dialogues: FilmDialogue[];
+  assets: FilmAsset[];
+  createdAt: string;
 };
 export type FilmAICandidate = {
 	id: string;
@@ -195,7 +231,7 @@ export type FilmAICandidate = {
 	appliedAt?: string;
 };
 
-export type FilmAIScriptDialogue = { kind: "dialogue" | "narration"; speaker: string; text: string };
+export type FilmAIScriptDialogue = { kind: "dialogue" | "narration"; speaker: string; emotion?: string; text: string };
 export type FilmAIScriptShot = { key: string; title: string; description: string; durationSeconds: number; dialogues: FilmAIScriptDialogue[] };
 export type FilmAIScriptScene = { key: string; heading: string; synopsis: string; shots: FilmAIScriptShot[] };
 export type FilmAIScript = { summary: string; scenes: FilmAIScriptScene[] };
@@ -228,6 +264,7 @@ export type FilmGenerationSnapshot = {
   styleVersion?: FilmAsset;
   storyboardDirectorSource?: FilmDirectorSource;
   firstFrameDirectorSource?: FilmDirectorSource;
+  lastFrameDirectorSource?: FilmDirectorSource;
   referenceStorageKeys: string[];
   estimatedGenerations: number;
   estimatedCredits?: number;
@@ -272,6 +309,7 @@ export type FilmRepairProposal = {
   affectedTargets?: string[];
   estimatedGenerations?: number;
   estimatedCredits?: number;
+  regenerationStage?: "storyboard" | "first_frame" | "audio" | "video";
 };
 
 export type FilmEntityVersion = {
@@ -350,7 +388,7 @@ export type FilmMediaAdoption = {
   revision: number;
   targetType: "shot" | "asset";
   targetId: string;
-  targetField: "image" | "first_frame" | "video" | "audio" | "media";
+  targetField: "image" | "first_frame" | "last_frame" | "video" | "audio" | "media";
   targetRevision: number;
   sourceNodeId: string;
   storageKey: string;
@@ -372,6 +410,7 @@ export type FilmDocument = {
   updatedAt: string;
   aspectRatio: string;
   source: FilmSource;
+  story?: FilmStoryBible;
   episodes: FilmEpisode[];
   scenes: FilmScene[];
   shots: FilmShot[];
@@ -381,6 +420,7 @@ export type FilmDocument = {
   tasks: FilmTask[];
   aiCandidates?: FilmAICandidate[];
   scriptCandidates?: FilmAIScriptCandidate[];
+  structureVersions?: FilmStructureVersion[];
   qualityReports: FilmQualityReport[];
   timeline: FilmTimeline;
   deliverables: FilmDeliverable[];

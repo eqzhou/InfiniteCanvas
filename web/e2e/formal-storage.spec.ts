@@ -6,11 +6,26 @@ import { readFileSync } from "node:fs";
 const generatedPNG = readFileSync(new URL("../../docs/screenshots/openboard-canvas.png", import.meta.url)).toString("base64");
 const generatedMP4 = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 0, 0x69, 0x73, 0x6f, 0x6d, 0x6d, 0x70, 0x34, 0x32, 0, 0, 0, 8, 0x6d, 0x64, 0x61, 0x74]);
 const generatedMP3 = Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]);
+const filmDecomposition = JSON.stringify({
+  summary: "A courier discovers a hidden signal.", theme: "trust",
+  characters: [{ key: "courier", name: "Lin", description: "A careful courier" }],
+  locations: [{ key: "station", name: "Old station", description: "An abandoned terminal" }],
+  timeline: ["night one"],
+  relationships: [{ fromCharacterKey: "courier", toCharacterKey: "courier", relation: "inner conflict", description: "Lin doubts her instincts." }],
+  beats: [{ key: "signal-found", episodeKey: "episode-1", title: "Signal found", description: "Lin locates the transmitter." }],
+  characterArcs: [{ characterKey: "courier", summary: "Lin learns to trust her instincts." }],
+  episodes: [{ key: "episode-1", title: "The signal", synopsis: "Lin follows the signal.", scenes: [{
+    key: "scene-1", heading: "INT. OLD STATION - NIGHT", synopsis: "Lin enters.", locationKey: "station",
+    shots: [{ key: "shot-1", title: "Arrival", description: "Lin steps into the hall.", durationSeconds: 4,
+      dialogues: [{ kind: "dialogue", characterKey: "courier", emotion: "guarded curiosity", text: "Is anyone here?" }] }],
+  }] }],
+});
 let imageUpstream: HTTPServer;
 let imageUpstreamURL = "";
 let releaseImage: (() => void) | undefined;
 let notifyImageStarted: (() => void) | undefined;
 let imageProviderRequest: { authorization: string; body: unknown } | undefined;
+let imageFailuresRemaining = 0;
 let releaseVideo: (() => void) | undefined;
 let notifyVideoStarted: (() => void) | undefined;
 let videoProviderRequest: { authorization: string; body: unknown } | undefined;
@@ -36,8 +51,8 @@ function releasePendingImageRequest() {
 
 async function settleInitialSurface(page: Page, path: string) {
   await page.goto(path);
-  await expect(page.getByTitle("设置")).toBeVisible();
-  await page.getByTitle("设置").click();
+  await expect(page.getByRole("button", { name: "打开设置" })).toBeVisible();
+  await page.getByRole("button", { name: "打开设置" }).click();
   const settings = page.getByRole("dialog", { name: "设置" });
   await expect(settings.getByLabel("当前渠道")).not.toHaveValue("");
   await settings.getByRole("button", { name: "关闭设置" }).click();
@@ -90,8 +105,8 @@ async function saveFormalConfig(
 
 async function openHydratedSurface(page: Page, path: string, channelId: string) {
   await page.goto(path);
-  await expect(page.getByTitle("设置")).toBeVisible();
-  await page.getByTitle("设置").click();
+  await expect(page.getByRole("button", { name: "打开设置" })).toBeVisible();
+  await page.getByRole("button", { name: "打开设置" }).click();
   const settings = page.getByRole("dialog", { name: "设置" });
   await expect(settings.getByLabel("当前渠道")).toHaveValue(`personal:${channelId}`);
   await settings.getByRole("button", { name: "关闭设置" }).click();
@@ -118,7 +133,57 @@ async function restoreProjectAfterContextClose(
   }, { timeout: 10_000, intervals: [100, 250, 500] }).toEqual(baseline);
 }
 
-test.beforeAll(async () => {
+async function ensureFormalCanvasProject(request: APIRequestContext) {
+	const quota = await request.put("/api/admin/tenant-quota", {
+		data: { generationQuotaMonthly: 1_000 },
+	});
+	await expect(quota).toBeOK();
+	const projectsResponse = await request.get("/api/projects");
+  await expect(projectsResponse).toBeOK();
+  const summaries = await projectsResponse.json() as Array<{ id: string }>;
+	for (const summary of summaries) {
+		const response = await request.get(`/api/projects/${encodeURIComponent(summary.id)}`);
+		if (!response.ok()) continue;
+		const document = await response.json() as Record<string, unknown>;
+		if (document.projectKind === "film") continue;
+		const touchedDocument = { ...document, updatedAt: new Date().toISOString() };
+		const touched = await request.put(`/api/projects/${encodeURIComponent(summary.id)}`, { data: touchedDocument });
+		expect(touched.status()).toBe(204);
+		return { id: summary.id, document: touchedDocument };
+  }
+
+  const id = "formal-canvas-seed";
+  const timestamp = "2026-08-11T00:00:00.000Z";
+  const document = {
+    schemaVersion: 3, projectKind: "canvas", id, title: "Formal Canvas",
+    createdAt: timestamp, updatedAt: timestamp, nodes: [], edges: [], chatSessions: [], activeChatId: null,
+    backgroundMode: "dots", viewport: { x: 0, y: 0, k: 1 },
+  };
+  const saved = await request.put(`/api/projects/${id}`, { data: document });
+  expect(saved.status()).toBe(204);
+	return { id, document };
+}
+
+async function selectFormalCanvasProject(page: Page, title: string) {
+	const projectsTab = page.getByRole("tab", { name: "项目", exact: true });
+	if (await projectsTab.isVisible()) await projectsTab.click();
+	for (const titleInput of await page.locator("aside input").all()) {
+		if (await titleInput.inputValue() !== title) continue;
+		await titleInput.locator("..").click();
+		await expect(page.getByRole("toolbar", { name: "画布工具栏" })).toBeVisible();
+		return;
+	}
+	throw new Error(`Canvas project ${title} was not visible in the project sidebar`);
+}
+
+test.beforeAll(async ({ request }) => {
+  const tenantId = "e2e-0123456789abcdef01234567";
+  const ensured = await request.post("/api/e2e/tenant", { data: { tenantId } });
+  await expect(ensured).toBeOK();
+  await expect(request.put("/api/admin/tenant-quota", { data: { generationQuotaMonthly: 100_000 } })).resolves.toBeOK();
+  await expect(request.post(`/api/admin/users/${tenantId}-user/credit-adjustments`, { data: {
+    delta: 100_000, reason: "formal E2E generation budget", idempotencyKey: "formal-e2e-budget-v1",
+  } })).resolves.toBeOK();
   imageUpstream = createServer(async (incoming, response) => {
 	if (incoming.method === "GET" && incoming.url === "/v1/videos/formal-video/content") {
 	  response.writeHead(200, { "Content-Type": "video/mp4" });
@@ -191,6 +256,11 @@ test.beforeAll(async () => {
 	  response.end(generatedMP3);
 	  return;
 	}
+	if (incoming.method === "POST" && incoming.url === "/v1/responses") {
+	  response.writeHead(200, { "Content-Type": "application/json" });
+	  response.end(JSON.stringify({ output_text: filmDecomposition }));
+	  return;
+	}
 	if (incoming.method !== "POST" || (incoming.url !== "/v1/images/generations" && incoming.url !== "/v1/images/edits")) {
 	  response.writeHead(404).end();
 	  return;
@@ -202,6 +272,12 @@ test.beforeAll(async () => {
         : Buffer.concat(chunks).toString("utf8"),
     };
     notifyImageStarted?.();
+    if (imageFailuresRemaining > 0) {
+      imageFailuresRemaining -= 1;
+      response.writeHead(502, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "formal provider failure" } }));
+      return;
+    }
     await new Promise<void>((resolve) => { releaseImage = resolve; });
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ data: [{ b64_json: generatedPNG }] }));
@@ -220,7 +296,276 @@ test.afterAll(async () => {
   await new Promise<void>((resolve) => imageUpstream.close(() => resolve()));
 });
 
+test("formal Film storyboard repairs retry failed shots and persist durable parent jobs", async ({ request }) => {
+  const projectId = "formal-film-storyboard";
+  const timestamp = "2026-08-11T00:00:00.000Z";
+  const board = {
+    schemaVersion: 3,
+    projectKind: "film",
+    id: projectId,
+    title: "Formal Film Storyboard",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    nodes: [],
+    edges: [],
+    chatSessions: [],
+    activeChatId: null,
+    backgroundMode: "dots",
+    viewport: { x: 0, y: 0, k: 1 },
+  };
+  const savedBoard = await request.put(`/api/projects/${projectId}`, { data: board });
+  expect(savedBoard.status()).toBe(204);
+
+  const createdFilm = await request.post(`/api/film/projects/${projectId}`, { data: {} });
+  expect(createdFilm.status()).toBe(201);
+
+  const imported = await request.put(`/api/film/projects/${projectId}/source/text`, { data: {
+    revision: 0,
+    format: "text",
+    originalName: "formal-storyboard.txt",
+    text: "EPISODE 1\nINT. FORMAL STAGE - NIGHT\nA camera frames a glowing green comet.",
+  } });
+  expect(imported.status()).toBe(200);
+  let film = (await imported.json() as {
+    data: { revision: number; stages: Array<{ id: string; revision: number; status: string }>; shots: Array<{ id: string }>; timeline: Record<string, unknown>; qualityReports: Array<{ repairs: Array<{ id: string; expectedRevision: number; regenerationStage?: string }> }> };
+  }).data;
+  expect(film.shots).toHaveLength(1);
+
+  const decompose = film.stages.find((stage) => stage.id === "decompose");
+  expect(decompose).toMatchObject({ status: "needs_review" });
+  const approvedDecompose = await request.post(`/api/film/projects/${projectId}/stages/decompose/approve`, {
+    data: { revision: decompose!.revision },
+  });
+  expect(approvedDecompose.status()).toBe(200);
+  film = (await approvedDecompose.json() as { data: typeof film }).data;
+
+  const script = film.stages.find((stage) => stage.id === "script");
+  const ranScript = await request.post(`/api/film/projects/${projectId}/stages/script/run`, {
+    data: { revision: script!.revision },
+  });
+  expect(ranScript.status()).toBe(202);
+  film = (await ranScript.json() as { data: typeof film }).data;
+  const reviewableScript = film.stages.find((stage) => stage.id === "script");
+  expect(reviewableScript).toMatchObject({ status: "needs_review" });
+  const approvedScript = await request.post(`/api/film/projects/${projectId}/stages/script/approve`, {
+    data: { revision: reviewableScript!.revision },
+  });
+  expect(approvedScript.status()).toBe(200);
+  film = (await approvedScript.json() as { data: typeof film }).data;
+
+  const provider = { baseUrl: imageUpstreamURL, apiKey: "", model: "gpt-image-1", protocol: "openai" };
+  await saveFormalConfig(request, {
+    channels: [{
+      id: "formal-film-image", name: "Formal Film Image", baseUrl: imageUpstreamURL, apiKey: "",
+      defaultTextModel: "gpt-4o-mini", defaultImageModel: "gpt-image-1",
+      defaultVideoModel: "sora-2", defaultAudioModel: "gpt-4o-mini-tts",
+      providers: {
+        text: { ...provider, model: "gpt-4o-mini" }, image: provider,
+        video: { ...provider, model: "sora-2" }, audio: { ...provider, model: "gpt-4o-mini-tts" },
+      },
+    }],
+    activeChannelId: "formal-film-image", systemPrompt: "", imageSize: "1024x1024",
+    imageQuality: "auto", imageCount: 1, theme: "light",
+  }, {
+    "formal-film-image": { image: "sk-formal-film" },
+  });
+  const raisedQuota = await request.put("/api/admin/tenant-quota", {
+    data: { generationQuotaMonthly: 1_000 },
+  });
+  await expect(raisedQuota).toBeOK();
+
+  imageProviderRequest = undefined;
+  imageFailuresRemaining = 1;
+  const validated = await request.post(`/api/film/projects/${projectId}/validate`, { data: {} });
+  await expect(validated).toBeOK();
+  film = (await validated.json() as { data: typeof film }).data;
+  const repair = film.qualityReports.at(-1)?.repairs.find((item) => item.regenerationStage === "storyboard");
+  expect(repair).toBeTruthy();
+  const runStoryboard = await request.post(`/api/film/projects/${projectId}/repairs/${repair!.id}/apply`, { data: {
+    revision: repair!.expectedRevision,
+    approved: true,
+    providerId: "formal-film-image",
+    model: "gpt-image-1",
+    expectedCredits: 1,
+    idempotencyKey: "formal-film-storyboard-v1",
+    config: { size: "1024x1024", quality: "standard" },
+  } });
+  expect(runStoryboard.status()).toBe(202);
+  film = (await runStoryboard.json() as { data: typeof film }).data;
+  await expect.poll(async () => {
+    const response = await request.get(`/api/generation-jobs?projectId=${projectId}&page=1&pageSize=20`);
+    if (!response.ok()) return [];
+    const page = await response.json() as { items: Array<{ kind: string; status: string }> };
+    return page.items.map((job) => `${job.kind}:${job.status}`).sort();
+  }, { timeout: 20_000 }).toEqual(["film-stage:failed", "image:failed"]);
+
+  const failedStage = film.stages.find((stage) => stage.id === "storyboard");
+  const synchronizedFailure = await request.post(`/api/film/projects/${projectId}/stages/storyboard/sync`, {
+    data: { revision: failedStage!.revision },
+  });
+  await expect(synchronizedFailure).toBeOK();
+  film = (await synchronizedFailure.json() as { data: typeof film }).data;
+  expect(film.stages.find((stage) => stage.id === "storyboard")).toMatchObject({ status: "failed" });
+
+  let imageStartedResolve: (() => void) | undefined;
+  const imageStarted = new Promise<void>((resolve) => { imageStartedResolve = resolve; });
+  notifyImageStarted = imageStartedResolve;
+  const retryStage = film.stages.find((stage) => stage.id === "storyboard");
+  const retried = await request.post(`/api/film/projects/${projectId}/stages/storyboard/run`, { data: {
+    revision: retryStage!.revision, shotIds: [film.shots[0]!.id], providerId: "formal-film-image",
+    model: "gpt-image-1", idempotencyKey: "formal-film-storyboard-retry-v1",
+    config: { size: "1024x1024", quality: "standard" },
+  } });
+  expect(retried.status()).toBe(202);
+  film = (await retried.json() as { data: typeof film }).data;
+  await Promise.race([
+    imageStarted,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Film storyboard retry did not call Provider")), 15_000)),
+  ]);
+  expect(imageProviderRequest).toMatchObject({
+    authorization: "Bearer sk-formal-film",
+    body: { model: "gpt-image-1", n: 1, size: "1024x1024" },
+  });
+  releasePendingImageRequest();
+
+  await expect.poll(async () => {
+    const response = await request.get(`/api/generation-jobs?projectId=${projectId}&page=1&pageSize=20`);
+    if (!response.ok()) return [];
+    const page = await response.json() as { items: Array<{ kind: string; status: string }> };
+    return page.items.map((job) => `${job.kind}:${job.status}`).sort();
+  }, { timeout: 20_000 }).toEqual(["film-stage:failed", "film-stage:succeeded", "image:failed", "image:succeeded"]);
+
+  const filmJobsResponse = await request.get(`/api/film/projects/${projectId}/generation-jobs`);
+  await expect(filmJobsResponse).toBeOK();
+  const filmJobs = await filmJobsResponse.json() as {
+    data: { generationJobs: Array<{ id: string; parentJobId?: string; stage: string; status: string; shotId?: string }> };
+  };
+  const parent = filmJobs.data.generationJobs.find((job) => !job.parentJobId && job.status === "succeeded");
+  const child = filmJobs.data.generationJobs.find((job) => job.parentJobId === parent?.id && job.status === "succeeded");
+  expect(parent).toMatchObject({ stage: "storyboard", status: "succeeded" });
+  expect(child).toMatchObject({ parentJobId: parent!.id, stage: "storyboard", status: "succeeded", shotId: film.shots[0]!.id });
+
+  const persistedParent = await request.get(`/api/generation-jobs/${parent!.id}`);
+  const persistedChild = await request.get(`/api/generation-jobs/${child!.id}`);
+  await expect(persistedParent).toBeOK();
+  await expect(persistedChild).toBeOK();
+  await expect(persistedParent.json()).resolves.toMatchObject({
+    id: parent!.id, projectId, kind: "film-stage", status: "succeeded",
+  });
+  await expect(persistedChild.json()).resolves.toMatchObject({
+    id: child!.id, projectId, kind: "image", status: "succeeded",
+    parameters: { film: { projectId, stage: "storyboard", parentGenerationJobId: parent!.id } },
+  });
+
+  const storyboardStage = film.stages.find((stage) => stage.id === "storyboard");
+  const synchronized = await request.post(`/api/film/projects/${projectId}/stages/storyboard/sync`, { data: { revision: storyboardStage!.revision } });
+  await expect(synchronized).toBeOK();
+  film = (await synchronized.json() as { data: typeof film }).data;
+  expect(film.shots[0]).toMatchObject({ imageStorageKey: expect.any(String) });
+
+  const savedTimeline = await request.put(`/api/film/projects/${projectId}/timeline`, { data: film.timeline });
+  await expect(savedTimeline).toBeOK();
+  const staleTimeline = await request.put(`/api/film/projects/${projectId}/timeline`, { data: film.timeline });
+  expect(staleTimeline.status()).toBe(409);
+  film = (await savedTimeline.json() as { data: typeof film }).data;
+  const exported = await request.post(`/api/film/projects/${projectId}/exports`, { data: {
+    kind: "manifest", revision: film.revision, idempotencyKey: "formal-film-manifest-v1",
+  } });
+  expect(exported.status()).toBe(201);
+  const deliverables = await request.get(`/api/film/projects/${projectId}/deliverables`);
+  await expect(deliverables).toBeOK();
+  expect(JSON.stringify(await deliverables.json())).toContain("manifest");
+  notifyImageStarted = undefined;
+});
+
+test("formal Film AI candidate review survives a browser reload", async ({ page, request }) => {
+  const projectId = "formal-film-ai-review";
+  const timestamp = "2026-08-11T00:00:00.000Z";
+  const tenantId = "e2e-0123456789abcdef01234567";
+  const tenantHeaders = { "X-OpenBoard-E2E-Tenant": tenantId, "X-OpenBoard-E2E-Token": "e2e-tenant-token-0123456789abcdef" };
+  await expect(request.post("/api/e2e/tenant", {
+    headers: { "X-OpenBoard-E2E-Token": "e2e-tenant-token-0123456789abcdef" }, data: { tenantId },
+  })).resolves.toBeOK();
+  await page.context().setExtraHTTPHeaders(tenantHeaders);
+  const filmRequest = page.context().request;
+  await expect(filmRequest.put("/api/admin/tenant-quota", {
+    data: { generationQuotaMonthly: 1_000 },
+  })).resolves.toBeOK();
+  await expect(filmRequest.post(`/api/admin/users/${tenantId}-user/credit-adjustments`, {
+    data: { delta: 1_000, reason: "formal Film AI generation", idempotencyKey: "formal-film-ai-credits-v1" },
+  })).resolves.toBeOK();
+  await saveFormalConfig(filmRequest, {
+    channels: [{
+      id: "formal-film-text", name: "Formal Film Text", baseUrl: imageUpstreamURL, apiKey: "",
+      defaultTextModel: "gpt-4o-mini", defaultImageModel: "gpt-image-1", defaultVideoModel: "sora-2", defaultAudioModel: "gpt-4o-mini-tts",
+      providers: {
+        text: { baseUrl: imageUpstreamURL, apiKey: "", model: "gpt-4o-mini", protocol: "openai" },
+        image: { baseUrl: imageUpstreamURL, apiKey: "", model: "gpt-image-1", protocol: "openai" },
+        video: { baseUrl: imageUpstreamURL, apiKey: "", model: "sora-2", protocol: "openai" },
+        audio: { baseUrl: imageUpstreamURL, apiKey: "", model: "gpt-4o-mini-tts", protocol: "openai" },
+      },
+    }],
+    activeChannelId: "formal-film-text", systemPrompt: "", imageSize: "1024x1024", imageQuality: "auto", imageCount: 1, theme: "light",
+  }, { "formal-film-text": { text: "sk-formal-film-text" } });
+  const board = {
+    schemaVersion: 3, projectKind: "film", id: projectId, title: "Formal Film AI Review",
+    createdAt: timestamp, updatedAt: timestamp, nodes: [], edges: [], chatSessions: [], activeChatId: null,
+    backgroundMode: "dots", viewport: { x: 0, y: 0, k: 1 },
+  };
+  expect((await filmRequest.put(`/api/projects/${projectId}`, { data: board })).status()).toBe(204);
+  expect((await filmRequest.post(`/api/film/projects/${projectId}`, { data: {} })).status()).toBe(201);
+  const imported = await filmRequest.put(`/api/film/projects/${projectId}/source/text`, { data: {
+    revision: 0, format: "text", text: "INT. OLD STATION - NIGHT\nLin follows a hidden signal.",
+  } });
+  let film = (await imported.json() as { data: {
+    revision: number; stages: Array<{ id: string; revision: number; status: string }>;
+    tasks: Array<{ generationJobId?: string }>; aiCandidates?: Array<{ id: string; revision: number; status: string }>;
+  } }).data;
+  const stage = film.stages.find((item) => item.id === "decompose");
+  const queued = await filmRequest.post(`/api/film/projects/${projectId}/stages/decompose/run`, { data: {
+    revision: stage!.revision, mode: "ai", providerId: "formal-film-text", model: "gpt-4o-mini",
+    idempotencyKey: "formal-film-ai-review-v1",
+  } });
+  expect(queued.status(), queued.ok() ? "" : await queued.text()).toBe(202);
+  film = (await queued.json() as { data: typeof film }).data;
+  const textJobId = film.tasks.at(-1)?.generationJobId;
+  expect(textJobId).toBeTruthy();
+  let textJob: { status: string; error?: string } | undefined;
+  await expect.poll(async () => {
+    const response = await filmRequest.get(`/api/generation-jobs/${textJobId}`);
+    if (!response.ok()) return "missing";
+    textJob = await response.json() as { status: string; error?: string };
+    return ["succeeded", "failed", "cancelled"].includes(textJob.status) ? "terminal" : textJob.status;
+  }, { timeout: 20_000 }).toBe("terminal");
+  expect(textJob?.status, JSON.stringify(textJob)).toBe("succeeded");
+  await expect.poll(async () => {
+    const completedFilm = await filmRequest.get(`/api/film/projects/${projectId}/status`);
+    if (!completedFilm.ok()) return "missing";
+    film = (await completedFilm.json() as { data: typeof film }).data;
+    return film.aiCandidates?.at(-1)?.status ?? "pending";
+  }, { timeout: 10_000 }).toBe("ready");
+  const candidate = film.aiCandidates?.at(-1);
+  expect(candidate).toMatchObject({ status: "ready" });
+  const applied = await filmRequest.post(`/api/film/projects/${projectId}/ai-candidates/${candidate!.id}/apply`, {
+    data: { revision: candidate!.revision },
+  });
+  await expect(applied).toBeOK();
+  film = (await applied.json() as { data: typeof film }).data;
+  const reviewStage = film.stages.find((item) => item.id === "decompose");
+  await expect(filmRequest.post(`/api/film/projects/${projectId}/stages/decompose/approve`, {
+    data: { revision: reviewStage!.revision },
+  })).resolves.toBeOK();
+
+  await page.goto(`/film/${projectId}`);
+  await expect(page.getByRole("heading", { name: "Formal Film AI Review" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "The signal 集标题" })).toHaveValue("The signal");
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Formal Film AI Review" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "The signal 集标题" })).toHaveValue("The signal");
+});
+
 test("formal restricted Template image jobs survive reload", async ({ page, request }) => {
+	await ensureFormalCanvasProject(request);
   const template = {
     method: "PUT", path: "/template-render", auth: "x-api-key",
     request: { prompt: "{{prompt}}", model: "{{model}}", count: "{{count}}" },
@@ -245,7 +590,7 @@ test("formal restricted Template image jobs survive reload", async ({ page, requ
     imageSize: "1024x1024", imageQuality: "auto", imageCount: 1, theme: "light",
   };
   await page.goto("/workbench/image");
-  await expect(page.getByTitle("设置")).toBeVisible();
+  await expect(page.getByRole("button", { name: "打开设置" })).toBeVisible();
   // Let the initial server hydrate and any default-workspace writes settle
   // before seeding credentials through the formal API client.
   await page.waitForTimeout(500);
@@ -303,6 +648,7 @@ test("formal restricted Template image jobs survive reload", async ({ page, requ
 });
 
 test("formal restricted Template video jobs survive reload", async ({ page, request }) => {
+	await ensureFormalCanvasProject(request);
   const template = {
     method: "PUT", path: "/template-video", auth: "x-api-key",
     request: {
@@ -382,10 +728,9 @@ test("formal restricted Template video jobs survive reload", async ({ page, requ
 });
 
 test("formal Gemini canvas image batches survive reload", async ({ page, request, context }) => {
-  await expect.poll(async () => (await (await request.get("/api/projects")).json() as unknown[]).length).toBeGreaterThan(0);
-  const summaries = await (await request.get("/api/projects")).json() as Array<{ id: string }>;
-  const projectId = summaries[0]!.id;
-  const baseline = await (await request.get(`/api/projects/${encodeURIComponent(projectId)}`)).json() as Record<string, unknown>;
+	const canvas = await ensureFormalCanvasProject(request);
+	const projectId = canvas.id;
+	const baseline = canvas.document;
   const geminiBaseURL = imageUpstreamURL.replace(/\/v1$/, "/v1beta");
   const provider = { baseUrl: geminiBaseURL, apiKey: "", model: "gemini-image", protocol: "gemini" as const };
   const config = {
@@ -409,7 +754,8 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
   const started = new Promise<void>((resolve) => { startedResolve = resolve; });
   notifyGeminiStarted = startedResolve;
 
-  await openHydratedSurface(page, "/", "formal-gemini");
+	await openHydratedSurface(page, "/", "formal-gemini");
+	await selectFormalCanvasProject(page, String(canvas.document.title));
   const toolbar = page.getByRole("toolbar", { name: "画布工具栏" });
   await toolbar.getByRole("button", { name: "图片", exact: true }).click();
   const root = page.locator('[data-node-type="image"]').last();
@@ -502,11 +848,13 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
 });
 
 test("formal director captures synchronize through protected storage", async ({ page, request, browser, context }) => {
-  await page.goto("/");
+	const canvas = await ensureFormalCanvasProject(request);
+	await page.goto("/");
   await expect.poll(async () => {
     const response = await request.get("/api/projects");
     return (await response.json() as Array<unknown>).length;
   }).toBeGreaterThan(0);
+	await selectFormalCanvasProject(page, String(canvas.document.title));
   const projectsResponse = await request.get("/api/projects");
   const projects = await projectsResponse.json() as Array<{ id: string }>;
   const baselines = new Map<string, { id: string; title: string; nodes?: Array<{ id: string; type: string }> }>();
@@ -576,17 +924,16 @@ test("formal director captures synchronize through protected storage", async ({ 
 });
 
 test("formal video and canvas audio jobs survive the browser executor boundary", async ({ page, request, context }) => {
+	const canvas = await ensureFormalCanvasProject(request);
 	await page.goto("/");
 	await expect(page.getByRole("toolbar", { name: "画布工具栏" })).toBeVisible();
 	await expect.poll(async () => {
 		const response = await request.get("/api/projects");
 		return (await response.json() as Array<unknown>).length;
 	}).toBeGreaterThan(0);
-	const baselineProjectsResponse = await request.get("/api/projects");
-	const baselineProjects = await baselineProjectsResponse.json() as Array<{ id: string }>;
-	const baselineProjectId = baselineProjects[0]!.id;
-	const baselineProjectResponse = await request.get(`/api/projects/${encodeURIComponent(baselineProjectId)}`);
-	const baselineProject = await baselineProjectResponse.json() as Record<string, unknown>;
+	await selectFormalCanvasProject(page, String(canvas.document.title));
+	const baselineProjectId = canvas.id;
+	const baselineProject = canvas.document;
 	const provider = { baseUrl: imageUpstreamURL, apiKey: "", protocol: "openai" as const };
 	const config = {
 		channels: [{
@@ -668,6 +1015,7 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 });
 
 test("formal local runtime persists projects, blobs, state, and Agent access", async ({ page, request }) => {
+	await ensureFormalCanvasProject(request);
   await page.route("https://formal-prompts.example/catalog.json", async (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ payload: { entries: [{ label: "Formal prompt", value: "persisted prompt source body" }] } }),
@@ -725,9 +1073,9 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await expect(durableBlob).toBeOK();
   expect(Buffer.from(await durableBlob.body()).toString("base64")).toBe(generatedPNG);
 
-  await page.goto("/");
-  await expect(page.getByRole("toolbar", { name: "画布工具栏" })).toBeVisible();
-  await page.getByTitle("设置").click();
+	await page.goto("/");
+	await expect(page.getByRole("toolbar", { name: "画布工具栏" })).toBeVisible();
+  await page.getByRole("button", { name: "打开设置" }).click();
   await expect(page.getByRole("button", { name: "拉取文本模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取生图模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取视频模型" })).toBeVisible();
@@ -810,10 +1158,11 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await page.reload();
   await expect(page.locator("article").filter({ hasText: "Formal asset" })).toBeVisible();
 
+	const agentCanvas = await ensureFormalCanvasProject(request);
   await page.goto("/");
-  await page.getByRole("group", { name: "全局工具" })
-    .getByRole("button", { name: "画布 Agent", exact: true })
-    .click();
+	expect(agentCanvas.document.projectKind).not.toBe("film");
+	await expect(page.getByRole("toolbar", { name: "画布工具栏" })).toBeVisible();
+	await page.locator('button[aria-label="画布 Agent"]:visible').click();
 	await page.getByLabel("本地地址").fill("http://127.0.0.1:8793");
 	await page.getByLabel("连接令牌").fill("e2e-token");
   const connectButton = page.getByRole("button", { name: "连接", exact: true });
@@ -926,10 +1275,7 @@ test("formal workflow survives reload, checkpoints steps, and exposes image chil
   await expect(templates).toBeOK();
   await expect(templates.json()).resolves.toMatchObject([{ id: "formal_series", scope: "personal" }]);
 
-  const projectsResponse = await request.get("/api/projects");
-  const projects = await projectsResponse.json() as Array<{ id: string }>;
-  expect(projects[0]?.id).toBeTruthy();
-  const projectId = projects[0]!.id;
+	const projectId = (await ensureFormalCanvasProject(request)).id;
 
   let firstStartedResolve: (() => void) | undefined;
   const firstStarted = new Promise<void>((resolve) => { firstStartedResolve = resolve; });

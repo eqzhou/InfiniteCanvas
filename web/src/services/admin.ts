@@ -69,6 +69,16 @@ export type AdminStoragePoolProviderStatus = {
 };
 
 export type AdminChannelProtocol = "openai" | "gemini" | "apimart" | "kie" | "azure" | "edge";
+export type AdminMediaKind = "image" | "video" | "audio";
+export type AdminMediaMode = "text_to_image" | "image_to_image" | "text_to_video" | "image_to_video" | "text_to_audio";
+export type AdminMediaCapability = {
+  model: string;
+  kind: AdminMediaKind;
+  modes: AdminMediaMode[];
+  sizes: string[];
+  durations: number[];
+  maxReferences: number;
+};
 export type AdminChannel = {
   id: string;
   name: string;
@@ -84,6 +94,7 @@ export type AdminChannel = {
    * model (or whose list is empty).
    */
   models?: string[];
+  mediaCapabilities?: AdminMediaCapability[];
   defaultTextModel: string;
   defaultImageModel: string;
   defaultVideoModel: string;
@@ -95,6 +106,8 @@ export type AdminChannel = {
 const channelIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const adminRevisionPattern = /^[a-f0-9]{64}$/;
 const channelProtocols = new Set<AdminChannelProtocol>(["openai", "gemini", "apimart", "kie", "azure", "edge"]);
+const adminMediaModes = new Set<AdminMediaMode>(["text_to_image", "image_to_image", "text_to_video", "image_to_video", "text_to_audio"]);
+const mediaSizePattern = /^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|\d{3,4}p|[1248][Kk]|auto|adaptive)$/;
 
 function readAdminRevision(response: Response): string {
   const revision = response.headers.get("X-OpenBoard-Revision") ?? "";
@@ -118,10 +131,49 @@ export function cleanAdminChannelModels(values: readonly string[] | undefined): 
   return clean;
 }
 
+export function normalizeAdminMediaCapabilities(
+  values: readonly AdminMediaCapability[] | undefined,
+  allowedModels: readonly string[],
+): AdminMediaCapability[] {
+  if (!values?.length) return [];
+  if (values.length > 200) throw new Error("媒体模型能力数量不能超过 200");
+  const allowed = new Set(allowedModels.map((model) => model.trim().toLowerCase()).filter(Boolean));
+  const seen = new Set<string>();
+  return values.map((raw) => {
+    const model = raw.model.trim();
+    if (!model || model.length > 500 || (allowed.size > 0 && !allowed.has(model.toLowerCase()))) {
+      throw new Error("媒体能力模型必须来自渠道可用模型");
+    }
+    const kind = raw.kind;
+    const validForKind: Record<AdminMediaKind, Set<AdminMediaMode>> = {
+      image: new Set(["text_to_image", "image_to_image"]),
+      video: new Set(["text_to_video", "image_to_video"]),
+      audio: new Set(["text_to_audio"]),
+    };
+    if (kind !== "image" && kind !== "video" && kind !== "audio") throw new Error("媒体能力类型无效");
+    const modes = [...new Set(raw.modes)];
+    if (!modes.length || modes.some((mode) => !adminMediaModes.has(mode) || !validForKind[kind].has(mode))) throw new Error("媒体生成模式无效");
+    const sizes = [...new Set(raw.sizes.map((size) => size.trim().replaceAll("X", "x")).filter(Boolean))];
+    const durations = [...new Set(raw.durations)];
+    if (sizes.length > 100 || sizes.some((size) => !mediaSizePattern.test(size)) || durations.length > 100 ||
+        durations.some((duration) => !Number.isSafeInteger(duration) || duration < 1 || duration > 900) ||
+        !Number.isSafeInteger(raw.maxReferences) || raw.maxReferences < 0 || raw.maxReferences > 16) {
+      throw new Error("媒体模型尺寸、时长或参考素材限制无效");
+    }
+    const key = `${model.toLowerCase()}:${kind}`;
+    if (seen.has(key)) throw new Error("同一模型和媒体类型的能力不能重复");
+    seen.add(key);
+    return { model, kind, modes, sizes, durations, maxReferences: raw.maxReferences };
+  });
+}
+
 function normalizeAdminChannel(channel: AdminChannel): Omit<AdminChannel, "secretConfigured"> {
   const models = cleanAdminChannelModels(channel.models);
   if (models.length > 200) throw new Error("共享渠道模型数量不能超过 200");
   if (models.some((model) => model.length > 500)) throw new Error("共享渠道模型无效");
+  const defaultModels = [channel.defaultImageModel, channel.defaultVideoModel, channel.defaultAudioModel]
+    .filter((model): model is string => typeof model === "string" && Boolean(model.trim()));
+  const mediaCapabilities = normalizeAdminMediaCapabilities(channel.mediaCapabilities, [...models, ...defaultModels]);
   const value = {
     id: channel.id.trim(),
     name: channel.name.trim() || channel.id.trim(),
@@ -132,6 +184,7 @@ function normalizeAdminChannel(channel: AdminChannel): Omit<AdminChannel, "secre
     weight: channel.weight,
     timeoutSeconds: channel.timeoutSeconds,
     ...(models.length ? { models } : {}),
+    ...(mediaCapabilities.length ? { mediaCapabilities } : {}),
     defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel.trim() : "",
     defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel.trim() : "",
     defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel.trim() : "",
@@ -373,6 +426,7 @@ export async function listAdminChannels(): Promise<{ items: AdminChannel[]; revi
   const channels = await json<AdminChannel[]>(response);
   return { revision, items: channels.map((channel) => ({
     ...channel,
+    mediaCapabilities: Array.isArray(channel.mediaCapabilities) ? channel.mediaCapabilities : [],
     defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel : "",
     defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel : "",
     defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel : "",

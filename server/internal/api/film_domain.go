@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -254,6 +255,12 @@ func filmShotRepair(qualityIssue filmQualityIssue, shot filmShot) (filmRepairPro
 	case "aspect_mismatch":
 		patch["aspectRatio"] = "16:9"
 		summary = "Align this shot with the project delivery aspect."
+	case "media_aspect_mismatch":
+		patch["status"] = filmStatusDraft
+		summary = "Regenerate the video with dimensions matching the planned aspect ratio."
+	case "media_duration_mismatch":
+		patch["status"] = filmStatusDraft
+		summary = "Regenerate the video with a duration matching the shot plan."
 	case "missing_subtitle":
 		patch["subtitle"] = shot.Description
 		summary = "Use the approved shot description as a subtitle draft."
@@ -261,10 +268,61 @@ func filmShotRepair(qualityIssue filmQualityIssue, shot filmShot) (filmRepairPro
 		return filmRepairProposal{}, false
 	}
 	estimated := 0
-	if qualityIssue.Code == "missing_media" || qualityIssue.Code == "missing_audio" || qualityIssue.Code == "media_invalid" || qualityIssue.Code == "media_corrupt" {
+	regenerationStage := ""
+	if qualityIssue.Code == "missing_media" || qualityIssue.Code == "missing_audio" || qualityIssue.Code == "media_invalid" || qualityIssue.Code == "media_corrupt" || qualityIssue.Code == "media_aspect_mismatch" || qualityIssue.Code == "media_duration_mismatch" {
 		estimated = 1
+		regenerationStage = filmRepairRegenerationStage(qualityIssue, shot)
+		if regenerationStage == "" {
+			return filmRepairProposal{}, false
+		}
 	}
-	return filmRepairProposal{ID: stableFilmID("repair", qualityIssue.ID), IssueID: qualityIssue.ID, TargetType: "shot", TargetID: shot.ID, ExpectedRevision: shot.Revision, Patch: patch, Summary: summary, AffectedTargets: []string{shot.ID}, EstimatedGenerations: estimated, EstimatedCredits: estimated}, true
+	return filmRepairProposal{ID: stableFilmID("repair", qualityIssue.ID), IssueID: qualityIssue.ID, TargetType: "shot", TargetID: shot.ID, ExpectedRevision: shot.Revision, Patch: patch, Summary: summary, AffectedTargets: []string{shot.ID}, EstimatedGenerations: estimated, EstimatedCredits: estimated, RegenerationStage: regenerationStage}, true
+}
+
+func filmDialogueRepair(qualityIssue filmQualityIssue, dialogue filmDialogue) (filmRepairProposal, bool) {
+	if qualityIssue.Code != "missing_audio" && qualityIssue.Code != "media_corrupt" {
+		return filmRepairProposal{}, false
+	}
+	patch := map[string]any{"status": filmStatusDraft}
+	return filmRepairProposal{
+		ID: stableFilmID("repair", qualityIssue.ID), IssueID: qualityIssue.ID, TargetType: "dialogue", TargetID: dialogue.ID,
+		ExpectedRevision: dialogue.Revision, Patch: patch, Summary: "Return this dialogue to draft and generate a new voice asset.",
+		AffectedTargets: []string{dialogue.ID}, EstimatedGenerations: 1, EstimatedCredits: 1, RegenerationStage: "audio",
+	}, true
+}
+
+func filmRepairRegenerationStage(issue filmQualityIssue, shot filmShot) string {
+	switch issue.Code {
+	case "missing_audio":
+		return "audio"
+	case "missing_media":
+		if shot.ImageStorageKey != "" || shot.StoryboardDirectorSource != nil {
+			return "first_frame"
+		}
+		return "storyboard"
+	case "media_invalid", "media_corrupt":
+		switch issue.MediaKind {
+		case "audio", "video", "first_frame", "last_frame", "storyboard":
+			return issue.MediaKind
+		case "image":
+			if shot.FirstFrameStorageKey != "" && shot.ImageStorageKey == "" {
+				return "first_frame"
+			}
+			return "storyboard"
+		}
+		if shot.VideoStorageKey != "" {
+			return "video"
+		}
+		if shot.AudioStorageKey != "" {
+			return "audio"
+		}
+		if shot.FirstFrameStorageKey != "" && shot.ImageStorageKey == "" {
+			return "first_frame"
+		}
+		return "storyboard"
+	default:
+		return ""
+	}
 }
 
 func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
@@ -297,6 +355,12 @@ func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
 		}
 	}
 	shotByID := map[string]filmShot{}
+	dialogueByID := map[string]filmDialogue{}
+	dialoguesByShot := map[string][]filmDialogue{}
+	for _, dialogue := range document.Dialogues {
+		dialogueByID[dialogue.ID] = dialogue
+		dialoguesByShot[dialogue.ShotID] = append(dialoguesByShot[dialogue.ShotID], dialogue)
+	}
 	for _, shot := range document.Shots {
 		shotByID[shot.ID] = shot
 		if shot.ImageStorageKey == "" && shot.VideoStorageKey == "" {
@@ -324,7 +388,15 @@ func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
 				return filmQualityReport{}, err
 			}
 		}
-		if shot.AudioStorageKey == "" {
+		if dialogues := dialoguesByShot[shot.ID]; len(dialogues) > 0 {
+			for _, dialogue := range dialogues {
+				if dialogue.AudioStorageKey == "" {
+					if err := appendIssue(newFilmIssue("missing_audio", "dialogue", dialogue.ID, "Dialogue has no generated audio media.", "warning")); err != nil {
+						return filmQualityReport{}, err
+					}
+				}
+			}
+		} else if shot.AudioStorageKey == "" {
 			if err := appendIssue(newFilmIssue("missing_audio", "shot", shot.ID, "Shot has no dialogue or audio media.", "warning")); err != nil {
 				return filmQualityReport{}, err
 			}
@@ -345,7 +417,9 @@ func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
 			}
 		}
 		if shot.MediaMIMEType != "" && !filmMIMEType.MatchString(shot.MediaMIMEType) {
-			if err := appendIssue(newFilmIssue("media_invalid", "shot", shot.ID, "Shot media type is invalid.", "error")); err != nil {
+			issue := newFilmIssue("media_invalid", "shot", shot.ID, "Shot media type is invalid.", "error")
+			issue.MediaKind = filmInvalidMediaKind(shot)
+			if err := appendIssue(issue); err != nil {
 				return filmQualityReport{}, err
 			}
 		}
@@ -396,9 +470,32 @@ func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
 				}
 				repairs = append(repairs, repair)
 			}
+		} else if dialogue, exists := dialogueByID[qualityIssue.TargetID]; exists {
+			if repair, ok := filmDialogueRepair(qualityIssue, dialogue); ok {
+				if len(repairs) >= maxFilmRepairProposals {
+					return filmQualityReport{}, errors.New("film quality repair limit reached")
+				}
+				repairs = append(repairs, repair)
+			}
 		}
 	}
 	return filmQualityReport{ID: stableFilmID("quality", document.ProjectID, document.Revision), Revision: 1, CreatedAt: document.UpdatedAt, Issues: issues, Repairs: repairs}, nil
+}
+
+func filmInvalidMediaKind(shot filmShot) string {
+	value := strings.ToLower(strings.TrimSpace(shot.MediaMIMEType))
+	for _, kind := range []string{"audio", "video", "image"} {
+		if strings.HasPrefix(value, kind+"/") {
+			return kind
+		}
+	}
+	if shot.VideoStorageKey != "" {
+		return "video"
+	}
+	if shot.AudioStorageKey != "" {
+		return "audio"
+	}
+	return "image"
 }
 
 // checkFilmDocument performs the same deterministic checks as validation but
@@ -467,15 +564,82 @@ func applyFilmRepair(document filmDocument, repairID string) (filmDocument, erro
 				}
 			}
 		}
-		return invalidateFilmStages(next, "script", now), nil
+		return invalidateFilmStages(next, filmRepairInvalidationStage(*repair), now), nil
+	}
+	if repair.TargetType == "dialogue" {
+		for index, dialogue := range next.Dialogues {
+			if dialogue.ID != repair.TargetID {
+				continue
+			}
+			if dialogue.Revision != repair.ExpectedRevision {
+				return filmDocument{}, errors.New("repair revision conflict")
+			}
+			snapshot, snapshotErr := json.Marshal(dialogue)
+			if snapshotErr != nil {
+				return filmDocument{}, snapshotErr
+			}
+			if len(next.Versions) >= 1_000 {
+				return filmDocument{}, errors.New("film entity version limit reached")
+			}
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			next.Versions = append(next.Versions, filmEntityVersion{ID: stableFilmID("version", "dialogue", dialogue.ID, dialogue.Revision, repair.ID), EntityType: "dialogue", EntityID: dialogue.ID, Revision: dialogue.Revision, Snapshot: snapshot, Reason: "repair:" + repair.ID, CreatedAt: now})
+			if status, ok := repair.Patch["status"].(string); ok {
+				dialogue.Status = status
+			}
+			dialogue.Revision++
+			next.Dialogues[index] = dialogue
+			next.Revision++
+			for reportIndex := range next.QualityReports {
+				for repairIndex := range next.QualityReports[reportIndex].Repairs {
+					if next.QualityReports[reportIndex].Repairs[repairIndex].ID == repairID {
+						next.QualityReports[reportIndex].Repairs[repairIndex].AppliedAt = now
+					}
+				}
+			}
+			return invalidateFilmStages(next, "audio", now), nil
+		}
 	}
 	return filmDocument{}, errors.New("repair target not found")
+}
+
+func filmRepairInvalidationStage(repair filmRepairProposal) string {
+	if repair.RegenerationStage != "" {
+		return filmRepairLifecycleStage(repair.RegenerationStage)
+	}
+	if _, ok := repair.Patch["subtitle"]; ok {
+		return "compose"
+	}
+	return "storyboard"
 }
 
 func normalizeFilmOrdering(document *filmDocument) {
 	sort.SliceStable(document.Episodes, func(i, j int) bool { return document.Episodes[i].Order < document.Episodes[j].Order })
 	sort.SliceStable(document.Scenes, func(i, j int) bool { return document.Scenes[i].Order < document.Scenes[j].Order })
 	sort.SliceStable(document.Shots, func(i, j int) bool { return document.Shots[i].Order < document.Shots[j].Order })
+}
+
+func pruneFilmIdentityScopes(document filmDocument) filmDocument {
+	next := cloneFilmDocument(document)
+	episodes, scenes, shots := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	for _, item := range next.Episodes {
+		episodes[item.ID] = struct{}{}
+	}
+	for _, item := range next.Scenes {
+		scenes[item.ID] = struct{}{}
+	}
+	for _, item := range next.Shots {
+		shots[item.ID] = struct{}{}
+	}
+	for index, asset := range next.Assets {
+		if asset.Kind != "identity" {
+			continue
+		}
+		asset.EpisodeIDs = slices.DeleteFunc(asset.EpisodeIDs, func(id string) bool { _, exists := episodes[id]; return !exists })
+		asset.SceneIDs = slices.DeleteFunc(asset.SceneIDs, func(id string) bool { _, exists := scenes[id]; return !exists })
+		asset.ShotIDs = slices.DeleteFunc(asset.ShotIDs, func(id string) bool { _, exists := shots[id]; return !exists })
+		next.Assets[index] = asset
+	}
+	return next
 }
 
 var filmStageDependencies = map[string][]string{
@@ -601,9 +765,22 @@ func validateFilmStageReadiness(document filmDocument, stageID string) error {
 			}
 		}
 	case "audio":
-		for _, shot := range document.Shots {
-			if strings.TrimSpace(shot.AudioStorageKey) == "" {
-				return fmt.Errorf("audio requires audio media for shot %s", shot.ID)
+		if len(document.Dialogues) > 0 {
+			for _, shot := range document.Shots {
+				if strings.TrimSpace(shot.AudioStorageKey) != "" {
+					continue
+				}
+				for _, dialogue := range document.Dialogues {
+					if dialogue.ShotID == shot.ID && strings.TrimSpace(dialogue.AudioStorageKey) == "" {
+						return fmt.Errorf("audio requires audio media for dialogue %s", dialogue.ID)
+					}
+				}
+			}
+		} else {
+			for _, shot := range document.Shots {
+				if strings.TrimSpace(shot.AudioStorageKey) == "" {
+					return fmt.Errorf("audio requires audio media for shot %s", shot.ID)
+				}
 			}
 		}
 	case "video":

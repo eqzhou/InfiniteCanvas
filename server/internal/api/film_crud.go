@@ -42,19 +42,22 @@ type filmShotInput struct {
 }
 
 type filmAssetInput struct {
-	Revision        *int    `json:"revision,omitempty"`
-	Kind            *string `json:"kind,omitempty"`
-	Title           *string `json:"title,omitempty"`
-	Description     *string `json:"description,omitempty"`
-	ParentAssetID   *string `json:"parentAssetId,omitempty"`
-	MediaStorageKey *string `json:"mediaStorageKey,omitempty"`
-	Voice           *string `json:"voice,omitempty"`
-	StylePrompt     *string `json:"stylePrompt,omitempty"`
-	AspectRatio     *string `json:"aspectRatio,omitempty"`
-	AgeStage        *string `json:"ageStage,omitempty"`
-	Costume         *string `json:"costume,omitempty"`
-	StoryPeriod     *string `json:"storyPeriod,omitempty"`
-	IsDefault       *bool   `json:"isDefault,omitempty"`
+	Revision        *int      `json:"revision,omitempty"`
+	Kind            *string   `json:"kind,omitempty"`
+	Title           *string   `json:"title,omitempty"`
+	Description     *string   `json:"description,omitempty"`
+	ParentAssetID   *string   `json:"parentAssetId,omitempty"`
+	MediaStorageKey *string   `json:"mediaStorageKey,omitempty"`
+	Voice           *string   `json:"voice,omitempty"`
+	StylePrompt     *string   `json:"stylePrompt,omitempty"`
+	AspectRatio     *string   `json:"aspectRatio,omitempty"`
+	AgeStage        *string   `json:"ageStage,omitempty"`
+	Costume         *string   `json:"costume,omitempty"`
+	StoryPeriod     *string   `json:"storyPeriod,omitempty"`
+	IsDefault       *bool     `json:"isDefault,omitempty"`
+	EpisodeIDs      *[]string `json:"episodeIds,omitempty"`
+	SceneIDs        *[]string `json:"sceneIds,omitempty"`
+	ShotIDs         *[]string `json:"shotIds,omitempty"`
 }
 
 func cleanFilmText(value *string, name string, maximum int, required bool) (string, error) {
@@ -326,6 +329,7 @@ func (s *Server) deleteFilmScene(w http.ResponseWriter, r *http.Request) {
 		}
 		document.Scenes, document.Shots = scenes, shots
 		document.Dialogues = slices.DeleteFunc(document.Dialogues, func(dialogue filmDialogue) bool { _, removed := removedShotIDs[dialogue.ShotID]; return removed })
+		document = pruneFilmIdentityScopes(document)
 		document.ProjectionRevision++
 		return invalidateFilmStages(document, "script", document.UpdatedAt), nil
 	})
@@ -551,7 +555,36 @@ func applyFilmAssetInput(asset filmAsset, input filmAssetInput, create bool) (fi
 	if input.IsDefault != nil {
 		asset.IsDefault = *input.IsDefault
 	}
-	if asset.Kind != "identity" && (asset.AgeStage != "" || asset.Costume != "" || asset.StoryPeriod != "" || asset.IsDefault) {
+	applyScope := func(source *[]string, target *[]string) error {
+		if source == nil {
+			return nil
+		}
+		if len(*source) > 1_000 {
+			return errors.New("identity applicability scope exceeds its limit")
+		}
+		seen := map[string]struct{}{}
+		next := make([]string, 0, len(*source))
+		for _, id := range *source {
+			if !validProjectID(id) {
+				return errors.New("identity applicability contains an invalid id")
+			}
+			if _, duplicate := seen[id]; !duplicate {
+				seen[id] = struct{}{}
+				next = append(next, id)
+			}
+		}
+		*target = next
+		return nil
+	}
+	for _, scope := range []struct {
+		source *[]string
+		target *[]string
+	}{{input.EpisodeIDs, &asset.EpisodeIDs}, {input.SceneIDs, &asset.SceneIDs}, {input.ShotIDs, &asset.ShotIDs}} {
+		if err := applyScope(scope.source, scope.target); err != nil {
+			return filmAsset{}, err
+		}
+	}
+	if asset.Kind != "identity" && (asset.AgeStage != "" || asset.Costume != "" || asset.StoryPeriod != "" || asset.IsDefault || len(asset.EpisodeIDs)+len(asset.SceneIDs)+len(asset.ShotIDs) > 0) {
 		return filmAsset{}, errors.New("identity metadata is only valid for identity assets")
 	}
 	return asset, nil

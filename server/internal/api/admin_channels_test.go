@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,7 +239,12 @@ func TestSharedJobCreationPersistsResolvedDefaultModels(t *testing.T) {
 	channels := []byte(`[{
 		"id":"shared-main","name":"Shared","baseUrl":"https://shared.example/v1","protocol":"openai",
 		"enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,
-		"defaultImageModel":"image-default","defaultVideoModel":"video-default","defaultAudioModel":"audio-default"
+		"defaultImageModel":"image-default","defaultVideoModel":"video-default","defaultAudioModel":"audio-default",
+		"mediaCapabilities":[
+			{"model":"image-default","kind":"image","modes":["text_to_image"],"sizes":["1024x1024"]},
+			{"model":"video-default","kind":"video","modes":["text_to_video"]},
+			{"model":"audio-default","kind":"audio","modes":["text_to_audio"]}
+		]
 	}]`)
 	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
 		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
@@ -578,6 +585,84 @@ func TestNormalizeAdminChannelCleansModels(t *testing.T) {
 	}
 	if len(channel.Models) != 2 || channel.Models[0] != "gpt-image-2" || channel.Models[1] != "seedream-4" {
 		t.Fatalf("models not cleaned: %#v", channel.Models)
+	}
+}
+
+func TestNormalizeAdminChannelCleansExplicitMediaCapabilities(t *testing.T) {
+	channel, message := normalizeAdminChannel(adminChannelPublic{
+		ID: "shared-media", Name: "Shared", BaseURL: "https://api.example.com/v1",
+		Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultImageModel: "gpt-image-1", Models: []string{"gpt-image-1", "video-model"},
+		MediaCapabilities: []adminMediaCapability{
+			{Model: " gpt-image-1 ", Kind: " IMAGE ", Modes: []string{" text_to_image ", "TEXT_TO_IMAGE", "image_to_image"}, Sizes: []string{" 1024x1024 ", "1024X1024"}, MaxReferences: 4},
+			{Model: "video-model", Kind: "video", Modes: []string{"text_to_video"}, Sizes: []string{"16:9", "720p", "4K"}, Durations: []int{10, 5, 10}},
+		},
+	})
+	if message != "" {
+		t.Fatalf("normalize failed: %s", message)
+	}
+	if len(channel.MediaCapabilities) != 2 {
+		t.Fatalf("capabilities = %#v", channel.MediaCapabilities)
+	}
+	image := channel.MediaCapabilities[0]
+	if image.Model != "gpt-image-1" || image.Kind != "image" || !reflect.DeepEqual(image.Modes, []string{"text_to_image", "image_to_image"}) || !reflect.DeepEqual(image.Sizes, []string{"1024x1024"}) || image.MaxReferences != 4 {
+		t.Fatalf("image capability not normalized: %#v", image)
+	}
+	if !reflect.DeepEqual(channel.MediaCapabilities[1].Durations, []int{10, 5}) {
+		t.Fatalf("durations not deduplicated: %#v", channel.MediaCapabilities[1])
+	}
+	if !reflect.DeepEqual(channel.MediaCapabilities[1].Sizes, []string{"16:9", "720p", "4K"}) {
+		t.Fatalf("video ratios and resolutions not normalized: %#v", channel.MediaCapabilities[1])
+	}
+}
+
+func TestNormalizeAdminChannelRejectsInvalidExplicitMediaCapabilities(t *testing.T) {
+	base := adminChannelPublic{
+		ID: "shared-media", Name: "Shared", BaseURL: "https://api.example.com/v1",
+		Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultImageModel: "gpt-image-1", Models: []string{"gpt-image-1", "video-model"},
+	}
+	tests := []struct {
+		name         string
+		capabilities []adminMediaCapability
+	}{
+		{name: "model outside channel", capabilities: []adminMediaCapability{{Model: "other", Kind: "image", Modes: []string{"text_to_image"}}}},
+		{name: "invalid kind", capabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "text", Modes: []string{"text_to_image"}}}},
+		{name: "mode does not match kind", capabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_video"}}}},
+		{name: "empty modes", capabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image"}}},
+		{name: "too many references", capabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image"}, MaxReferences: 17}}},
+		{name: "negative references", capabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image"}, MaxReferences: -1}}},
+		{name: "invalid duration", capabilities: []adminMediaCapability{{Model: "video-model", Kind: "video", Modes: []string{"text_to_video"}, Durations: []int{0}}}},
+		{name: "duration too large", capabilities: []adminMediaCapability{{Model: "video-model", Kind: "video", Modes: []string{"text_to_video"}, Durations: []int{901}}}},
+		{name: "invalid size syntax", capabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image"}, Sizes: []string{"anything"}}}},
+		{name: "size too long", capabilities: []adminMediaCapability{{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image"}, Sizes: []string{strings.Repeat("x", 101)}}}},
+		{name: "duplicate model kind", capabilities: []adminMediaCapability{
+			{Model: "gpt-image-1", Kind: "image", Modes: []string{"text_to_image"}},
+			{Model: "GPT-IMAGE-1", Kind: "IMAGE", Modes: []string{"text_to_image"}},
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := base
+			input.MediaCapabilities = test.capabilities
+			if _, message := normalizeAdminChannel(input); message == "" {
+				t.Fatalf("accepted invalid capabilities: %#v", test.capabilities)
+			}
+		})
+	}
+}
+
+func TestAdminSharedChannelResponseNeverIncludesSecretInput(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	body := []byte(`[{
+		"id":"shared-main","name":"Shared","baseUrl":"https://api.example.com/v1","protocol":"openai",
+		"enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultImageModel":"gpt-image-1",
+		"models":["gpt-image-1"],"mediaCapabilities":[{"model":"gpt-image-1","kind":"image","modes":["text_to_image"]}],
+		"apiKey":"must-not-be-accepted"
+	}]`)
+	response := putAdminConfigForTest(t, router, "/api/admin/channels", body)
+	if response.Code != http.StatusBadRequest || bytes.Contains(response.Body.Bytes(), []byte("must-not-be-accepted")) {
+		t.Fatalf("sensitive field accepted or echoed: %d %s", response.Code, response.Body.String())
 	}
 }
 

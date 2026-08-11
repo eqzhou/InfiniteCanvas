@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestTextWorkerUsesFrozenChannelAndPersistsProviderResult(t *testing.T) {
 	}
 	parameters, err := json.Marshal(persistedTextJobParameters{
 		Executor: serverExecutorMarker, RequestHash: "request-hash", Operation: "film_decompose",
-		PromptVersion: "film-decompose-v1", OutputSchema: "film-decompose-v1",
+		PromptVersion: "film-decompose-v2", OutputSchema: "film-decompose-v2",
 		SharedChannel: &generationChannelSnapshot{
 			ProviderID: channel.ID, BaseURL: channel.BaseURL, Protocol: channel.Protocol,
 			Model: channel.DefaultTextModel, TimeoutSeconds: channel.TimeoutSeconds,
@@ -131,6 +132,35 @@ func TestTextWorkerUsesFrozenChannelAndPersistsProviderResult(t *testing.T) {
 	}
 	if string(stored.Parameters) == "" || containsJSONSecret(stored.Parameters) {
 		t.Fatalf("completed job retained a public execution credential: %s", stored.Parameters)
+	}
+}
+
+func TestTextWorkerLeavesLeaseRecoverableOnProcessShutdown(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	channel := adminChannelPublic{ID: "shared-text", BaseURL: "https://text.example/v1", Protocol: "openai", TimeoutSeconds: 45, DefaultTextModel: "gpt-text"}
+	secret, err := server.sealGenerationChannelSecret(store.DefaultTenantID, "shutdown-text", "text", channel, "sk-frozen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, _ := json.Marshal(persistedTextJobParameters{
+		Executor: serverExecutorMarker, RequestHash: "request-hash", Operation: "film_decompose",
+		SharedChannel: &generationChannelSnapshot{ProviderID: channel.ID, BaseURL: channel.BaseURL, Protocol: channel.Protocol, Model: channel.DefaultTextModel, TimeoutSeconds: channel.TimeoutSeconds, Secret: secret},
+	})
+	now := time.Now().UTC()
+	job := store.GenerationJob{ID: "shutdown-text", ProjectID: "film-project", Kind: "text", Status: "running", Prompt: "story", ProviderID: channel.ID, Model: channel.DefaultTextModel, Parameters: parameters, Result: json.RawMessage(`{}`), LeaseOwner: "worker-1", CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano)}
+	if err := backend.CreateGenerationJob(t.Context(), store.DefaultTenantID, job); err != nil {
+		t.Fatal(err)
+	}
+	server.stopGeneration()
+	server.executeClaimedTextJob(store.TenantGenerationJob{TenantID: store.DefaultTenantID, Job: job})
+	stored, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, job.ID)
+	if err != nil || stored.Status != "running" || stored.LeaseOwner != "worker-1" {
+		t.Fatalf("shutdown finalized recoverable text job: %#v err=%v", stored, err)
 	}
 }
 
@@ -171,7 +201,7 @@ func TestFilmAIDecomposeRunCreatesOneIdempotentTextJob(t *testing.T) {
 	task := created.Tasks[len(created.Tasks)-1]
 	if task.Stage != "decompose" || task.ShotID != "" || task.GenerationJobID == "" || task.TextSnapshot == nil ||
 		task.TextSnapshot.SourceRevision != document.Source.Revision || task.TextSnapshot.SourceSHA256 == "" ||
-		task.TextSnapshot.Model != "gpt-text" || task.TextSnapshot.PromptVersion != "film-decompose-v1" {
+		task.TextSnapshot.Model != "gpt-text" || task.TextSnapshot.PromptVersion != "film-decompose-v2" {
 		t.Fatalf("text task did not freeze its inputs: %#v", task)
 	}
 	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
@@ -303,7 +333,7 @@ func TestFilmAIScriptRunFreezesOneEpisodeAndQueuesTextJob(t *testing.T) {
 	}()
 	body, _ := json.Marshal(map[string]any{
 		"revision": scriptStage.Revision, "mode": "ai", "providerId": "provider-text", "model": "gpt-text",
-		"episodeId": episode.ID, "idempotencyKey": "script-pass-1",
+		"episodeId": episode.ID, "scriptMode": "shooting", "idempotencyKey": "script-pass-1",
 	})
 	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/script/run", body)
 	if response.Code != http.StatusAccepted {
@@ -312,12 +342,16 @@ func TestFilmAIScriptRunFreezesOneEpisodeAndQueuesTextJob(t *testing.T) {
 	created := decodeFilmResponse(t, response)
 	task := created.Tasks[len(created.Tasks)-1]
 	if task.Stage != "script" || task.TextSnapshot == nil || task.TextSnapshot.TargetEntityID != episode.ID ||
-		task.TextSnapshot.TargetRevision != episode.Revision || task.TextSnapshot.TargetSHA256 == "" {
+		task.TextSnapshot.TargetRevision != episode.Revision || task.TextSnapshot.TargetSHA256 == "" || task.TextSnapshot.ScriptMode != "shooting" {
 		t.Fatalf("script task did not freeze target episode: %#v", task)
 	}
 	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
 	if err != nil || job.Kind != "text" || job.Status != "queued" || bytes.Contains([]byte(job.Prompt), []byte(episode.ID)) {
 		t.Fatalf("script text job was not safely queued: %#v err=%v", job, err)
+	}
+	var parameters persistedTextJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.ScriptMode != "shooting" || !strings.Contains(parameters.SystemPrompt, "shooting") {
+		t.Fatalf("script mode was not frozen in the text job: %s", job.Parameters)
 	}
 }
 

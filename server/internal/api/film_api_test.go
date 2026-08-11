@@ -30,6 +30,7 @@ type filmMemoryStore struct {
 	workspaceTokens    map[string]filmMemoryWorkspaceToken
 	cleanupGenerations map[string]store.FilmCleanupGeneration
 	atomicBatchCalls   atomic.Int32
+	lastReservations   []store.FilmGenerationReservation
 }
 
 type filmMemoryWorkspaceToken struct {
@@ -436,6 +437,7 @@ func (m *filmMemoryStore) CreateFilmGenerationBatch(
 	for _, reservation := range reservations {
 		m.jobs[tenantKey(tenantID, reservation.Job.ID)] = reservation.Job
 	}
+	m.lastReservations = append([]store.FilmGenerationReservation(nil), reservations...)
 	record.Revision++
 	record.Document = append([]byte(nil), document...)
 	m.films[key] = record
@@ -453,6 +455,12 @@ func filmAPIServerHandler(t *testing.T) (*Server, *filmMemoryStore, http.Handler
 	server.SetProcessToken("test-token")
 	t.Cleanup(server.Close)
 	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user := store.AuthUser{ID: "film-test-user", TenantID: store.DefaultTenantID, Role: "owner", Status: "active"}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authUserKey, user)))
+		})
+	})
 	MountServer(router, server)
 	project := []byte(`{"schemaVersion":3,"projectKind":"film","id":"film-api","title":"Film API","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
 	if response := request(t, router, http.MethodPut, "/api/projects/film-api", project); response.Code != http.StatusNoContent {
@@ -540,9 +548,17 @@ func TestFilmAPIVerticalWorkflowAndRevisionConflicts(t *testing.T) {
 		t.Fatalf("quality report missing: %#v", document.QualityReports)
 	}
 	repair := document.QualityReports[0].Repairs[0]
-	applyBody, _ := json.Marshal(map[string]any{"revision": repair.ExpectedRevision, "approved": true})
+	applyRequest := map[string]any{"revision": repair.ExpectedRevision, "approved": true}
+	if repair.EstimatedGenerations > 0 {
+		applyRequest["providerId"] = "provider-a"
+		applyRequest["model"] = "model-a"
+		applyRequest["config"] = map[string]any{"size": "1024x1024"}
+		applyRequest["idempotencyKey"] = "vertical-repair"
+		applyRequest["expectedCredits"] = 1
+	}
+	applyBody, _ := json.Marshal(applyRequest)
 	applied := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", applyBody)
-	if applied.Code != http.StatusOK {
+	if applied.Code != http.StatusOK && applied.Code != http.StatusAccepted {
 		t.Fatalf("apply repair: %d %s", applied.Code, applied.Body.String())
 	}
 
@@ -574,6 +590,189 @@ func TestFilmMutationResponseKeepsCapabilityEnvelope(t *testing.T) {
 	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/episodes", []byte(`{"title":"Episode"}`))
 	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"stageGeneration"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"assetBundleExport"`)) {
 		t.Fatalf("mutation capability envelope: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFilmRepairRegenerationRequiresGenerationRequestAndCommitsAtomically(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	validated := request(t, handler, http.MethodPost, "/api/film/projects/film-api/validate", []byte(`{}`))
+	if validated.Code != http.StatusOK {
+		t.Fatalf("validate: %d %s", validated.Code, validated.Body.String())
+	}
+	document = decodeFilmResponse(t, validated)
+	var repair filmRepairProposal
+	for _, candidate := range document.QualityReports[len(document.QualityReports)-1].Repairs {
+		if candidate.EstimatedGenerations > 0 && candidate.RegenerationStage == "storyboard" {
+			repair = candidate
+			break
+		}
+	}
+	if repair.ID == "" {
+		t.Fatalf("storyboard repair missing: %#v", document.QualityReports)
+	}
+
+	missing := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", []byte(`{"revision":1,"approved":true}`))
+	if missing.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("generative repair without generation request = %d %s", missing.Code, missing.Body.String())
+	}
+
+	batchCalls := backend.atomicBatchCalls.Load()
+	body, _ := json.Marshal(map[string]any{
+		"revision": repair.ExpectedRevision, "approved": true,
+		"providerId": "provider-a", "model": "model-a", "idempotencyKey": "repair-storyboard-1",
+		"expectedCredits": 1,
+		"config":          map[string]any{"size": "1024x1024", "quality": "standard"},
+	})
+	applied := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", body)
+	if applied.Code != http.StatusAccepted {
+		t.Fatalf("apply generative repair: %d %s", applied.Code, applied.Body.String())
+	}
+	repaired := decodeFilmResponse(t, applied)
+	if backend.atomicBatchCalls.Load() != batchCalls+1 {
+		t.Fatal("repair did not use one atomic generation batch")
+	}
+	if len(backend.lastReservations) != 2 || backend.lastReservations[0].Units != 0 || backend.lastReservations[1].Units != 1 {
+		t.Fatalf("repair credit reservations = %#v", backend.lastReservations)
+	}
+	var appliedAt string
+	for _, report := range repaired.QualityReports {
+		for _, candidate := range report.Repairs {
+			if candidate.ID == repair.ID {
+				appliedAt = candidate.AppliedAt
+			}
+		}
+	}
+	if appliedAt == "" || len(repaired.Versions) == 0 {
+		t.Fatalf("repair patch/version was not committed: %#v", repaired)
+	}
+	lastTask := repaired.Tasks[len(repaired.Tasks)-1]
+	if lastTask.Stage != "storyboard" || lastTask.ShotID != repair.TargetID || lastTask.ParentGenerationJobID == "" {
+		t.Fatalf("single-shot repair task = %#v", lastTask)
+	}
+	parent, parentErr := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, lastTask.ParentGenerationJobID)
+	child, childErr := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, lastTask.GenerationJobID)
+	if parentErr != nil || childErr != nil || parent.Kind != "film-stage" || child.Kind != "image" {
+		t.Fatalf("repair jobs parent=%#v/%v child=%#v/%v", parent, parentErr, child, childErr)
+	}
+	replayed := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", body)
+	if replayed.Code != http.StatusOK || backend.atomicBatchCalls.Load() != batchCalls+1 {
+		t.Fatalf("repair idempotent replay = %d batches=%d body=%s", replayed.Code, backend.atomicBatchCalls.Load(), replayed.Body.String())
+	}
+	conflictingBody := bytes.Replace(body, []byte(`"quality":"standard"`), []byte(`"quality":"high"`), 1)
+	conflicting := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", conflictingBody)
+	if conflicting.Code != http.StatusConflict {
+		t.Fatalf("repair idempotency mismatch accepted: %d %s", conflicting.Code, conflicting.Body.String())
+	}
+}
+
+func TestFilmPureFieldRepairKeepsNonGenerativeApplyFlow(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	updateBody, _ := json.Marshal(map[string]any{"revision": document.Shots[0].Revision, "aspectRatio": "4:3"})
+	updated := request(t, handler, http.MethodPut, "/api/film/projects/film-api/shots/"+document.Shots[0].ID, updateBody)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("prepare aspect mismatch: %d %s", updated.Code, updated.Body.String())
+	}
+	validated := request(t, handler, http.MethodPost, "/api/film/projects/film-api/validate", []byte(`{}`))
+	document = decodeFilmResponse(t, validated)
+	var repair filmRepairProposal
+	for _, candidate := range document.QualityReports[len(document.QualityReports)-1].Repairs {
+		if candidate.EstimatedGenerations == 0 && candidate.Patch["aspectRatio"] != nil {
+			repair = candidate
+			break
+		}
+	}
+	if repair.ID == "" {
+		t.Fatalf("pure field repair missing: %#v", document.QualityReports)
+	}
+	before := backend.atomicBatchCalls.Load()
+	body, _ := json.Marshal(map[string]any{"revision": repair.ExpectedRevision, "approved": true})
+	applied := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", body)
+	if applied.Code != http.StatusOK {
+		t.Fatalf("pure repair: %d %s", applied.Code, applied.Body.String())
+	}
+	if backend.atomicBatchCalls.Load() != before {
+		t.Fatal("pure field repair unexpectedly created a generation batch")
+	}
+	repaired := decodeFilmResponse(t, applied)
+	if repaired.Shots[0].AspectRatio != "16:9" || len(repaired.Versions) == 0 {
+		t.Fatalf("pure field repair result = %#v", repaired.Shots[0])
+	}
+}
+
+func TestFilmRepairAtomicBatchFailureLeavesProposalUnapplied(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	validated := request(t, handler, http.MethodPost, "/api/film/projects/film-api/validate", []byte(`{}`))
+	document = decodeFilmResponse(t, validated)
+	var repair filmRepairProposal
+	for _, candidate := range document.QualityReports[len(document.QualityReports)-1].Repairs {
+		if candidate.EstimatedGenerations > 0 {
+			repair = candidate
+			break
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"revision": repair.ExpectedRevision, "approved": true,
+		"providerId": "provider-a", "model": "model-a", "idempotencyKey": "repair-atomic-failure",
+		"expectedCredits": 1,
+		"config":          map[string]any{"size": "1024x1024"},
+	})
+	backend.casErr = store.ErrConflict
+	failed := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", body)
+	backend.casErr = nil
+	if failed.Code != http.StatusConflict {
+		t.Fatalf("atomic failure = %d %s", failed.Code, failed.Body.String())
+	}
+	current := request(t, handler, http.MethodGet, "/api/film/projects/film-api", nil)
+	unchanged := decodeFilmResponse(t, current)
+	for _, report := range unchanged.QualityReports {
+		for _, candidate := range report.Repairs {
+			if candidate.ID == repair.ID && (candidate.AppliedAt != "" || candidate.Approved) {
+				t.Fatalf("failed batch persisted repair state: %#v", candidate)
+			}
+		}
+	}
+	parentID := stableFilmID("job-stage-repair", "film-api", repair.ID, "repair-atomic-failure")
+	childID := stableFilmID("job-repair", "film-api", repair.ID, "repair-atomic-failure", repair.TargetID)
+	if _, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, parentID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("failed batch left parent job: %v", err)
+	}
+	if _, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, childID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("failed batch left child job: %v", err)
+	}
+}
+
+func TestFilmRepairRegenerationEnforcesTenantModelAllowList(t *testing.T) {
+	server, backend, handler := filmAPIServerHandler(t)
+	if err := server.saveSitePolicy(t.Context(), store.DefaultTenantID, SitePolicy{AllowRegister: true, AllowCustomChannel: true, AllowCloudChannel: true, AvailableModels: []string{"allowed-model"}}); err != nil {
+		t.Fatal(err)
+	}
+	prepareFilmGenerationStage(t, handler)
+	document := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/validate", []byte(`{}`)))
+	var repair filmRepairProposal
+	for _, candidate := range document.QualityReports[len(document.QualityReports)-1].Repairs {
+		if candidate.EstimatedGenerations > 0 {
+			repair = candidate
+			break
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"revision": repair.ExpectedRevision, "approved": true,
+		"providerId": "provider-a", "model": "blocked-model", "idempotencyKey": "repair-blocked-model",
+		"expectedCredits": 1,
+		"config":          map[string]any{"size": "1024x1024"},
+	})
+	before := backend.atomicBatchCalls.Load()
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/repairs/"+repair.ID+"/apply", body)
+	if response.Code != http.StatusForbidden || backend.atomicBatchCalls.Load() != before {
+		t.Fatalf("blocked repair model = %d batches=%d body=%s", response.Code, backend.atomicBatchCalls.Load(), response.Body.String())
+	}
+	current := decodeFilmResponse(t, request(t, handler, http.MethodGet, "/api/film/projects/film-api", nil))
+	selected, _ := findFilmRepairProposal(current, repair.ID)
+	if selected.Approved || selected.AppliedAt != "" {
+		t.Fatalf("model refusal mutated repair: %#v", selected)
 	}
 }
 

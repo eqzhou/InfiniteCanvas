@@ -9,6 +9,15 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+func snapshotFilmStructure(document filmDocument, id, candidateID, now string) filmStructureVersion {
+	copy := cloneFilmDocument(document)
+	return filmStructureVersion{
+		ID: id, Revision: 1, CandidateID: candidateID, Story: copy.Story,
+		Episodes: copy.Episodes, Scenes: copy.Scenes, Shots: copy.Shots,
+		Dialogues: copy.Dialogues, Assets: copy.Assets, CreatedAt: now,
+	}
+}
+
 func applyFilmAICandidate(document filmDocument, candidateID string, expectedRevision int, now string) (filmDocument, error) {
 	if !validProjectID(candidateID) || expectedRevision < 1 || !validFilmTimestamp(now) {
 		return filmDocument{}, errors.New("AI candidate apply request is invalid")
@@ -35,13 +44,7 @@ func applyFilmAICandidate(document filmDocument, candidateID string, expectedRev
 		return filmDocument{}, err
 	}
 	next := cloneFilmDocument(document)
-	next.StructureVersions = append(next.StructureVersions, filmStructureVersion{
-		ID: stableFilmID("structure", document.ProjectID, candidate.ID, document.Revision), Revision: 1,
-		CandidateID: candidate.ID, Episodes: append([]filmEpisode(nil), document.Episodes...),
-		Scenes: append([]filmScene(nil), document.Scenes...), Shots: append([]filmShot(nil), document.Shots...),
-		Dialogues: append([]filmDialogue(nil), document.Dialogues...), Assets: append([]filmAsset(nil), document.Assets...),
-		CreatedAt: now,
-	})
+	next.StructureVersions = append(next.StructureVersions, snapshotFilmStructure(document, stableFilmID("structure", document.ProjectID, candidate.ID, document.Revision), candidate.ID, now))
 	if len(next.StructureVersions) > 100 {
 		return filmDocument{}, errors.New("film structure version retention limit reached")
 	}
@@ -66,11 +69,13 @@ func applyFilmAICandidate(document filmDocument, candidateID string, expectedRev
 	}
 
 	episodes := make([]filmEpisode, 0, len(candidate.Decomposition.Episodes))
+	episodeIDs := make(map[string]string, len(candidate.Decomposition.Episodes))
 	scenes := make([]filmScene, 0)
 	shots := make([]filmShot, 0)
 	dialogues := make([]filmDialogue, 0)
 	for episodeOrder, sourceEpisode := range candidate.Decomposition.Episodes {
 		episodeID := stableFilmID("episode", document.ProjectID, candidate.ID, sourceEpisode.Key)
+		episodeIDs[sourceEpisode.Key] = episodeID
 		episodes = append(episodes, filmEpisode{
 			ID: episodeID, Revision: 1, Order: episodeOrder, Title: sourceEpisode.Title,
 			Synopsis: sourceEpisode.Synopsis, Status: filmStatusDraft,
@@ -99,12 +104,25 @@ func applyFilmAICandidate(document filmDocument, candidateID string, expectedRev
 					dialogues = append(dialogues, filmDialogue{
 						ID: stableFilmID("dialogue", shotID, dialogueOrder, sourceDialogue.Text), Revision: 1,
 						ShotID: shotID, Order: dialogueOrder, Kind: sourceDialogue.Kind,
-						CharacterAssetID: characterID, Text: sourceDialogue.Text, Status: filmStatusDraft,
+						CharacterAssetID: characterID, Emotion: sourceDialogue.Emotion, Text: sourceDialogue.Text, Status: filmStatusDraft,
 					})
 				}
 			}
 		}
 	}
+	relationships := make([]filmStoryRelationship, 0, len(candidate.Decomposition.Relationships))
+	for _, relationship := range candidate.Decomposition.Relationships {
+		relationships = append(relationships, filmStoryRelationship{CharacterAssetID: characterIDs[relationship.FromCharacterKey], RelatedCharacterAssetID: characterIDs[relationship.ToCharacterKey], Relation: relationship.Relation, Description: relationship.Description})
+	}
+	beats := make([]filmStoryBeat, 0, len(candidate.Decomposition.Beats))
+	for order, beat := range candidate.Decomposition.Beats {
+		beats = append(beats, filmStoryBeat{ID: stableFilmID("beat", document.ProjectID, candidate.ID, beat.Key), EpisodeID: episodeIDs[beat.EpisodeKey], Order: order, Title: beat.Title, Description: beat.Description})
+	}
+	arcs := make([]filmCharacterArc, 0, len(candidate.Decomposition.CharacterArcs))
+	for _, arc := range candidate.Decomposition.CharacterArcs {
+		arcs = append(arcs, filmCharacterArc{CharacterAssetID: characterIDs[arc.CharacterKey], Summary: arc.Summary})
+	}
+	next.Story = filmStoryBible{Summary: candidate.Decomposition.Summary, Theme: candidate.Decomposition.Theme, Timeline: append([]string(nil), candidate.Decomposition.Timeline...), Relationships: relationships, Beats: beats, CharacterArcs: arcs}
 	next.Episodes, next.Scenes, next.Shots, next.Dialogues, next.Assets = episodes, scenes, shots, dialogues, assets
 	updatedCandidate := next.AICandidates[candidateIndex]
 	updatedCandidate.Revision++
@@ -121,6 +139,70 @@ func applyFilmAICandidate(document filmDocument, candidateID string, expectedRev
 		return filmDocument{}, err
 	}
 	return next, nil
+}
+
+func restoreFilmStructureVersion(document filmDocument, versionID string, expectedRevision int, now string) (filmDocument, error) {
+	if !validProjectID(versionID) || expectedRevision != document.Revision || !validFilmTimestamp(now) {
+		return filmDocument{}, errors.New("film structure restore revision conflict")
+	}
+	var selected *filmStructureVersion
+	for index := range document.StructureVersions {
+		if document.StructureVersions[index].ID == versionID {
+			copy := document.StructureVersions[index]
+			selected = &copy
+			break
+		}
+	}
+	if selected == nil {
+		return filmDocument{}, errors.New("film structure version not found")
+	}
+	next := cloneFilmDocument(document)
+	for _, task := range document.Tasks {
+		if task.Status == filmStatusRunning {
+			return filmDocument{}, errors.New("film structure cannot be restored while generation tasks are active")
+		}
+	}
+	current := snapshotFilmStructure(document, stableFilmID("structure", document.ProjectID, "restore", document.Revision), stableFilmID("restore-candidate", selected.ID), now)
+	if len(next.StructureVersions) >= 100 {
+		return filmDocument{}, errors.New("film structure version retention limit reached")
+	}
+	next.StructureVersions = append(next.StructureVersions, current)
+	next.Story = selected.Story
+	next.Episodes = append([]filmEpisode(nil), selected.Episodes...)
+	next.Scenes = append([]filmScene(nil), selected.Scenes...)
+	next.Shots = append([]filmShot(nil), selected.Shots...)
+	next.Dialogues = append([]filmDialogue(nil), selected.Dialogues...)
+	next.Assets = append([]filmAsset(nil), selected.Assets...)
+	next.Tasks = nil
+	next.AICandidates = nil
+	next.ScriptCandidates = nil
+	next.QualityReports = nil
+	next.Deliverables = nil
+	next.Adoptions = nil
+	next.Versions = nil
+	next.Timeline = defaultFilmTimeline()
+	next.ProjectionRevision++
+	next = invalidateFilmStages(next, "decompose", now)
+	next.Revision++
+	next.UpdatedAt = now
+	if err := validateFilmAggregate(next, next.ProjectID); err != nil {
+		return filmDocument{}, err
+	}
+	return next, nil
+}
+
+func (s *Server) restoreFilmStructureVersionHandler(w http.ResponseWriter, r *http.Request) {
+	var input filmRevisionRequest
+	if err := decodeFilmRequest(w, r, 4<<10, &input); err != nil {
+		writeFilmError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	record, document, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
+		return restoreFilmStructureVersion(document, chi.URLParam(r, "versionId"), input.Revision, time.Now().UTC().Format(time.RFC3339Nano))
+	})
+	if ok {
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
+	}
 }
 
 func (s *Server) applyFilmAICandidateHandler(w http.ResponseWriter, r *http.Request) {

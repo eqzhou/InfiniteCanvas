@@ -103,7 +103,7 @@ func (s *Server) cleanupUnreferencedFilmBlob(parent context.Context, tenantID, u
 		return
 	}
 	for _, shot := range document.Shots {
-		if shot.ImageStorageKey == storageKey || shot.FirstFrameStorageKey == storageKey || shot.VideoStorageKey == storageKey || shot.AudioStorageKey == storageKey {
+		if shot.ImageStorageKey == storageKey || shot.FirstFrameStorageKey == storageKey || shot.LastFrameStorageKey == storageKey || shot.VideoStorageKey == storageKey || shot.AudioStorageKey == storageKey {
 			return
 		}
 	}

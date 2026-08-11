@@ -11,6 +11,7 @@ import {
   listAdminCreditLogs,
   listAdminChannels,
   listAdminUsers,
+  normalizeAdminMediaCapabilities,
   putAdminChannelSecret,
   putAdminChannels,
   putAdminModelCosts,
@@ -33,6 +34,12 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe("admin client", () => {
+  test("accepts the documented ratio and resolution presets in explicit capabilities", () => {
+    expect(normalizeAdminMediaCapabilities([{
+      model: "video-main", kind: "video", modes: ["text_to_video"],
+      sizes: ["16:9", "720p", "4K", "adaptive"], durations: [5], maxReferences: 1,
+    }], ["video-main"])[0]?.sizes).toEqual(["16:9", "720p", "4K", "adaptive"]);
+  });
   test("treats auth-off open mode as local admin without granting authenticated members", () => {
     expect(canManageAdmin({ status: "open", localAdmin: true, user: null })).toBe(true);
     expect(canManageAdmin({ status: "open", localAdmin: false, user: null })).toBe(false);

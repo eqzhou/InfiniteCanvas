@@ -31,7 +31,7 @@ func filmAdoptionExpectedMIME(targetType, field string) string {
 	switch field {
 	case "image":
 		return "image/"
-	case "first_frame":
+	case "first_frame", "last_frame":
 		return "image/"
 	case "video":
 		return "video/"
@@ -110,6 +110,8 @@ func (s *Server) adoptFilmCanvasMedia(w http.ResponseWriter, r *http.Request) {
 					shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID = input.StorageKey, digest, version, input.GenerationJobID
 				case "first_frame":
 					shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = input.StorageKey, digest, version, input.GenerationJobID
+				case "last_frame":
+					shot.LastFrameStorageKey, shot.LastFrameSHA256, shot.LastFrameObjectVersion, shot.LastFrameGenerationJobID = input.StorageKey, digest, version, input.GenerationJobID
 				case "video":
 					shot.VideoStorageKey, shot.VideoSHA256, shot.VideoObjectVersion, shot.VideoGenerationJobID = input.StorageKey, digest, version, input.GenerationJobID
 				case "audio":

@@ -47,7 +47,7 @@ func (s *Server) adoptFilmDirectorCapture(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if !validProjectID(input.ShotID) || input.ExpectedRevision < 1 || !validProjectID(input.CaptureID) ||
-		(input.TargetField != "storyboard" && input.TargetField != "first_frame") {
+		(input.TargetField != "storyboard" && input.TargetField != "first_frame" && input.TargetField != "last_frame") {
 		writeFilmError(w, http.StatusUnprocessableEntity, "director_adoption_invalid", "Director adoption request is invalid")
 		return
 	}
@@ -124,14 +124,18 @@ func (s *Server) adoptFilmDirectorCapture(w http.ResponseWriter, r *http.Request
 	version := blobIdentityVersion(stable)
 	if input.TargetField == "storyboard" {
 		shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID = storageKey, digest, version, ""
-	} else {
+	} else if input.TargetField == "first_frame" {
 		shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = storageKey, digest, version, ""
+	} else {
+		shot.LastFrameStorageKey, shot.LastFrameSHA256, shot.LastFrameObjectVersion, shot.LastFrameGenerationJobID = storageKey, digest, version, ""
 	}
 	directorSource := &filmDirectorSource{Revision: 1, TargetField: input.TargetField, CaptureID: capture.ID, DirectorNodeID: capture.DirectorNodeID, CameraID: capture.CameraID, CameraName: capture.CameraName, Width: capture.Width, Height: capture.Height, StorageKey: storageKey, SHA256: digest, ObjectVersion: version, Snapshot: append(json.RawMessage(nil), capture.Shot...), AdoptedAt: now}
 	if input.TargetField == "storyboard" {
 		shot.StoryboardDirectorSource = directorSource
-	} else {
+	} else if input.TargetField == "first_frame" {
 		shot.FirstFrameDirectorSource = directorSource
+	} else {
+		shot.LastFrameDirectorSource = directorSource
 	}
 	shot.MediaMIMEType, shot.MediaProvenance, shot.Status = "image/png", "director:"+capture.ID, filmStatusNeedsReview
 	shot.Revision++

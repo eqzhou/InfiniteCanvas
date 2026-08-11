@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 )
 
 type mediaModelCapability struct {
@@ -15,6 +16,8 @@ type mediaModelCapability struct {
 	Kind          string   `json:"kind"`
 	Modes         []string `json:"modes"`
 	Sizes         []string `json:"sizes,omitempty"`
+	Ratios        []string `json:"ratios,omitempty"`
+	Resolutions   []string `json:"resolutions,omitempty"`
 	Durations     []int    `json:"durations,omitempty"`
 	MaxReferences int      `json:"maxReferences"`
 }
@@ -34,35 +37,46 @@ func validFilmGenerationMode(mode string) bool {
 }
 
 func capabilityForChannelDefault(channel adminChannelPublic, kind, model string) mediaModelCapability {
-	capability := mediaModelCapability{ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol, Model: model, Kind: kind}
 	registered, registeredOK := resolveProviderModelCapability(channel.Protocol, kind, model)
+	if !registeredOK {
+		return mediaModelCapability{}
+	}
+	capability := mediaModelCapability{
+		ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol,
+		Model: model, Kind: kind, MaxReferences: registered.MaxImageReferences,
+		Sizes: append([]string(nil), registered.Sizes...), Ratios: append([]string(nil), registered.Ratios...),
+		Resolutions: append([]string(nil), registered.Resolutions...),
+	}
 	switch kind {
 	case "image":
-		capability.Modes, capability.MaxReferences = []string{"text_to_image", "image_to_image"}, 16
-		if channel.Protocol == "openai" {
-			capability.Sizes = []string{"1024x1024", "1536x1024", "1024x1536"}
+		capability.Modes = []string{"text_to_image"}
+		if registered.MaxImageReferences > 0 {
+			capability.Modes = append(capability.Modes, "image_to_image")
 		}
 	case "video":
-		capability.Modes, capability.MaxReferences = []string{"text_to_video", "image_to_video"}, 8
-	case "audio":
-		capability.Modes, capability.MaxReferences = []string{"text_to_audio"}, 0
-	}
-	if registeredOK {
-		capability.MaxReferences = registered.MaxImageReferences
-		capability.Sizes = append([]string(nil), registered.Sizes...)
-		if registered.MinDuration > 0 && registered.MaxDuration >= registered.MinDuration {
-			capability.Durations = []int{registered.MinDuration, registered.MaxDuration}
+		capability.Modes = []string{"text_to_video"}
+		if registered.MaxImageReferences > 0 {
+			capability.Modes = append(capability.Modes, "image_to_video")
 		}
-		if registered.MaxImageReferences == 0 {
-			switch kind {
-			case "image":
-				capability.Modes = []string{"text_to_image"}
-			case "video":
-				capability.Modes = []string{"text_to_video"}
-			}
+	case "audio":
+		capability.Modes = []string{"text_to_audio"}
+	}
+	if registered.MinDuration > 0 && registered.MaxDuration >= registered.MinDuration {
+		capability.Durations = make([]int, 0, registered.MaxDuration-registered.MinDuration+1)
+		for duration := registered.MinDuration; duration <= registered.MaxDuration; duration++ {
+			capability.Durations = append(capability.Durations, duration)
 		}
 	}
 	return capability
+}
+
+func capabilityForExplicitChannelModel(channel adminChannelPublic, configured adminMediaCapability) mediaModelCapability {
+	return mediaModelCapability{
+		ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol,
+		Model: configured.Model, Kind: configured.Kind,
+		Modes: append([]string(nil), configured.Modes...), Sizes: append([]string(nil), configured.Sizes...),
+		Durations: append([]int(nil), configured.Durations...), MaxReferences: configured.MaxReferences,
+	}
 }
 
 func (s *Server) buildMediaCapabilityCatalog(ctx context.Context, tenantID string) (mediaCapabilityCatalog, error) {
@@ -80,9 +94,20 @@ func (s *Server) buildMediaCapabilityCatalog(ctx context.Context, tenantID strin
 		if message != "" || !channel.Enabled || !channel.AllowUserUse || (adminChannelRequiresSecret(channel) && !presence[channel.ID]) {
 			continue
 		}
+		explicit := make(map[string]struct{}, len(channel.MediaCapabilities))
+		for _, configured := range channel.MediaCapabilities {
+			explicit[configured.Kind+"\x00"+strings.ToLower(configured.Model)] = struct{}{}
+			models = append(models, capabilityForExplicitChannelModel(channel, configured))
+		}
 		defaults := []struct{ kind, model string }{{"image", channel.DefaultImageModel}, {"video", channel.DefaultVideoModel}, {"audio", channel.DefaultAudioModel}}
 		for _, item := range defaults {
-			if item.model != "" && channelModelsAllow(channel.Models, item.model) {
+			if item.model == "" || !channelModelsAllow(channel.Models, item.model) {
+				continue
+			}
+			if _, configured := explicit[item.kind+"\x00"+strings.ToLower(item.model)]; configured {
+				continue
+			}
+			if _, registered := resolveProviderModelCapability(channel.Protocol, item.kind, item.model); registered {
 				models = append(models, capabilityForChannelDefault(channel, item.kind, item.model))
 			}
 		}
@@ -118,6 +143,45 @@ func (s *Server) verifySharedMediaCapability(ctx context.Context, tenantID, chan
 		}
 	}
 	return "", errors.New("shared media capability is not listed")
+}
+
+func validateMediaCapabilityRequest(capability mediaModelCapability, mode string, config filmGenerationConfig) error {
+	if !containsFilmMode(capability.Modes, mode) {
+		return errors.New("media generation mode is not supported")
+	}
+	if len(config.ReferenceStorageKeys) > capability.MaxReferences {
+		return errors.New("media reference count exceeds channel capability")
+	}
+	requestedSize := strings.TrimSpace(config.Size)
+	if requestedSize != "" && len(capability.Sizes) > 0 && !containsFilmStorageKey(capability.Sizes, requestedSize) {
+		return errors.New("media size is not supported by channel capability")
+	}
+	requestedRatio := strings.TrimSpace(config.Ratio)
+	allowedRatios := capability.Ratios
+	if len(allowedRatios) == 0 {
+		allowedRatios = capability.Sizes
+	}
+	if requestedRatio != "" && len(allowedRatios) > 0 && !containsFilmStorageKey(allowedRatios, requestedRatio) {
+		return errors.New("media ratio is not supported by channel capability")
+	}
+	requestedResolution := strings.TrimSpace(config.Resolution)
+	allowedResolutions := capability.Resolutions
+	if len(allowedResolutions) == 0 {
+		allowedResolutions = capability.Sizes
+	}
+	if requestedResolution != "" && len(allowedResolutions) > 0 && !containsFilmStorageKey(allowedResolutions, requestedResolution) {
+		return errors.New("media resolution is not supported by channel capability")
+	}
+	if config.Seconds > 0 && len(capability.Durations) > 0 {
+		allowed := false
+		for _, duration := range capability.Durations {
+			allowed = allowed || duration == config.Seconds
+		}
+		if !allowed {
+			return errors.New("media duration is not supported by channel capability")
+		}
+	}
+	return nil
 }
 
 func (s *Server) getMediaCapabilities(w http.ResponseWriter, r *http.Request) {

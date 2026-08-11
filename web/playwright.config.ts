@@ -66,6 +66,10 @@ export default defineConfig({
     baseURL: origin,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    ...(formal ? { extraHTTPHeaders: {
+      "X-OpenBoard-E2E-Tenant": "e2e-0123456789abcdef01234567",
+      "X-OpenBoard-E2E-Token": "e2e-tenant-token-0123456789abcdef",
+    } } : {}),
   },
   projects: (formal ? [
     {

@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createProject } from "@/lib/defaults";
 import { createFilmDocument } from "@/lib/film-document";
 import type { FilmStatus } from "@/services/film-client";
-import { ProductionPanel, ProjectionPanel } from "./ProductionPanels";
+import { AgentPanel, ProductionPanel, ProjectionPanel } from "./ProductionPanels";
 
 describe("Film Director projection workflow", () => {
   test("offers an on-demand Director node for every Film scene", () => {
@@ -48,5 +48,18 @@ describe("Film media capability selection", () => {
     expect(html).toContain("媒体能力目录");
     expect(html).toContain("目录加载完成前不会猜测模型能力");
     expect(html).toContain("disabled");
+  });
+});
+
+describe("Film production assistant", () => {
+  test("shows progress, blockers, safe checks and guarded high-impact actions", () => {
+    const document = createFilmDocument("film-agent", "2026-08-11T00:00:00.000Z");
+    document.qualityReports = [{ id: "report-1", revision: 1, createdAt: document.createdAt, issues: [{ id: "issue-1", code: "missing_media", severity: "error", targetType: "shot", targetId: "shot-1", message: "missing" }], repairs: [] }];
+    const status: FilmStatus = { document, recordRevision: 1, capabilities: { available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: true, fileUploadImport: true, maxImportBytes: 1, stageGeneration: true, generationJobs: true, generationStages: [], assetBundleExport: true, mp4Export: false, mp4Diagnostic: "", agentOperations: ["status", "next_steps", "validate", "run_stage", "approve_stage"] } };
+    const html = renderToStaticMarkup(<AgentPanel status={status} onValidate={() => undefined} />);
+    expect(html).toContain("制片助理控制台");
+    expect(html).toContain("质量问题 1");
+    expect(html).toContain("读取检查可直接执行");
+    expect(html).toContain("生成、审批、修复和导出需要确认");
   });
 });

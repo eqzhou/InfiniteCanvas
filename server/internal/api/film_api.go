@@ -36,8 +36,13 @@ type filmSourceRequest struct {
 }
 
 type filmRepairApplyRequest struct {
-	Revision int  `json:"revision"`
-	Approved bool `json:"approved"`
+	Revision        int                   `json:"revision"`
+	Approved        bool                  `json:"approved"`
+	ProviderID      string                `json:"providerId,omitempty"`
+	Model           string                `json:"model,omitempty"`
+	Config          *filmGenerationConfig `json:"config,omitempty"`
+	IdempotencyKey  string                `json:"idempotencyKey,omitempty"`
+	ExpectedCredits *int                  `json:"expectedCredits,omitempty"`
 }
 
 type filmProjectionCommitRequest struct {
@@ -97,6 +102,7 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/generation-jobs/{jobId}/cancel", server.cancelFilmGenerationJob)
 		r.Post("/ai-candidates/{candidateId}/apply", server.applyFilmAICandidateHandler)
 		r.Post("/ai-script-candidates/{candidateId}/apply", server.applyFilmAIScriptCandidateHandler)
+		r.Post("/structure-versions/{versionId}/restore", server.restoreFilmStructureVersionHandler)
 		r.Post("/stages/{stageId}/approve", server.approveFilmStage)
 		r.Post("/stages/{stageId}/reject", server.rejectFilmStage)
 		r.Post("/validate", server.validateFilmProduction)
@@ -514,7 +520,7 @@ func (s *Server) validateFilmProduction(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) applyFilmRepairProposal(w http.ResponseWriter, r *http.Request) {
 	var input filmRepairApplyRequest
-	if err := decodeFilmRequest(w, r, 4096, &input); err != nil {
+	if err := decodeFilmRequest(w, r, 32<<10, &input); err != nil {
 		writeFilmError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -522,8 +528,29 @@ func (s *Server) applyFilmRepairProposal(w http.ResponseWriter, r *http.Request)
 		writeFilmError(w, http.StatusUnprocessableEntity, "repair_not_approved", "Repair must be explicitly approved")
 		return
 	}
+	repairID := chi.URLParam(r, "repairId")
+	_, _, current, loaded := s.loadFilmProduction(w, r, true)
+	if !loaded {
+		return
+	}
+	repair, found := findFilmRepairProposal(current, repairID)
+	if !found {
+		writeFilmOperationError(w, errors.New("repair not found"))
+		return
+	}
+	if repair.ExpectedRevision != input.Revision {
+		writeFilmOperationError(w, errors.New("repair revision conflict"))
+		return
+	}
+	if repair.EstimatedGenerations > 0 {
+		if strings.TrimSpace(input.ProviderID) == "" || !validProjectID(input.ProviderID) || strings.TrimSpace(input.Model) == "" || len(input.Model) > 500 || input.Config == nil || !validFilmIdempotencyKey(input.IdempotencyKey) || input.ExpectedCredits == nil || *input.ExpectedCredits < 1 || *input.ExpectedCredits > 1_000_000_000 {
+			writeFilmError(w, http.StatusUnprocessableEntity, "repair_generation_request_required", "Generative repair requires providerId, model, config, idempotencyKey, and an exact expectedCredits quote")
+			return
+		}
+		s.applyFilmRegenerativeRepair(w, r, input, repair)
+		return
+	}
 	record, document, ok := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
-		repairID := chi.URLParam(r, "repairId")
 		for reportIndex := range document.QualityReports {
 			for repairIndex := range document.QualityReports[reportIndex].Repairs {
 				repair := &document.QualityReports[reportIndex].Repairs[repairIndex]
@@ -540,6 +567,17 @@ func (s *Server) applyFilmRepairProposal(w http.ResponseWriter, r *http.Request)
 	if ok {
 		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
+}
+
+func findFilmRepairProposal(document filmDocument, repairID string) (filmRepairProposal, bool) {
+	for _, report := range document.QualityReports {
+		for _, repair := range report.Repairs {
+			if repair.ID == repairID {
+				return repair, true
+			}
+		}
+	}
+	return filmRepairProposal{}, false
 }
 
 func filmProjectionTargets(document filmDocument) []map[string]any {

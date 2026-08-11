@@ -71,6 +71,7 @@ func filmRestoreReferences(document filmDocument) map[string]map[string]struct{}
 	for _, shot := range document.Shots {
 		add(shot.ImageStorageKey, "shot", shot.ID, "imageStorageKey")
 		add(shot.FirstFrameStorageKey, "shot", shot.ID, "firstFrameStorageKey")
+		add(shot.LastFrameStorageKey, "shot", shot.ID, "lastFrameStorageKey")
 		add(shot.AudioStorageKey, "shot", shot.ID, "audioStorageKey")
 		add(shot.VideoStorageKey, "shot", shot.ID, "videoStorageKey")
 	}
@@ -433,7 +434,7 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 	}
 	for index := range document.Shots {
 		shot := &document.Shots[index]
-		for _, stage := range []string{"storyboard", "first_frame", "audio", "video"} {
+		for _, stage := range []string{"storyboard", "first_frame", "last_frame", "audio", "video"} {
 			key, digest, version, _, prefix := filmShotMediaIdentity(*shot, stage)
 			if key == "" {
 				continue
@@ -452,6 +453,11 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 				shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = value.key, value.digest, value.version, ""
 				if shot.FirstFrameDirectorSource != nil {
 					shot.FirstFrameDirectorSource.StorageKey, shot.FirstFrameDirectorSource.SHA256, shot.FirstFrameDirectorSource.ObjectVersion = value.key, value.digest, value.version
+				}
+			case "last_frame":
+				shot.LastFrameStorageKey, shot.LastFrameSHA256, shot.LastFrameObjectVersion, shot.LastFrameGenerationJobID = value.key, value.digest, value.version, ""
+				if shot.LastFrameDirectorSource != nil {
+					shot.LastFrameDirectorSource.StorageKey, shot.LastFrameDirectorSource.SHA256, shot.LastFrameDirectorSource.ObjectVersion = value.key, value.digest, value.version
 				}
 			case "audio":
 				shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID = value.key, value.digest, value.version, ""
@@ -549,7 +555,7 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 		if json.Unmarshal(version.Snapshot, &shot) != nil {
 			return fail(errors.New("film version snapshot is invalid"))
 		}
-		for _, stage := range []string{"storyboard", "first_frame", "audio", "video"} {
+		for _, stage := range []string{"storyboard", "first_frame", "last_frame", "audio", "video"} {
 			key, digest, objectVersion, _, prefix := filmShotMediaIdentity(shot, stage)
 			if key == "" {
 				continue
@@ -568,6 +574,11 @@ func (s *Server) rehydrateRestoredFilmMedia(ctx context.Context, tenantID, userI
 				shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID = value.key, value.digest, value.version, ""
 				if shot.FirstFrameDirectorSource != nil {
 					shot.FirstFrameDirectorSource.StorageKey, shot.FirstFrameDirectorSource.SHA256, shot.FirstFrameDirectorSource.ObjectVersion = value.key, value.digest, value.version
+				}
+			case "last_frame":
+				shot.LastFrameStorageKey, shot.LastFrameSHA256, shot.LastFrameObjectVersion, shot.LastFrameGenerationJobID = value.key, value.digest, value.version, ""
+				if shot.LastFrameDirectorSource != nil {
+					shot.LastFrameDirectorSource.StorageKey, shot.LastFrameDirectorSource.SHA256, shot.LastFrameDirectorSource.ObjectVersion = value.key, value.digest, value.version
 				}
 			case "audio":
 				shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID = value.key, value.digest, value.version, ""

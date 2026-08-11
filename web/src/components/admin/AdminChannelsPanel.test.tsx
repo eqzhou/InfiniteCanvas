@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   AdminChannelModelDiffReview,
   AdminChannelNameField,
+  AdminMediaCapabilityEditor,
   adminChannelCanTest,
   emptyAdminChannel,
 } from "./AdminChannelsPanel";
@@ -71,5 +72,31 @@ describe("AdminChannelModelDiffReview", () => {
     expect(html).toContain("拉取结果为空");
     expect(html).toContain("configured-model");
     expect(html).toContain("确认更新模型");
+  });
+
+  test("renders explicit per-model media capabilities without exposing channel internals", () => {
+    const html = renderToStaticMarkup(
+      <AdminMediaCapabilityEditor
+        models={["gpt-image-1", "video-pro"]}
+        capabilities={[{
+          model: "gpt-image-1",
+          kind: "image",
+          modes: ["text_to_image", "image_to_image"],
+          sizes: ["1024x1024"],
+          durations: [],
+          maxReferences: 4,
+        }]}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("媒体模型能力");
+    expect(html).toContain("gpt-image-1");
+    expect(html).toContain("图生图");
+    expect(html).toContain("1024x1024");
+    expect(html).toContain("尺寸 / 画幅 / 清晰度");
+    expect(html).toContain("如 1024x1024、16:9、720p");
+    expect(html).toContain("添加能力");
+    expect(html).not.toContain("apiKey");
   });
 });

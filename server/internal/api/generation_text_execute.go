@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net/url"
+	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -17,6 +20,7 @@ type persistedTextJobParameters struct {
 	Operation      string                     `json:"operation"`
 	PromptVersion  string                     `json:"promptVersion"`
 	OutputSchema   string                     `json:"outputSchema"`
+	ScriptMode     string                     `json:"scriptMode,omitempty"`
 	SystemPrompt   string                     `json:"systemPrompt"`
 	SourceRevision int                        `json:"sourceRevision"`
 	SourceSHA256   string                     `json:"sourceSha256"`
@@ -34,12 +38,22 @@ type textExecutor interface {
 
 type providerTextExecutor struct{}
 
+func allowServerTextProviderLoopback(tenantID string) bool {
+	databaseURL, err := url.Parse(strings.TrimSpace(os.Getenv("OPENBOARD_DATABASE_URL")))
+	if err != nil || databaseURL.Scheme == "" || !strings.HasPrefix(path.Base(databaseURL.Path), "openboard_e2e_") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("OPENBOARD_AUTH_MODE")), "off") &&
+		len(strings.TrimSpace(os.Getenv("OPENBOARD_E2E_TENANT_TOKEN"))) >= 32 &&
+		e2eTenantIDPattern.MatchString(strings.TrimSpace(tenantID))
+}
+
 func (providerTextExecutor) Generate(
 	ctx context.Context,
 	connection providerModelConnection,
 	request providerTextRequest,
 ) (string, error) {
-	return fetchProviderTextWithClient(ctx, connection, &request, providerTextHTTPClient, false)
+	return fetchProviderTextWithClient(ctx, connection, &request, providerTextHTTPClient, request.AllowLoopback)
 }
 
 func validatePersistedTextJob(job store.GenerationJob, parameters persistedTextJobParameters) error {
@@ -57,6 +71,9 @@ func validatePersistedTextJob(job store.GenerationJob, parameters persistedTextJ
 	}
 	if parameters.Operation == "film_script" && (!validProjectID(parameters.TargetEntityID) || parameters.TargetRevision < 1 || !validFilmRequestHash(parameters.TargetSHA256)) {
 		return errors.New("invalid server text target snapshot")
+	}
+	if parameters.Operation == "film_script" && parameters.ScriptMode != "" && !validFilmScriptMode(parameters.ScriptMode) {
+		return errors.New("invalid server text script mode")
 	}
 	return nil
 }
@@ -161,6 +178,12 @@ func (s *Server) executeClaimedTextJob(claimed store.TenantGenerationJob) {
 	}()
 
 	finish := func(status string, result json.RawMessage, message string, auditRequest any) {
+		// Process shutdown must leave the lease untouched so another instance can
+		// reclaim the job after it expires. A user cancellation is persisted by
+		// the cancellation endpoint before it cancels this worker context.
+		if s.generationRoot.Err() != nil {
+			return
+		}
 		if result == nil {
 			result = json.RawMessage(`{}`)
 		}
@@ -186,6 +209,7 @@ func (s *Server) executeClaimedTextJob(claimed store.TenantGenerationJob) {
 		finish("failed", nil, "文本生成配置不可用，请检查渠道和模型", nil)
 		return
 	}
+	request.AllowLoopback = allowServerTextProviderLoopback(tenantID)
 	text, err := s.textExecutor.Generate(ctx, connection, request)
 	if err != nil {
 		finish("failed", nil, "文本生成失败，请稍后重试", providerTextAuditPayload(request, connection.Protocol))

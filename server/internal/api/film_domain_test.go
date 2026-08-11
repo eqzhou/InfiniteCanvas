@@ -1,10 +1,31 @@
 package api
 
 import (
+	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestDecodeFilmDocumentBackfillsLegacyRepairRegenerationStage(t *testing.T) {
+	document, err := decomposeFilmSource(newFilmDocument("project-legacy-repair"), "INT. SET - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue := newFilmIssue("missing_audio", "shot", document.Shots[0].ID, "missing", "warning")
+	repair, _ := filmShotRepair(issue, document.Shots[0])
+	repair.RegenerationStage = ""
+	document.QualityReports = []filmQualityReport{{ID: "quality-legacy", Revision: 1, CreatedAt: document.UpdatedAt, Issues: []filmQualityIssue{issue}, Repairs: []filmRepairProposal{repair}}}
+	raw, _ := json.Marshal(document)
+	decoded, err := decodeFilmDocument(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.QualityReports[0].Repairs[0].RegenerationStage != "audio" {
+		t.Fatalf("legacy repair was not migrated: %#v", decoded.QualityReports[0].Repairs[0])
+	}
+}
 
 func TestDecomposeFilmSourceIsDeterministic(t *testing.T) {
 	document := newFilmDocument("project-film")
@@ -52,6 +73,72 @@ func TestFilmValidationCreatesNonDestructiveRepairs(t *testing.T) {
 		if repair.Approved {
 			t.Fatal("repair was approved without a user decision")
 		}
+		if repair.EstimatedGenerations > 0 && repair.RegenerationStage == "" {
+			t.Fatalf("generative repair has no regeneration stage: %#v", repair)
+		}
+	}
+}
+
+func TestFilmShotRepairSelectsRegenerationStageFromIssueAndMedia(t *testing.T) {
+	shot := filmShot{ID: "shot-stage", Revision: 1, Description: "Action", DurationSeconds: 4, AspectRatio: "16:9"}
+	tests := []struct {
+		name  string
+		issue filmQualityIssue
+		shot  filmShot
+		stage string
+	}{
+		{name: "missing storyboard", issue: newFilmIssue("missing_media", "shot", shot.ID, "missing", "error"), shot: shot, stage: "storyboard"},
+		{name: "missing first frame after storyboard", issue: newFilmIssue("missing_media", "shot", shot.ID, "missing", "error"), shot: func() filmShot { next := shot; next.ImageStorageKey = "image:storyboard"; return next }(), stage: "first_frame"},
+		{name: "missing audio", issue: newFilmIssue("missing_audio", "shot", shot.ID, "missing", "warning"), shot: shot, stage: "audio"},
+		{name: "corrupt video", issue: filmQualityIssue{ID: "issue-video", Code: "media_corrupt", Severity: "error", TargetType: "shot", TargetID: shot.ID, MediaKind: "video"}, shot: shot, stage: "video"},
+		{name: "corrupt first frame", issue: filmQualityIssue{ID: "issue-first", Code: "media_corrupt", Severity: "error", TargetType: "shot", TargetID: shot.ID, MediaKind: "first_frame"}, shot: shot, stage: "first_frame"},
+		{name: "corrupt last frame", issue: filmQualityIssue{ID: "issue-last", Code: "media_corrupt", Severity: "error", TargetType: "shot", TargetID: shot.ID, MediaKind: "last_frame"}, shot: shot, stage: "last_frame"},
+		{name: "invalid audio", issue: filmQualityIssue{ID: "issue-audio", Code: "media_invalid", Severity: "error", TargetType: "shot", TargetID: shot.ID, MediaKind: "audio"}, shot: shot, stage: "audio"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repair, ok := filmShotRepair(test.issue, test.shot)
+			if !ok || repair.RegenerationStage != test.stage || repair.EstimatedGenerations != 1 {
+				t.Fatalf("repair = %#v, ok=%v", repair, ok)
+			}
+		})
+	}
+}
+
+func TestFilmQualityCreatesDialogueLevelAudioRepairs(t *testing.T) {
+	document, err := decomposeFilmSource(newFilmDocument("dialogue-quality"), "INT. ROOM - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Dialogues = []filmDialogue{
+		{ID: "dialogue-ready", Revision: 1, ShotID: document.Shots[0].ID, Order: 0, Text: "Ready", Status: filmStatusDraft, AudioStorageKey: "film:media:dialogue-quality:ready"},
+		{ID: "dialogue-missing", Revision: 1, ShotID: document.Shots[0].ID, Order: 1, Text: "Missing", Status: filmStatusDraft},
+	}
+	report, err := validateFilmDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repair := range report.Repairs {
+		if repair.TargetType == "dialogue" && repair.TargetID == "dialogue-missing" && repair.RegenerationStage == "audio" {
+			return
+		}
+	}
+	t.Fatalf("dialogue-level audio repair missing: %#v", report.Repairs)
+}
+
+func TestFilmAggregateRejectsIdentityOutsideSelectedShotScope(t *testing.T) {
+	document, err := decomposeFilmSource(newFilmDocument("identity-scope"), "INT. ROOM - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherShot := document.Shots[0]
+	otherShot.ID = "another-shot"
+	otherShot.Order = 1
+	document.Shots = append(document.Shots, otherShot)
+	document.Assets = []filmAsset{{ID: "identity", Revision: 1, Kind: "identity", Title: "Hero", Status: filmStatusDraft, ShotIDs: []string{"another-shot"}}}
+	document.Shots[0].IdentityVersionIDs = []string{"identity"}
+	if err := validateFilmAggregate(document, document.ProjectID); err == nil {
+		t.Fatal("shot accepted an identity version outside its applicability scope")
 	}
 }
 
@@ -99,6 +186,52 @@ func TestApplyFilmRepairRequiresApprovalAndRevision(t *testing.T) {
 	}
 	if _, err := applyFilmRepair(repaired, repairID); err == nil {
 		t.Fatal("stale repair revision was accepted")
+	}
+}
+
+func TestFilmIdentityApplicabilityIsDeduplicatedAndRestrictedToIdentityAssets(t *testing.T) {
+	episodeIDs := []string{"episode-1", "episode-1", "episode-2"}
+	sceneIDs := []string{"scene-1"}
+	shotIDs := []string{"shot-1"}
+	identity, err := applyFilmAssetInput(filmAsset{ID: "identity-1", Revision: 1, Kind: "identity", Title: "Hero"}, filmAssetInput{EpisodeIDs: &episodeIDs, SceneIDs: &sceneIDs, ShotIDs: &shotIDs}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(identity.EpisodeIDs, []string{"episode-1", "episode-2"}) || !slices.Equal(identity.SceneIDs, sceneIDs) || !slices.Equal(identity.ShotIDs, shotIDs) {
+		t.Fatalf("identity scopes were not stored deterministically: %#v", identity)
+	}
+	if _, err := applyFilmAssetInput(filmAsset{ID: "character-1", Revision: 1, Kind: "character", Title: "Hero"}, filmAssetInput{ShotIDs: &shotIDs}, false); err == nil {
+		t.Fatal("non-identity asset accepted identity applicability")
+	}
+}
+
+func TestApplyFilmRepairInvalidatesOnlyTargetGenerationStageAndDownstream(t *testing.T) {
+	document, err := decomposeFilmSource(newFilmDocument("project-repair-stage"), "INT. SET - DAY\nAction.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range document.Stages {
+		document.Stages[index].Status = filmStatusApproved
+	}
+	issue := newFilmIssue("missing_media", "shot", document.Shots[0].ID, "missing", "error")
+	repair, ok := filmShotRepair(issue, document.Shots[0])
+	if !ok {
+		t.Fatal("missing media repair not created")
+	}
+	repair.Approved = true
+	document.QualityReports = []filmQualityReport{{ID: "quality-stage", Revision: 1, CreatedAt: document.UpdatedAt, Issues: []filmQualityIssue{issue}, Repairs: []filmRepairProposal{repair}}}
+
+	repaired, err := applyFilmRepair(document, repair.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range repaired.Stages {
+		if (stage.ID == "decompose" || stage.ID == "script") && stage.Status != filmStatusApproved {
+			t.Fatalf("required upstream approval %s was cleared", stage.ID)
+		}
+		if filmStageAffectedBy(stage.ID, repair.RegenerationStage) && stage.Status != filmStatusDraft {
+			t.Fatalf("affected stage %s was not invalidated: %s", stage.ID, stage.Status)
+		}
 	}
 }
 

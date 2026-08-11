@@ -14,6 +14,7 @@ type filmDialogueInput struct {
 	Kind             *string `json:"kind,omitempty"`
 	CharacterAssetID *string `json:"characterAssetId,omitempty"`
 	VoiceAssetID     *string `json:"voiceAssetId,omitempty"`
+	Emotion          *string `json:"emotion,omitempty"`
 	Text             *string `json:"text,omitempty"`
 }
 
@@ -30,6 +31,9 @@ func applyFilmDialogueInput(dialogue filmDialogue, input filmDialogueInput, crea
 	}
 	if err == nil && (create || input.Text != nil) {
 		dialogue.Text, err = cleanFilmText(input.Text, "text", 20_000, true)
+	}
+	if err == nil && input.Emotion != nil {
+		dialogue.Emotion, err = cleanFilmText(input.Emotion, "emotion", 500, false)
 	}
 	if err != nil {
 		return filmDialogue{}, err

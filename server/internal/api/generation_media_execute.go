@@ -466,6 +466,10 @@ func (s *Server) createServerMediaJob(w http.ResponseWriter, r *http.Request, jo
 		http.Error(w, "account banned", http.StatusForbidden)
 		return
 	}
+	if errors.Is(err, store.ErrUnauthorized) {
+		http.Error(w, "login required for billable generation", http.StatusUnauthorized)
+		return
+	}
 	if err != nil {
 		http.Error(w, "failed to store generation job", http.StatusInternalServerError)
 		return

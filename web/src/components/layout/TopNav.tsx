@@ -27,6 +27,7 @@ import {
   Sparkles,
   ScrollText,
   WandSparkles,
+  ListTodo,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -164,6 +165,7 @@ export function TopNav({
     { to: "/prompts", label: "提示词", ariaLabel: "提示库页面", icon: Sparkles },
     { to: "/plugins", label: "插件", icon: Puzzle },
     { to: "/workbench/image", label: "工作台", icon: WandSparkles },
+    { to: "/tasks", label: "任务", icon: ListTodo },
     ...(canManage ? [{ to: "/admin", label: "管理", icon: Settings }] : []),
   ];
 

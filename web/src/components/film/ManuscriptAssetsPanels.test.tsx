@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 
-import { AIDecompositionPanel, AIScriptPanel, ManuscriptPanel } from "./ManuscriptAssetsPanels";
+import { AIDecompositionPanel, AIScriptPanel, AssetsPanel, ManuscriptPanel } from "./ManuscriptAssetsPanels";
 import { createFilmDocument } from "@/lib/film-document";
 
 describe("AI decomposition panel", () => {
@@ -19,6 +20,7 @@ describe("AI decomposition panel", () => {
       },
       createdAt: document.createdAt,
     }];
+    document.structureVersions = [{ id: "structure-1", revision: 1, candidateId: "candidate-old", story: {}, episodes: [], scenes: [], shots: [], dialogues: [], assets: [], createdAt: document.createdAt }];
     const html = renderToStaticMarkup(<AIDecompositionPanel
       document={document}
       busy={false}
@@ -29,6 +31,7 @@ describe("AI decomposition panel", () => {
       onModel={() => {}}
       onRun={() => {}}
       onApply={() => {}}
+      onRestoreStructure={() => {}}
     />);
 
     expect(html).toContain("AI 故事拆解");
@@ -36,6 +39,29 @@ describe("AI decomposition panel", () => {
     expect(html).toContain("A courier follows a hidden signal.");
     expect(html).toContain("采用这个候选");
     expect(html).toContain("先采用候选，再批准拆解阶段");
+    expect(html).toContain("历史故事结构");
+    expect(html).toContain("恢复此结构");
+  });
+});
+
+describe("film identity applicability", () => {
+  test("exposes episode, scene and shot scopes without hiding internal ids behind text inputs", () => {
+    const document = createFilmDocument("film-assets", "2026-08-08T00:00:00.000Z");
+    document.episodes = [{ id: "episode-1", revision: 1, order: 0, title: "Pilot", synopsis: "", status: "draft" }];
+    document.scenes = [{ id: "scene-1", revision: 1, episodeId: "episode-1", order: 0, heading: "INT. ROOM", synopsis: "", status: "draft" }];
+    document.shots = [{ id: "shot-1", revision: 1, sceneId: "scene-1", order: 0, title: "Close up", description: "", status: "draft", durationSeconds: 3, aspectRatio: "16:9", identityVersionIds: [] }];
+    document.assets = [
+      { id: "character-1", revision: 1, kind: "character", title: "Lin", description: "", status: "draft" },
+      { id: "identity-1", revision: 1, kind: "identity", title: "Lin pilot", description: "", status: "draft", parentAssetId: "character-1", episodeIds: ["episode-1"] },
+    ];
+    const html = renderToStaticMarkup(<MemoryRouter><AssetsPanel status={{ document, capabilities: {} as never }} busy={false} onCreate={() => {}} onSave={() => {}} /></MemoryRouter>);
+
+    expect(html).toContain("身份适用分集");
+    expect(html).toContain("身份适用场景");
+    expect(html).toContain("身份适用镜头");
+    expect(html).toContain("Pilot");
+    expect(html).toContain("INT. ROOM");
+    expect(html).toContain("Close up");
   });
 });
 
@@ -85,9 +111,11 @@ describe("AI episode script panel", () => {
       channelId="shared-text"
       model="gpt-text"
       episodeId="episode-1"
+      scriptMode="shooting"
       onChannel={() => {}}
       onModel={() => {}}
       onEpisode={() => {}}
+      onScriptMode={() => {}}
       onRun={() => {}}
       onApply={() => {}}
     />);
@@ -96,5 +124,7 @@ describe("AI episode script panel", () => {
     expect(html).toContain("Signal");
     expect(html).toContain("Lin follows the signal.");
     expect(html).toContain("采用这版剧本");
+    expect(html).toContain("拍摄稿");
+    expect(html).toContain("忠实原稿");
   });
 });

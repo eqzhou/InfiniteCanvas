@@ -8,6 +8,9 @@ import {
   testAdminChannel,
   type AdminChannel,
   type AdminChannelProtocol,
+  type AdminMediaCapability,
+  type AdminMediaKind,
+  type AdminMediaMode,
 } from "@/services/admin";
 import { invalidateSharedChannelCatalog } from "@/services/shared-channels";
 import { uid } from "@/lib/id";
@@ -39,6 +42,7 @@ export function emptyAdminChannel(index: number): AdminChannel {
     weight: 1,
     timeoutSeconds: 60,
     models: [],
+    mediaCapabilities: [],
     defaultTextModel: "",
     defaultImageModel: "",
     defaultVideoModel: "",
@@ -70,6 +74,43 @@ function parseModelsText(value: string): string[] {
     .split(/[\n,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+const capabilityModes: Record<AdminMediaKind, Array<{ id: AdminMediaMode; label: string }>> = {
+  image: [{ id: "text_to_image", label: "文生图" }, { id: "image_to_image", label: "图生图" }],
+  video: [{ id: "text_to_video", label: "文生视频" }, { id: "image_to_video", label: "图生视频" }],
+  audio: [{ id: "text_to_audio", label: "文生音频" }],
+};
+
+function defaultCapability(model: string, kind: AdminMediaKind = "image"): AdminMediaCapability {
+  return { model, kind, modes: [capabilityModes[kind][0].id], sizes: [], durations: [], maxReferences: 0 };
+}
+
+export function AdminMediaCapabilityEditor({
+  models,
+  capabilities,
+  onChange,
+}: {
+  models: string[];
+  capabilities: AdminMediaCapability[];
+  onChange: (capabilities: AdminMediaCapability[]) => void;
+}) {
+  const update = (index: number, patch: Partial<AdminMediaCapability>) => {
+    onChange(capabilities.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
+  };
+  return <div className="space-y-2 rounded-lg border border-[var(--ob-line)] p-3">
+    <div className="flex flex-wrap items-center gap-2"><strong className="mr-auto text-sm">媒体模型能力</strong><span className="text-xs text-[var(--ob-muted)]">未配置且无精确内置契约的模型不会开放生成</span></div>
+    {capabilities.map((capability, index) => <div key={`${capability.model}:${capability.kind}:${index}`} className="grid gap-2 rounded-lg bg-[var(--ob-surface-2)] p-2 md:grid-cols-[1.2fr_.7fr_1.4fr_1fr_1fr_.6fr_auto]">
+      <select aria-label={`能力 ${index + 1} 模型`} className="ob-field" value={capability.model} onChange={(event) => update(index, { model: event.target.value })}><option value="">选择模型</option>{models.map((model) => <option key={model}>{model}</option>)}</select>
+      <select aria-label={`能力 ${index + 1} 类型`} className="ob-field" value={capability.kind} onChange={(event) => { const kind = event.target.value as AdminMediaKind; update(index, { kind, modes: [capabilityModes[kind][0].id], sizes: [], durations: [], maxReferences: 0 }); }}>{(["image", "video", "audio"] as AdminMediaKind[]).map((kind) => <option key={kind} value={kind}>{kind === "image" ? "图片" : kind === "video" ? "视频" : "音频"}</option>)}</select>
+      <div className="flex flex-wrap items-center gap-2">{capabilityModes[capability.kind].map((mode) => <label key={mode.id} className="flex items-center gap-1 text-xs"><input type="checkbox" checked={capability.modes.includes(mode.id)} onChange={(event) => update(index, { modes: event.target.checked ? [...capability.modes, mode.id] : capability.modes.filter((item) => item !== mode.id) })} />{mode.label}</label>)}</div>
+      <input aria-label={`能力 ${index + 1} 尺寸 / 画幅 / 清晰度`} className="ob-field" placeholder="如 1024x1024、16:9、720p" title="尺寸 / 画幅 / 清晰度，使用逗号分隔" value={capability.sizes.join(",")} onChange={(event) => update(index, { sizes: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} />
+      <input aria-label={`能力 ${index + 1} 时长`} className="ob-field" placeholder="时长秒数" value={capability.durations.join(",")} onChange={(event) => update(index, { durations: event.target.value.split(",").map(Number).filter(Number.isFinite) })} />
+      <input aria-label={`能力 ${index + 1} 参考数`} className="ob-field" type="number" min={0} max={16} value={capability.maxReferences} onChange={(event) => update(index, { maxReferences: Number(event.target.value) })} />
+      <button type="button" className="ob-btn" onClick={() => onChange(capabilities.filter((_, itemIndex) => itemIndex !== index))}>删除能力</button>
+    </div>)}
+    <button type="button" className="ob-btn" disabled={!models.length} onClick={() => onChange([...capabilities, defaultCapability(models[0] ?? "")])}>添加能力</button>
+  </div>;
 }
 
 interface PendingModelReview {
@@ -199,6 +240,7 @@ export function AdminChannelsPanel() {
               return persisted ? "渠道已删除" : "未保存渠道已移除";
             })}>删除</button>
           </div>
+          <AdminMediaCapabilityEditor models={[...new Set([...(channel.models ?? []), channel.defaultImageModel, channel.defaultVideoModel, channel.defaultAudioModel].filter(Boolean))]} capabilities={channel.mediaCapabilities ?? []} onChange={(mediaCapabilities) => update(channel.id, { mediaCapabilities })} />
           {modelReviews[channel.id] ? (
             <AdminChannelModelDiffReview
               diff={modelReviews[channel.id].diff}

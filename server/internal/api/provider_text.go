@@ -37,6 +37,7 @@ type providerTextRequest struct {
 	ReasoningEffort     string   `json:"reasoningEffort,omitempty"`
 	SystemPrompt        string   `json:"-"`
 	AuditEndpoint       string   `json:"-"`
+	AllowLoopback       bool     `json:"-"`
 }
 
 type providerTextResult struct {

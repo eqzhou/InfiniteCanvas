@@ -16,6 +16,9 @@ const validFilmAIDecompositionJSON = `{
   "characters":[{"key":"courier","name":"Lin","description":"A careful courier"}],
   "locations":[{"key":"station","name":"Old station","description":"An abandoned terminal"}],
   "timeline":["night one"],
+  "relationships":[{"fromCharacterKey":"courier","toCharacterKey":"courier","relation":"inner conflict","description":"Lin doubts her own instincts."}],
+  "beats":[{"key":"signal-found","episodeKey":"episode-1","title":"Signal found","description":"Lin locates the transmitter."}],
+  "characterArcs":[{"characterKey":"courier","summary":"Lin learns to trust her instincts."}],
   "episodes":[{
     "key":"episode-1","title":"The signal","synopsis":"Lin follows the signal.",
     "scenes":[{
@@ -24,7 +27,7 @@ const validFilmAIDecompositionJSON = `{
       "shots":[{
         "key":"shot-1","title":"Arrival","description":"Lin steps into the hall.",
         "durationSeconds":4,
-        "dialogues":[{"kind":"dialogue","characterKey":"courier","text":"Is anyone here?"}]
+        "dialogues":[{"kind":"dialogue","characterKey":"courier","emotion":"guarded curiosity","text":"Is anyone here?"}]
       }]
     }]
   }]
@@ -36,7 +39,7 @@ const validFilmAIScriptJSON = `{
     "key":"scene-1","heading":"INT. OLD STATION - NIGHT","synopsis":"Lin enters the terminal.",
     "shots":[{
       "key":"shot-1","title":"Arrival","description":"Lin crosses the empty hall.","durationSeconds":4,
-      "dialogues":[{"kind":"dialogue","speaker":"Lin","text":"Is anyone here?"}]
+      "dialogues":[{"kind":"dialogue","speaker":"Lin","emotion":"guarded curiosity","text":"Is anyone here?"}]
     }]
   }]
 }`
@@ -47,7 +50,8 @@ func TestParseFilmAIDecompositionAcceptsStrictNestedContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if candidate.Summary == "" || len(candidate.Characters) != 1 || len(candidate.Episodes) != 1 ||
-		len(candidate.Episodes[0].Scenes) != 1 || len(candidate.Episodes[0].Scenes[0].Shots) != 1 {
+		len(candidate.Episodes[0].Scenes) != 1 || len(candidate.Episodes[0].Scenes[0].Shots) != 1 ||
+		len(candidate.Relationships) != 1 || len(candidate.Beats) != 1 || len(candidate.CharacterArcs) != 1 {
 		t.Fatalf("candidate was not decoded completely: %#v", candidate)
 	}
 }
@@ -58,17 +62,18 @@ func TestParseFilmAIScriptAcceptsStrictEpisodeContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if script.Summary == "" || len(script.Scenes) != 1 || len(script.Scenes[0].Shots) != 1 ||
-		len(script.Scenes[0].Shots[0].Dialogues) != 1 {
+		len(script.Scenes[0].Shots[0].Dialogues) != 1 || script.Scenes[0].Shots[0].Dialogues[0].Emotion != "guarded curiosity" {
 		t.Fatalf("script candidate was not decoded completely: %#v", script)
 	}
 }
 
 func TestParseFilmAIScriptRejectsForgedAndAmbiguousStructure(t *testing.T) {
 	for name, value := range map[string]string{
-		"database id":      strings.Replace(validFilmAIScriptJSON, `"summary":`, `"episodeId":"episode-forged","summary":`, 1),
-		"duplicate key":    strings.Replace(validFilmAIScriptJSON, `"shots":[{`, `"shots":[{"key":"shot-1","title":"Duplicate","description":"x","durationSeconds":1,"dialogues":[]},{`, 1),
-		"invalid duration": strings.Replace(validFilmAIScriptJSON, `"durationSeconds":4`, `"durationSeconds":0`, 1),
-		"markdown":         "```json\n" + validFilmAIScriptJSON + "\n```",
+		"database id":       strings.Replace(validFilmAIScriptJSON, `"summary":`, `"episodeId":"episode-forged","summary":`, 1),
+		"duplicate key":     strings.Replace(validFilmAIScriptJSON, `"shots":[{`, `"shots":[{"key":"shot-1","title":"Duplicate","description":"x","durationSeconds":1,"dialogues":[]},{`, 1),
+		"invalid duration":  strings.Replace(validFilmAIScriptJSON, `"durationSeconds":4`, `"durationSeconds":0`, 1),
+		"oversized emotion": strings.Replace(validFilmAIScriptJSON, `"guarded curiosity"`, `"`+strings.Repeat("x", 501)+`"`, 1),
+		"markdown":          "```json\n" + validFilmAIScriptJSON + "\n```",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseFilmAIScriptCandidate([]byte(value)); err == nil {
@@ -201,8 +206,12 @@ func TestApplyFilmAICandidateVersionsOldStructureAndGeneratesServerIDs(t *testin
 	if len(applied.Episodes) != 1 || applied.Episodes[0].Title != "The signal" || applied.Episodes[0].ID == "episode-1" ||
 		len(applied.Scenes) != 1 || applied.Scenes[0].EpisodeID != applied.Episodes[0].ID || applied.Scenes[0].ID == "scene-1" ||
 		len(applied.Shots) != 1 || applied.Shots[0].SceneID != applied.Scenes[0].ID || applied.Shots[0].ID == "shot-1" ||
-		len(applied.Dialogues) != 1 || applied.Dialogues[0].ShotID != applied.Shots[0].ID {
+		len(applied.Dialogues) != 1 || applied.Dialogues[0].ShotID != applied.Shots[0].ID || applied.Dialogues[0].Emotion != "guarded curiosity" {
 		t.Fatalf("candidate was not converted to server-owned facts: %#v", applied)
+	}
+	if len(applied.Story.Relationships) != 1 || len(applied.Story.Beats) != 1 || len(applied.Story.CharacterArcs) != 1 ||
+		applied.Story.Relationships[0].CharacterAssetID == "" || applied.Story.Beats[0].EpisodeID != applied.Episodes[0].ID {
+		t.Fatalf("story graph was not converted to server-owned references: %#v", applied.Story)
 	}
 	if applied.AICandidates[0].Status != filmAICandidateApplied || applied.AICandidates[0].AppliedAt == "" ||
 		applied.Stages[0].Status != filmStatusNeedsReview {
@@ -210,6 +219,39 @@ func TestApplyFilmAICandidateVersionsOldStructureAndGeneratesServerIDs(t *testin
 	}
 	if _, err := applyFilmAICandidate(applied, candidate.ID, candidate.Revision, time.Now().UTC().Format(time.RFC3339Nano)); err == nil {
 		t.Fatal("stale candidate revision was applied twice")
+	}
+}
+
+func TestRestoreFilmStructureVersionIsReversibleAndRevisionChecked(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	document := newFilmDocument("film-structure-restore")
+	document.Revision = 7
+	document.Story = filmStoryBible{Summary: "current"}
+	document.Episodes = []filmEpisode{{ID: "episode-current", Revision: 1, Order: 0, Title: "Current", Status: filmStatusDraft}}
+	document.Tasks = []filmTask{{ID: "task-old", Revision: 1, Stage: "storyboard", ShotID: "shot-current", Title: "Old task", Status: filmStatusFailed, CreatedAt: now, UpdatedAt: now}}
+	document.QualityReports = []filmQualityReport{{ID: "quality-old", Revision: 1, CreatedAt: now}}
+	document.Deliverables = []filmDeliverable{{ID: "delivery-old"}}
+	document.StructureVersions = []filmStructureVersion{{
+		ID: "structure-old", Revision: 1, CandidateID: "candidate-old", Story: filmStoryBible{Summary: "old"},
+		Episodes: []filmEpisode{{ID: "episode-old", Revision: 1, Order: 0, Title: "Old", Status: filmStatusDraft}}, CreatedAt: now,
+	}}
+	restored, err := restoreFilmStructureVersion(document, "structure-old", document.Revision, now)
+	if err != nil || restored.Story.Summary != "old" || restored.Episodes[0].ID != "episode-old" || len(restored.StructureVersions) != 2 {
+		t.Fatalf("structure restore = %#v err=%v", restored, err)
+	}
+	if restored.StructureVersions[1].Story.Summary != "current" || restored.StructureVersions[1].Episodes[0].ID != "episode-current" {
+		t.Fatalf("restore did not archive the displaced structure: %#v", restored.StructureVersions[1])
+	}
+	if len(restored.Tasks) != 0 || len(restored.QualityReports) != 0 || len(restored.Deliverables) != 0 || restored.Timeline.Revision != 1 {
+		t.Fatalf("restore retained derived state: tasks=%#v quality=%#v deliverables=%#v timeline=%#v", restored.Tasks, restored.QualityReports, restored.Deliverables, restored.Timeline)
+	}
+	active := cloneFilmDocument(document)
+	active.Tasks[0].Status = filmStatusRunning
+	if _, err := restoreFilmStructureVersion(active, "structure-old", active.Revision, now); err == nil {
+		t.Fatal("structure restore was accepted while a generation task was active")
+	}
+	if _, err := restoreFilmStructureVersion(document, "structure-old", document.Revision-1, now); err == nil {
+		t.Fatal("stale structure restore was accepted")
 	}
 }
 
@@ -272,7 +314,7 @@ func TestFilmAIScriptCandidateBecomesStaleWhenTargetChanges(t *testing.T) {
 		TargetRevision: 1, TargetSHA256: strings.Repeat("b", 64), EstimatedGenerations: 1,
 		CreatedAt: document.Tasks[len(document.Tasks)-1].CreatedAt,
 	}
-	job.Parameters = json.RawMessage(`{"executor":"server","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","operation":"film_script","promptVersion":"film-script-v1","outputSchema":"film-script-v1","sourceRevision":1,"sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","filmRevision":1,"targetEntityId":"missing","targetRevision":1,"targetSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","film":{"projectId":"film-ai","stage":"script","taskId":"task-ai","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
+	job.Parameters = json.RawMessage(`{"executor":"server","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","operation":"film_script","promptVersion":"film-script-v2","outputSchema":"film-script-v2","sourceRevision":1,"sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","filmRevision":1,"targetEntityId":"missing","targetRevision":1,"targetSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","film":{"projectId":"film-ai","stage":"script","taskId":"task-ai","requestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
 	job.Result, _ = json.Marshal(providerTextResult{Text: validFilmAIScriptJSON})
 	stale, err := integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil || len(stale.ScriptCandidates) != 1 || stale.ScriptCandidates[0].Status != filmAICandidateStale ||

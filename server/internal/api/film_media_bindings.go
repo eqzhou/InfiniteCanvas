@@ -11,7 +11,7 @@ func (s *Server) verifiedFilmShotMedia(ctx context.Context, tenantID string, doc
 		return blobObject{}, errors.New("film media storage key is not verified")
 	}
 	for _, task := range document.Tasks {
-		if task.Stage != stage || task.ShotID != shotID || task.GenerationJobID == "" || task.RequestHash == "" {
+		if task.Stage != stage || task.ShotID != shotID || task.DialogueID != "" || task.GenerationJobID == "" || task.RequestHash == "" {
 			continue
 		}
 		job, err := s.store.GetGenerationJob(ctx, tenantID, task.GenerationJobID)
@@ -40,6 +40,8 @@ func filmShotMediaIdentity(shot filmShot, stage string) (key, digest, version, j
 		return shot.ImageStorageKey, shot.ImageSHA256, shot.ImageObjectVersion, shot.ImageGenerationJobID, "image/"
 	case "first_frame":
 		return shot.FirstFrameStorageKey, shot.FirstFrameSHA256, shot.FirstFrameObjectVersion, shot.FirstFrameGenerationJobID, "image/"
+	case "last_frame":
+		return shot.LastFrameStorageKey, shot.LastFrameSHA256, shot.LastFrameObjectVersion, shot.LastFrameGenerationJobID, "image/"
 	case "audio":
 		return shot.AudioStorageKey, shot.AudioSHA256, shot.AudioObjectVersion, shot.AudioGenerationJobID, "audio/"
 	case "video":
@@ -91,7 +93,7 @@ func (s *Server) validateRestoredFilmMediaBindings(ctx context.Context, tenantID
 		}
 	}
 	for _, shot := range document.Shots {
-		for _, stage := range []string{"storyboard", "first_frame", "audio", "video"} {
+		for _, stage := range []string{"storyboard", "first_frame", "last_frame", "audio", "video"} {
 			key, _, _, _, _ := filmShotMediaIdentity(shot, stage)
 			if key == "" {
 				continue

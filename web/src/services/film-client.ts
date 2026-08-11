@@ -129,7 +129,7 @@ export type FilmDirectorAdoptionInput = {
   shotId: string;
   expectedRevision: number;
   captureId: string;
-  targetField: "storyboard" | "first_frame";
+  targetField: "storyboard" | "first_frame" | "last_frame";
 };
 export type FilmDirectorSceneBindingInput = { sceneId: string; expectedRevision: number; captureId: string };
 
@@ -260,7 +260,7 @@ export function adoptFilmDirectorCapture(projectId: string, input: FilmDirectorA
     throw new Error("Invalid Film Director adoption identity");
   }
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("Invalid shot revision");
-  if (input.targetField !== "storyboard" && input.targetField !== "first_frame") throw new Error("Invalid Director adoption target");
+  if (input.targetField !== "storyboard" && input.targetField !== "first_frame" && input.targetField !== "last_frame") throw new Error("Invalid Director adoption target");
   return requestFilm(projectId, "/director/adopt", { method: "POST", body: JSON.stringify(input) });
 }
 
@@ -368,11 +368,11 @@ export function createFilmAsset(
   return requestFilm(projectId, "/assets", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function createFilmDialogue(projectId: string, input: Pick<FilmDialogue, "shotId" | "kind" | "text"> & Partial<Pick<FilmDialogue, "order" | "characterAssetId" | "voiceAssetId">>): Promise<FilmStatus> {
+export function createFilmDialogue(projectId: string, input: Pick<FilmDialogue, "shotId" | "kind" | "text"> & Partial<Pick<FilmDialogue, "order" | "characterAssetId" | "voiceAssetId" | "emotion">>): Promise<FilmStatus> {
   return requestFilm(projectId, "/dialogues", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function updateFilmDialogue(projectId: string, dialogueId: string, input: { revision: number } & Partial<Pick<FilmDialogue, "shotId" | "kind" | "text" | "order" | "characterAssetId" | "voiceAssetId">>): Promise<FilmStatus> {
+export function updateFilmDialogue(projectId: string, dialogueId: string, input: { revision: number } & Partial<Pick<FilmDialogue, "shotId" | "kind" | "text" | "order" | "characterAssetId" | "voiceAssetId" | "emotion">>): Promise<FilmStatus> {
   return requestFilm(projectId, `/dialogues/${encodeURIComponent(dialogueId)}`, { method: "PUT", body: JSON.stringify(input) });
 }
 
@@ -397,6 +397,9 @@ export function updateFilmAsset(
     costume?: string;
     storyPeriod?: string;
     isDefault?: boolean;
+    episodeIds?: string[];
+    sceneIds?: string[];
+    shotIds?: string[];
   },
 ): Promise<FilmStatus> {
   return requestFilm(projectId, `/assets/${encodeURIComponent(assetId)}`, { method: "PUT", body: JSON.stringify(patch) });
@@ -458,7 +461,7 @@ export function applyFilmAICandidate(projectId: string, candidateId: string, rev
 
 export function requestFilmAIScript(
   projectId: string,
-  input: { revision: number; episodeId: string; providerId: string; model: string; idempotencyKey: string },
+  input: { revision: number; episodeId: string; scriptMode?: "adaptive" | "literal" | "shooting"; providerId: string; model: string; idempotencyKey: string },
 ): Promise<FilmStatus> {
   return requestFilm(projectId, "/stages/script/run", {
     method: "POST",
@@ -467,6 +470,7 @@ export function requestFilmAIScript(
       revision: input.revision,
       mode: "ai",
       episodeId: input.episodeId,
+      scriptMode: input.scriptMode ?? "adaptive",
       providerId: input.providerId,
       model: input.model,
       idempotencyKey: input.idempotencyKey,
@@ -552,6 +556,16 @@ function normalizeFilmGenerationTask(value: unknown): FilmGenerationJob {
 }
 
 function buildFilmGenerationHierarchy(tasks: readonly unknown[], jobs: readonly unknown[]): FilmGenerationJob[] {
+  const normalizedJobs = jobs.map(normalizeFilmGenerationJob);
+  const durableParentIds = new Set(normalizedJobs.filter((job) => job.parentJobId).map((job) => job.parentJobId!));
+  const durableJobIds = new Set(normalizedJobs.map((job) => job.id));
+  if ([...durableParentIds].some((id) => durableJobIds.has(id))) {
+    const topLevel = normalizedJobs.filter((job) => !job.parentJobId);
+    return [
+      ...topLevel.flatMap((parent) => [parent, ...normalizedJobs.filter((job) => job.parentJobId === parent.id)]),
+      ...normalizedJobs.filter((job) => job.parentJobId && !durableJobIds.has(job.parentJobId)),
+    ];
+  }
   const parents = tasks.map(normalizeFilmGenerationTask);
   const tasksByGenerationJob = new Map<string, string>();
   for (const value of tasks) {
@@ -560,8 +574,7 @@ function buildFilmGenerationHierarchy(tasks: readonly unknown[], jobs: readonly 
       tasksByGenerationJob.set(task.generationJobId, task.id);
     }
   }
-  const children = jobs.map((value) => {
-    const child = normalizeFilmGenerationJob(value);
+  const children = normalizedJobs.map((child) => {
     const parentJobId = child.parentJobId ?? tasksByGenerationJob.get(child.id);
     return parentJobId ? { ...child, parentJobId } : child;
   });
@@ -710,15 +723,24 @@ export function validateFilm(projectId: string): Promise<FilmStatus> {
   return requestFilm(projectId, "/validate", { method: "POST", body: "{}" });
 }
 
-export function applyFilmRepair(projectId: string, repairId: string, revision: number): Promise<FilmStatus> {
+export function applyFilmRepair(
+  projectId: string,
+  repairId: string,
+  revision: number,
+  generation?: { providerId: string; model: string; config: FilmGenerationConfig; idempotencyKey: string; expectedCredits: number },
+): Promise<FilmStatus> {
   return requestFilm(projectId, `/repairs/${encodeURIComponent(repairId)}/apply`, {
     method: "POST",
-    body: JSON.stringify({ revision, approved: true }),
+    body: JSON.stringify({ revision, approved: true, ...generation }),
   });
 }
 
 export function restoreFilmEntityVersion(projectId: string, versionId: string, currentRevision: number): Promise<FilmStatus> {
   return requestFilm(projectId, `/versions/${encodeURIComponent(versionId)}/restore`, { method: "POST", body: JSON.stringify({ revision: currentRevision }) });
+}
+
+export function restoreFilmStructureVersion(projectId: string, versionId: string, currentRevision: number): Promise<FilmStatus> {
+  return requestFilm(projectId, `/structure-versions/${encodeURIComponent(versionId)}/restore`, { method: "POST", body: JSON.stringify({ revision: currentRevision }) });
 }
 
 export async function refreshFilmProjection(projectId: string): Promise<FilmProjectionPlan> {
@@ -739,7 +761,7 @@ export function commitFilmProjection(projectId: string, commit: FilmProjectionCo
 export type FilmCanvasAdoptionRequest = {
   targetType: "shot" | "asset";
   targetId: string;
-  targetField: "image" | "first_frame" | "video" | "audio" | "media";
+  targetField: "image" | "first_frame" | "last_frame" | "video" | "audio" | "media";
   expectedRevision: number;
   sourceNodeId: string;
   storageKey: string;

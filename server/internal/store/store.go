@@ -302,6 +302,9 @@ type FilmGenerationReservation struct {
 	Job       GenerationJob
 	Units     int
 	UsageMeta json.RawMessage
+	// ExpectedCredits binds a user-confirmed quote to the transactional model price.
+	// Nil is accepted for legacy/non-interactive generation; repair confirmations set it.
+	ExpectedCredits *int
 }
 
 // FilmGenerationBatchStore commits the aggregate revision, queued jobs and

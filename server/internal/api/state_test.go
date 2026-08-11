@@ -35,6 +35,7 @@ type memoryStore struct {
 	compareAndSwapStatesHook func(tenantID string, mutations []store.StateMutation)
 	generationJobCreateErr   error
 	generationJobPutErr      error
+	generationCancelErrors   map[string]error
 	authUsers                map[string]store.AuthUser
 	credits                  map[string]int64
 	creditLogs               map[string]struct{}
@@ -369,6 +370,9 @@ func (m *memoryStore) CancelServerGenerationJob(_ context.Context, tenantID, id 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := tenantKey(tenantID, id)
+	if err := m.generationCancelErrors[key]; err != nil {
+		return store.GenerationJob{}, err
+	}
 	job, ok := m.jobs[key]
 	if !ok {
 		return store.GenerationJob{}, store.ErrNotFound

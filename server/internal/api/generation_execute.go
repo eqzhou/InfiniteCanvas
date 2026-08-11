@@ -419,6 +419,9 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	} else if errors.Is(err, store.ErrBanned) {
 		http.Error(w, "account banned", http.StatusForbidden)
 		return
+	} else if errors.Is(err, store.ErrUnauthorized) {
+		http.Error(w, "login required for billable generation", http.StatusUnauthorized)
+		return
 	} else if err != nil {
 		http.Error(w, "failed to store generation job", http.StatusInternalServerError)
 		return
@@ -599,7 +602,8 @@ func isServerGenerationJob(job store.GenerationJob) bool {
 	}
 	return ((job.Kind == "text" || job.Kind == "image" || job.Kind == "video" || job.Kind == "audio") && parameters.Executor == serverExecutorMarker) ||
 		(job.Kind == "workflow" && parameters.Executor == "workflow") ||
-		(job.Kind == "export" && parameters.Executor == filmExportExecutorMarker)
+		(job.Kind == "export" && parameters.Executor == filmExportExecutorMarker) ||
+		(job.Kind == "film-stage" && parameters.Executor == "film-stage")
 }
 
 func (s *Server) startGenerationWorkers(count int) {
@@ -829,6 +833,38 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	tenantID := tenantIDFrom(r)
+	existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, id)
+	if errors.Is(getErr, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if getErr != nil {
+		http.Error(w, "failed to load generation job", http.StatusInternalServerError)
+		return
+	}
+	if existing.Kind == "film-stage" {
+		var parameters filmStageGenerationParameters
+		if json.Unmarshal(existing.Parameters, &parameters) != nil || parameters.Executor != "film-stage" || len(parameters.ChildJobIDs) > 1_000 {
+			http.Error(w, "invalid film stage generation job", http.StatusConflict)
+			return
+		}
+		seen := make(map[string]struct{}, len(parameters.ChildJobIDs))
+		for _, childID := range parameters.ChildJobIDs {
+			if !validProjectID(childID) {
+				http.Error(w, "invalid film stage child job", http.StatusConflict)
+				return
+			}
+			if _, duplicate := seen[childID]; duplicate {
+				continue
+			}
+			seen[childID] = struct{}{}
+			if _, childErr := s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC()); childErr != nil {
+				http.Error(w, "failed to cancel film stage child job", http.StatusInternalServerError)
+				return
+			}
+			s.cancelLocalGeneration(tenantID, childID)
+		}
+	}
 	job, err := s.store.CancelServerGenerationJob(r.Context(), tenantID, id, time.Now().UTC())
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
