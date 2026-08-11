@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -110,6 +111,85 @@ func TestWebDAVBlobObjectStoreCRUDAndCAS(t *testing.T) {
 		if strings.Contains(path, "tenant-a") || strings.Contains(path, "dav-pass") {
 			t.Fatalf("path leaked tenant or secret: %s", path)
 		}
+	}
+}
+
+func TestWebDAVBlobObjectStoreCreatesParentCollectionsBeforePut(t *testing.T) {
+	type entry struct {
+		body    []byte
+		version int
+	}
+	var mu sync.Mutex
+	collections := map[string]bool{"/dav": true}
+	objects := map[string]entry{}
+	mkcolCalls := make(map[string]int)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "dav-user" || pass != "dav-pass" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method {
+		case "MKCOL":
+			mkcolCalls[r.URL.Path]++
+			if r.ContentLength > 0 {
+				http.Error(w, "MKCOL body is not allowed", http.StatusUnsupportedMediaType)
+				return
+			}
+			if collections[r.URL.Path] {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			if !collections[path.Dir(r.URL.Path)] {
+				http.Error(w, "parent collection missing", http.StatusConflict)
+				return
+			}
+			collections[r.URL.Path] = true
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodPut:
+			if !collections[path.Dir(r.URL.Path)] {
+				http.Error(w, "parent collection missing", http.StatusConflict)
+				return
+			}
+			body, _ := io.ReadAll(r.Body)
+			current := objects[r.URL.Path]
+			current.body, current.version = body, current.version+1
+			objects[r.URL.Path] = current
+			w.Header().Set("ETag", fmt.Sprintf(`"v%d"`, current.version))
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer upstream.Close()
+
+	objectStore, err := newWebDAVBlobObjectStore(WebDAVBlobStorageConfig{
+		Endpoint: upstream.URL + "/dav", Username: "dav-user", Password: "dav-pass",
+		Prefix: "openboard/media", AllowInsecureLoopback: true, HTTPClient: upstream.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := blobObject{Data: []byte("pixels"), Metadata: blobMetadata{ContentType: "image/png"}}
+	for _, name := range []string{"nested/first", "nested/second"} {
+		if _, err := objectStore.Put(t.Context(), "tenant-a", name, value, blobVersionAbsent); err != nil {
+			t.Fatalf("put %s: %v", name, err)
+		}
+	}
+
+	objectURL, err := objectStore.objectURL("tenant-a", "nested/first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for collection := path.Dir(objectURL.Path); collection != "/dav"; collection = path.Dir(collection) {
+		if !collections[collection] || mkcolCalls[collection] == 0 {
+			t.Fatalf("parent collection was not created: %s (collections=%v calls=%v)", collection, collections, mkcolCalls)
+		}
+	}
+	if len(objects) != 2 {
+		t.Fatalf("stored objects = %d, want 2", len(objects))
 	}
 }
 

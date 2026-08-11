@@ -245,6 +245,83 @@ func TestTenantWebDAVStoragePoolFailsClosedWhenFeatureDisabled(t *testing.T) {
 	}
 }
 
+func TestDisabledWebDAVCanBePreservedWhileEditingOtherStorage(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	t.Setenv(webDAVMediaFeatureEnv, "true")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	initial := []byte(`[
+		{"id":"tenant-dav","kind":"webdav","endpoint":"http://127.0.0.1:8080/dav","prefix":"media","weight":1,"healthy":true,"allowInsecureLoopback":true},
+		{"id":"tenant-s3","kind":"s3","endpoint":"http://127.0.0.1:9000","bucket":"bucket","region":"auto","prefix":"openboard","weight":1,"healthy":true,"allowInsecureLoopback":true}
+	]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", initial); got.Code != http.StatusOK {
+		t.Fatalf("initial config = %d %s", got.Code, got.Body.String())
+	}
+	t.Setenv(webDAVMediaFeatureEnv, "false")
+
+	withUnchangedWebDAV := []byte(`[
+		{"id":"tenant-dav","kind":"webdav","endpoint":"http://127.0.0.1:8080/dav","prefix":"media","weight":1,"healthy":true,"allowInsecureLoopback":true},
+		{"id":"tenant-s3","kind":"s3","endpoint":"http://127.0.0.1:9000","bucket":"bucket","region":"auto","prefix":"openboard","weight":2,"healthy":true,"allowInsecureLoopback":true}
+	]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", withUnchangedWebDAV); got.Code != http.StatusOK {
+		t.Fatalf("preserve disabled WebDAV = %d %s", got.Code, got.Body.String())
+	}
+	providers, err := decodeTenantStoragePool(backend.state[tenantKey(store.DefaultTenantID, tenantStoragePoolStateKey)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range providers {
+		if provider.ID == "tenant-dav" && provider.Deleted {
+			t.Fatal("unchanged disabled WebDAV provider was tombstoned")
+		}
+	}
+}
+
+func TestEditingOtherStorageDoesNotTombstoneOmittedDisabledWebDAV(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	t.Setenv(webDAVMediaFeatureEnv, "true")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	initial := []byte(`[
+		{"id":"tenant-dav","kind":"webdav","endpoint":"http://127.0.0.1:8080/dav","prefix":"media","weight":1,"healthy":true,"allowInsecureLoopback":true},
+		{"id":"tenant-s3","kind":"s3","endpoint":"http://127.0.0.1:9000","bucket":"bucket","region":"auto","prefix":"openboard","weight":1,"healthy":true,"allowInsecureLoopback":true}
+	]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", initial); got.Code != http.StatusOK {
+		t.Fatalf("initial config = %d %s", got.Code, got.Body.String())
+	}
+	t.Setenv(webDAVMediaFeatureEnv, "false")
+
+	s3Only := []byte(`[
+		{"id":"tenant-s3","kind":"s3","endpoint":"http://127.0.0.1:9000","bucket":"bucket","region":"auto","prefix":"openboard","weight":2,"healthy":true,"allowInsecureLoopback":true}
+	]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", s3Only); got.Code != http.StatusOK {
+		t.Fatalf("edit S3 = %d %s", got.Code, got.Body.String())
+	}
+	providers, err := decodeTenantStoragePool(backend.state[tenantKey(store.DefaultTenantID, tenantStoragePoolStateKey)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range providers {
+		if provider.ID == "tenant-dav" {
+			if provider.Deleted || provider.Weight != 1 || !provider.Healthy {
+				t.Fatalf("disabled WebDAV provider changed: %#v", provider)
+			}
+			return
+		}
+	}
+	t.Fatal("disabled WebDAV provider was removed")
+}
+
 func TestDisablingWebDAVKeepsHistoricalReadsButStopsNewPlacements(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	t.Setenv("OPENBOARD_TOKEN", "test-token")
