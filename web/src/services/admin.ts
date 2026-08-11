@@ -50,7 +50,7 @@ export function isCreditAdjustmentReady(delta: number, reason: string): boolean 
 
 export type AdminStoragePoolProviderStatus = {
   id: string;
-  kind: string;
+  kind: "s3" | "webdav" | string;
   weight: number;
   endpoint?: string;
   bucket?: string;
@@ -58,6 +58,7 @@ export type AdminStoragePoolProviderStatus = {
   prefix?: string;
   healthy?: boolean;
   allowInsecureLoopback?: boolean;
+  allowPrivate?: boolean;
   secretConfigured?: boolean;
   configuredSelectable: boolean;
   probeKnown: boolean;
@@ -355,7 +356,7 @@ export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStorage
     for (const [key, max] of [["endpoint", 8 * 1024], ["bucket", 63], ["region", 64], ["prefix", 256]] as const) {
       if (item[key] !== undefined && (typeof item[key] !== "string" || item[key].length > max)) throw new Error("存储池配置响应无效");
     }
-    for (const key of ["healthy", "allowInsecureLoopback", "secretConfigured"] as const) {
+    for (const key of ["healthy", "allowInsecureLoopback", "allowPrivate", "secretConfigured"] as const) {
       if (item[key] !== undefined && typeof item[key] !== "boolean") throw new Error("存储池配置响应无效");
     }
     return {
@@ -372,6 +373,7 @@ export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStorage
       ...(typeof item.prefix === "string" ? { prefix: item.prefix } : {}),
       ...(typeof item.healthy === "boolean" ? { healthy: item.healthy } : {}),
       ...(typeof item.allowInsecureLoopback === "boolean" ? { allowInsecureLoopback: item.allowInsecureLoopback } : {}),
+      ...(typeof item.allowPrivate === "boolean" ? { allowPrivate: item.allowPrivate } : {}),
       ...(typeof item.secretConfigured === "boolean" ? { secretConfigured: item.secretConfigured } : {}),
       ...(totalBytes === undefined ? {} : { totalBytes }),
       ...(availableBytes === undefined ? {} : { availableBytes }),
@@ -382,13 +384,24 @@ export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStorage
 }
 
 export type AdminStoragePoolProviderInput = {
+  kind?: "s3" | "webdav";
   id: string; endpoint: string; bucket: string; region: string; prefix: string;
-  weight: number; healthy: boolean; allowInsecureLoopback: boolean;
+  weight: number; healthy: boolean; allowInsecureLoopback: boolean; allowPrivate?: boolean;
 };
 
 function normalizeStorageProvider(item: AdminStoragePoolProviderInput): AdminStoragePoolProviderInput {
-  const value = { ...item, id: item.id.trim(), endpoint: item.endpoint.trim().replace(/\/+$/, ""), bucket: item.bucket.trim().toLowerCase(), region: item.region.trim() || "auto", prefix: item.prefix.trim().replace(/^\/+|\/+$/g, "") || "openboard" };
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value.id) || !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(value.bucket) || !Number.isSafeInteger(value.weight) || value.weight < 0 || value.weight > 10_000) throw new Error("存储提供商配置无效");
+  const kind = item.kind ?? "s3";
+  const value = {
+    ...item,
+    ...(item.kind === undefined ? {} : { kind }),
+    id: item.id.trim(), endpoint: item.endpoint.trim().replace(/\/+$/, ""),
+    bucket: kind === "s3" ? item.bucket.trim().toLowerCase() : "",
+    region: kind === "s3" ? item.region.trim() || "auto" : "",
+    prefix: item.prefix.trim().replace(/^\/+|\/+$/g, "") || "openboard",
+    ...(item.allowPrivate === undefined ? {} : { allowPrivate: kind === "webdav" && item.allowPrivate }),
+  };
+  const validBucket = kind === "webdav" || /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(value.bucket);
+  if ((kind !== "s3" && kind !== "webdav") || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value.id) || !validBucket || !Number.isSafeInteger(value.weight) || value.weight < 0 || value.weight > 10_000) throw new Error("存储提供商配置无效");
   let parsed: URL; try { parsed = new URL(value.endpoint); } catch { throw new Error("存储端点无效"); }
   const loopback = isLoopbackHostname(parsed.hostname);
   if (parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback && value.allowInsecureLoopback))) throw new Error("存储端点必须使用 HTTPS（仅显式允许本机 HTTP）");
@@ -407,8 +420,16 @@ export async function putAdminStoragePool(items: AdminStoragePoolProviderInput[]
   return { items: values, revision: nextRevision };
 }
 
-export async function putAdminStoragePoolSecret(id: string, credential: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }): Promise<void> {
-  if (!credential.accessKeyId.trim() || !credential.secretAccessKey.trim()) throw new Error("Access Key 和 Secret Key 不能为空");
+export type AdminStoragePoolCredential =
+  | { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
+  | { username: string; password: string };
+
+export async function putAdminStoragePoolSecret(id: string, credential: AdminStoragePoolCredential): Promise<void> {
+  if ("username" in credential) {
+    if (!credential.username.trim() || !credential.password) throw new Error("WebDAV 用户名和密码不能为空");
+  } else if (!credential.accessKeyId.trim() || !credential.secretAccessKey.trim()) {
+    throw new Error("Access Key 和 Secret Key 不能为空");
+  }
   const response = await authFetch(`admin/storage-pool/${encodeURIComponent(id)}/secret`, { method: "PUT", body: JSON.stringify(credential) });
   if (!response.ok) await json(response);
 }

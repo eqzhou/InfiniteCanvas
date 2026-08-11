@@ -23,10 +23,14 @@ export function storageCapacityLabel(status: AdminStoragePoolProviderStatus): st
   return `${formatBytes(status.availableBytes)} 可用 / ${formatBytes(status.totalBytes)}`;
 }
 
-const blankProvider = (): AdminStoragePoolProviderInput => ({ id: "", endpoint: "https://", bucket: "", region: "auto", prefix: "openboard", weight: 1, healthy: true, allowInsecureLoopback: false });
+export const blankStorageProvider = (): AdminStoragePoolProviderInput => ({ kind: "s3", id: "", endpoint: "https://", bucket: "", region: "auto", prefix: "openboard", weight: 1, healthy: true, allowPrivate: false, allowInsecureLoopback: false });
+
+export function storageCredentialKind(kind: string): "access-key" | "username-password" {
+  return kind === "webdav" ? "username-password" : "access-key";
+}
 
 function editable(items: AdminStoragePoolProviderStatus[]): AdminStoragePoolProviderInput[] {
-  return items.filter((item) => item.endpoint !== undefined).map((item) => ({ id: item.id, endpoint: item.endpoint ?? "", bucket: item.bucket ?? "", region: item.region ?? "auto", prefix: item.prefix ?? "openboard", weight: item.weight, healthy: item.healthy ?? item.configuredSelectable, allowInsecureLoopback: item.allowInsecureLoopback ?? false }));
+  return items.filter((item) => item.endpoint !== undefined).map((item) => ({ kind: item.kind === "webdav" ? "webdav" : "s3", id: item.id, endpoint: item.endpoint ?? "", bucket: item.bucket ?? "", region: item.region ?? (item.kind === "webdav" ? "" : "auto"), prefix: item.prefix ?? "openboard", weight: item.weight, healthy: item.healthy ?? item.configuredSelectable, allowPrivate: item.allowPrivate ?? false, allowInsecureLoopback: item.allowInsecureLoopback ?? false }));
 }
 
 export function AdminStoragePoolPanel() {
@@ -40,6 +44,8 @@ export function AdminStoragePoolPanel() {
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
   const [sessionToken, setSessionToken] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const load = async () => {
     setLoading(true);
     setLoaded(false);
@@ -63,14 +69,19 @@ export function AdminStoragePoolPanel() {
   };
   const saveSecret = async () => {
     setLoading(true);
-    try { await putAdminStoragePoolSecret(secretFor, { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) }); setSecretFor(""); setAccessKeyId(""); setSecretAccessKey(""); setSessionToken(""); await load(); }
+    const provider = drafts.find((item) => item.id === secretFor);
+    try {
+      if (storageCredentialKind(provider?.kind ?? "s3") === "username-password") await putAdminStoragePoolSecret(secretFor, { username, password });
+      else await putAdminStoragePoolSecret(secretFor, { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) });
+      setSecretFor(""); setAccessKeyId(""); setSecretAccessKey(""); setSessionToken(""); setUsername(""); setPassword(""); await load();
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setLoading(false); }
   };
 
   return <section className="space-y-4" aria-labelledby="storage-pool-title">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h2 id="storage-pool-title" className="text-lg font-semibold">租户存储池</h2><p className="text-sm text-[var(--ob-muted)]">用户单存储优先，其次使用这里的加权池，最后回退到进程存储。凭据加密保存且永不回显。</p></div>
-      <div className="flex gap-2"><button type="button" className="ob-btn" disabled={loading || !loaded} onClick={() => setDrafts((current) => [...current, blankProvider()])}><Plus size={15} />新增</button><button type="button" className="ob-btn ob-btn-primary" disabled={loading || !loaded} onClick={() => void save()}><Save size={15} />保存</button><button type="button" className="ob-btn" disabled={loading} onClick={() => void load()}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />{loaded ? "刷新" : "重新加载"}</button></div>
+      <div><h2 id="storage-pool-title" className="text-lg font-semibold">租户存储池</h2><p className="text-sm text-[var(--ob-muted)]">集中配置 S3/R2 或 WebDAV 媒体存储。这里的 WebDAV 用于服务端媒体，不是用户设置中的工作区备份。凭据加密保存且永不回显。</p></div>
+      <div className="flex gap-2"><button type="button" className="ob-btn" disabled={loading || !loaded} onClick={() => setDrafts((current) => [...current, blankStorageProvider()])}><Plus size={15} />新增</button><button type="button" className="ob-btn ob-btn-primary" disabled={loading || !loaded} onClick={() => void save()}><Save size={15} />保存</button><button type="button" className="ob-btn" disabled={loading} onClick={() => void load()}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />{loaded ? "刷新" : "重新加载"}</button></div>
     </div>
     {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
     {!loading && loaded && drafts.length === 0 ? <div className="ob-surface p-5 text-sm text-[var(--ob-muted)]">尚未配置租户存储池；当前使用进程级存储回退。</div> : null}
@@ -79,16 +90,17 @@ export function AdminStoragePoolPanel() {
       {drafts.map((item, index) => { const status = items.find((candidate) => candidate.id === item.id); return <article key={index} className="ob-surface space-y-3 p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-sm">稳定 ID<input className="ob-input mt-1 w-full" value={item.id} disabled={Boolean(status)} onChange={(event) => update(index, { id: event.target.value })} /></label>
-          <label className="text-sm xl:col-span-2">S3/R2 Endpoint<input className="ob-input mt-1 w-full" value={item.endpoint} disabled={Boolean(status)} onChange={(event) => update(index, { endpoint: event.target.value })} /></label>
-          <label className="text-sm">Bucket<input className="ob-input mt-1 w-full" value={item.bucket} disabled={Boolean(status)} onChange={(event) => update(index, { bucket: event.target.value })} /></label>
-          <label className="text-sm">Region<input className="ob-input mt-1 w-full" value={item.region} disabled={Boolean(status)} onChange={(event) => update(index, { region: event.target.value })} /></label>
+          <label className="text-sm">类型<select className="ob-input mt-1 w-full" value={item.kind ?? "s3"} disabled={Boolean(status)} onChange={(event) => update(index, { kind: event.target.value === "webdav" ? "webdav" : "s3", bucket: "", region: event.target.value === "webdav" ? "" : "auto", allowPrivate: false })}><option value="s3">S3 / R2</option><option value="webdav">WebDAV 媒体</option></select></label>
+          <label className="text-sm xl:col-span-2">{item.kind === "webdav" ? "WebDAV Endpoint" : "S3/R2 Endpoint"}<input className="ob-input mt-1 w-full" value={item.endpoint} disabled={Boolean(status)} onChange={(event) => update(index, { endpoint: event.target.value })} /></label>
+          {item.kind !== "webdav" ? <><label className="text-sm">Bucket<input className="ob-input mt-1 w-full" value={item.bucket} disabled={Boolean(status)} onChange={(event) => update(index, { bucket: event.target.value })} /></label>
+          <label className="text-sm">Region<input className="ob-input mt-1 w-full" value={item.region} disabled={Boolean(status)} onChange={(event) => update(index, { region: event.target.value })} /></label></> : null}
           <label className="text-sm">Prefix<input className="ob-input mt-1 w-full" value={item.prefix} disabled={Boolean(status)} onChange={(event) => update(index, { prefix: event.target.value })} /></label>
           <label className="text-sm">权重<input className="ob-input mt-1 w-full" type="number" min={0} max={10000} value={item.weight} onChange={(event) => update(index, { weight: Number(event.target.value) })} /></label>
-          <div className="flex items-end gap-4 pb-2 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={item.healthy} onChange={(event) => update(index, { healthy: event.target.checked })} />参与新写入</label><label className="flex items-center gap-2"><input type="checkbox" checked={item.allowInsecureLoopback} disabled={Boolean(status)} onChange={(event) => update(index, { allowInsecureLoopback: event.target.checked })} />本机 HTTP</label></div>
+          <div className="flex items-end gap-4 pb-2 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={item.healthy} onChange={(event) => update(index, { healthy: event.target.checked })} />参与新写入</label><label className="flex items-center gap-2"><input type="checkbox" checked={item.allowInsecureLoopback} disabled={Boolean(status)} onChange={(event) => update(index, { allowInsecureLoopback: event.target.checked })} />本机 HTTP</label>{item.kind === "webdav" ? <label className="flex items-center gap-2"><input type="checkbox" checked={item.allowPrivate ?? false} disabled={Boolean(status)} onChange={(event) => update(index, { allowPrivate: event.target.checked })} />私网 HTTPS</label> : null}</div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--ob-muted)]"><span>{status ? `${storageProbeLabel(status)} · ${storageCapacityLabel(status)} · ${status.secretConfigured ? "凭据已配置" : "凭据缺失"}` : "保存后可配置凭据"}</span><div className="flex gap-2">{status ? <button type="button" className="ob-btn" onClick={() => setSecretFor(item.id)}><KeyRound size={14} />更新凭据</button> : null}<button type="button" className="ob-btn text-[var(--ob-danger)]" onClick={() => void remove(status ? item.id : "", index)}><Trash2 size={14} />删除</button></div></div>
       </article>; })}
     </div>
-    {secretFor ? <div className="ob-surface space-y-3 p-4"><h3 className="font-medium">更新 {secretFor} 凭据</h3><div className="grid gap-3 md:grid-cols-3"><input className="ob-input" placeholder="Access Key ID" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} /><input className="ob-input" type="password" placeholder="Secret Access Key" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} /><input className="ob-input" type="password" placeholder="Session Token（可选）" value={sessionToken} onChange={(event) => setSessionToken(event.target.value)} /></div><div className="flex gap-2"><button type="button" className="ob-btn ob-btn-primary" onClick={() => void saveSecret()}>加密保存</button><button type="button" className="ob-btn" onClick={() => setSecretFor("")}>取消</button></div></div> : null}
+    {secretFor ? <div className="ob-surface space-y-3 p-4"><h3 className="font-medium">更新 {secretFor} 凭据</h3>{storageCredentialKind(drafts.find((item) => item.id === secretFor)?.kind ?? "s3") === "username-password" ? <div className="grid gap-3 md:grid-cols-2"><input className="ob-input" placeholder="WebDAV 用户名" value={username} onChange={(event) => setUsername(event.target.value)} /><input className="ob-input" type="password" autoComplete="new-password" placeholder="WebDAV 密码" value={password} onChange={(event) => setPassword(event.target.value)} /></div> : <div className="grid gap-3 md:grid-cols-3"><input className="ob-input" placeholder="Access Key ID" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} /><input className="ob-input" type="password" placeholder="Secret Access Key" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} /><input className="ob-input" type="password" placeholder="Session Token（可选）" value={sessionToken} onChange={(event) => setSessionToken(event.target.value)} /></div>}<div className="flex gap-2"><button type="button" className="ob-btn ob-btn-primary" onClick={() => void saveSecret()}>加密保存</button><button type="button" className="ob-btn" onClick={() => setSecretFor("")}>取消</button></div></div> : null}
   </section>;
 }
