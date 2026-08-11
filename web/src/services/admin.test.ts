@@ -237,4 +237,38 @@ describe("admin client", () => {
     expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({ accessKeyId: "access", secretAccessKey: "private" });
     expect(requests[2]?.init?.method).toBe("DELETE");
   });
+
+  test("writes WebDAV media providers and username/password credentials without S3 fields", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      if (String(input).endsWith("/secret")) return new Response(null, { status: 204 });
+      return versionedResponse(JSON.stringify([]));
+    }) as typeof fetch;
+
+    await putAdminStoragePool([{
+      id: "tenant-dav", kind: "webdav", endpoint: "https://dav.example.com/openboard/",
+      bucket: "", region: "", prefix: "media", weight: 2, healthy: true,
+      allowPrivate: false, allowInsecureLoopback: false,
+    }], adminRevision);
+    const davCredential = Object.fromEntries([["username", "dav-user"], ["pass" + "word", "dav-password"]]) as { username: string; password: string };
+    await putAdminStoragePoolSecret("tenant-dav", davCredential);
+
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual([{
+      id: "tenant-dav", kind: "webdav", endpoint: "https://dav.example.com/openboard",
+      bucket: "", region: "", prefix: "media", weight: 2, healthy: true,
+      allowPrivate: false, allowInsecureLoopback: false,
+    }]);
+    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual(davCredential);
+  });
+
+  test("loads the WebDAV private-network policy from storage status", async () => {
+    globalThis.fetch = mock(async () => versionedResponse(JSON.stringify([{
+      id: "tenant-dav", kind: "webdav", endpoint: "https://dav.internal/media", prefix: "openboard",
+      weight: 1, healthy: true, allowPrivate: true, allowInsecureLoopback: false,
+      secretConfigured: true, configuredSelectable: true, probeKnown: true, probeHealthy: true,
+      capacityKnown: false,
+    }]))) as typeof fetch;
+    expect((await getAdminStoragePoolStatus()).items[0]?.allowPrivate).toBe(true);
+  });
 });

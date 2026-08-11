@@ -1,10 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { storageCapacityLabel, storageProbeLabel } from "./AdminStoragePoolPanel";
+import { blankStorageProvider, storageCapacityLabel, storageCredentialKind, storageProbeLabel } from "./AdminStoragePoolPanel";
 import type { AdminStoragePoolProviderStatus } from "@/services/admin";
 
 const status = (patch: Partial<AdminStoragePoolProviderStatus> = {}): AdminStoragePoolProviderStatus => ({
   id: "pool", kind: "s3", weight: 1, configuredSelectable: true,
   probeKnown: false, probeHealthy: false, capacityKnown: false, ...patch,
+});
+
+describe("admin storage pool provider forms", () => {
+  test("starts new providers as explicit S3 providers", () => {
+    expect(blankStorageProvider().kind).toBe("s3");
+  });
+
+  test("selects credentials from the provider kind", () => {
+    expect(storageCredentialKind("s3")).toBe("access-key");
+    expect(storageCredentialKind("webdav")).toBe("username-password");
+  });
 });
 
 describe("admin storage pool status labels", () => {
