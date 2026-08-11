@@ -94,6 +94,7 @@ import {
   Type,
   Wand2,
 } from "lucide-react";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type PromptDialogKind = "rewrite" | "image" | "video" | "audio";
 
@@ -118,6 +119,7 @@ export function NodeActions({
   avoidTopToolbarOverlap?: boolean;
   inlineConfigOnly?: boolean;
 }) {
+  const { t } = useI18n();
   const project = useBoardStore((s) => s.getActive());
   const config = useBoardStore((s) => s.config);
   const updateNode = useBoardStore((s) => s.updateNode);
@@ -163,13 +165,13 @@ export function NodeActions({
 		options: { replaceExisting?: boolean } = {},
 		selectedChannel = channel,
 	) => {
-		if (!selectedChannel) throw new Error("图片生成渠道不可用");
+		if (!selectedChannel) throw new Error(t("canvasNodes.imageChannelUnavailable"));
 		const provider = getProvider(selectedChannel, "image");
 		if (provider.protocol === "gemini" && generation.transparentBackground) {
-			throw new Error("Gemini 图片生成不支持透明背景");
+			throw new Error(t("canvasNodes.geminiTransparentUnsupported"));
 		}
 		if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
-			throw new Error("当前图片模板不支持透明背景");
+			throw new Error(t("canvasNodes.templateTransparentUnsupported"));
 		}
 		const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
 		const jobId = uid("job");
@@ -203,7 +205,7 @@ export function NodeActions({
 			const job = await cancelServerGenerationJob(jobId);
 			updateNode(node.id, { metadata: {
 				status: "error",
-				errorDetails: job.error || "已取消",
+				errorDetails: job.error || t("canvasNodes.cancelled"),
 				generationJobId: job.id,
 			} });
 		} catch (cause) {
@@ -228,11 +230,11 @@ export function NodeActions({
     return [...local, ...cloud].map((provider) => ({
       id: provider.id,
       label: provider.kind === "local" && capability === "mask"
-        ? `${provider.label} · 透明遮罩`
+        ? `${provider.label} · ${t("canvasNodes.transparentMask")}`
         : provider.label,
       kind: provider.kind,
     }));
-  }, [imageTool, transformRegistry]);
+  }, [imageTool, t, transformRegistry]);
 
   const upstream = () => {
     if (!project)
@@ -305,13 +307,13 @@ export function NodeActions({
   const runConfigGenerate = async () => {
     if (configGenerating || node.metadata.status === "loading") return;
     if (node.metadata.generationChannelId && !channel) {
-      alert("原生成渠道已不可用，请恢复该渠道后再重试");
+      alert(t("canvasNodes.originalChannelUnavailable"));
       return;
     }
     const mode = node.metadata.generationMode ?? "image";
     const providerKind = mode === "text" ? "text" : mode === "video" ? "video" : "image";
     if (!isGenerationChannelReady(channel, providerKind)) {
-      alert("请先在设置中配置对应模型服务的 API Key");
+      alert(t("canvasNodes.modelApiKeyRequired"));
       return;
     }
     const inputs = upstream();
@@ -324,7 +326,7 @@ export function NodeActions({
       : inputs.imageKeys;
     const images = inputs.images;
     if (usesStoredDirectorReferences && imageKeys.length === 0) {
-      alert("导演台拍摄参考已丢失，无法按原镜头重新生成");
+      alert(t("canvasNodes.directorReferenceMissing"));
       return;
     }
     const prompt = resolveConfigPrompt({
@@ -332,7 +334,7 @@ export function NodeActions({
       upstreamTexts: texts,
     });
     if (!prompt) {
-      alert("需要上游文本或节点内提示词");
+      alert(t("canvasNodes.promptRequired"));
       return;
     }
     setConfigGenerating(true);
@@ -560,7 +562,7 @@ export function NodeActions({
 
   const rewriteText = async (instruction: string) => {
     if (!channel || !getProvider(channel, "text").apiKey) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading" } });
@@ -568,7 +570,7 @@ export function NodeActions({
       const out = await generateText({
         channel,
         model: node.metadata.model || getProvider(channel, "text").model,
-        prompt: `原文本：\n${node.metadata.content ?? ""}\n\n改写要求：${instruction}`,
+        prompt: t("canvasNodes.originalTextPrompt", { text: node.metadata.content ?? "", instruction }),
         systemPrompt: config.systemPrompt,
         reasoningEffort: node.metadata.reasoningEffort,
       });
@@ -599,7 +601,7 @@ export function NodeActions({
 
   const continueFromImage = async (prompt: string) => {
     if (!isGenerationChannelReady(channel, "image")) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     try {
@@ -643,7 +645,7 @@ export function NodeActions({
           x: node.position.x + node.width + 60,
           y: node.position.y + index * 36,
         }, {
-          title: `结果 ${index + 1}`,
+          title: t("canvasNodes.resultTitle", { index: index + 1 }),
           metadata: {
             content: uploaded.url,
             storageKey: uploaded.storageKey,
@@ -680,16 +682,16 @@ export function NodeActions({
       ? channelChoices.find((choice) => choice.id === savedChannelId)
       : channel;
     if (savedChannelId && !retryChannel) {
-      alert("原生成渠道已不可用，无法按原参数重试");
+      alert(t("canvasNodes.originalChannelRetryUnavailable"));
       return;
     }
     if (!isGenerationChannelReady(retryChannel, "image")) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     const prompt = node.metadata.prompt?.trim();
     if (!prompt) {
-      alert("此图片没有可重试的生成快照，请使用“继续创作”生成新结果");
+      alert(t("canvasNodes.retrySnapshotMissing"));
       return;
     }
     const referenceStorageKeys = [...(node.metadata.referenceStorageKeys ?? [])];
@@ -726,7 +728,7 @@ export function NodeActions({
         transparentBackground: normalizedGeneration.transparentBackground,
         systemPrompt: config.systemPrompt,
       });
-      if (!url) throw new Error("图片服务没有返回结果");
+      if (!url) throw new Error(t("canvasNodes.imageResultMissing"));
       const uploaded = await uploadMedia(url, "image");
       updateNode(node.id, { metadata: {
         content: uploaded.url,
@@ -748,7 +750,7 @@ export function NodeActions({
 
   const reversePrompt = async () => {
     if (!channel || !getProvider(channel, "text").apiKey) {
-      alert("请先在设置中配置文本视觉模型服务的 API Key");
+      alert(t("canvasNodes.visionApiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
@@ -758,18 +760,18 @@ export function NodeActions({
         node.metadata.content,
       );
       const images = image ? [image] : [];
-      if (!images.length) throw new Error("当前图片没有可读取的内容");
+      if (!images.length) throw new Error(t("canvasNodes.imageContentMissing"));
       const text = await generateText({
         channel,
         model: getProvider(channel, "text").model,
-        prompt: "分析这张图片并输出可复现其主体、构图、光线、色彩和风格的详细生图提示词。只输出提示词。",
+        prompt: t("canvasNodes.reversePromptInstruction"),
         images,
         systemPrompt: config.systemPrompt,
       });
       const created = createNode(
         "text",
         { x: node.position.x + node.width + 60, y: node.position.y },
-        { title: "反推提示词", metadata: { content: text, status: "success" } },
+        { title: t("canvasNodes.reversePrompt"), metadata: { content: text, status: "success" } },
       );
       placeRight([created]);
       updateNode(node.id, { metadata: { status: "success" } });
@@ -785,7 +787,7 @@ export function NodeActions({
 
   const generateOnVideo = async (prompt: string) => {
     if (!channel || !getProvider(channel, "video").apiKey) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
@@ -862,7 +864,7 @@ export function NodeActions({
         ),
       ]);
       if (node.type === "image" && !referenceImages.length) {
-        throw new Error("当前图片参考内容不可用，请重新导入图片后再生成视频");
+        throw new Error(t("canvasNodes.imageReferenceUnavailable"));
       }
       const result = await generateVideo({
         channel,
@@ -943,7 +945,7 @@ export function NodeActions({
         a.click();
         return;
       }
-      alert("没有可下载的文件");
+      alert(t("canvasNodes.downloadMissing"));
       return;
     }
     try {
@@ -969,7 +971,7 @@ export function NodeActions({
       setImageCopyState("copied");
     } catch (cause) {
       setImageCopyState("error");
-      alert(cause instanceof Error ? cause.message : "复制图片失败");
+      alert(cause instanceof Error ? cause.message : t("canvasNodes.copyImageFailed"));
     }
   };
 
@@ -978,7 +980,7 @@ export function NodeActions({
   const generateOnAudio = async (prompt: string) => {
     const provider = channel ? getProvider(channel, "audio") : undefined;
     if (!channel || !provider || (audioProtocolRequiresKey(provider.protocol) && !provider.apiKey)) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
@@ -1071,61 +1073,61 @@ export function NodeActions({
 
   const openRewriteDialog = () => {
     if (!channel || !getProvider(channel, "text").apiKey) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setPromptDialog({
       kind: "rewrite",
-      title: "AI 改写",
-      label: "改写要求",
-      initialValue: "更具体、更适合生图",
-      submitLabel: "开始改写",
+      title: t("canvasNodes.rewrite"),
+      label: t("canvasNodes.rewriteRequirement"),
+      initialValue: t("canvasNodes.rewriteDefault"),
+      submitLabel: t("canvasNodes.startRewrite"),
     });
   };
 
   const openImageGenerationDialog = () => {
     if (!isGenerationChannelReady(channel, "image")) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     const continuing = Boolean(node.metadata.content || node.metadata.storageKey);
     setPromptDialog({
       kind: "image",
-      title: continuing ? "基于此图继续创作" : "生成图片",
-      label: continuing ? "创作要求" : "生图提示词",
+      title: continuing ? t("canvasNodes.continueImage") : t("canvasNodes.generateImage"),
+      label: continuing ? t("canvasNodes.creationRequirement") : t("canvasNodes.imagePrompt"),
       initialValue: continuing ? "" : node.metadata.prompt || "cinematic still",
-      placeholder: continuing ? "描述希望基于当前图片进行的修改或延展…" : "描述要生成的图片…",
-      submitLabel: continuing ? "生成新图片" : "生成图片",
+      placeholder: continuing ? t("canvasNodes.continueImagePlaceholder") : t("canvasNodes.imagePromptPlaceholder"),
+      submitLabel: continuing ? t("canvasNodes.generateNewImage") : t("canvasNodes.generateImage"),
     });
   };
 
   const openVideoGenerationDialog = () => {
     if (!channel || !getProvider(channel, "video").apiKey) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setPromptDialog({
       kind: "video",
-      title: "生成视频",
-      label: "视频提示词",
+      title: t("canvasNodes.generateVideo"),
+      label: t("canvasNodes.videoPrompt"),
       initialValue: node.type === "text"
         ? node.metadata.content || "cinematic short clip"
         : node.metadata.prompt || "cinematic short clip",
-      submitLabel: "生成视频",
+      submitLabel: t("canvasNodes.generateVideo"),
     });
   };
 
   const openAudioGenerationDialog = () => {
     if (!isGenerationChannelReady(channel, "audio")) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setPromptDialog({
       kind: "audio",
-      title: "生成语音",
-      label: "语音文本",
-      initialValue: node.metadata.prompt || node.metadata.content || "你好，OpenBoard",
-      submitLabel: "生成语音",
+      title: t("canvasNodes.generateSpeech"),
+      label: t("canvasNodes.speechText"),
+      initialValue: node.metadata.prompt || node.metadata.content || t("canvasNodes.defaultSpeechText"),
+      submitLabel: t("canvasNodes.generateSpeech"),
     });
   };
 
@@ -1148,36 +1150,36 @@ export function NodeActions({
   const renderImageToolbarAction = (action: ImageToolbarAction) => {
     switch (action) {
       case "generate":
-        return <IconBtn key={action} label={imageToolLabel(imageHasSource ? "续作" : "生成")} title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : imageHasSource ? "基于此图继续创作" : "生成图片"} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openImageGenerationDialog())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(imageHasSource ? t("canvasNodes.continueShort") : t("canvasNodes.generate"))} title={node.metadata.status === "loading" && node.metadata.generationJobId ? t("canvasNodes.cancelGeneration") : imageHasSource ? t("canvasNodes.continueImage") : t("canvasNodes.generateImage")} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openImageGenerationDialog())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
       case "video":
-        return <IconBtn key={action} label={imageToolLabel("视频")} title="生成视频" onClick={openVideoGenerationDialog}><span className="text-[10px] font-semibold">视频</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.video"))} title={t("canvasNodes.generateVideo")} onClick={openVideoGenerationDialog}><span className="text-[10px] font-semibold">{t("canvasNodes.video")}</span></IconBtn>;
       case "reverse":
-        return <IconBtn key={action} label={imageToolLabel("反推")} title="反推提示词" onClick={() => void reversePrompt()}><Type size={14} /></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.reverseShort"))} title={t("canvasNodes.reversePrompt")} onClick={() => void reversePrompt()}><Type size={14} /></IconBtn>;
       case "crop":
-        return <IconBtn key={action} label={imageToolLabel("裁剪")} title="裁剪" onClick={() => setCropOpen(true)}><Crop size={14} /></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.crop"))} title={t("canvasNodes.crop")} onClick={() => setCropOpen(true)}><Crop size={14} /></IconBtn>;
       case "rotate":
-        return <IconBtn key={action} label={imageToolLabel("旋转")} title="旋转 90°" onClick={() => void (async () => {
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.rotate"))} title={t("canvasNodes.rotate90")} onClick={() => void (async () => {
           try { placeRight([await makeRotatedNode(node, 90)]); }
           catch (error) { alert(error instanceof Error ? error.message : String(error)); }
         })()}><RotateCw size={14} /></IconBtn>;
       case "angle":
-        return <IconBtn key={action} label={imageToolLabel("多角度")} title="多角度" onClick={() => setAngleOpen(true)}><span className="text-[10px] font-semibold">角</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.multiAngle"))} title={t("canvasNodes.multiAngle")} onClick={() => setAngleOpen(true)}><span className="text-[10px] font-semibold">{t("canvasNodes.angleShort")}</span></IconBtn>;
       case "mask":
-        return <IconBtn key={action} label={imageToolLabel("遮罩")} title="遮罩/局部编辑" onClick={() => setImageTool("mask")}><span className="text-[10px] font-semibold">罩</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.mask"))} title={t("canvasNodes.maskEdit")} onClick={() => setImageTool("mask")}><span className="text-[10px] font-semibold">{t("canvasNodes.mask")}</span></IconBtn>;
       case "resize":
-        return <IconBtn key={action} label={imageToolLabel("本地放大")} title="本地尺寸放大" onClick={() => setImageTool("resize")}><span className="text-[10px] font-semibold">尺寸</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.localUpscale"))} title={t("canvasNodes.localSizeUpscale")} onClick={() => setImageTool("resize")}><span className="text-[10px] font-semibold">{t("canvasNodes.sizeShort")}</span></IconBtn>;
       case "ai-upscale": {
         const available = transformRegistry.forCapability("upscale").some((provider) => provider.kind === "cloud");
-        return <IconBtn key={action} label={imageToolLabel("AI 超分")} title={available ? "AI 超分" : "当前渠道不支持 AI 超分"} disabled={!available} onClick={() => setImageTool("ai-upscale")}><span className="text-[10px] font-semibold">超分</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.aiUpscale"))} title={available ? t("canvasNodes.aiUpscale") : t("canvasNodes.aiUpscaleUnavailable")} disabled={!available} onClick={() => setImageTool("ai-upscale")}><span className="text-[10px] font-semibold">{t("canvasNodes.aiUpscale")}</span></IconBtn>;
       }
       case "split":
-        return <IconBtn key={action} label={imageToolLabel("切分")} title="切分" onClick={() => setImageTool("split")}><span className="text-[10px] font-semibold">切</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.split"))} title={t("canvasNodes.split")} onClick={() => setImageTool("split")}><span className="text-[10px] font-semibold">{t("canvasNodes.split")}</span></IconBtn>;
       case "copy":
-        return <IconBtn key={action} label={imageToolLabel(imageCopyState === "copied" ? "已复制" : "复制")} title={imageCopyState === "copying" ? "正在复制图片" : imageCopyState === "copied" ? "图片已复制" : imageCopyState === "error" ? "复制失败，请重试" : "复制图片"} disabled={imageCopyState === "copying" || (!node.metadata.content && !node.metadata.storageKey)} onClick={() => void copyImageNode()}>{imageCopyState === "copied" ? <BookmarkCheck size={14} /> : <Copy size={14} />}</IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(imageCopyState === "copied" ? t("canvasNodes.copied") : t("canvasNodes.copy"))} title={imageCopyState === "copying" ? t("canvasNodes.copyingImage") : imageCopyState === "copied" ? t("canvasNodes.imageCopied") : imageCopyState === "error" ? t("canvasNodes.copyRetry") : t("canvasNodes.copyImage")} disabled={imageCopyState === "copying" || (!node.metadata.content && !node.metadata.storageKey)} onClick={() => void copyImageNode()}>{imageCopyState === "copied" ? <BookmarkCheck size={14} /> : <Copy size={14} />}</IconBtn>;
       case "download":
-        return <IconBtn key={action} label={imageToolLabel("下载")} title="下载" onClick={() => void downloadNode()}><Download size={14} /></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.download"))} title={t("canvasNodes.download")} onClick={() => void downloadNode()}><Download size={14} /></IconBtn>;
       case "aspect":
-        return <IconBtn key={action} label={imageToolLabel(node.metadata.freeResize ? "自由" : "等比")} title={node.metadata.freeResize ? "锁定比例" : "自由缩放"} onClick={() => updateNode(node.id, { metadata: { freeResize: !node.metadata.freeResize } })}><span className="text-[10px] font-semibold">{node.metadata.freeResize ? "自由" : "等比"}</span></IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(node.metadata.freeResize ? t("canvasNodes.free") : t("canvasNodes.proportional"))} title={node.metadata.freeResize ? t("canvasNodes.lockAspect") : t("canvasNodes.freeResize")} onClick={() => updateNode(node.id, { metadata: { freeResize: !node.metadata.freeResize } })}><span className="text-[10px] font-semibold">{node.metadata.freeResize ? t("canvasNodes.free") : t("canvasNodes.proportional")}</span></IconBtn>;
     }
   };
 
@@ -1190,15 +1192,15 @@ export function NodeActions({
         type="button"
         className="ob-btn-primary mt-1 inline-flex w-full items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs"
         data-canvas-control
-        aria-label={cancellable ? "停止配置节点生成" : "配置节点生成"}
+        aria-label={cancellable ? t("canvasNodes.stopConfigGeneration") : t("canvasNodes.configGeneration")}
         aria-busy={loading}
         disabled={loading && !cancellable}
-        title={cancellable ? "停止当前生成" : loading ? "生成中" : node.metadata.generationOutputRootId ? "再次生成一批独立结果" : "生成一批独立结果"}
+        title={cancellable ? t("canvasNodes.stopCurrentGeneration") : loading ? t("canvasNodes.generating") : node.metadata.generationOutputRootId ? t("canvasNodes.regenerateBatchTitle") : t("canvasNodes.generateBatchTitle")}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={() => void (cancellable ? cancelNodeGeneration() : runConfigGenerate())}
       >
         {cancellable ? <Square size={13} /> : <Sparkles size={13} />}
-        {cancellable ? "停止生成" : loading ? "生成中…" : node.metadata.generationOutputRootId ? "再次生成一批" : "生成"}
+        {cancellable ? t("canvasNodes.stopGeneration") : loading ? t("canvasNodes.generatingEllipsis") : node.metadata.generationOutputRootId ? t("canvasNodes.regenerateBatch") : t("canvasNodes.generate")}
       </button>
     );
   }
@@ -1214,20 +1216,20 @@ export function NodeActions({
       >
         {node.type === "text" ? (
           <>
-            <IconBtn title="编辑文字" onClick={() => onEditText?.()}>
+            <IconBtn title={t("canvasNodes.editText")} onClick={() => onEditText?.()}>
               <Type size={14} />
             </IconBtn>
-            <IconBtn title="AI 改写" onClick={openRewriteDialog}>
+            <IconBtn title={t("canvasNodes.rewrite")} onClick={openRewriteDialog}>
               <Wand2 size={14} />
             </IconBtn>
-            <IconBtn title="生图" onClick={() => void textToImage()}>
+            <IconBtn title={t("canvasNodes.textToImage")} onClick={() => void textToImage()}>
               <ImagePlus size={14} />
             </IconBtn>
-            <IconBtn title="生成视频" onClick={openVideoGenerationDialog}>
+            <IconBtn title={t("canvasNodes.generateVideo")} onClick={openVideoGenerationDialog}>
               <Sparkles size={14} />
             </IconBtn>
             <IconBtn
-              title="减小字号"
+              title={t("canvasNodes.decreaseFont")}
               onClick={() =>
                 updateNode(node.id, {
                   metadata: { fontSize: adjustFontSize(node.metadata.fontSize, -2) },
@@ -1237,7 +1239,7 @@ export function NodeActions({
               <Minus size={14} />
             </IconBtn>
             <IconBtn
-              title="增大字号"
+              title={t("canvasNodes.increaseFont")}
               onClick={() =>
                 updateNode(node.id, {
                   metadata: { fontSize: adjustFontSize(node.metadata.fontSize, 2) },
@@ -1253,8 +1255,8 @@ export function NodeActions({
             {imageToolbarActions.map(renderImageToolbarAction)}
             {canRetryImageResult(node.metadata) ? (
               <IconBtn
-                label={imageToolLabel("重试")}
-                title="按原生成参数重试"
+                label={imageToolLabel(t("canvasNodes.retry"))}
+                title={t("canvasNodes.retryOriginal")}
                 onClick={() => void retryImageResult()}
               >
                 <RotateCw size={14} />
@@ -1266,12 +1268,12 @@ export function NodeActions({
         {node.type === "video" ? (
           <>
 			<IconBtn
-				title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "生成视频"}
+				title={node.metadata.status === "loading" && node.metadata.generationJobId ? t("canvasNodes.cancelGeneration") : t("canvasNodes.generateVideo")}
 				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openVideoGenerationDialog())}
 			>
 			  {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
 			</IconBtn>
-            <IconBtn title="下载" onClick={() => void downloadNode()}>
+            <IconBtn title={t("canvasNodes.download")} onClick={() => void downloadNode()}>
               <Download size={14} />
             </IconBtn>
           </>
@@ -1279,12 +1281,12 @@ export function NodeActions({
         {node.type === "audio" ? (
           <>
 			<IconBtn
-				title={node.metadata.status === "loading" && node.metadata.generationJobId ? "取消生成" : "语音生成"}
+				title={node.metadata.status === "loading" && node.metadata.generationJobId ? t("canvasNodes.cancelGeneration") : t("canvasNodes.speechGeneration")}
 				onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openAudioGenerationDialog())}
 			>
 			  {node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}
 			</IconBtn>
-            <IconBtn title="下载" onClick={() => void downloadNode()}>
+            <IconBtn title={t("canvasNodes.download")} onClick={() => void downloadNode()}>
               <Download size={14} />
             </IconBtn>
           </>
@@ -1292,7 +1294,7 @@ export function NodeActions({
         {cameraAvailable ? (
           <span ref={cameraAnchorRef} className="inline-flex">
             <IconBtn
-              title={node.metadata.cameraPrompt?.enabled ? "摄像机设置（已启用）" : "摄像机设置"}
+              title={node.metadata.cameraPrompt?.enabled ? t("canvasNodes.cameraEnabled") : t("canvasNodes.camera")}
               onClick={() => setCameraOpen((open) => !open)}
             >
               <Camera size={14} className={node.metadata.cameraPrompt?.enabled ? "text-[var(--ob-accent)]" : undefined} />
@@ -1302,14 +1304,14 @@ export function NodeActions({
         {(node.type === "text" || node.type === "image") && (
           <IconBtn
             title={node.type === "image" && !node.metadata.content
-              ? "素材尚未就绪"
+              ? t("canvasNodes.assetNotReady")
               : assetSaveState === "saving"
-                ? "正在加入素材"
+                ? t("canvasNodes.assetSaving")
                 : assetSaveState === "saved"
-                  ? "已加入素材"
+                  ? t("canvasNodes.assetSaved")
                   : assetSaveState === "error"
-                    ? "加入素材失败"
-                    : "加入素材"}
+                    ? t("canvasNodes.assetSaveFailed")
+                    : t("canvasNodes.addAsset")}
             disabled={(node.type === "image" && !node.metadata.content) || assetSaveState === "saving"}
             onClick={() => void (async () => {
               setAssetSaveState("saving");
@@ -1324,7 +1326,7 @@ export function NodeActions({
             {assetSaveState === "saved" ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
           </IconBtn>
         )}
-        <IconBtn title="节点信息" onClick={inspect}>
+        <IconBtn title={t("canvasNodes.nodeInfo")} onClick={inspect}>
           <Info size={14} />
         </IconBtn>
       </div>
@@ -1398,7 +1400,7 @@ export function NodeActions({
           onClose={() => setImageTool(null)}
           onMask={async (mask, keep, providerId, prompt, context) => {
             const provider = transformRegistry.get(providerId);
-            if (!provider) throw new Error("图像处理方式不可用");
+            if (!provider) throw new Error(t("canvasNodes.imageProcessorUnavailable"));
             const source = await resolveNodeImageTransformSource(node, context.signal);
             const isCloud = provider.capabilities.inpaint;
             const result = isCloud
@@ -1416,7 +1418,7 @@ export function NodeActions({
                   width: source.width,
                   height: source.height,
                 }, context);
-            if (!result) throw new Error("所选处理方式不支持此操作");
+            if (!result) throw new Error(t("canvasNodes.operationUnsupported"));
             const uploaded = await uploadMedia(result.blob, "image");
             const display = fitMediaDisplaySize(
               uploaded.width || node.width,
@@ -1429,7 +1431,7 @@ export function NodeActions({
                 "image",
                 { x: node.position.x + node.width + 48, y: node.position.y },
                 {
-                  title: `${node.title} · ${isCloud ? "局部重绘" : "遮罩"}`,
+                  title: `${node.title} · ${isCloud ? t("canvasNodes.inpaint") : t("canvasNodes.mask")}`,
                   metadata: {
                     content: uploaded.url,
                     storageKey: uploaded.storageKey,
@@ -1456,7 +1458,7 @@ export function NodeActions({
           }}
           onUpscale={async (scale, providerId, operation, context) => {
             const provider = transformRegistry.get(providerId);
-            if (!provider?.upscale) throw new Error("所选处理方式不支持放大");
+            if (!provider?.upscale) throw new Error(t("canvasNodes.upscaleUnsupported"));
             const source = await resolveNodeImageTransformSource(node, context.signal);
             const result = await provider.upscale({
               image: source.blob,
@@ -1474,7 +1476,7 @@ export function NodeActions({
                 "image",
                 { x: node.position.x + node.width + 48, y: node.position.y },
                 {
-                  title: `${node.title} · ${operation === "ai-upscale" ? "AI 超分" : "本地放大"} ${scale}x`,
+                  title: `${node.title} · ${operation === "ai-upscale" ? t("canvasNodes.aiUpscale") : t("canvasNodes.localUpscale")} ${scale}x`,
                   metadata: {
                     content: uploaded.url,
                     storageKey: uploaded.storageKey,

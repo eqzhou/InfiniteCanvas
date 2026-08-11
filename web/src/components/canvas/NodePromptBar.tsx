@@ -20,7 +20,6 @@ import {
   initialNodePrompt,
   isNodePromptType,
   nodePromptKind,
-  nodePromptPlaceholder,
   nodePromptUsesPromptLibrary,
   type NodePromptType,
 } from "@/lib/node-prompt";
@@ -64,8 +63,10 @@ import {
   audioVoiceOptions,
   resolveAudioVoice,
 } from "@/lib/audio-provider";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function NodePromptBar({ node }: { node: BoardNode }) {
+  const { t } = useI18n();
   const config = useBoardStore((s) => s.config);
   const prompts = useBoardStore((s) => s.prompts);
   const project = useBoardStore((s) => s.getActive());
@@ -99,13 +100,13 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       images: nodes.filter((item) => item.type === "image" && (item.metadata.content || item.metadata.storageKey)).map((item) => ({
         nodeId: item.id,
         kind: "image" as const,
-        label: "上游图片",
+        label: t("canvasNodes.upstreamImage"),
         title: item.title,
         ...(item.metadata.storageKey ? { storageKey: item.metadata.storageKey } : {}),
         ...(item.metadata.content ? { content: item.metadata.content } : {}),
       })),
     };
-  }, [node.id, node.metadata.inputOrder, project]);
+  }, [node.id, node.metadata.inputOrder, project, t]);
 
   const promptable = isNodePromptType(node.type);
   const promptType: NodePromptType = isNodePromptType(node.type) ? node.type : "text";
@@ -167,14 +168,14 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       ? channelChoices.find((choice) => choice.id === node.metadata.generationChannelId)
       : undefined;
     if (regenerateImageInPlace && node.metadata.generationChannelId && !savedChannel) {
-      alert("原生成渠道已不可用，无法按修改后的提示词重新生成");
+      alert(t("canvasNodes.originalChannelPromptRetryUnavailable"));
       return;
     }
     const requestChannel = savedChannel ?? channel;
     const requestProvider = requestChannel ? getProvider(requestChannel, kind) : undefined;
     const requiresKey = kind !== "audio" || !requestProvider || audioProtocolRequiresKey(requestProvider.protocol);
     if (!requestChannel || (!isServerManagedChannel(requestChannel, kind) && requiresKey && !requestProvider?.apiKey)) {
-      alert("请先在设置中配置 API Key");
+      alert(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setBusy(true);
@@ -188,13 +189,13 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       const activeReferences = activePromptReferences(text, references);
       if (node.type === "text") {
         const prompt = node.metadata.content
-          ? `原文本：\n${node.metadata.content}\n\n修改要求：${text.trim()}`
+          ? t("canvasNodes.originalTextRevisionPrompt", { text: node.metadata.content, instruction: text.trim() })
           : rawPrompt;
         const out = await generateText({
           channel: requestChannel,
           model: node.metadata.model || getProvider(requestChannel, "text").model,
           prompt,
-          images: await resolvePromptReferences(activeReferences, "image", 9),
+          images: await resolvePromptReferences(activeReferences, "image", 9, t("canvasNodes.mediaReferenceUnreadable")),
           systemPrompt: config.systemPrompt,
           reasoningEffort: node.metadata.reasoningEffort,
         });
@@ -219,14 +220,14 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           ? [...(node.metadata.referenceStorageKeys ?? [])]
           : [];
         if (regenerateImageInPlace && node.metadata.generationType === "image-to-image" && savedReferenceKeys.length === 0) {
-          throw new Error("原参考图关系已丢失，无法按修改后的提示词重新生成");
+          throw new Error(t("canvasNodes.originalReferencesMissing"));
         }
         const imageReferences: PromptReference[] = regenerateImageInPlace
           ? savedReferenceKeys.map((storageKey, index) => ({
               nodeId: `saved-reference-${index}`,
               kind: "image",
-              label: `原参考图${index + 1}`,
-              title: `原参考图 ${index + 1}`,
+              label: t("canvasNodes.originalReference", { index: index + 1 }),
+              title: t("canvasNodes.originalReferenceTitle", { index: index + 1 }),
               storageKey,
             }))
           : [
@@ -234,7 +235,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
                 ? [{
                     nodeId: node.id,
                     kind: "image" as const,
-                    label: "当前图片",
+                    label: t("canvasNodes.currentImage"),
                     title: node.title,
                     ...(node.metadata.storageKey ? { storageKey: node.metadata.storageKey } : {}),
                     ...(node.metadata.content ? { content: node.metadata.content } : {}),
@@ -247,7 +248,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         const referenceStorageKeys = uniqueImageReferences
           .map((reference) => reference.storageKey)
           .filter((key): key is string => Boolean(key));
-        const refs = await resolvePromptReferences(uniqueImageReferences, "image", 9);
+        const refs = await resolvePromptReferences(uniqueImageReferences, "image", 9, t("canvasNodes.mediaReferenceUnreadable"));
         const provider = getProvider(requestChannel, "image");
         const generation = createImageGenerationMetadata({
           prompt: rawPrompt,
@@ -266,10 +267,10 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
             (provider.protocol === "template" && Boolean(provider.template))) &&
             uniqueImageReferences.every((reference) => Boolean(reference.storageKey))) {
           if (provider.protocol === "gemini" && normalizedGeneration.transparentBackground) {
-            throw new Error("Gemini 图片生成不支持透明背景");
+            throw new Error(t("canvasNodes.geminiTransparentUnsupported"));
           }
           if (provider.protocol === "template" && normalizedGeneration.transparentBackground && !provider.template?.supportsTransparentBackground) {
-            throw new Error("当前图片模板不支持透明背景");
+            throw new Error(t("canvasNodes.templateTransparentUnsupported"));
           }
           const jobId = uid("job");
           await submitServerImageGeneration({
@@ -313,13 +314,15 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         });
         await placeImageResults(node, urls, normalizedGeneration, updateActive, {
           replaceExisting: regenerateImageInPlace,
+          missingResultMessage: t("canvasNodes.imageResultMissing"),
+          resultTitle: (index) => t("canvasNodes.resultTitle", { index }),
         });
       } else if (node.type === "video") {
         const ownVideo: PromptReference[] = node.metadata.storageKey || node.metadata.content
           ? [{
               nodeId: node.id,
               kind: "video",
-              label: "当前视频",
+              label: t("canvasNodes.currentVideo"),
               title: node.title,
               ...(node.metadata.storageKey ? { storageKey: node.metadata.storageKey } : {}),
               ...(node.metadata.content ? { content: node.metadata.content } : {}),
@@ -386,13 +389,14 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           generateAudio: Boolean(node.metadata.generateAudio),
           watermark: Boolean(node.metadata.watermark),
           frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
-          referenceImages: await resolvePromptReferences(activeReferences, "image", 9),
+          referenceImages: await resolvePromptReferences(activeReferences, "image", 9, t("canvasNodes.mediaReferenceUnreadable")),
           referenceVideos: await resolvePromptReferences(
             [...ownVideo, ...activeReferences],
             "video",
             3,
+            t("canvasNodes.mediaReferenceUnreadable"),
           ),
-          referenceAudios: await resolvePromptReferences(activeReferences, "audio", 3),
+          referenceAudios: await resolvePromptReferences(activeReferences, "audio", 3, t("canvasNodes.mediaReferenceUnreadable")),
         });
         let content = result.url;
         let storageKey: string | undefined;
@@ -507,7 +511,13 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
     }
   };
 
-  const placeholder = nodePromptPlaceholder(promptType, Boolean(node.metadata.content || node.metadata.storageKey));
+  const placeholder = promptType === "text"
+    ? (node.metadata.content ? t("canvasNodes.textRewritePlaceholder") : t("canvasNodes.textGeneratePlaceholder"))
+    : promptType === "image"
+      ? (hasImageContent ? t("canvasNodes.imageContinuePlaceholder") : t("canvasNodes.imageGeneratePlaceholder"))
+      : promptType === "video"
+        ? t("canvasNodes.videoPromptPlaceholder")
+        : t("canvasNodes.audioPromptPlaceholder");
   const defaultModelLabel = modelChoices.inheritedLabel;
 
   const appendPromptLibrary = (promptId: string) => {
@@ -530,11 +540,11 @@ ${body}` : body;
       className="ob-composer node-prompt absolute left-0 top-full z-20 mt-2 flex w-[min(420px,calc(100vw-1.5rem))] max-w-full flex-col gap-2 p-2"
       onPointerDown={(e) => e.stopPropagation()}
       role="group"
-      aria-label="节点提示词"
+      aria-label={t("canvasNodes.nodePrompt")}
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <select
-          aria-label="节点生成模型"
+          aria-label={t("canvasNodes.nodeGenerationModel")}
           className="min-w-0 flex-1 truncate rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
           value={node.metadata.model ?? ""}
           title={defaultModelLabel}
@@ -553,7 +563,7 @@ ${body}` : body;
         </select>
         {nodePromptUsesPromptLibrary(promptType) ? (
           <select
-            aria-label="提示词库"
+            aria-label={t("canvasNodes.promptLibrary")}
             className="w-[42%] min-w-[6rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-1 text-[11px]"
             value=""
             onChange={(event) => {
@@ -562,7 +572,7 @@ ${body}` : body;
               if (id) appendPromptLibrary(id);
             }}
           >
-            <option value="">提示词库</option>
+            <option value="">{t("canvasNodes.promptLibrary")}</option>
             {prompts.map((prompt) => (
               <option key={prompt.id} value={prompt.id}>{prompt.title}</option>
             ))}
@@ -570,14 +580,14 @@ ${body}` : body;
         ) : null}
       </div>
       {node.type === "image" && !hasImageContent && upstream.texts.length > 0 && !text.trim() ? (
-        <p className="text-[10px] text-[var(--ob-muted)]">将使用直接上游文本作为本次图片提示词。</p>
+        <p className="text-[10px] text-[var(--ob-muted)]">{t("canvasNodes.upstreamPromptHint")}</p>
       ) : null}
       {node.type === "image" && hasImageContent && inheritsUpstreamPrompt && node.metadata.prompt ? (
         <div
           className="rounded border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_45%,transparent)] px-2 py-1.5 text-[10px]"
-          aria-label="最终实际发送的提示词"
+          aria-label={t("canvasNodes.finalPrompt")}
         >
-          <div className="mb-1 font-medium text-[var(--ob-muted)]">最终实际发送的提示词（只读）</div>
+          <div className="mb-1 font-medium text-[var(--ob-muted)]">{t("canvasNodes.finalPromptReadonly")}</div>
           <p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words leading-relaxed" onWheel={(event) => event.stopPropagation()}>
             {node.metadata.prompt}
           </p>
@@ -586,8 +596,8 @@ ${body}` : body;
       {node.type === "audio" ? (
         <div className="grid min-w-0 grid-cols-2 gap-1.5">
           <select
-            aria-label="音频角色"
-            title="角色来自：项目面板 → 当前画布配音角色"
+            aria-label={t("canvasNodes.audioRole")}
+            title={t("canvasNodes.audioRoleSource")}
             className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
             value={node.metadata.audioRoleId ?? ""}
             onChange={(event) => updateNode(node.id, { metadata: {
@@ -599,12 +609,12 @@ ${body}` : body;
             {(project?.audioRoles ?? []).map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
           </select>
           <select
-            aria-label="音频声线"
+            aria-label={t("canvasNodes.audioVoice")}
             className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-1 text-[11px]"
             value={node.metadata.voice ?? ""}
             onChange={(event) => updateNode(node.id, { metadata: { voice: event.target.value || undefined } })}
           >
-            <option value="">跟随角色/默认：{audioVoiceLabel(selectedAudioVoice)}</option>
+            <option value="">{t("canvasNodes.followRoleVoice", { voice: audioVoiceLabel(selectedAudioVoice) })}</option>
             {audioVoiceOptions(selectedAudioProtocol).map((voice) => (
               <option key={voice} value={voice}>{audioVoiceLabel(voice)}</option>
             ))}
@@ -629,20 +639,20 @@ ${body}` : body;
             onSubmit={() => void send()}
           />
         </div>
-        <button type="button" className="ob-icon-btn h-9 w-9 shrink-0" aria-label="展开编辑长提示词" title="展开编辑长提示词" onClick={() => setExpandedPrompt(true)}><Maximize2 size={14} /></button>
+        <button type="button" className="ob-icon-btn h-9 w-9 shrink-0" aria-label={t("canvasNodes.expandPrompt")} title={t("canvasNodes.expandPrompt")} onClick={() => setExpandedPrompt(true)}><Maximize2 size={14} /></button>
         <button
           type="button"
           className="ob-btn-primary h-9 w-9 shrink-0 rounded-lg p-0"
           aria-busy={busy}
-          aria-label={busy ? "生成中" : "发送提示词"}
+          aria-label={busy ? t("canvasNodes.generating") : t("canvasNodes.sendPrompt")}
           disabled={generationBusy || !effectivePrompt}
           onClick={() => void send()}
-          title="发送 (Ctrl/Cmd+Enter)"
+          title={t("canvasNodes.sendShortcut")}
         >
           <Send size={14} />
         </button>
       </div>
-      <TextEntryDialog open={expandedPrompt} title="编辑完整提示词" label="提示词" initialValue={text} placeholder={placeholder} submitLabel="完成编辑" multiline onClose={() => setExpandedPrompt(false)} onValueChange={(value) => { setText(value); if (!(node.type === "image" && inheritsUpstreamPrompt)) updateNode(node.id, { metadata: { prompt: value } }, { history: false }); }} onSubmit={(value) => { setText(value); if (!(node.type === "image" && inheritsUpstreamPrompt)) updateNode(node.id, { metadata: { prompt: value } }); setExpandedPrompt(false); }} />
+      <TextEntryDialog open={expandedPrompt} title={t("canvasNodes.editFullPrompt")} label={t("canvasNodes.prompt")} initialValue={text} placeholder={placeholder} submitLabel={t("canvasNodes.finishEditing")} multiline onClose={() => setExpandedPrompt(false)} onValueChange={(value) => { setText(value); if (!(node.type === "image" && inheritsUpstreamPrompt)) updateNode(node.id, { metadata: { prompt: value } }, { history: false }); }} onSubmit={(value) => { setText(value); if (!(node.type === "image" && inheritsUpstreamPrompt)) updateNode(node.id, { metadata: { prompt: value } }); setExpandedPrompt(false); }} />
     </div>
   );
 }
@@ -651,6 +661,7 @@ async function resolvePromptReferences(
   references: readonly PromptReference[],
   kind: PromptReference["kind"],
   limit: number,
+  errorMessage: string,
 ): Promise<string[]> {
   const selected = references.filter((reference) => reference.kind === kind).slice(0, limit);
   const resolved = await Promise.all(selected.map((reference) =>
@@ -659,7 +670,7 @@ async function resolvePromptReferences(
       content: reference.content,
     }], 1)));
   if (resolved.some((items) => items.length !== 1)) {
-    throw new Error("所选媒体引用无法读取，请重新连接或上传素材");
+    throw new Error(errorMessage);
   }
   return resolved.flat();
 }
@@ -669,11 +680,15 @@ async function placeImageResults(
   urls: string[],
   generation: ReturnType<typeof createImageGenerationMetadata>,
   updateActive: ReturnType<typeof useBoardStore.getState>["updateActive"],
-  options: { replaceExisting?: boolean } = {},
+  options: {
+    replaceExisting?: boolean;
+    missingResultMessage: string;
+    resultTitle: (index: number) => string;
+  },
 ) {
   if (options.replaceExisting) {
     const url = urls[0];
-    if (!url) throw new Error("图片服务没有返回结果");
+    if (!url) throw new Error(options.missingResultMessage);
     const uploaded = await uploadMedia(url, "image");
     updateActive((project) => ({
       ...project,
@@ -709,7 +724,7 @@ async function placeImageResults(
           y: node.position.y + Math.floor(i / 3) * 28,
         },
         {
-          title: `结果 ${i + 1}`,
+          title: options.resultTitle(i + 1),
           metadata: {
             content: uploaded.url,
             storageKey: uploaded.storageKey,

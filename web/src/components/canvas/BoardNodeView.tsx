@@ -46,6 +46,7 @@ import { buildDirectorShotPrompt, planDirectorShotGeneration } from "@/lib/direc
 import { createImageGenerationMetadata, normalizeImageGenerationForProvider } from "@/lib/image-generation";
 import { createServerImageGenerationJob, cancelServerGenerationJob } from "@/services/generation-jobs";
 import { uid } from "@/lib/id";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const DirectorDialog = lazy(() => import("@/components/director/DirectorDialog").then((module) => ({
   default: module.DirectorDialog,
@@ -100,6 +101,7 @@ export function BoardNodeView({
   onContextMenu,
   generationChannels = [],
 }: Props) {
+  const { t } = useI18n();
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const directorEditStartedRef = useRef(false);
   const updateNode = useBoardStore((s) => s.updateNode);
@@ -234,7 +236,7 @@ export function BoardNodeView({
         height: display.height,
       });
     })().catch((error: unknown) => {
-      window.alert(error instanceof Error ? error.message : "图片导入失败");
+      window.alert(error instanceof Error ? error.message : t("canvasNodes.imageImportFailed"));
     });
   };
 
@@ -298,7 +300,7 @@ export function BoardNodeView({
           <input
             autoFocus
             data-canvas-control
-            aria-label="节点标题"
+            aria-label={t("canvasNodes.nodeTitle")}
             className="w-full min-w-32 rounded border border-[var(--ob-select)] bg-[var(--ob-panel)] px-1.5 py-0.5 outline-none"
             maxLength={500}
             value={titleDraft}
@@ -337,16 +339,16 @@ export function BoardNodeView({
           <div className="flex h-full flex-col gap-1" onPointerDown={(event) => event.stopPropagation()}>
             <div className="flex min-w-0 items-center gap-1">
               <input
-                aria-label="文本节点模型"
+                aria-label={t("canvasNodes.textModel")}
                 className="min-w-0 flex-1 truncate rounded border border-[var(--ob-line)] bg-transparent px-1.5 py-0.5 text-[11px]"
                 value={node.metadata.model ?? ""}
-                title={node.metadata.model || (activeChannel ? defaultModelForMode(activeChannel, "text") : "继承默认文本模型")}
-                placeholder={activeChannel ? defaultModelForMode(activeChannel, "text") : "继承默认文本模型"}
+                title={node.metadata.model || (activeChannel ? defaultModelForMode(activeChannel, "text") : t("canvasNodes.inheritTextModel"))}
+                placeholder={activeChannel ? defaultModelForMode(activeChannel, "text") : t("canvasNodes.inheritTextModel")}
                 onChange={(event) => updateNode(node.id, { metadata: { model: event.target.value || undefined } })}
               />
               <select
-                aria-label="文本推理强度"
-                title="推理强度"
+                aria-label={t("canvasNodes.reasoningEffort")}
+                title={t("canvasNodes.reasoningEffort")}
                 className="w-[4.5rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
                 value={node.metadata.reasoningEffort ?? ""}
                 onChange={(event) => updateNode(node.id, {
@@ -359,13 +361,13 @@ export function BoardNodeView({
                   },
                 })}
               >
-                <option value="">默认</option>
-                <option value="low">低</option>
-                <option value="medium">中</option>
-                <option value="high">高</option>
+                <option value="">{t("canvasNodes.default")}</option>
+                <option value="low">{t("canvasNodes.low")}</option>
+                <option value="medium">{t("canvasNodes.medium")}</option>
+                <option value="high">{t("canvasNodes.high")}</option>
               </select>
               <select
-                aria-label="提示词库"
+                aria-label={t("canvasNodes.promptLibrary")}
                 className="w-[32%] min-w-[4.5rem] shrink-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5 text-[11px]"
                 value=""
                 onChange={(event) => {
@@ -373,7 +375,7 @@ export function BoardNodeView({
                   if (prompt) updateNode(node.id, { metadata: { content: prompt.body } });
                 }}
               >
-                <option value="">提示词库</option>
+                <option value="">{t("canvasNodes.promptLibrary")}</option>
                 {prompts.map((prompt) => (
                   <option key={prompt.id} value={prompt.id}>{prompt.title}</option>
                 ))}
@@ -384,7 +386,7 @@ export function BoardNodeView({
               className="min-h-0 flex-1 resize-none border-0 bg-transparent outline-none"
               style={{ fontSize: node.metadata.fontSize ?? 14 }}
               value={node.metadata.content ?? ""}
-              placeholder="写下提示词或说明…"
+              placeholder={t("canvasNodes.nodePromptPlaceholder")}
               onChange={(e) =>
                 updateNode(node.id, {
                   metadata: { content: e.target.value },
@@ -409,19 +411,19 @@ export function BoardNodeView({
               />
               {node.metadata.status !== "loading" ? (
                 <label
-                  aria-label="替换图片"
-                  title="替换图片"
+                  aria-label={t("canvasNodes.replaceImage")}
+                  title={t("canvasNodes.replaceImage")}
                   className="absolute bottom-2 left-2 inline-flex cursor-pointer items-center gap-1.5 rounded border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_88%,transparent)] px-2 py-1 text-[11px] text-[var(--ob-ink)] shadow-sm backdrop-blur-sm"
                   onPointerDown={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
                 >
                   <Upload size={13} />
-                  替换图片
+                  {t("canvasNodes.replaceImage")}
                   <input
                     type="file"
                     accept="image/*"
                     className="hidden"
-                    aria-label="替换图片"
+                    aria-label={t("canvasNodes.replaceImage")}
                     onChange={(event) => {
                       const file = event.currentTarget.files?.[0];
                       if (file) importImageIntoNode(file);
@@ -437,25 +439,25 @@ export function BoardNodeView({
               onPointerDown={(event) => event.stopPropagation()}
             >
               {node.metadata.status === "loading" ? (
-                "生成中…"
+                t("canvasNodes.generatingEllipsis")
               ) : node.metadata.status === "error" ? (
                 <span className="max-w-[90%] break-words text-center">
-                  {node.metadata.errorDetails || "生成失败"}
+                  {node.metadata.errorDetails || t("canvasNodes.generationFailed")}
                 </span>
               ) : null}
               {node.metadata.status !== "loading" ? (
                 <label
-                  aria-label="上传图片"
+                  aria-label={t("canvasNodes.uploadImage")}
                   className="ob-btn inline-flex cursor-pointer items-center gap-1.5 px-3 py-1.5 text-xs"
                   onPointerDown={(event) => event.stopPropagation()}
                 >
                   <Upload size={14} />
-                  上传图片
+                  {t("canvasNodes.uploadImage")}
                   <input
                     type="file"
                     accept="image/*"
                     className="hidden"
-                    aria-label="上传图片"
+                    aria-label={t("canvasNodes.uploadImage")}
                     onChange={(event) => {
                       const file = event.currentTarget.files?.[0];
                       if (file) importImageIntoNode(file);
@@ -479,10 +481,10 @@ export function BoardNodeView({
             ) : (
               <div className="grid min-h-0 flex-1 place-items-center text-sm text-[var(--ob-muted)]">
                 {node.metadata.status === "loading"
-                  ? "生成中…"
+                  ? t("canvasNodes.generatingEllipsis")
                   : node.metadata.status === "error"
-                    ? node.metadata.errorDetails || "生成失败"
-                    : "空视频节点"}
+                    ? node.metadata.errorDetails || t("canvasNodes.generationFailed")
+                    : t("canvasNodes.emptyVideo")}
               </div>
             )}
             <div className="grid grid-cols-2 gap-1 text-[10px]">
@@ -494,7 +496,7 @@ export function BoardNodeView({
                     metadata: { generateAudio: e.target.checked },
                   })}
                 />
-                生成声音
+                {t("canvasNodes.generateAudio")}
               </label>
               <label className="flex items-center gap-1">
                 <input
@@ -504,12 +506,12 @@ export function BoardNodeView({
                     metadata: { watermark: e.target.checked },
                   })}
                 />
-                水印
+                {t("canvasNodes.watermark")}
               </label>
               <label className="col-span-2 flex flex-col gap-1">
-                图片参考模式
+                {t("canvasNodes.referenceMode")}
                 <select
-                  aria-label="图片参考模式"
+                  aria-label={t("canvasNodes.referenceMode")}
                   className="rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5"
                   value={node.metadata.videoFrameMode ?? "references"}
                   onChange={(e) => updateNode(node.id, {
@@ -518,8 +520,8 @@ export function BoardNodeView({
                     },
                   })}
                 >
-                  <option value="references">普通参考图</option>
-                  <option value="first-last">首尾帧</option>
+                  <option value="references">{t("canvasNodes.references")}</option>
+                  <option value="first-last">{t("canvasNodes.firstLast")}</option>
                 </select>
               </label>
             </div>
@@ -537,10 +539,10 @@ export function BoardNodeView({
           ) : (
             <div className="grid h-full place-items-center text-sm text-[var(--ob-muted)]">
 			  {node.metadata.status === "loading"
-				? "生成中…"
+				? t("canvasNodes.generatingEllipsis")
 				: node.metadata.status === "error"
-					? node.metadata.errorDetails || "生成失败"
-					: "空音频节点"}
+					? node.metadata.errorDetails || t("canvasNodes.generationFailed")
+					: t("canvasNodes.emptyAudio")}
             </div>
           )
         ) : null}
@@ -552,7 +554,7 @@ export function BoardNodeView({
             onWheel={(e) => e.stopPropagation()}
           >
             <label className="flex flex-col gap-1">
-              模式
+              {t("canvasNodes.mode")}
               <select
                 className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                 value={node.metadata.generationMode ?? "image"}
@@ -568,9 +570,9 @@ export function BoardNodeView({
                   });
                 }}
               >
-                <option value="text">文本</option>
-                <option value="image">图片</option>
-                <option value="video">视频</option>
+                <option value="text">{t("canvasNodes.text")}</option>
+                <option value="image">{t("canvasNodes.image")}</option>
+                <option value="video">{t("canvasNodes.video")}</option>
               </select>
             </label>
             {(node.metadata.generationMode ?? "image") === "image" ? (
@@ -582,17 +584,17 @@ export function BoardNodeView({
                     metadata: { transparentBackground: event.target.checked },
                   })}
                 />
-                透明背景
+                {t("canvasNodes.transparentBackground")}
               </label>
             ) : null}
             <label className="flex min-w-0 flex-col gap-1">
-              模型
+              {t("canvasNodes.model")}
               <input
-                aria-label="配置节点模型"
+                aria-label={t("canvasNodes.configModel")}
                 className="min-w-0 truncate rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                 value={node.metadata.model ?? ""}
-                title={node.metadata.model || "继承全局默认"}
-                placeholder="继承全局默认"
+                title={node.metadata.model || t("canvasNodes.inheritGlobal")}
+                placeholder={t("canvasNodes.inheritGlobal")}
                 onChange={(e) =>
                   updateNode(node.id, { metadata: { model: e.target.value } })
                 }
@@ -600,9 +602,9 @@ export function BoardNodeView({
             </label>
             {(node.metadata.generationMode ?? "image") === "text" ? (
               <label className="flex flex-col gap-1">
-                推理强度
+                {t("canvasNodes.reasoningEffort")}
                 <select
-                  aria-label="配置节点文本推理强度"
+                  aria-label={t("canvasNodes.configReasoning")}
                   className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                   value={node.metadata.reasoningEffort ?? ""}
                   onChange={(event) => updateNode(node.id, {
@@ -615,20 +617,20 @@ export function BoardNodeView({
                     },
                   })}
                 >
-                  <option value="">跟随模型默认</option>
-                  <option value="low">低</option>
-                  <option value="medium">中</option>
-                  <option value="high">高</option>
+                  <option value="">{t("canvasNodes.followModel")}</option>
+                  <option value="low">{t("canvasNodes.low")}</option>
+                  <option value="medium">{t("canvasNodes.medium")}</option>
+                  <option value="high">{t("canvasNodes.high")}</option>
                 </select>
               </label>
             ) : null}
             <label className="flex min-h-0 flex-1 flex-col gap-1">
-              提示词
+              {t("canvasNodes.prompt")}
               <textarea
-                aria-label="配置节点提示词"
+                aria-label={t("canvasNodes.configPrompt")}
                 className="min-h-20 flex-1 resize-none rounded border border-[var(--ob-line)] bg-transparent px-2 py-1 leading-relaxed"
                 maxLength={100_000}
-                placeholder="留空时使用上游输入；填写后独立生成"
+                placeholder={t("canvasNodes.configPromptPlaceholder")}
                 value={node.metadata.prompt ?? ""}
                 onChange={(event) => updateNode(node.id, {
                   metadata: { prompt: event.target.value },
@@ -638,9 +640,9 @@ export function BoardNodeView({
             {(node.metadata.generationMode ?? "image") === "image" ? (
               <>
                 <label className="flex flex-col gap-1">
-                  尺寸 / 比例
+                  {t("canvasNodes.sizeRatio")}
                   <select
-                    aria-label="配置节点图片尺寸"
+                    aria-label={t("canvasNodes.imageSize")}
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                     value={node.metadata.size ?? "1024x1024"}
                     onChange={(event) => updateNode(node.id, {
@@ -657,9 +659,9 @@ export function BoardNodeView({
                 </label>
                 {!imageSizeOptions.some((option) => option.value === (node.metadata.size ?? "1024x1024")) ? (
                   <label className="flex flex-col gap-1">
-                    自定义尺寸
+                    {t("canvasNodes.customSize")}
                     <input
-                      aria-label="配置节点自定义图片尺寸"
+                      aria-label={t("canvasNodes.customImageSize")}
                       className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                       value={node.metadata.size ?? "1024x1024"}
                       onChange={(event) => updateNode(node.id, {
@@ -669,9 +671,9 @@ export function BoardNodeView({
                   </label>
                 ) : null}
                 <label className="flex flex-col gap-1">
-                  图片质量
+                  {t("canvasNodes.imageQuality")}
                   <select
-                    aria-label="配置节点图片质量"
+                    aria-label={t("canvasNodes.configImageQuality")}
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                     value={imageQuality}
                     onChange={(event) => updateNode(node.id, {
@@ -689,7 +691,7 @@ export function BoardNodeView({
               </>
             ) : null}
             <label className="flex flex-col gap-1">
-              数量
+              {t("canvasNodes.count")}
               <input
                 type="number"
                 min={1}
@@ -711,19 +713,19 @@ export function BoardNodeView({
             {(node.metadata.generationMode ?? "image") === "video" ? (
               <>
                 <label className="flex flex-col gap-1">
-                  自动尺寸
+                  {t("canvasNodes.autoSize")}
                   <input
-                    aria-label="配置节点视频尺寸"
+                    aria-label={t("canvasNodes.videoSize")}
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                     value={node.metadata.size || videoSize}
-                    placeholder="由比例和清晰度推导，可手动覆盖"
+                    placeholder={t("canvasNodes.videoSizePlaceholder")}
                     onChange={(event) => updateNode(node.id, {
                       metadata: { size: event.target.value },
                     })}
                   />
                 </label>
                 <label className="flex flex-col gap-1">
-                  视频比例
+                  {t("canvasNodes.videoRatio")}
                   <select
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                     value={videoRatio}
@@ -749,7 +751,7 @@ export function BoardNodeView({
                   </select>
                 </label>
                 <label className="flex flex-col gap-1">
-                  清晰度
+                  {t("canvasNodes.resolution")}
                   <select
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                     value={videoResolution}
@@ -775,7 +777,7 @@ export function BoardNodeView({
                   </select>
                 </label>
                 <label className="flex flex-col gap-1">
-                  时长(秒)
+                  {t("canvasNodes.durationSeconds")}
                   <input
                     type="number"
                     min={4}
@@ -798,7 +800,7 @@ export function BoardNodeView({
                       metadata: { smartDuration: event.target.checked },
                     })}
                   />
-                  智能时长
+                  {t("canvasNodes.smartDuration")}
                 </label>
                 <label className="flex items-center gap-2">
                   <input
@@ -810,7 +812,7 @@ export function BoardNodeView({
                       })
                     }
                   />
-                  生成声音
+                  {t("canvasNodes.generateAudio")}
                 </label>
                 <label className="flex items-center gap-2">
                   <input
@@ -822,12 +824,12 @@ export function BoardNodeView({
                       })
                     }
                   />
-                  水印
+                  {t("canvasNodes.watermark")}
                 </label>
                 <label className="flex flex-col gap-1">
-                  图片参考模式
+                  {t("canvasNodes.referenceMode")}
                   <select
-                    aria-label="图片参考模式"
+                    aria-label={t("canvasNodes.referenceMode")}
                     className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
                     value={node.metadata.videoFrameMode ?? "references"}
                     onChange={(e) =>
@@ -838,27 +840,27 @@ export function BoardNodeView({
                       })
                     }
                   >
-                    <option value="references">普通参考图</option>
-                    <option value="first-last">首尾帧</option>
+                    <option value="references">{t("canvasNodes.references")}</option>
+                    <option value="first-last">{t("canvasNodes.firstLast")}</option>
                   </select>
                 </label>
                 {node.metadata.videoFrameMode === "first-last" ? (
                   <p className="text-[10px] leading-snug text-[var(--ob-muted)]">
-                    按上游图片顺序：第 1 张为首帧，第 2 张为尾帧；其余仍作为参考图。
+                    {t("canvasNodes.firstLastHint")}
                   </p>
                 ) : null}
               </>
             ) : null}
             <div className="rounded border border-[var(--ob-line)] p-1.5">
-              <div className="mb-1 font-medium">上游输入</div>
+              <div className="mb-1 font-medium">{t("canvasNodes.upstreamInputs")}</div>
               {(() => {
-                if (!project) return <div className="text-[var(--ob-muted)]">无</div>;
+                if (!project) return <div className="text-[var(--ob-muted)]">{t("canvasNodes.none")}</div>;
                 const incoming = project.edges
                   .filter((e) => e.to === node.id)
                   .map((e) => e.from);
                 const configured = node.metadata.inputOrder?.filter((id) => incoming.includes(id)) ?? [];
                 const order = [...configured, ...incoming.filter((id) => !configured.includes(id))];
-                if (!order.length) return <div className="text-[var(--ob-muted)]">暂无上游节点</div>;
+                if (!order.length) return <div className="text-[var(--ob-muted)]">{t("canvasNodes.noUpstream")}</div>;
                 return (
                   <ul className="space-y-1">
                     {order.map((id, idx) => {
@@ -876,14 +878,14 @@ export function BoardNodeView({
                             {n.type === "image" && n.metadata.content ? (
                               <img
                                 src={n.metadata.content}
-                                alt="参考图片"
+                                alt={t("canvasNodes.referenceImage")}
                                 className="mt-1 h-12 w-16 rounded object-contain bg-[var(--ob-canvas)]"
                               />
                             ) : null}
                             {n.type === "video" && n.metadata.content ? (
                               <video
                                 src={n.metadata.content}
-                                aria-label="参考视频"
+                                aria-label={t("canvasNodes.referenceVideo")}
                                 muted
                                 preload="metadata"
                                 className="mt-1 h-12 w-20 rounded bg-black object-contain"
@@ -892,7 +894,7 @@ export function BoardNodeView({
                             {n.type === "audio" && n.metadata.content ? (
                               <audio
                                 src={n.metadata.content}
-                                aria-label="参考音频"
+                                aria-label={t("canvasNodes.referenceAudio")}
                                 controls
                                 preload="none"
                                 className="mt-1 h-8 w-full max-w-44"
@@ -901,7 +903,7 @@ export function BoardNodeView({
                           </div>
                           <button
                             type="button"
-                            aria-label={`上移输入 ${idx + 1}`}
+                            aria-label={t("canvasNodes.moveInputUp", { index: idx + 1 })}
                             className="rounded px-1 hover:bg-[var(--ob-accent-soft)]"
                             disabled={idx === 0}
                             onClick={() => {
@@ -914,7 +916,7 @@ export function BoardNodeView({
                           </button>
                           <button
                             type="button"
-                            aria-label={`下移输入 ${idx + 1}`}
+                            aria-label={t("canvasNodes.moveInputDown", { index: idx + 1 })}
                             className="rounded px-1 hover:bg-[var(--ob-accent-soft)]"
                             disabled={idx === order.length - 1}
                             onClick={() => {
@@ -934,7 +936,7 @@ export function BoardNodeView({
             </div>
             <NodeActions node={node} inlineConfigOnly />
             <div className="text-[var(--ob-muted)]">
-              状态：{node.metadata.status ?? "idle"}
+              {t("canvasNodes.status", { status: node.metadata.status ?? "idle" })}
               {node.metadata.errorDetails
                 ? ` — ${node.metadata.errorDetails}`
                 : ""}
@@ -946,9 +948,13 @@ export function BoardNodeView({
           <div className="flex h-full flex-col items-center justify-center gap-3 bg-gradient-to-b from-slate-950 to-slate-900 text-center" onPointerDown={(event) => event.stopPropagation()}>
             <Clapperboard size={30} className="text-[var(--ob-accent)]" />
             <div>
-              <div className="text-sm font-medium">3D 导演台</div>
+              <div className="text-sm font-medium">{t("canvasNodes.director")}</div>
               <div className="mt-1 text-[11px] text-slate-400">
-                {node.metadata.directorScene?.objects.length ?? 0} 个舞台元素 · {node.metadata.directorScene ? getDirectorPopulation(node.metadata.directorScene) : 0} 人 · {node.metadata.directorScene?.cameras.length ?? 1} 个机位
+                {t("canvasNodes.directorStats", {
+                  objects: node.metadata.directorScene?.objects.length ?? 0,
+                  people: node.metadata.directorScene ? getDirectorPopulation(node.metadata.directorScene) : 0,
+                  cameras: node.metadata.directorScene?.cameras.length ?? 1,
+                })}
               </div>
             </div>
             <button
@@ -959,20 +965,20 @@ export function BoardNodeView({
                 setDirectorOpen(true);
               }}
             >
-              打开导演台
+              {t("canvasNodes.openDirector")}
             </button>
           </div>
         ) : null}
 
         {node.type === "panorama" ? (
-          <Suspense fallback={<div className="grid h-full place-items-center bg-slate-950 text-xs text-slate-400">正在加载全景节点…</div>}>
+          <Suspense fallback={<div className="grid h-full place-items-center bg-slate-950 text-xs text-slate-400">{t("canvasNodes.loadingPanorama")}</div>}>
             <PanoramaNodeCard node={node} />
           </Suspense>
         ) : null}
 
         {node.type === "group" ? (
           <div className="grid h-full place-items-center text-xs text-[var(--ob-muted)]">
-            {node.metadata.childIds?.length ?? 0} 个节点
+            {t("canvasNodes.nodeCount", { count: node.metadata.childIds?.length ?? 0 })}
           </div>
         ) : null}
 
@@ -987,8 +993,8 @@ export function BoardNodeView({
             <div className="grid h-full place-items-center px-4 text-center text-xs text-[var(--ob-muted)]">
               <div>
                 <Puzzle className="mx-auto mb-2" size={22} />
-                <p data-testid="plugin-unavailable">插件不可用</p>
-                <p className="mt-1 break-all">{node.metadata.pluginId ?? "缺少插件 ID"}</p>
+                <p data-testid="plugin-unavailable">{t("canvasNodes.pluginUnavailable")}</p>
+                <p className="mt-1 break-all">{node.metadata.pluginId ?? t("canvasNodes.pluginIdMissing")}</p>
               </div>
             </div>
           )
@@ -1021,7 +1027,7 @@ export function BoardNodeView({
             type="button"
             className="ob-port absolute top-1/2 -left-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)] shadow-sm"
             data-canvas-control
-            title="输入端口"
+            title={t("canvasNodes.inputPort")}
             onPointerDown={(e) => {
               e.stopPropagation();
               onCompleteConnect();
@@ -1032,7 +1038,7 @@ export function BoardNodeView({
             type="button"
             className="ob-port absolute top-1/2 -right-2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-[var(--ob-panel)] bg-[var(--ob-port)] shadow-sm"
             data-canvas-control
-            title="输出端口 / 拖出连线"
+            title={t("canvasNodes.outputPort")}
             onPointerDown={(e) => {
               e.stopPropagation();
               onStartConnect(e);
@@ -1052,7 +1058,7 @@ export function BoardNodeView({
       ) : null}
 
       {node.type === "director" ? (
-        <Suspense fallback={directorOpen ? <div role="dialog" aria-modal="true" aria-label="正在加载 3D 导演台" className="fixed inset-0 z-[150] grid place-items-center bg-[#111] text-sm text-white">正在加载 3D 导演台…</div> : null}>
+        <Suspense fallback={directorOpen ? <div role="dialog" aria-modal="true" aria-label={t("canvasNodes.loadingDirector")} className="fixed inset-0 z-[150] grid place-items-center bg-[#111] text-sm text-white">{t("canvasNodes.loadingDirectorEllipsis")}</div> : null}>
           <DirectorDialog
             open={directorOpen}
             ownerScope={captureOwnerScope}
@@ -1062,7 +1068,7 @@ export function BoardNodeView({
             scene={node.metadata.directorScene ?? createDefaultDirectorScene()}
             panoramaOptions={(project ? listDirectorEnvironmentOptions(project, node.id) : []).map((candidate) => ({
               id: candidate.id,
-              label: `${candidate.title}（${isSphericalDirectorEnvironment(candidate) ? "360° 球形全景" : "平面背景"}）`,
+              label: `${candidate.title} (${isSphericalDirectorEnvironment(candidate) ? t("canvasNodes.sphericalPanorama") : t("canvasNodes.flatBackground")})`,
               url: candidate.metadata.content!,
               spherical: isSphericalDirectorEnvironment(candidate),
             }))}
@@ -1109,7 +1115,7 @@ export function BoardNodeView({
               const current = active?.nodes.find((item) => item.id === node.id);
               if (!active || active.id !== directorProjectId || !current || current.type !== "director") {
                 await Promise.all(uploaded.map((item) => deleteBlob("image", item.storageKey).catch(() => undefined)));
-                throw new Error("导演台节点已不存在，无法发送截图");
+                throw new Error(t("canvasNodes.directorNodeMissing"));
               }
               const existingBottom = active.nodes
                 .filter((item) => item.metadata.derivedFromId === current.id && item.type === "image")
@@ -1150,13 +1156,13 @@ export function BoardNodeView({
               directorEditStartedRef.current = false;
             }}
             onGenerateCapture={async (capture: DirectorCapture) => {
-              if (!capture.shot) throw new Error("这张旧截图没有拍摄时机位信息，请重新拍摄后生成正式镜头");
-              if (!imageChannel || !imageProvider?.model) throw new Error("请先配置可用的图片生成渠道和模型");
+              if (!capture.shot) throw new Error(t("canvasNodes.oldCaptureMissingShot"));
+              if (!imageChannel || !imageProvider?.model) throw new Error(t("canvasNodes.imageChannelModelRequired"));
               const serverProtocolSupported = imageProvider.protocol === "openai" || imageProvider.protocol === "gemini" ||
                 (imageProvider.protocol === "template" && Boolean(imageProvider.template)) ||
                 imageProvider.protocol === "apimart" || imageProvider.protocol === "kie";
               if (!serverProtocolSupported) {
-                throw new Error(`当前图片协议（${imageProvider.protocol}）不支持服务端正式镜头生成`);
+                throw new Error(t("canvasNodes.protocolShotUnsupported", { protocol: imageProvider.protocol }));
               }
               const uploaded = await uploadMedia(capture.blob, "image", { requirePersistent: true });
               const store = useBoardStore.getState();
@@ -1164,7 +1170,7 @@ export function BoardNodeView({
               const current = active?.nodes.find((item) => item.id === node.id);
               if (!active || active.id !== directorProjectId || !current || current.type !== "director") {
                 await deleteBlob("image", uploaded.storageKey).catch(() => undefined);
-                throw new Error("导演台节点已不存在，无法生成正式镜头");
+                throw new Error(t("canvasNodes.directorFormalShotMissing"));
               }
               let prepared: ReturnType<typeof planDirectorShotGeneration> extends infer Planned
                 ? { planned: Planned; generation: ReturnType<typeof createImageGenerationMetadata>; jobId: string; configNode: BoardNode }
@@ -1198,7 +1204,7 @@ export function BoardNodeView({
                 });
                 const configNode = planned.nodes.find((item) =>
                   item.type === "config" && item.metadata.directorShot?.captureId === capture.id);
-                if (!configNode) throw new Error("正式镜头配置创建失败");
+                if (!configNode) throw new Error(t("canvasNodes.formalShotConfigFailed"));
                 prepared = { planned, generation, jobId, configNode };
               } catch (error) {
                 await deleteBlob("image", uploaded.storageKey).catch(() => undefined);

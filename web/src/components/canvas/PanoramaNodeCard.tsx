@@ -32,8 +32,10 @@ import {
   useSharedChannels,
 } from "@/services/shared-channels";
 import { nextPanoramaPreviewZoom } from "@/lib/panorama-zoom";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function PanoramaNodeCard({ node }: { node: BoardNode }) {
+  const { t } = useI18n();
   const project = useBoardStore((state) => state.getActive());
   const config = useBoardStore((state) => state.config);
   const updateNode = useBoardStore((state) => state.updateNode);
@@ -98,8 +100,8 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
   const isBatchChild = Boolean(node.metadata.batchRootId);
 
   const beginWrite = () => {
-    if (isBatchChild) throw new Error("全景批次子结果不可独立修改");
-    if (generationRef.current) throw new Error("全景图正在处理，请稍后再试");
+    if (isBatchChild) throw new Error(t("canvasNodes.panorama.batchImmutable"));
+    if (generationRef.current) throw new Error(t("canvasNodes.panorama.processing"));
     const operation = new AbortController();
     generationRef.current = operation;
     setLoading(true);
@@ -121,7 +123,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
     let results: PanoramaGeneratedMedia[] = [];
     try {
       const historyProject = useBoardStore.getState().getActive();
-      if (!historyProject) throw new Error("全景项目不存在");
+      if (!historyProject) throw new Error(t("canvasNodes.panorama.projectMissing"));
       results = await stagePanoramaGeneratedMedia(
         ["direct-upload"],
         1,
@@ -154,7 +156,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
       const source = sourceImages.find((candidate) => candidate.id === sourceId);
       if (!source) return;
       const historyProject = useBoardStore.getState().getActive();
-      if (!historyProject) throw new Error("全景项目不存在");
+      if (!historyProject) throw new Error(t("canvasNodes.panorama.projectMissing"));
       await commitPanoramaBatch(historyProject.id, node.id, [{
         content: source.metadata.content!,
         storageKey: source.metadata.storageKey!,
@@ -181,13 +183,13 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
     let commitAttempted = false;
     try {
       const historyProject = useBoardStore.getState().getActive();
-      if (!historyProject) throw new Error("全景项目不存在");
+      if (!historyProject) throw new Error(t("canvasNodes.panorama.projectMissing"));
       const currentNode = historyProject.nodes.find((candidate) => candidate.id === node.id);
-      if (!currentNode || currentNode.type !== "panorama") throw new Error("全景节点不存在");
-      if (!channel) throw new Error("请先配置图片生成渠道");
+      if (!currentNode || currentNode.type !== "panorama") throw new Error(t("canvasNodes.panorama.nodeMissing"));
+      if (!channel) throw new Error(t("canvasNodes.imageChannelRequired"));
       const imageProvider = getProvider(channel, "image");
       if (!imageProvider.apiKey || !imageProvider.baseUrl || !imageProvider.model) {
-        throw new Error("请先配置图片生成渠道");
+        throw new Error(t("canvasNodes.imageChannelRequired"));
       }
       const prompt = buildPanoramaPrompt(currentNode.metadata.prompt ?? "");
       const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
@@ -198,7 +200,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
         const supported = imageProvider.protocol === "openai" || imageProvider.protocol === "gemini" ||
           (imageProvider.protocol === "template" && Boolean(imageProvider.template)) || imageProvider.protocol === "apimart" ||
           imageProvider.protocol === "kie";
-        if (!supported) throw new Error(`当前图片协议（${imageProvider.protocol}）不支持服务端全景生成`);
+        if (!supported) throw new Error(t("canvasNodes.panorama.protocolUnsupported", { protocol: imageProvider.protocol }));
         const result = await runPanoramaServerGeneration({
           projectId: historyProject.id,
           prompt,
@@ -302,9 +304,9 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
     void (async () => {
       try {
         const historyProject = useBoardStore.getState().getActive();
-        if (!historyProject) throw new Error("全景项目不存在");
+        if (!historyProject) throw new Error(t("canvasNodes.panorama.projectMissing"));
         const currentNode = historyProject.nodes.find((candidate) => candidate.id === node.id);
-        if (!currentNode || currentNode.type !== "panorama") throw new Error("全景节点不存在");
+        if (!currentNode || currentNode.type !== "panorama") throw new Error(t("canvasNodes.panorama.nodeMissing"));
         const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
         const media = await resumePanoramaServerGeneration(
           jobId,
@@ -369,58 +371,58 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
               </span>
             ) : null}
           </div>
-          <button type="button" aria-label="打开 360° 全景" className="absolute right-2 top-2 rounded bg-black/65 p-2 hover:bg-black/80" onClick={() => setOpen(true)}><Expand size={15} /></button>
+          <button type="button" aria-label={t("canvasNodes.panorama.open")} className="absolute right-2 top-2 rounded bg-black/65 p-2 hover:bg-black/80" onClick={() => setOpen(true)}><Expand size={15} /></button>
         </>
       ) : (
         <div className="grid min-h-0 flex-1 place-items-center p-3 text-center text-xs text-slate-400">
-          <div><ImagePlus size={24} className="mx-auto mb-2" /><p>上传、选择或生成 2:1 全景图</p></div>
+          <div><ImagePlus size={24} className="mx-auto mb-2" /><p>{t("canvasNodes.panorama.empty")}</p></div>
         </div>
       )}
       <div className="grid gap-1 border-t border-white/10 bg-black/50 p-2">
-        <input aria-label="全景提示词" disabled={loading || isBatchChild} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs outline-none disabled:opacity-50" placeholder="描述 360° 场景…" value={node.metadata.prompt ?? ""} onChange={(event) => updateNode(node.id, { metadata: { prompt: event.target.value } }, { history: false })} />
+        <input aria-label={t("canvasNodes.panorama.prompt")} disabled={loading || isBatchChild} className="rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs outline-none disabled:opacity-50" placeholder={t("canvasNodes.panorama.promptPlaceholder")} value={node.metadata.prompt ?? ""} onChange={(event) => updateNode(node.id, { metadata: { prompt: event.target.value } }, { history: false })} />
         <div className="flex gap-1">
-          <select aria-label="选择 2:1 画布图片" disabled={loading || isBatchChild} className="min-w-0 flex-1 rounded border border-white/10 bg-slate-900 px-1 text-[11px] disabled:opacity-50" value="" onChange={(event) => void selectSource(event.target.value).catch((cause) => setError(panoramaGenerationError(cause)))}>
-            <option value="">复用 2:1 全景</option>
+          <select aria-label={t("canvasNodes.panorama.selectSource")} disabled={loading || isBatchChild} className="min-w-0 flex-1 rounded border border-white/10 bg-slate-900 px-1 text-[11px] disabled:opacity-50" value="" onChange={(event) => void selectSource(event.target.value).catch((cause) => setError(panoramaGenerationError(cause)))}>
+            <option value="">{t("canvasNodes.panorama.reuse")}</option>
             {sourceImages.map((source) => <option key={source.id} value={source.id}>{source.title}</option>)}
           </select>
-          <label className={`grid h-8 w-8 shrink-0 place-items-center rounded border border-white/10 ${loading || isBatchChild ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`} title="上传 2:1 全景图"><Upload size={14} /><input aria-label="上传 2:1 全景图" disabled={loading || isBatchChild} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => {
+          <label className={`grid h-8 w-8 shrink-0 place-items-center rounded border border-white/10 ${loading || isBatchChild ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`} title={t("canvasNodes.panorama.upload")}><Upload size={14} /><input aria-label={t("canvasNodes.panorama.upload")} disabled={loading || isBatchChild} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void applyMedia(file).catch((cause) => setError(panoramaGenerationError(cause)));
             event.currentTarget.value = "";
           }} /></label>
-          <button type="button" aria-label="生成全景图" disabled={loading || isBatchChild} className="grid h-8 w-8 shrink-0 place-items-center rounded bg-[var(--ob-accent)] text-white disabled:opacity-50" onClick={() => void generate().catch((cause) => setError(panoramaGenerationError(cause)))}>{loading ? <span className="animate-pulse">…</span> : <Sparkles size={14} />}</button>
+          <button type="button" aria-label={t("canvasNodes.panorama.generate")} disabled={loading || isBatchChild} className="grid h-8 w-8 shrink-0 place-items-center rounded bg-[var(--ob-accent)] text-white disabled:opacity-50" onClick={() => void generate().catch((cause) => setError(panoramaGenerationError(cause)))}>{loading ? <span className="animate-pulse">…</span> : <Sparkles size={14} />}</button>
         </div>
-        <div role="group" aria-label="全景生成设置" className="grid grid-cols-[1fr_5rem] gap-1">
+        <div role="group" aria-label={t("canvasNodes.panorama.settings")} className="grid grid-cols-[1fr_5rem] gap-1">
           <label className="grid grid-cols-[2.5rem_1fr] items-center gap-1 text-[10px] text-slate-400">
-            质量
-            <select aria-label="全景生成质量" disabled={loading || isBatchChild} className="min-w-0 rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.quality ?? config.imageQuality} onChange={(event) => updateNode(node.id, { metadata: { quality: event.target.value } })}>
+            {t("canvasNodes.panorama.quality")}
+            <select aria-label={t("canvasNodes.panorama.generationQuality")} disabled={loading || isBatchChild} className="min-w-0 rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.quality ?? config.imageQuality} onChange={(event) => updateNode(node.id, { metadata: { quality: event.target.value } })}>
               {!["auto", "low", "medium", "high"].includes(node.metadata.quality ?? config.imageQuality) ? <option value={node.metadata.quality ?? config.imageQuality}>{node.metadata.quality ?? config.imageQuality}</option> : null}
-              <option value="auto">自动</option>
-              <option value="low">低</option>
-              <option value="medium">中</option>
-              <option value="high">高</option>
+              <option value="auto">{t("canvasNodes.auto")}</option>
+              <option value="low">{t("canvasNodes.low")}</option>
+              <option value="medium">{t("canvasNodes.medium")}</option>
+              <option value="high">{t("canvasNodes.high")}</option>
             </select>
           </label>
           <label className="grid grid-cols-[2rem_1fr] items-center gap-1 text-[10px] text-slate-400">
-            张数
-            <select aria-label="全景生成张数" disabled={loading || isBatchChild} className="rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.count ?? 1} onChange={(event) => updateNode(node.id, { metadata: { count: Number(event.target.value) } })}>
+            {t("canvasNodes.panorama.quantity")}
+            <select aria-label={t("canvasNodes.panorama.generationQuantity")} disabled={loading || isBatchChild} className="rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.count ?? 1} onChange={(event) => updateNode(node.id, { metadata: { count: Number(event.target.value) } })}>
               {Array.from({ length: 8 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}
             </select>
           </label>
         </div>
-        {isBatchChild ? <p className="text-[10px] text-slate-400">批次子结果请从主结果重新生成</p> : null}
+        {isBatchChild ? <p className="text-[10px] text-slate-400">{t("canvasNodes.panorama.batchHint")}</p> : null}
         {project ? (() => {
           const imageNodeIds = new Set(project.nodes.filter((candidate) => candidate.type === "image").map((candidate) => candidate.id));
           const count = new Set(project.edges.filter((edge) => edge.to === node.id && imageNodeIds.has(edge.from)).map((edge) => edge.from)).size;
-          return count > 0 ? <p className="text-[10px] text-slate-400">已连接 {count} 张普通图片作为生成参考</p> : null;
+          return count > 0 ? <p className="text-[10px] text-slate-400">{t("canvasNodes.panorama.referencesConnected", { count })}</p> : null;
         })() : null}
       </div>
       {(error || node.metadata.errorDetails) ? <p role="alert" className="absolute bottom-20 left-2 right-2 rounded bg-red-950/90 px-2 py-1 text-[11px] text-red-200">{error || node.metadata.errorDetails}</p> : null}
       {open && node.metadata.content ? createPortal(
-        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="360° 全景查看器" className="fixed inset-0 z-[160] bg-black text-white">
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={t("canvasNodes.panorama.viewer")} className="fixed inset-0 z-[160] bg-black text-white">
           <PanoramaViewport sourceUrl={node.metadata.content} onError={setError} />
           <div className="absolute left-4 top-4 rounded bg-black/60 px-3 py-2 text-sm">{node.title} · {node.metadata.naturalWidth}×{node.metadata.naturalHeight}</div>
-          <button ref={closeButtonRef} type="button" aria-label="关闭全景查看器" className="absolute right-4 top-4 rounded bg-black/60 p-2" onClick={() => setOpen(false)}><X size={20} /></button>
+          <button ref={closeButtonRef} type="button" aria-label={t("canvasNodes.panorama.closeViewer")} className="absolute right-4 top-4 rounded bg-black/60 p-2" onClick={() => setOpen(false)}><X size={20} /></button>
         </div>, document.body) : null}
     </div>
   );

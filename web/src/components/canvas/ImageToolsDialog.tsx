@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { BoardNode } from "@/types/board";
 import type { ImageTransformContext } from "@/services/image-transform/types";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export type ImageToolMode = "mask" | "resize" | "ai-upscale" | "split";
 export type ImageToolProviderOption = {
@@ -37,6 +38,7 @@ export function ImageToolsDialog({
   onSplit: (vertical: number[], horizontal: number[]) => Promise<void>;
   providers: ImageToolProviderOption[];
 }) {
+  const { t } = useI18n();
   const [x, setX] = useState(0.15);
   const [y, setY] = useState(0.15);
   const [w, setW] = useState(0.7);
@@ -86,8 +88,8 @@ export function ImageToolsDialog({
   }, [mode, vertical.length, horizontal.length]);
 
   if (!open) return null;
-  const title = mode === "mask" ? "遮罩编辑" : mode === "resize" ? "本地尺寸放大" :
-    mode === "ai-upscale" ? "AI 超分" : "网格切分";
+  const title = mode === "mask" ? t("canvasNodes.imageTools.maskTitle") : mode === "resize" ? t("canvasNodes.imageTools.resizeTitle") :
+    mode === "ai-upscale" ? t("canvasNodes.imageTools.aiUpscaleTitle") : t("canvasNodes.imageTools.splitTitle");
   const selectedProvider = compatibleProviders.find((provider) => provider.id === providerId);
 
   const execute = async () => {
@@ -103,15 +105,15 @@ export function ImageToolsDialog({
     try {
       if (mode === "mask") await onMask({ x, y, w, h }, keep, providerId, prompt, context);
       else if (mode === "resize" || mode === "ai-upscale") {
-        if (!selectedProvider) throw new Error(mode === "ai-upscale" ? "当前渠道不支持 AI 超分" : "本地放大不可用");
+        if (!selectedProvider) throw new Error(mode === "ai-upscale" ? t("canvasNodes.aiUpscaleUnavailable") : t("canvasNodes.imageTools.localUnavailable"));
         await onUpscale(scale, providerId, mode, context);
       }
       else await onSplit(vertical, horizontal);
     } catch (cause) {
       if (!controller.signal.aborted) {
         const detail = cause instanceof Error
-          ? cause.message.trim() || cause.name.trim() || "图像处理失败"
-          : String(cause).trim() || "图像处理失败";
+          ? cause.message.trim() || cause.name.trim() || t("canvasNodes.imageTools.failed")
+          : String(cause).trim() || t("canvasNodes.imageTools.failed");
         setError(detail);
       }
     } finally {
@@ -172,8 +174,8 @@ export function ImageToolsDialog({
           <button
             type="button"
             className="ob-icon-btn ml-auto"
-            aria-label="关闭图像工具"
-            title="关闭图像工具"
+            aria-label={t("canvasNodes.imageTools.close")}
+            title={t("canvasNodes.imageTools.close")}
             onClick={cancel}
           >
             <X size={16} />
@@ -210,7 +212,7 @@ export function ImageToolsDialog({
                     <button
                       key={`v-${index}`}
                       type="button"
-                      aria-label={`纵向分割线 ${index + 1}`}
+                      aria-label={t("canvasNodes.imageTools.verticalGuide", { index: index + 1 })}
                       className="absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize bg-transparent after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:bg-[var(--ob-select)]"
                       style={{ left: `${value * 100}%` }}
                       onPointerDown={(event) => {
@@ -231,7 +233,7 @@ export function ImageToolsDialog({
                     <button
                       key={`h-${index}`}
                       type="button"
-                      aria-label={`横向分割线 ${index + 1}`}
+                      aria-label={t("canvasNodes.imageTools.horizontalGuide", { index: index + 1 })}
                       className="absolute inset-x-0 z-10 h-3 -translate-y-1/2 cursor-row-resize bg-transparent after:absolute after:inset-x-0 after:top-1/2 after:h-0.5 after:bg-[var(--ob-select)]"
                       style={{ top: `${value * 100}%` }}
                       onPointerDown={(event) => {
@@ -258,15 +260,15 @@ export function ImageToolsDialog({
           <div className="grid grid-cols-2 gap-2 text-sm">
             <Num label="X" value={x} onChange={setX} step={0.01} min={0} max={1} />
             <Num label="Y" value={y} onChange={setY} step={0.01} min={0} max={1} />
-            <Num label="宽" value={w} onChange={setW} step={0.01} min={0.05} max={1} />
-            <Num label="高" value={h} onChange={setH} step={0.01} min={0.05} max={1} />
+            <Num label={t("canvasNodes.imageTools.width")} value={w} onChange={setW} step={0.01} min={0.05} max={1} />
+            <Num label={t("canvasNodes.imageTools.height")} value={h} onChange={setH} step={0.01} min={0.05} max={1} />
             <label className="col-span-2 flex items-center gap-2 text-sm">
               <input type="checkbox" checked={keep} disabled={selectedProvider?.kind === "cloud"} onChange={(e) => setKeep(e.target.checked)} />
-              保留框内（取消则擦除框内）
+              {t("canvasNodes.imageTools.keepInside")}
             </label>
             {selectedProvider?.kind === "cloud" ? (
               <label className="col-span-2 flex flex-col gap-1">
-                <span className="ob-label">局部重绘提示词</span>
+                <span className="ob-label">{t("canvasNodes.imageTools.inpaintPrompt")}</span>
                 <textarea
                   value={prompt}
                   maxLength={4000}
@@ -281,7 +283,7 @@ export function ImageToolsDialog({
 
         {(mode === "mask" || mode === "resize" || mode === "ai-upscale") && compatibleProviders.length > 0 ? (
           <label className="mt-3 flex flex-col gap-1 text-sm">
-            处理方式
+            {t("canvasNodes.imageTools.method")}
             <select
               className="ob-field px-2 py-1"
               value={providerId}
@@ -297,7 +299,7 @@ export function ImageToolsDialog({
 
         {mode === "resize" || mode === "ai-upscale" ? (
           <label className="flex flex-col gap-1 text-sm">
-            放大倍数
+            {t("canvasNodes.imageTools.scale")}
             <select
               className="ob-field px-2 py-1"
               value={scale}
@@ -310,8 +312,8 @@ export function ImageToolsDialog({
             </select>
             <span className="ob-label">
               {mode === "ai-upscale"
-                ? "调用当前 AI 渠道的专用超分接口；不会静默回退到图像编辑。"
-                : "浏览器 Canvas 插值，不调用云端模型。"}
+                ? t("canvasNodes.imageTools.aiHint")
+                : t("canvasNodes.imageTools.localHint")}
             </span>
           </label>
         ) : null}
@@ -328,7 +330,7 @@ export function ImageToolsDialog({
                 });
               }}
             >
-              新增纵线
+              {t("canvasNodes.imageTools.addVertical")}
             </button>
             <button
               type="button"
@@ -340,7 +342,7 @@ export function ImageToolsDialog({
                 });
               }}
             >
-              新增横线
+              {t("canvasNodes.imageTools.addHorizontal")}
             </button>
             <button
               type="button"
@@ -356,14 +358,14 @@ export function ImageToolsDialog({
                 setSelectedGuide(null);
               }}
             >
-              删除选中线
+              {t("canvasNodes.imageTools.deleteGuide")}
             </button>
             <button type="button" className="ob-btn px-2 py-1" onClick={() => {
               setVertical([0.5]);
               setHorizontal([0.5]);
               setSelectedGuide(null);
             }}>
-              重置
+              {t("canvasNodes.imageTools.reset")}
             </button>
           </div>
         ) : null}
@@ -381,7 +383,7 @@ export function ImageToolsDialog({
         </div>
         <div className="ob-dialog-footer">
           <button type="button" className="ob-btn" onClick={cancel}>
-            取消
+            {t("canvasNodes.imageTools.cancel")}
           </button>
           <button
             type="button"
@@ -390,7 +392,7 @@ export function ImageToolsDialog({
               (mode === "mask" && selectedProvider?.kind === "cloud" && !prompt.trim())}
             onClick={() => void execute()}
           >
-            {running ? "处理中" : "应用"}
+            {running ? t("canvasNodes.imageTools.processing") : t("canvasNodes.imageTools.apply")}
           </button>
         </div>
       </div>
