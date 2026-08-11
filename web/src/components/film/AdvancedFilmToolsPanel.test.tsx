@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createFilmDocument } from "@/lib/film-document";
 import { normalizeFilmCapabilities, type FilmStatus } from "@/services/film-client";
 import { AdvancedFilmToolsPanel } from "./AdvancedFilmToolsPanel";
+import { createLatestRequestGate, localizeAdvancedFilmError, localizeAdvancedFilmStatus } from "./AdvancedFilmToolsPanel";
+import { translate } from "@/i18n/core";
 
 function statusWithFeatures(features: Partial<FilmStatus["capabilities"]["features"]>): FilmStatus {
   const document = createFilmDocument("film-advanced", "2026-08-11T00:00:00.000Z");
@@ -27,6 +29,22 @@ function statusWithFeatures(features: Partial<FilmStatus["capabilities"]["featur
 }
 
 describe("advanced film tools", () => {
+	test("rejects stale voice record responses after the selected identity changes", () => {
+		const gate = createLatestRequestGate();
+		const first = gate.begin();
+		const second = gate.begin();
+		expect(gate.isCurrent(first)).toBe(false);
+		expect(gate.isCurrent(second)).toBe(true);
+	});
+
+	test("localizes workflow enums and stable worker errors in both languages", () => {
+		for (const locale of ["zh-CN", "en-US"] as const) {
+			const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
+			expect(localizeAdvancedFilmStatus(t, "running")).toBe(locale === "zh-CN" ? "运行中" : "Running");
+			expect(localizeAdvancedFilmStatus(t, "authorized")).toBe(locale === "zh-CN" ? "已授权" : "Authorized");
+			expect(localizeAdvancedFilmError(t, "COMFYUI_EXECUTION_FAILED")).toBe(locale === "zh-CN" ? "ComfyUI 执行失败" : "ComfyUI execution failed");
+		}
+	});
   test("keeps disabled capabilities explicit and removes actionable forms", () => {
     const html = renderToStaticMarkup(<AdvancedFilmToolsPanel
       status={statusWithFeatures({ advancedVoice: false, styleExtraction: false, localWorkflows: false })}

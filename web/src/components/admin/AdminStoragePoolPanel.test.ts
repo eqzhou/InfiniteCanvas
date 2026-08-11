@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   blankStorageProvider,
+  blankStorageCredentials,
   newStorageProviderDraft,
   persistedStorageProviderDrafts,
   storageCapacityLabel,
@@ -27,6 +28,10 @@ describe("admin storage pool provider forms", () => {
     expect(storageCredentialKind("s3")).toBe("access-key");
     expect(storageCredentialKind("webdav")).toBe("username-password");
   });
+
+	test("resets every credential field when the editor closes or switches provider", () => {
+		expect(blankStorageCredentials()).toEqual({ accessKeyId: "", secretAccessKey: "", sessionToken: "", username: "", password: "" });
+	});
 
   test("does not let an unsaved draft impersonate or delete a persisted provider", () => {
     const persisted = status({ id: "existing", endpoint: "https://storage.example.com" });

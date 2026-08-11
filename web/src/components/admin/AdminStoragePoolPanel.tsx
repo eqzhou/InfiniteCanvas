@@ -68,6 +68,10 @@ export function storageCredentialKind(kind: string): "access-key" | "username-pa
   return kind === "webdav" ? "username-password" : "access-key";
 }
 
+export function blankStorageCredentials() {
+  return { accessKeyId: "", secretAccessKey: "", sessionToken: "", username: "", password: "" };
+}
+
 export function persistedStorageProviderDrafts(items: AdminStoragePoolProviderStatus[]): StorageProviderDraft[] {
   return items.filter((item) => item.endpoint !== undefined).map((item) => ({
     clientKey: `persisted:${item.id}`,
@@ -99,6 +103,13 @@ export function AdminStoragePoolPanel() {
   const [sessionToken, setSessionToken] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const resetCredentials = () => {
+    const blank = blankStorageCredentials();
+    setAccessKeyId(blank.accessKeyId); setSecretAccessKey(blank.secretAccessKey); setSessionToken(blank.sessionToken);
+    setUsername(blank.username); setPassword(blank.password);
+  };
+  const closeCredentialEditor = () => { resetCredentials(); setSecretFor(""); };
+  const openCredentialEditor = (providerId: string) => { resetCredentials(); setSecretFor(providerId); };
   const load = async () => {
     setLoading(true);
     setLoaded(false);
@@ -128,7 +139,7 @@ export function AdminStoragePoolPanel() {
     try {
       if (storageCredentialKind(provider?.kind ?? "s3") === "username-password") await putAdminStoragePoolSecret(secretFor, { username, password });
       else await putAdminStoragePoolSecret(secretFor, { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) });
-      setSecretFor(""); setAccessKeyId(""); setSecretAccessKey(""); setSessionToken(""); setUsername(""); setPassword(""); await load();
+	  closeCredentialEditor(); await load();
     }
     catch (cause) { setError(storagePoolErrorMessage(cause, locale)); setLoading(false); }
   };
@@ -154,9 +165,9 @@ export function AdminStoragePoolPanel() {
           <label className="text-sm">{t("admin.storage.weight")}<input className="ob-input mt-1 w-full" type="number" min={0} max={10000} value={item.weight} onChange={(event) => update(draft.clientKey, { weight: Number(event.target.value) })} /></label>
           <div className="flex flex-wrap items-end gap-4 pb-2 text-sm"><label className="flex min-h-6 items-center gap-2"><input type="checkbox" checked={item.healthy} onChange={(event) => update(draft.clientKey, { healthy: event.target.checked })} />{t("admin.storage.newWrites")}</label><label className="flex min-h-6 items-center gap-2"><input type="checkbox" checked={item.allowInsecureLoopback} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { allowInsecureLoopback: event.target.checked })} />{t("admin.storage.loopback")}</label>{item.kind === "webdav" ? <label className="flex min-h-6 items-center gap-2"><input type="checkbox" checked={item.allowPrivate ?? false} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { allowPrivate: event.target.checked })} />{t("admin.storage.privateHttps")}</label> : null}</div>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--ob-muted)]"><span>{status ? `${storageProbeLabel(status, locale)} · ${storageCapacityLabel(status, locale)} · ${status.secretConfigured ? t("admin.storage.credentialConfigured") : t("admin.storage.credentialMissing")}` : t("admin.storage.saveBeforeCredential")}</span><div className="flex flex-wrap gap-2">{status ? <button type="button" className="ob-btn" onClick={() => setSecretFor(draft.persistedId!)}><KeyRound size={14} />{t("admin.storage.updateCredential")}</button> : null}<button type="button" className="ob-btn text-[var(--ob-danger)]" onClick={() => void remove(draft)}><Trash2 size={14} />{t("common.delete")}</button></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--ob-muted)]"><span>{status ? `${storageProbeLabel(status, locale)} · ${storageCapacityLabel(status, locale)} · ${status.secretConfigured ? t("admin.storage.credentialConfigured") : t("admin.storage.credentialMissing")}` : t("admin.storage.saveBeforeCredential")}</span><div className="flex flex-wrap gap-2">{status ? <button type="button" className="ob-btn" onClick={() => openCredentialEditor(draft.persistedId!)}><KeyRound size={14} />{t("admin.storage.updateCredential")}</button> : null}<button type="button" className="ob-btn text-[var(--ob-danger)]" onClick={() => void remove(draft)}><Trash2 size={14} />{t("common.delete")}</button></div></div>
       </article>; })}
     </div>
-    {secretFor ? <div className="ob-surface space-y-3 p-4" role="region" aria-labelledby="storage-credential-title"><h3 id="storage-credential-title" className="font-medium">{t("admin.storage.update")} {secretFor} {t("admin.storage.credential")}</h3>{storageCredentialKind(drafts.find((draft) => draft.persistedId === secretFor)?.value.kind ?? "s3") === "username-password" ? <div className="grid gap-3 md:grid-cols-2"><label className="text-sm">{t("admin.storage.username")}<input autoFocus className="ob-input mt-1 w-full" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="text-sm">{t("admin.storage.password")}<input className="ob-input mt-1 w-full" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label></div> : <div className="grid gap-3 md:grid-cols-3"><label className="text-sm">{t("admin.storage.accessKeyId")}<input autoFocus className="ob-input mt-1 w-full" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} /></label><label className="text-sm">{t("admin.storage.secretAccessKey")}<input className="ob-input mt-1 w-full" type="password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} /></label><label className="text-sm">{t("admin.storage.sessionToken")}<input className="ob-input mt-1 w-full" type="password" value={sessionToken} onChange={(event) => setSessionToken(event.target.value)} /></label></div>}<div className="flex flex-wrap gap-2"><button type="button" className="ob-btn ob-btn-primary" onClick={() => void saveSecret()}>{t("admin.storage.encryptSave")}</button><button type="button" className="ob-btn" onClick={() => setSecretFor("")}>{t("common.cancel")}</button></div></div> : null}
+    {secretFor ? <div className="ob-surface space-y-3 p-4" role="region" aria-labelledby="storage-credential-title"><h3 id="storage-credential-title" className="font-medium">{t("admin.storage.update")} {secretFor} {t("admin.storage.credential")}</h3>{storageCredentialKind(drafts.find((draft) => draft.persistedId === secretFor)?.value.kind ?? "s3") === "username-password" ? <div className="grid gap-3 md:grid-cols-2"><label className="text-sm">{t("admin.storage.username")}<input autoFocus className="ob-input mt-1 w-full" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="text-sm">{t("admin.storage.password")}<input className="ob-input mt-1 w-full" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label></div> : <div className="grid gap-3 md:grid-cols-3"><label className="text-sm">{t("admin.storage.accessKeyId")}<input autoFocus className="ob-input mt-1 w-full" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} /></label><label className="text-sm">{t("admin.storage.secretAccessKey")}<input className="ob-input mt-1 w-full" type="password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} /></label><label className="text-sm">{t("admin.storage.sessionToken")}<input className="ob-input mt-1 w-full" type="password" value={sessionToken} onChange={(event) => setSessionToken(event.target.value)} /></label></div>}<div className="flex flex-wrap gap-2"><button type="button" className="ob-btn ob-btn-primary" onClick={() => void saveSecret()}>{t("admin.storage.encryptSave")}</button><button type="button" className="ob-btn" onClick={closeCredentialEditor}>{t("common.cancel")}</button></div></div> : null}
   </section>;
 }

@@ -30,12 +30,30 @@ type approvedComfyUIExecutor struct {
 }
 
 type comfyUIJobParameters struct {
-	Executor      string                `json:"executor"`
-	Exclusive     bool                  `json:"exclusiveExecutor,omitempty"`
-	BillingUserID string                `json:"billingUserId,omitempty"`
-	RequestHash   string                `json:"requestHash"`
-	Manifest      localWorkflowManifest `json:"manifest"`
-	Values        comfyUIWorkflowValues `json:"values"`
+	Executor       string                 `json:"executor"`
+	Exclusive      bool                   `json:"exclusiveExecutor,omitempty"`
+	BillingUserID  string                 `json:"billingUserId,omitempty"`
+	RequestHash    string                 `json:"requestHash"`
+	ApprovalHash   string                 `json:"approvalHash"`
+	Manifest       localWorkflowManifest  `json:"manifest"`
+	Values         comfyUIWorkflowValues  `json:"values"`
+	InputSnapshots []comfyUIInputSnapshot `json:"inputSnapshots,omitempty"`
+}
+
+func hashApprovedComfyUIExecutor(value approvedComfyUIExecutor) (string, error) {
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(canonical)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+type comfyUIInputSnapshot struct {
+	StorageKey    string `json:"storageKey"`
+	MIMEType      string `json:"mimeType"`
+	SHA256        string `json:"sha256"`
+	ObjectVersion string `json:"objectVersion"`
 }
 
 type comfyUIResultItem struct {
@@ -149,16 +167,22 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid ComfyUI workflow values", http.StatusBadRequest)
 		return
 	}
-	if err := s.validateComfyUIReferenceBlobs(r.Context(), tenantIDFrom(r), input.Values); err != nil {
+	tenantID := tenantIDFrom(r)
+	snapshots, err := s.snapshotComfyUIReferences(r.Context(), tenantID, input.Values)
+	if err != nil {
 		http.Error(w, "ComfyUI references must be valid tenant PNG or JPEG blobs", http.StatusBadRequest)
 		return
 	}
-	requestHash, err := hashComfyUIRequest(input.ProjectID, manifest, input.Values)
+	requestHash, err := hashComfyUIRequest(input.ProjectID, manifest, input.Values, snapshots)
 	if err != nil {
 		http.Error(w, "invalid ComfyUI generation job", http.StatusBadRequest)
 		return
 	}
-	tenantID := tenantIDFrom(r)
+	approvalHash, err := hashApprovedComfyUIExecutor(approved)
+	if err != nil {
+		http.Error(w, "ComfyUI generation is unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID); getErr == nil {
 		if matchingComfyUIRequest(existing, requestHash) {
 			writeJSON(w, publicGenerationJob(existing))
@@ -171,8 +195,8 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parameters, _ := json.Marshal(comfyUIJobParameters{
-		Executor: comfyUIExecutorMarker, Exclusive: approved.Exclusive, BillingUserID: userIDFrom(r), RequestHash: requestHash,
-		Manifest: manifest, Values: cloneComfyUIValues(input.Values),
+		Executor: comfyUIExecutorMarker, Exclusive: approved.Exclusive, BillingUserID: userIDFrom(r), RequestHash: requestHash, ApprovalHash: approvalHash,
+		Manifest: manifest, Values: cloneComfyUIValues(input.Values), InputSnapshots: snapshots,
 	})
 	result, _ := json.Marshal(comfyUIJobResult{})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -256,11 +280,12 @@ func validateComfyUIValues(manifest localWorkflowManifest, values comfyUIWorkflo
 	return err
 }
 
-func (s *Server) validateComfyUIReferenceBlobs(ctx context.Context, tenantID string, values comfyUIWorkflowValues) error {
+func (s *Server) snapshotComfyUIReferences(ctx context.Context, tenantID string, values comfyUIWorkflowValues) ([]comfyUIInputSnapshot, error) {
 	keys := append([]string(nil), values.References...)
 	keys = append(keys, values.FirstFrame, values.LastFrame)
 	total := 0
 	seen := map[string]struct{}{}
+	snapshots := make([]comfyUIInputSnapshot, 0, len(keys))
 	for _, key := range keys {
 		if key == "" {
 			continue
@@ -269,24 +294,31 @@ func (s *Server) validateComfyUIReferenceBlobs(ctx context.Context, tenantID str
 			continue
 		}
 		seen[key] = struct{}{}
-		value, err := s.readTenantImageBlobContext(ctx, tenantID, key)
+		value, err := s.readTenantBlob(ctx, tenantID, key, maxGeneratedImageBytes)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		if _, _, _, err := validateReferenceImage(generatedImage{Data: value.Data, MIMEType: value.Metadata.ContentType}); err != nil {
+			return nil, err
 		}
 		total += len(value.Data)
 		if total > maxMediaReferenceBytes {
-			return errors.New("ComfyUI references exceed size limit")
+			return nil, errors.New("ComfyUI references exceed size limit")
 		}
+		snapshots = append(snapshots, comfyUIInputSnapshot{
+			StorageKey: key, MIMEType: value.Metadata.ContentType, SHA256: sha256Hex(value.Data), ObjectVersion: blobIdentityVersion(value),
+		})
 	}
-	return nil
+	return snapshots, nil
 }
 
-func hashComfyUIRequest(projectID string, manifest localWorkflowManifest, values comfyUIWorkflowValues) (string, error) {
+func hashComfyUIRequest(projectID string, manifest localWorkflowManifest, values comfyUIWorkflowValues, snapshots []comfyUIInputSnapshot) (string, error) {
 	canonical, err := json.Marshal(struct {
-		ProjectID string                `json:"projectId,omitempty"`
-		Manifest  localWorkflowManifest `json:"manifest"`
-		Values    comfyUIWorkflowValues `json:"values"`
-	}{ProjectID: projectID, Manifest: manifest, Values: cloneComfyUIValues(values)})
+		ProjectID string                 `json:"projectId,omitempty"`
+		Manifest  localWorkflowManifest  `json:"manifest"`
+		Values    comfyUIWorkflowValues  `json:"values"`
+		Snapshots []comfyUIInputSnapshot `json:"inputSnapshots,omitempty"`
+	}{ProjectID: projectID, Manifest: manifest, Values: cloneComfyUIValues(values), Snapshots: snapshots})
 	if err != nil {
 		return "", err
 	}
@@ -315,9 +347,10 @@ func decodeComfyUIJob(job store.GenerationJob) (comfyUIJobParameters, comfyUIJob
 	decoder := json.NewDecoder(bytes.NewReader(job.Parameters))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&parameters) != nil || ensureJSONEOF(decoder) != nil || parameters.Executor != comfyUIExecutorMarker ||
-		len(parameters.RequestHash) != 64 || !allLowerHex(parameters.RequestHash) ||
+		len(parameters.RequestHash) != 64 || !allLowerHex(parameters.RequestHash) || len(parameters.ApprovalHash) != 64 || !allLowerHex(parameters.ApprovalHash) ||
 		len(parameters.BillingUserID) > 128 || strings.TrimSpace(parameters.BillingUserID) != parameters.BillingUserID ||
-		validateLocalWorkflowManifest(parameters.Manifest) != nil || validateComfyUIValues(parameters.Manifest, parameters.Values) != nil {
+		validateLocalWorkflowManifest(parameters.Manifest) != nil || validateComfyUIValues(parameters.Manifest, parameters.Values) != nil ||
+		validateComfyUIInputSnapshots(parameters.Values, parameters.InputSnapshots) != nil {
 		return comfyUIJobParameters{}, comfyUIJobResult{}, errors.New("invalid ComfyUI job parameters")
 	}
 	kind, err := localWorkflowOutputKind(parameters.Manifest)
@@ -337,6 +370,31 @@ func decodeComfyUIJob(job store.GenerationJob) (comfyUIJobParameters, comfyUIJob
 		}
 	}
 	return parameters, result, nil
+}
+
+func validateComfyUIInputSnapshots(values comfyUIWorkflowValues, snapshots []comfyUIInputSnapshot) error {
+	keys := append([]string(nil), values.References...)
+	keys = append(keys, values.FirstFrame, values.LastFrame)
+	required := map[string]struct{}{}
+	for _, key := range keys {
+		if key != "" {
+			required[key] = struct{}{}
+		}
+	}
+	if len(required) != len(snapshots) {
+		return errors.New("ComfyUI input snapshots do not match references")
+	}
+	seen := map[string]struct{}{}
+	for _, snapshot := range snapshots {
+		if _, ok := required[snapshot.StorageKey]; !ok || !validSHA256Hex(snapshot.SHA256) || snapshot.MIMEType == "" || snapshot.ObjectVersion == "" {
+			return errors.New("invalid ComfyUI input snapshot")
+		}
+		if _, duplicate := seen[snapshot.StorageKey]; duplicate {
+			return errors.New("duplicate ComfyUI input snapshot")
+		}
+		seen[snapshot.StorageKey] = struct{}{}
+	}
+	return nil
 }
 
 func (s *Server) startComfyUIWorkers(count int) {
@@ -392,15 +450,21 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 	tenantID, job := claimed.TenantID, claimed.Job
 	parameters, result, err := decodeComfyUIJob(job)
 	if err != nil {
-		s.completeComfyUIJob(tenantID, job, "failed", result, "ComfyUI 任务文档无效")
+		s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_INVALID_JOB")
 		return
 	}
-	executor, err := newComfyUIExecutor(parameters.Manifest.Endpoint, parameters.Manifest.AllowPrivate)
+	approved, approvalErr := resolveApprovedComfyUIExecutor(job.ProviderID)
+	currentApprovalHash, hashErr := hashApprovedComfyUIExecutor(approved)
+	if approvalErr != nil || hashErr != nil || currentApprovalHash != parameters.ApprovalHash || approved.BillingModel != job.Model {
+		s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_EXECUTOR_REVOKED")
+		return
+	}
+	executor, err := newComfyUIExecutor(approved.Manifest.Endpoint, approved.Manifest.AllowPrivate)
 	if err != nil {
-		s.completeComfyUIJob(tenantID, job, "failed", result, "ComfyUI 地址不可用")
+		s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_EXECUTOR_UNAVAILABLE")
 		return
 	}
-	executor.exclusive = parameters.Exclusive
+	executor.exclusive = approved.Exclusive
 	if s.comfyUIPollInterval > 0 {
 		executor.pollInterval = s.comfyUIPollInterval
 	}
@@ -419,9 +483,9 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 		cancel()
 	}()
 
-	values, err := s.prepareComfyUIInputs(ctx, tenantID, executor, parameters.Values)
+	values, err := s.prepareComfyUIInputs(ctx, tenantID, executor, parameters.Values, parameters.InputSnapshots)
 	if err != nil {
-		s.completeComfyUIJob(tenantID, job, "failed", result, "ComfyUI 输入素材无效或上传失败")
+		s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_INPUT_INVALID")
 		return
 	}
 	var checkpoint *comfyUIExternalCheckpoint
@@ -444,9 +508,9 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 			}
 			return
 		}
-		message := "ComfyUI 执行失败"
+		message := "COMFYUI_EXECUTION_FAILED"
 		if errors.Is(runErr, context.DeadlineExceeded) {
-			message = "ComfyUI 执行超时"
+			message = "COMFYUI_EXECUTION_TIMEOUT"
 		}
 		log.Printf("ComfyUI job %s/%s failed (%s)", tenantID, job.ID, comfyUIFailureClass(runErr))
 		s.completeComfyUIJob(tenantID, job, "failed", result, message)
@@ -458,7 +522,7 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 	result.Items, err = s.persistComfyUIOutput(ctx, tenantID, parameters.BillingUserID, job, result.ExternalPromptID, output.Items)
 	if err != nil {
 		log.Printf("ComfyUI job %s/%s output persistence failed: %v", tenantID, job.ID, err)
-		s.completeComfyUIJob(tenantID, job, "failed", result, "ComfyUI 输出无效或保存失败")
+		s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_OUTPUT_INVALID")
 		return
 	}
 	s.completeComfyUIJob(tenantID, job, "succeeded", result, "")
@@ -474,17 +538,30 @@ func comfyUIFailureClass(err error) string {
 	return "execution"
 }
 
-func (s *Server) prepareComfyUIInputs(ctx context.Context, tenantID string, executor *comfyUIExecutor, values comfyUIWorkflowValues) (comfyUIWorkflowValues, error) {
+func (s *Server) prepareComfyUIInputs(ctx context.Context, tenantID string, executor *comfyUIExecutor, values comfyUIWorkflowValues, snapshots []comfyUIInputSnapshot) (comfyUIWorkflowValues, error) {
 	prepared := cloneComfyUIValues(values)
 	prepared.ReferenceNames = make([]string, 0, len(values.References))
+	if err := validateComfyUIInputSnapshots(values, snapshots); err != nil {
+		return comfyUIWorkflowValues{}, err
+	}
+	frozen := make(map[string]comfyUIInputSnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		frozen[snapshot.StorageKey] = snapshot
+	}
 	upload := func(index int, key string) (string, error) {
-		image, err := s.readTenantImageBlobContext(ctx, tenantID, key)
+		value, err := s.readTenantBlob(ctx, tenantID, key, maxGeneratedImageBytes)
 		if err != nil {
 			return "", err
 		}
-		digest := sha256.Sum256(image.Data)
-		name := comfyUIUploadFilename(index, image.MIMEType, hex.EncodeToString(digest[:8]))
-		return executor.UploadImage(ctx, name, image.MIMEType, image.Data)
+		snapshot := frozen[key]
+		if value.Metadata.ContentType != snapshot.MIMEType || sha256Hex(value.Data) != snapshot.SHA256 || blobIdentityVersion(value) != snapshot.ObjectVersion {
+			return "", errors.New("ComfyUI reference changed after submission")
+		}
+		if _, _, _, err := validateReferenceImage(generatedImage{Data: value.Data, MIMEType: value.Metadata.ContentType}); err != nil {
+			return "", err
+		}
+		name := comfyUIUploadFilename(index, value.Metadata.ContentType, snapshot.SHA256[:16])
+		return executor.UploadImage(ctx, name, value.Metadata.ContentType, value.Data)
 	}
 	for index, key := range values.References {
 		name, err := upload(index, key)

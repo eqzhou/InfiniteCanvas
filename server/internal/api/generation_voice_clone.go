@@ -125,8 +125,6 @@ func (s *Server) executeClaimedVoiceCloneJob(claimed store.TenantGenerationJob) 
 		_, _ = s.store.CompleteServerGenerationJob(context.Background(), tenantID, job.ID, job.LeaseOwner, "failed", json.RawMessage(`{}`), "Voice clone job is invalid", time.Now().UTC())
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, _ = backend.CompleteVoiceIdentityVersion(context.Background(), tenantID, job.ProjectID, parameters.VersionID, job.ID, "running", "", "", now)
 	ctx, cancel := context.WithCancel(s.generationRoot)
 	key := tenantID + "\x00" + job.ID
 	s.generationMu.Lock()
@@ -141,6 +139,13 @@ func (s *Server) executeClaimedVoiceCloneJob(claimed store.TenantGenerationJob) 
 		s.generationMu.Unlock()
 		cancel()
 	}()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := backend.CompleteVoiceIdentityVersion(ctx, tenantID, job.ProjectID, parameters.VersionID, job.ID, "running", "", "", now); err != nil {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	request, timeout, err := s.resolveVoiceCloneProviderRequest(ctx, tenantID, job, parameters)
 	if err == nil {
 		var providerCancel context.CancelFunc
@@ -148,7 +153,7 @@ func (s *Server) executeClaimedVoiceCloneJob(claimed store.TenantGenerationJob) 
 		defer providerCancel()
 	}
 	providerVoiceID := ""
-	if err == nil {
+	if err == nil && ctx.Err() == nil {
 		providerVoiceID, err = s.voiceCloneExecutor.Clone(ctx, request)
 	}
 	status, versionStatus, message := "succeeded", "ready", ""

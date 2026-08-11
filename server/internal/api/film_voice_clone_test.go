@@ -33,6 +33,17 @@ type scriptedVoiceCloneExecutor struct {
 	requests chan voiceCloneProviderRequest
 }
 
+type rejectingVoiceVersionStore struct {
+	*voiceFilmMemoryStore
+}
+
+func (m *rejectingVoiceVersionStore) CompleteVoiceIdentityVersion(_ context.Context, _, _, _, _, status, _, _, _ string) (store.VoiceIdentityVersion, error) {
+	if status == "running" {
+		return store.VoiceIdentityVersion{}, store.ErrConflict
+	}
+	return store.VoiceIdentityVersion{}, store.ErrNotFound
+}
+
 func (e *scriptedVoiceCloneExecutor) Clone(_ context.Context, request voiceCloneProviderRequest) (string, error) {
 	e.requests <- request
 	return "provider-voice-worker", nil
@@ -169,7 +180,7 @@ func (m *voiceFilmMemoryStore) CancelServerGenerationJob(ctx context.Context, te
 	var parameters voiceCloneJobParameters
 	if job.Kind == "audio" && json.Unmarshal(job.Parameters, &parameters) == nil && parameters.Executor == voiceCloneExecutorMarker {
 		m.voiceMu.Lock()
-		key := voiceStoreKey(tenantID, job.ProjectID, parameters.VersionID)
+		key := voiceStoreKey(tenantID, parameters.ProjectID, parameters.VersionID)
 		if version, exists := m.versions[key]; exists && (version.Status == "queued" || version.Status == "running") {
 			version.Status, version.Error, version.UpdatedAt = "canceled", "Voice clone was canceled", now.UTC().Format(time.RFC3339Nano)
 			m.versions[key] = version
@@ -526,6 +537,11 @@ func TestVoiceCloneUsesExistingCancellationAndRefundLifecycle(t *testing.T) {
 	body := []byte(`{"providerId":"audio-main","model":"voice-clone-1","sampleIds":["` + sample.ID + `"],"consentId":"` + consent.ID + `","idempotencyKey":"voice-clone-cancel-1"}`)
 	created := request(t, handler, http.MethodPost, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/clone", body)
 	version := voiceData[store.VoiceIdentityVersion](t, created.Body.Bytes())
+	internalJob, internalErr := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, version.GenerationJobID)
+	var internalParameters voiceCloneJobParameters
+	if internalErr != nil || json.Unmarshal(internalJob.Parameters, &internalParameters) != nil || internalParameters.Executor != voiceCloneExecutorMarker || internalParameters.ProjectID != "voice-film" || internalParameters.VersionID != version.ID {
+		t.Fatalf("internal voice job was corrupted before cancellation: job=%#v err=%v", internalJob, internalErr)
+	}
 	canceled := request(t, handler, http.MethodPost, "/api/generation-jobs/"+version.GenerationJobID+"/cancel", nil)
 	var canceledJob store.GenerationJob
 	if json.Unmarshal(canceled.Body.Bytes(), &canceledJob) != nil || canceled.Code != http.StatusOK || canceledJob.Status != "cancelled" {
@@ -539,6 +555,64 @@ func TestVoiceCloneUsesExistingCancellationAndRefundLifecycle(t *testing.T) {
 	value := voiceData[store.VoiceIdentityVersion](t, synced.Body.Bytes())
 	if synced.Code != http.StatusOK || value.Status != "canceled" {
 		t.Fatalf("sync canceled status=%d value=%#v body=%s", synced.Code, value, synced.Body.String())
+	}
+}
+
+func TestVoiceCloneWorkerDoesNotCallProviderAfterVersionWasCanceled(t *testing.T) {
+	backend := &rejectingVoiceVersionStore{voiceFilmMemoryStore: newVoiceFilmMemoryStore()}
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	executor := &scriptedVoiceCloneExecutor{requests: make(chan voiceCloneProviderRequest, 1)}
+	server.voiceCloneExecutor = executor
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, "config", []byte(`{"channels":[{"id":"audio-main","name":"Audio","baseUrl":"https://audio.example/v1","defaultAudioModel":"voice-clone-1","providers":{"audio":{"baseUrl":"https://audio.example/v1","model":"voice-clone-1","protocol":"openai"}}}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := server.encryptSecrets([]byte(`{"apiKeys":{"audio-main":{"audio":"unit-value"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, "secrets", secrets); err != nil {
+		t.Fatal(err)
+	}
+	parameters, _ := json.Marshal(voiceCloneJobParameters{
+		Executor: voiceCloneExecutorMarker, ProjectID: "voice-film", VoiceIdentityID: "voice-one", VersionID: "version-one",
+	})
+	job := store.GenerationJob{
+		ID: "voice-cancel-race", ProjectID: "voice-film", Kind: "audio", Status: "running", ProviderID: "audio-main", Model: "voice-clone-1",
+		Prompt: "Lead voice", Parameters: parameters, Result: json.RawMessage(`{}`), LeaseOwner: "worker-one",
+	}
+	server.executeClaimedVoiceCloneJob(store.TenantGenerationJob{TenantID: store.DefaultTenantID, Job: job})
+	select {
+	case <-executor.requests:
+		t.Fatal("voice clone provider was called after the version transition was rejected")
+	default:
+	}
+}
+
+func TestPublicGenerationJobsRedactVoiceAndComfyUIExecutionSnapshots(t *testing.T) {
+	voiceParameters, _ := json.Marshal(voiceCloneJobParameters{
+		Executor: voiceCloneExecutorMarker, RequestHash: strings.Repeat("a", 64), ProjectID: "film-one", VoiceIdentityID: "voice-one",
+		VersionID: "version-one", ConsentID: "consent-one", Samples: []voiceCloneSampleSnapshot{{ID: "sample-one", StorageKey: "private.wav", MIMEType: "audio/wav", SHA256: strings.Repeat("b", 64), ObjectVersion: "secret-version"}},
+	})
+	voicePublic := publicGenerationJob(store.GenerationJob{Parameters: voiceParameters})
+	for _, secret := range []string{"private.wav", strings.Repeat("b", 64), "secret-version", "consent-one"} {
+		if strings.Contains(string(voicePublic.Parameters), secret) {
+			t.Fatalf("public voice job leaked %q: %s", secret, voicePublic.Parameters)
+		}
+	}
+	comfyParameters, _ := json.Marshal(comfyUIJobParameters{
+		Executor: comfyUIExecutorMarker, BillingUserID: "billing-user", RequestHash: strings.Repeat("c", 64), ApprovalHash: strings.Repeat("d", 64),
+		Manifest:       localWorkflowManifest{ID: "private-manifest", Endpoint: "https://internal.example", AllowPrivate: true},
+		InputSnapshots: []comfyUIInputSnapshot{{StorageKey: "private.png", MIMEType: "image/png", SHA256: strings.Repeat("e", 64), ObjectVersion: "private-version"}},
+	})
+	comfyPublic := publicGenerationJob(store.GenerationJob{Parameters: comfyParameters})
+	for _, secret := range []string{"billing-user", "internal.example", "private.png", "private-version", strings.Repeat("e", 64), "allowPrivate"} {
+		if strings.Contains(string(comfyPublic.Parameters), secret) {
+			t.Fatalf("public ComfyUI job leaked %q: %s", secret, comfyPublic.Parameters)
+		}
 	}
 }
 

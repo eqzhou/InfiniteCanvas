@@ -155,8 +155,24 @@ func stripGenerationChannelSecret(parameters json.RawMessage) json.RawMessage {
 }
 
 func publicGenerationJob(job store.GenerationJob) store.GenerationJob {
-	job.Parameters = stripGenerationChannelSecret(job.Parameters)
+	job.Parameters = stripPublicGenerationParameters(stripGenerationChannelSecret(job.Parameters))
 	return job
+}
+
+func stripPublicGenerationParameters(parameters json.RawMessage) json.RawMessage {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(parameters, &root) != nil {
+		return append(json.RawMessage(nil), parameters...)
+	}
+	var executor string
+	if rawExecutor, ok := root["executor"]; ok && json.Unmarshal(rawExecutor, &executor) == nil && (executor == voiceCloneExecutorMarker || executor == comfyUIExecutorMarker) {
+		clean, err := json.Marshal(map[string]string{"executor": executor})
+		if err == nil {
+			return clean
+		}
+		return json.RawMessage(`{}`)
+	}
+	return append(json.RawMessage(nil), parameters...)
 }
 
 func publicGenerationJobPage(page store.GenerationJobPage) store.GenerationJobPage {

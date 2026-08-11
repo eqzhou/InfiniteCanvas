@@ -95,8 +95,15 @@ func mustDecodeBase64(t *testing.T, value string) []byte {
 
 func comfyUIJobFixture(t *testing.T, id string, manifest localWorkflowManifest, checkpoint *comfyUIExternalCheckpoint) store.GenerationJob {
 	t.Helper()
+	approved := approvedComfyUIExecutor{ID: manifest.ID, BillingModel: "comfyui-image-standard", Exclusive: false, Manifest: manifest}
+	approvalHash, err := hashApprovedComfyUIExecutor(approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, _ := json.Marshal(map[string]any{"executors": []map[string]any{{"id": manifest.ID, "billingModel": approved.BillingModel, "exclusive": false, "manifest": manifest}}})
+	t.Setenv("OPENBOARD_COMFYUI_EXECUTORS", string(configured))
 	parameters, err := json.Marshal(comfyUIJobParameters{
-		Executor: comfyUIExecutorMarker, RequestHash: strings.Repeat("a", 64), Manifest: manifest,
+		Executor: comfyUIExecutorMarker, RequestHash: strings.Repeat("a", 64), ApprovalHash: approvalHash, Manifest: manifest,
 		Values: comfyUIWorkflowValues{Prompt: "hello", Seed: 7, Width: 512, Height: 512},
 	})
 	if err != nil {
@@ -111,7 +118,7 @@ func comfyUIJobFixture(t *testing.T, id string, manifest localWorkflowManifest, 
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return store.GenerationJob{ID: id, Kind: "image", Status: "queued", Prompt: "hello", Parameters: parameters, Result: resultJSON, CreatedAt: now, UpdatedAt: now}
+	return store.GenerationJob{ID: id, Kind: "image", Status: "queued", Prompt: "hello", ProviderID: manifest.ID, Model: approved.BillingModel, Parameters: parameters, Result: resultJSON, CreatedAt: now, UpdatedAt: now}
 }
 
 func TestComfyUIExecutorSubmitsPollsAndDownloadsValidatedOutput(t *testing.T) {
@@ -333,6 +340,59 @@ func TestComfyUIWorkerRecoversPersistedPromptAfterRestartWithoutResubmit(t *test
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("restarted worker did not recover expired ComfyUI job")
+}
+
+func TestComfyUIRecoveryRejectsChangedFrozenReference(t *testing.T) {
+	fixture := newComfyFixture(t)
+	server := NewServerWithStore(t.TempDir(), newMemoryStore())
+	t.Cleanup(server.Close)
+	initial := apimartPNG(t)
+	if err := server.storeTenantBlob(t.Context(), store.DefaultTenantID, "", "reference.png", "image/png", initial); err != nil {
+		t.Fatal(err)
+	}
+	values := comfyUIWorkflowValues{References: []string{"reference.png"}}
+	snapshots, err := server.snapshotComfyUIReferences(t.Context(), store.DefaultTenantID, values)
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots=%#v err=%v", snapshots, err)
+	}
+	changed := append([]byte(nil), initial...)
+	changed[len(changed)-1] ^= 1
+	if err := server.storeTenantBlob(t.Context(), store.DefaultTenantID, "", "reference.png", "image/png", changed); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := newComfyUIExecutor(fixture.server.URL, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.prepareComfyUIInputs(t.Context(), store.DefaultTenantID, executor, values, snapshots); err == nil {
+		t.Fatal("changed ComfyUI reference was accepted during recovery")
+	}
+}
+
+func TestComfyUIWorkerRejectsRevokedApprovedExecutorBeforeConnecting(t *testing.T) {
+	fixture := newComfyFixture(t)
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	job := comfyUIJobFixture(t, "revoked-comfy", comfyImageManifest(t, fixture.server.URL), nil)
+	if err := backend.CreateServerGenerationJob(t.Context(), store.DefaultTenantID, "", job, 1, json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := backend.ClaimServerGenerationJob(t.Context(), store.GenerationClaim{Kind: "image", Executor: comfyUIExecutorMarker}, "worker-one", time.Now(), time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_COMFYUI_EXECUTORS", `{"executors":[]}`)
+	server.executeClaimedComfyUIJob(claimed)
+	current, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, job.ID)
+	if err != nil || current.Status != "failed" || current.Error != "COMFYUI_EXECUTOR_REVOKED" {
+		t.Fatalf("job=%#v err=%v", current, err)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.submits != 0 {
+		t.Fatalf("revoked executor received %d submissions", fixture.submits)
+	}
 }
 
 func TestCreateComfyUIJobAPIIsIdempotentAndRejectsUnknownExecutor(t *testing.T) {

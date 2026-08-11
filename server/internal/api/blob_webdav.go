@@ -348,6 +348,29 @@ func (s *webDAVBlobObjectStore) Put(ctx context.Context, tenantID, name string, 
 	}
 	version := response.Header.Get("ETag")
 	if version == "" {
+		version, err = s.headVersion(ctx, tenantID, name)
+		if err != nil {
+			return "", err
+		}
+	}
+	return version, nil
+}
+
+func (s *webDAVBlobObjectStore) headVersion(ctx context.Context, tenantID, name string) (string, error) {
+	request, err := s.request(ctx, http.MethodHead, tenantID, name, nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := s.client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("WebDAV head failed with status %d", response.StatusCode)
+	}
+	version := response.Header.Get("ETag")
+	if version == "" {
 		return "", errors.New("WebDAV blob version is missing")
 	}
 	return version, nil
