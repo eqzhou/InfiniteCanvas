@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -241,5 +242,68 @@ func TestTenantWebDAVStoragePoolFailsClosedWhenFeatureDisabled(t *testing.T) {
 	config := []byte(`[{"id":"tenant-dav","kind":"webdav","endpoint":"http://127.0.0.1:8080/dav","prefix":"media","weight":1,"healthy":true,"allowInsecureLoopback":true}]`)
 	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", config); got.Code != http.StatusNotFound {
 		t.Fatalf("disabled WebDAV = %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestDisablingWebDAVKeepsHistoricalReadsButStopsNewPlacements(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	t.Setenv(webDAVMediaFeatureEnv, "true")
+	objects := map[string][]byte{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			objects[r.URL.Path] = body
+			w.Header().Set("ETag", `"dav-v1"`)
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			body, ok := objects[r.URL.Path]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("ETag", `"dav-v1"`)
+			_, _ = w.Write(body)
+		}
+	}))
+	defer upstream.Close()
+
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	processStore := newMemoryBlobObjectStore()
+	server.setBlobObjectStore(processStore)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	config := []byte(`[{"id":"tenant-dav","kind":"webdav","endpoint":"` + upstream.URL + `/dav","prefix":"media","weight":1,"healthy":true,"allowInsecureLoopback":true}]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", config); got.Code != http.StatusOK {
+		t.Fatalf("config = %d %s", got.Code, got.Body.String())
+	}
+	if got := request(t, router, http.MethodPut, "/api/admin/storage-pool/tenant-dav/secret", []byte(`{"username":"dav-user","password":"dav-secret"}`)); got.Code != http.StatusNoContent {
+		t.Fatalf("secret = %d", got.Code)
+	}
+	if err := server.storeTenantBlob(t.Context(), store.DefaultTenantID, "user", "historical", "image/png", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Setenv(webDAVMediaFeatureEnv, "false"); err != nil {
+		t.Fatal(err)
+	}
+	server.InvalidateTenantBlobStore(store.DefaultTenantID)
+	if err := server.storeTenantBlob(t.Context(), store.DefaultTenantID, "user", "new-after-disable", "image/png", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if len(processStore.objects) != 1 {
+		t.Fatalf("new write did not use process fallback: %#v", processStore.objects)
+	}
+	loaded, err := server.readTenantBlob(t.Context(), store.DefaultTenantID, "historical", maxUploadBytes)
+	if err != nil || string(loaded.Data) != "old" {
+		t.Fatalf("historical read = %#v, %v", loaded, err)
 	}
 }
