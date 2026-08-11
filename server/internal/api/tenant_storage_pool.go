@@ -255,14 +255,15 @@ func (s *Server) tenantStoragePool(ctx context.Context, tenantID string) (blobOb
 			objects, destination, fingerprint = s3store, s3BlobStorageDestination(s3store), objectStorageFingerprint(storage)
 		}
 		health := blobStorageProviderUnhealthy
-		if provider.Healthy && !provider.Deleted {
+		featureAllowsNewPlacements := provider.Kind != "webdav" || incrementFeatureEnabled(webDAVMediaFeatureEnv)
+		if provider.Healthy && !provider.Deleted && featureAllowsNewPlacements {
 			health = blobStorageProviderHealthy
 			if provider.Weight > 0 {
 				tenantSelectable = true
 			}
 		}
 		configs = append(configs, blobStorageProviderConfig{ID: provider.ID, Destination: destination, Weight: provider.Weight, Health: health, Store: objects})
-		fingerprintParts = append(fingerprintParts, strings.Join([]string{provider.ID, provider.Kind, fingerprint, boolString(provider.Healthy), boolString(provider.Deleted)}, "\x1e"))
+		fingerprintParts = append(fingerprintParts, strings.Join([]string{provider.ID, provider.Kind, fingerprint, boolString(provider.Healthy), boolString(provider.Deleted), boolString(featureAllowsNewPlacements)}, "\x1e"))
 	}
 	// Keep process routes in the same resolver so pre-existing process-pool
 	// placements remain readable after a tenant pool is enabled. They become
