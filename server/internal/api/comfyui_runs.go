@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,8 +18,20 @@ import (
 
 const comfyUIExecutorMarker = "comfyui"
 
+const maxComfyUIExecutorConfigBytes = 1 << 20
+
+var errComfyUIExecutorNotApproved = errors.New("ComfyUI executor is not approved")
+
+type approvedComfyUIExecutor struct {
+	ID           string
+	BillingModel string
+	Exclusive    bool
+	Manifest     localWorkflowManifest
+}
+
 type comfyUIJobParameters struct {
 	Executor      string                `json:"executor"`
+	Exclusive     bool                  `json:"exclusiveExecutor,omitempty"`
 	BillingUserID string                `json:"billingUserId,omitempty"`
 	RequestHash   string                `json:"requestHash"`
 	Manifest      localWorkflowManifest `json:"manifest"`
@@ -41,10 +54,56 @@ type comfyUIJobResult struct {
 }
 
 type createComfyUIJobRequest struct {
-	ID        string                `json:"id"`
-	ProjectID string                `json:"projectId,omitempty"`
-	Manifest  json.RawMessage       `json:"manifest"`
-	Values    comfyUIWorkflowValues `json:"values"`
+	ID         string                `json:"id"`
+	ProjectID  string                `json:"projectId,omitempty"`
+	ManifestID string                `json:"manifestId"`
+	Values     comfyUIWorkflowValues `json:"values"`
+}
+
+func loadApprovedComfyUIExecutors() (map[string]approvedComfyUIExecutor, error) {
+	raw := strings.TrimSpace(os.Getenv("OPENBOARD_COMFYUI_EXECUTORS"))
+	if raw == "" || len(raw) > maxComfyUIExecutorConfigBytes {
+		return nil, errors.New("ComfyUI executor configuration is unavailable")
+	}
+	var document struct {
+		Executors []struct {
+			ID           string          `json:"id"`
+			BillingModel string          `json:"billingModel"`
+			Exclusive    bool            `json:"exclusive"`
+			Manifest     json.RawMessage `json:"manifest"`
+		} `json:"executors"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&document) != nil || ensureJSONEOF(decoder) != nil || len(document.Executors) == 0 || len(document.Executors) > 32 {
+		return nil, errors.New("ComfyUI executor configuration is invalid")
+	}
+	approved := make(map[string]approvedComfyUIExecutor, len(document.Executors))
+	for _, candidate := range document.Executors {
+		candidate.ID = strings.TrimSpace(candidate.ID)
+		candidate.BillingModel = strings.TrimSpace(candidate.BillingModel)
+		manifest, err := decodeLocalWorkflowManifest(candidate.Manifest)
+		if err != nil || !validProjectID(candidate.ID) || manifest.ID != candidate.ID || candidate.BillingModel == "" || len(candidate.BillingModel) > 500 || strings.ContainsAny(candidate.BillingModel, "\r\n\x00") {
+			return nil, errors.New("ComfyUI executor configuration is invalid")
+		}
+		if _, duplicate := approved[candidate.ID]; duplicate {
+			return nil, errors.New("ComfyUI executor ids must be unique")
+		}
+		approved[candidate.ID] = approvedComfyUIExecutor{ID: candidate.ID, BillingModel: candidate.BillingModel, Exclusive: candidate.Exclusive, Manifest: manifest}
+	}
+	return approved, nil
+}
+
+func resolveApprovedComfyUIExecutor(id string) (approvedComfyUIExecutor, error) {
+	approved, err := loadApprovedComfyUIExecutors()
+	if err != nil {
+		return approvedComfyUIExecutor{}, err
+	}
+	executor, ok := approved[strings.TrimSpace(id)]
+	if !ok {
+		return approvedComfyUIExecutor{}, errComfyUIExecutorNotApproved
+	}
+	return executor, nil
 }
 
 func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
@@ -64,11 +123,16 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid ComfyUI generation job", http.StatusBadRequest)
 		return
 	}
-	manifest, err := decodeLocalWorkflowManifest(input.Manifest)
-	if err != nil {
-		http.Error(w, "invalid local workflow manifest", http.StatusBadRequest)
+	approved, err := resolveApprovedComfyUIExecutor(input.ManifestID)
+	if errors.Is(err, errComfyUIExecutorNotApproved) {
+		http.Error(w, "ComfyUI executor was not found", http.StatusNotFound)
 		return
 	}
+	if err != nil {
+		http.Error(w, "ComfyUI generation is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	manifest := approved.Manifest
 	kind, err := localWorkflowOutputKind(manifest)
 	if err != nil || validateComfyUIValues(manifest, input.Values) != nil {
 		http.Error(w, "invalid ComfyUI workflow values", http.StatusBadRequest)
@@ -96,14 +160,14 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parameters, _ := json.Marshal(comfyUIJobParameters{
-		Executor: comfyUIExecutorMarker, BillingUserID: userIDFrom(r), RequestHash: requestHash,
+		Executor: comfyUIExecutorMarker, Exclusive: approved.Exclusive, BillingUserID: userIDFrom(r), RequestHash: requestHash,
 		Manifest: manifest, Values: cloneComfyUIValues(input.Values),
 	})
 	result, _ := json.Marshal(comfyUIJobResult{})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job := store.GenerationJob{
 		ID: input.ID, ProjectID: input.ProjectID, Kind: kind, Status: "queued", Prompt: strings.TrimSpace(input.Values.Prompt),
-		ProviderID: manifest.ID, Model: manifest.Name, Parameters: parameters, Result: result, CreatedAt: now, UpdatedAt: now,
+		ProviderID: approved.ID, Model: approved.BillingModel, Parameters: parameters, Result: result, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.CheckGenerationQuota(r.Context(), tenantID); errors.Is(err, store.ErrQuotaExceeded) {
 		http.Error(w, "generation quota exceeded", http.StatusTooManyRequests)
@@ -355,7 +419,7 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 		if errors.Is(runErr, context.DeadlineExceeded) {
 			message = "ComfyUI 执行超时"
 		}
-		log.Printf("ComfyUI job %s/%s failed: %v", tenantID, job.ID, runErr)
+		log.Printf("ComfyUI job %s/%s failed (%s)", tenantID, job.ID, comfyUIFailureClass(runErr))
 		s.completeComfyUIJob(tenantID, job, "failed", result, message)
 		return
 	}
@@ -369,6 +433,16 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 		return
 	}
 	s.completeComfyUIJob(tenantID, job, "succeeded", result, "")
+}
+
+func comfyUIFailureClass(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "execution"
 }
 
 func (s *Server) prepareComfyUIInputs(ctx context.Context, tenantID string, executor *comfyUIExecutor, values comfyUIWorkflowValues) (comfyUIWorkflowValues, error) {

@@ -307,13 +307,20 @@ func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testin
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	fixture := newComfyFixture(t)
 	backend := newMemoryStore()
+	manifest := comfyImageManifest(t, fixture.server.URL)
+	configured, err := json.Marshal(map[string]any{"executors": []map[string]any{{
+		"id": manifest.ID, "billingModel": "comfyui-image-standard", "exclusive": false, "manifest": manifest,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_COMFYUI_EXECUTORS", string(configured))
 	server := NewServerWithStore(t.TempDir(), backend)
 	server.SetProcessToken("test-token")
 	defer server.Close()
 	router := chi.NewRouter()
 	MountServer(router, server)
-	manifest := comfyImageManifest(t, fixture.server.URL)
-	body, _ := json.Marshal(map[string]any{"id": "api-comfy", "projectId": "project-one", "manifest": manifest, "values": map[string]any{"prompt": "hello", "seed": 7, "width": 512, "height": 512}})
+	body, _ := json.Marshal(map[string]any{"id": "api-comfy", "projectId": "project-one", "manifestId": manifest.ID, "values": map[string]any{"prompt": "hello", "seed": 7, "width": 512, "height": 512}})
 	for attempt := 0; attempt < 2; attempt++ {
 		request := httptest.NewRequest(http.MethodPost, "/api/generation-jobs/comfyui", bytes.NewReader(body))
 		request.Header.Set("Authorization", "Bearer test-token")
@@ -332,14 +339,12 @@ func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testin
 		t.Fatalf("mismatched retry status=%d body=%s", response.Code, response.Body.String())
 	}
 
-	badManifest := manifest
-	badManifest.BusinessMode = "text_to_video"
-	badBody, _ := json.Marshal(map[string]any{"id": "bad-kind", "manifest": badManifest, "values": map[string]any{"prompt": "hello"}})
+	badBody, _ := json.Marshal(map[string]any{"id": "bad-kind", "manifestId": "missing-executor", "values": map[string]any{"prompt": "hello"}})
 	request = httptest.NewRequest(http.MethodPost, "/api/generation-jobs/comfyui", bytes.NewReader(badBody))
 	request.Header.Set("Authorization", "Bearer test-token")
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
+	if response.Code != http.StatusNotFound {
 		t.Fatalf("kind mismatch status=%d body=%s", response.Code, response.Body.String())
 	}
 }
