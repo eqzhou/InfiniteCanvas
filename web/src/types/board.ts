@@ -203,6 +203,9 @@ export type NodeMetadata = {
   splitCount?: number;
   splitVertical?: number[];
   splitHorizontal?: number[];
+  splitSourceStorageKey?: string;
+  splitCrop?: { x: number; y: number; width: number; height: number };
+  contentSha256?: string;
   /** Member nodes for an independently authored group container. */
   childIds?: string[];
   pluginId?: string;

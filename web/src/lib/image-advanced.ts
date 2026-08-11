@@ -1,7 +1,7 @@
 import { uploadMedia } from "@/services/storage";
 import type { BoardNode } from "@/types/board";
 import { createNode } from "@/lib/defaults";
-import { normalizeSplitGuides, splitSegments } from "@/lib/image-split";
+import { buildSplitCells, normalizeSplitGuides } from "@/lib/image-split";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -62,18 +62,10 @@ export async function splitImageByGuides(
   const h = img.naturalHeight;
   const vertical = normalizeSplitGuides(verticalGuides);
   const horizontal = normalizeSplitGuides(horizontalGuides);
-  const columns = splitSegments(vertical);
-  const rows = splitSegments(horizontal);
+  const cells = buildSplitCells(w, h, vertical, horizontal);
   const out: BoardNode[] = [];
-  let index = 0;
-  for (const [r, row] of rows.entries()) {
-    for (const [c, column] of columns.entries()) {
-      const sx = Math.round(column.start * w);
-      const sy = Math.round(row.start * h);
-      const ex = Math.round(column.end * w);
-      const ey = Math.round(row.end * h);
-      const cellW = Math.max(1, ex - sx);
-      const cellH = Math.max(1, ey - sy);
+  for (const cell of cells) {
+      const { x: sx, y: sy, width: cellW, height: cellH, row: r, column: c, index } = cell;
       const canvas = document.createElement("canvas");
       canvas.width = cellW;
       canvas.height = cellH;
@@ -91,6 +83,8 @@ export async function splitImageByGuides(
         cellH,
       );
       const blob = await canvasToBlob(canvas);
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+      const contentSha256 = Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
       const uploaded = await uploadMedia(blob, "image");
       const display = fitMediaDisplaySize(cellW, cellH, 120, 240);
       out.push(
@@ -114,16 +108,17 @@ export async function splitImageByGuides(
               status: "success",
               derivedFromId: source.id,
               splitIndex: index,
-              splitCount: rows.length * columns.length,
+              splitCount: cells.length,
               splitVertical: vertical,
               splitHorizontal: horizontal,
+              splitSourceStorageKey: source.metadata.storageKey,
+              splitCrop: { x: sx, y: sy, width: cellW, height: cellH },
+              contentSha256,
               transformOperation: "split",
             },
           },
         ),
       );
-      index += 1;
-    }
   }
   return out;
 }
