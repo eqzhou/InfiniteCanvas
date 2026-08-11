@@ -213,9 +213,11 @@ describe("admin client", () => {
       return versionedResponse(JSON.stringify([{
         id: "process-main", kind: "s3", weight: 3, configuredSelectable: true,
         probeKnown: false, probeHealthy: false, capacityKnown: false,
-      }]));
+      }]), { headers: { "X-OpenBoard-WebDAV-Media-Enabled": "false" } });
     }) as typeof fetch;
-    expect((await getAdminStoragePoolStatus()).items).toEqual([{
+    const result = await getAdminStoragePoolStatus();
+    expect(result.webdavEnabled).toBe(false);
+    expect(result.items).toEqual([{
       id: "process-main", kind: "s3", weight: 3, configuredSelectable: true,
       probeKnown: false, probeHealthy: false, capacityKnown: false,
     }]);
