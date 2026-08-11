@@ -114,7 +114,9 @@ canvas.
 
 The current evidence matrix is [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md),
 the latest dual-upstream review is [`docs/UPSTREAM_GAP_PLAN_7.md`](docs/UPSTREAM_GAP_PLAN_7.md),
-and the latest Tiger-specific review is [`docs/TIGER_GAP_PLAN_4.md`](docs/TIGER_GAP_PLAN_4.md).
+the latest Tiger-specific review is [`docs/TIGER_GAP_PLAN_4.md`](docs/TIGER_GAP_PLAN_4.md),
+and the active three-reference increment blueprint is
+[`plans/openboard-three-upstream-increment-v0151-v052-v132.md`](plans/openboard-three-upstream-increment-v0151-v052-v132.md).
 `TIGER_GAP_PLAN.md`, `_2`, and `_3` are retained only as historical audit records.
 For day-to-day use, see the [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) guide for
 Agent Skills setup, manual `SKILL.md` examples, local Agent connection, and video

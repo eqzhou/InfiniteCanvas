@@ -18,6 +18,13 @@ claim about either reference product. Its status and evidence are recorded
 separately below so local engineering verification is not presented as legal,
 source-origin, visual-similarity, or Provider certification.
 
+The newer Basket `v0.15.1`, Tiger `v0.5.2`, and DramaClaw `v1.3.2` deltas are
+tracked in `plans/openboard-three-upstream-increment-v0151-v052-v132.md`.
+The shared feature-gate contract, the locale foundation, and frozen four-mode
+video resolution now carry passing evidence; page-domain translation and the
+remaining storage, voice, provider, style, and Film workflow deltas are still
+planned. This inventory must not be read as current full-version parity.
+
 ## Tiger v0.4.5 convergence baseline
 
 The broader product goal additionally tracks the publicly documented behavior
