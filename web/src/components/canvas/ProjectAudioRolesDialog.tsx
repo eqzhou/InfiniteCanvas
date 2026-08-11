@@ -5,6 +5,7 @@ import { replaceProjectAudioRoles } from "@/lib/project-audio-roles";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { resolveActiveAIChannel, useSharedChannels } from "@/services/shared-channels";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function ProjectAudioRolesDialog({
   open,
@@ -13,6 +14,7 @@ export function ProjectAudioRolesDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const project = useBoardStore((state) =>
     state.projects.find((item) => item.id === state.activeProjectId) ?? null);
   const config = useBoardStore((state) => state.config);
@@ -47,14 +49,14 @@ export function ProjectAudioRolesDialog({
           <div className="min-w-0">
             <p className="ob-page-kicker">Project cast</p>
             <h2 id="project-audio-roles-title" className="truncate text-lg font-semibold tracking-tight">
-              当前画布配音角色
+              {t("projectAudio.title")}
             </h2>
             <p className="truncate text-xs text-[var(--ob-muted)]">{project.title}</p>
           </div>
           <button
             type="button"
-            aria-label="关闭配音角色"
-            title="关闭"
+            aria-label={t("projectAudio.close")}
+            title={t("projectAudio.closeButton")}
             className="ob-icon-btn ml-auto"
             onClick={close}
           >
@@ -63,7 +65,7 @@ export function ProjectAudioRolesDialog({
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
           <p className="mb-3 text-xs leading-relaxed text-[var(--ob-muted)]">
-            角色只保存在当前画布项目中。音频节点可选择角色并自动跟随其声线，也可在节点上临时覆盖声线。
+            {t("projectAudio.description")}
           </p>
           <AudioRoleEditor
             roles={project.audioRoles ?? []}
@@ -74,7 +76,7 @@ export function ProjectAudioRolesDialog({
             )}
           />
           <p className="mt-3 text-xs text-[var(--ob-muted)]">
-            删除角色会清除节点上的角色绑定；节点已明确覆盖的声线会保留。
+            {t("projectAudio.deleteNote")}
           </p>
         </div>
       </div>

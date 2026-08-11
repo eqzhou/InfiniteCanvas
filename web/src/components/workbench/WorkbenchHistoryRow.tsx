@@ -7,6 +7,7 @@ import {
   normalizeWorkbenchCategory,
   workbenchReferenceKeys,
 } from "@/lib/workbench-history";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export type WorkbenchResultItem = {
   url?: string;
@@ -33,16 +34,17 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
   onDelete: () => Promise<void>;
   onCancel?: () => Promise<void>;
 }) {
+  const { t } = useI18n();
   const items = resultItems(job);
   const referenceKeys = workbenchReferenceKeys(job);
   const category = normalizeWorkbenchCategory(job.parameters.category);
   const [inserting, setInserting] = useState<number | null>(null);
   const [inserted, setInserted] = useState<number | null>(null);
   const statusLabel =
-    job.status === "succeeded" ? "成功"
-      : job.status === "running" ? "进行中"
-        : job.status === "failed" ? "失败"
-          : job.status === "cancelled" ? "已取消"
+    job.status === "succeeded" ? t("tasks.succeeded")
+      : job.status === "running" ? t("tasks.running")
+        : job.status === "failed" ? t("tasks.failed")
+          : job.status === "cancelled" ? t("tasks.cancelled")
             : job.status;
   return (
     <article className="ob-card p-4" data-generation-status={job.status} data-selected={selected ? "true" : "false"}>
@@ -51,7 +53,7 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
           <label className="mt-1 flex shrink-0 items-center">
             <input
               type="checkbox"
-              aria-label={`选择历史 ${job.prompt}`}
+              aria-label={t("history.select", { prompt: job.prompt })}
               checked={selected}
               onChange={(event) => onSelectedChange(event.target.checked)}
             />
@@ -61,7 +63,7 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
           <div className="truncate text-base font-semibold text-[var(--ob-ink)]">{job.prompt}</div>
           <div className="mt-0.5 text-xs font-medium text-[var(--ob-muted)]">
             <span className="ob-status-dot mr-1" data-status={job.status} />
-            {statusLabel} · {job.model || "默认模型"}
+            {statusLabel} · {job.model || t("history.defaultModel")}
           </div>
           {job.kind === "image" ? (
             <span className="mt-1 inline-flex rounded-full bg-[var(--ob-accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--ob-accent)]">
@@ -70,7 +72,7 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
           ) : null}
         </div>
         {onCancel ? (
-          <button type="button" className="ob-btn-danger rounded-lg p-1.5" title="取消任务" onClick={() => void onCancel()}>
+          <button type="button" className="ob-btn-danger rounded-lg p-1.5" title={t("history.cancel")} onClick={() => void onCancel()}>
             <Square size={16} />
           </button>
         ) : (
@@ -78,16 +80,16 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
             <button
               type="button"
               className="ob-icon-btn h-8 w-8"
-              title="回填设置到表单"
-              aria-label="回填设置到表单"
+              title={t("history.refill")}
+              aria-label={t("history.refill")}
               onClick={onRefill}
             >
               <CornerUpLeft size={16} />
             </button>
-            <button type="button" className="ob-icon-btn h-8 w-8" title="重试" onClick={onRetry}>
+            <button type="button" className="ob-icon-btn h-8 w-8" title={t("history.retry")} onClick={onRetry}>
               <RefreshCw size={16} />
             </button>
-            <button type="button" className="ob-btn-danger rounded-lg p-1.5" title="删除" onClick={() => void onDelete()}>
+            <button type="button" className="ob-btn-danger rounded-lg p-1.5" title={t("history.delete")} onClick={() => void onDelete()}>
               <Trash2 size={16} />
             </button>
           </>
@@ -106,7 +108,7 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
               <button
                 type="button"
                 className="ob-icon-btn h-8 w-8 border border-[var(--ob-line)]"
-                title="下载"
+                title={t("history.download")}
                 onClick={() => item.storageKey
                   ? void downloadStorageKey(item.storageKey, `${job.kind}-${index + 1}.${job.kind === "video" ? "mp4" : "png"}`)
                   : downloadURL(item.url)}
@@ -127,7 +129,7 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
                   }
                 })()}
               >
-                {inserting === index ? "插入中" : inserted === index ? "已插入" : "插入画布"}
+                {inserting === index ? t("history.inserting") : inserted === index ? t("history.inserted") : t("history.insertCanvas")}
               </button>
             </div>
           </div>
@@ -138,16 +140,18 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
 }
 
 function HistoryReferencePreviews({ storageKeys }: { storageKeys: readonly string[] }) {
+  const { t } = useI18n();
   if (!storageKeys.length) return null;
   return (
-    <div className="mb-3 flex items-center gap-1.5 overflow-x-auto" aria-label="任务参考图">
-      <span className="mr-1 shrink-0 text-[10px] font-medium text-[var(--ob-muted)]">参考</span>
+    <div className="mb-3 flex items-center gap-1.5 overflow-x-auto" aria-label={t("history.references")}>
+      <span className="mr-1 shrink-0 text-[10px] font-medium text-[var(--ob-muted)]">{t("history.reference")}</span>
       {storageKeys.slice(0, 8).map((storageKey) => <StoredReferencePreview key={storageKey} storageKey={storageKey} />)}
     </div>
   );
 }
 
 function StoredReferencePreview({ storageKey }: { storageKey: string }) {
+  const { t } = useI18n();
   const [url, setUrl] = useState("");
   useEffect(() => {
     let objectURL = "";
@@ -159,11 +163,12 @@ function StoredReferencePreview({ storageKey }: { storageKey: string }) {
     return () => { if (objectURL) URL.revokeObjectURL(objectURL); };
   }, [storageKey]);
   return url
-    ? <img src={url} alt="参考图" className="h-10 w-10 shrink-0 rounded-lg border border-[var(--ob-line)] object-cover" />
-    : <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-[var(--ob-line)] text-[9px] text-[var(--ob-muted)]">媒体</span>;
+    ? <img src={url} alt={t("history.referenceImage")} className="h-10 w-10 shrink-0 rounded-lg border border-[var(--ob-line)] object-cover" />
+    : <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-[var(--ob-line)] text-[9px] text-[var(--ob-muted)]">{t("history.media")}</span>;
 }
 
 function MediaPreview({ item, video }: { item: WorkbenchResultItem; video: boolean }) {
+  const { t } = useI18n();
   const [url, setUrl] = useState(item.url);
   useEffect(() => {
     if (!item.storageKey) return;
@@ -175,10 +180,10 @@ function MediaPreview({ item, video }: { item: WorkbenchResultItem; video: boole
     });
     return () => { if (objectURL) URL.revokeObjectURL(objectURL); };
   }, [item.storageKey]);
-  if (!url) return <div className="grid aspect-video place-items-center text-xs font-medium text-[var(--ob-muted)]">结果不可用</div>;
+  if (!url) return <div className="grid aspect-video place-items-center text-xs font-medium text-[var(--ob-muted)]">{t("history.unavailable")}</div>;
   return video
     ? <video src={url} controls className="aspect-video w-full object-contain" />
-    : <img src={url} alt="生成结果" className="aspect-video w-full object-contain" />;
+    : <img src={url} alt={t("history.result")} className="aspect-video w-full object-contain" />;
 }
 
 function downloadURL(url?: string) {

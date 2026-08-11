@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { ImagePlus } from "lucide-react";
 import type { AssetItem } from "@/types/board";
 import { getBlob } from "@/services/storage";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function FileReferencePreviews({ files }: { files: readonly File[] }) {
+  const { t } = useI18n();
   if (!files.length) return null;
   return (
-    <div className="mt-2 flex gap-2 overflow-x-auto" aria-label="参考文件缩略图">
+    <div className="mt-2 flex gap-2 overflow-x-auto" aria-label={t("workbench.referenceFiles")}>
       {files.slice(0, 16).map((file, index) => <FileReferencePreview key={`${file.name}:${file.size}:${index}`} file={file} />)}
     </div>
   );

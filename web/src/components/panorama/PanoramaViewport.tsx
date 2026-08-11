@@ -5,8 +5,14 @@ import {
   nextPanoramaFieldOfView,
   nextPanoramaViewerZoom,
 } from "@/lib/panorama-zoom";
+import { useI18n } from "@/i18n/I18nProvider";
 
-function mountFallback(container: HTMLDivElement, sourceUrl: string, onError?: (message: string) => void): () => void {
+function mountFallback(
+  container: HTMLDivElement,
+  sourceUrl: string,
+  decodeError: string,
+  onError?: (message: string) => void,
+): () => void {
   const canvas = document.createElement("canvas");
   canvas.dataset.nativePanoramaCanvas = "true";
   canvas.dataset.panoramaRenderer = "2d";
@@ -44,7 +50,7 @@ function mountFallback(container: HTMLDivElement, sourceUrl: string, onError?: (
   };
   image.onerror = () => {
     canvas.dataset.panoramaLoaded = "error";
-    onError?.("全景图片无法解码");
+    onError?.(decodeError);
   };
   image.src = sourceUrl;
   const observer = new ResizeObserver(draw);
@@ -95,6 +101,7 @@ function mountFallback(container: HTMLDivElement, sourceUrl: string, onError?: (
 }
 
 export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; onError?: (message: string) => void }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const reportError = useCallback((message: string) => {
@@ -109,7 +116,7 @@ export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; on
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true });
     } catch {
-      return mountFallback(container, sourceUrl, reportError);
+      return mountFallback(container, sourceUrl, t("panorama.decodeFailed"), reportError);
     }
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 100);
@@ -137,7 +144,7 @@ export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; on
           (image?.height ?? 0) > renderer.capabilities.maxTextureSize) {
         loaded.dispose();
         renderer.domElement.dataset.panoramaLoaded = "error";
-        reportError(`全景图片超过当前设备 ${renderer.capabilities.maxTextureSize}px 的纹理限制`);
+        reportError(t("panorama.textureLimit", { size: renderer.capabilities.maxTextureSize }));
         return;
       }
       loaded.colorSpace = THREE.SRGBColorSpace;
@@ -148,7 +155,7 @@ export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; on
       renderer.domElement.dataset.panoramaLoaded = "true";
     }, undefined, () => {
       renderer.domElement.dataset.panoramaLoaded = "error";
-      reportError("全景图片无法解码");
+      reportError(t("panorama.decodeFailed"));
     });
     const resize = () => {
       const width = Math.max(1, container.clientWidth);
@@ -203,10 +210,10 @@ export function PanoramaViewport({ sourceUrl, onError }: { sourceUrl: string; on
       renderer.forceContextLoss();
       renderer.domElement.remove();
     };
-  }, [reportError, sourceUrl]);
+  }, [reportError, sourceUrl, t]);
   return (
     <div className="relative h-full w-full bg-slate-950">
-      <div ref={containerRef} tabIndex={0} className="h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-cyan-300" aria-label="360° 全景视图" aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown + -" />
+      <div ref={containerRef} tabIndex={0} className="h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-cyan-300" aria-label={t("panorama.viewer")} aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown + -" />
       {runtimeError ? (
         <div role="alert" className="pointer-events-none absolute inset-x-6 bottom-6 rounded bg-red-950/90 px-4 py-3 text-center text-sm text-red-100">
           {runtimeError}

@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { useI18n } from "@/i18n/I18nProvider";
 import type { PluginManifest, Point } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import {
@@ -65,6 +66,7 @@ export function ContextMenu({
   onUngroup?: () => void;
   plugins?: PluginManifest[];
 }) {
+  const { t } = useI18n();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   useEscapeDismiss(Boolean(state), onClose, 80);
   if (!state) return null;
@@ -79,41 +81,41 @@ export function ContextMenu({
   };
   const items: Item[] = state.nodeId
     ? [
-        { label: "创建副本", action: onDuplicate, icon: CopyPlus },
-        { label: "删除", action: onDelete, icon: Trash2 },
-        { label: "适应视图", action: onBring, icon: Focus },
+        { label: t("context.duplicate"), action: onDuplicate, icon: CopyPlus },
+        { label: t("context.delete"), action: onDelete, icon: Trash2 },
+        { label: t("context.fit"), action: onBring, icon: Focus },
         ...(multi
           ? [
-              { label: "左对齐", action: () => onAlign?.("left") },
-              { label: "右对齐", action: () => onAlign?.("right") },
-              { label: "顶对齐", action: () => onAlign?.("top") },
-              { label: "底对齐", action: () => onAlign?.("bottom") },
-              { label: "水平居中", action: () => onAlign?.("hcenter") },
-              { label: "垂直居中", action: () => onAlign?.("vcenter") },
-              { label: "水平分布", action: () => onDistribute?.("x") },
-              { label: "垂直分布", action: () => onDistribute?.("y") },
+              { label: t("context.alignLeft"), action: () => onAlign?.("left") },
+              { label: t("context.alignRight"), action: () => onAlign?.("right") },
+              { label: t("context.alignTop"), action: () => onAlign?.("top") },
+              { label: t("context.alignBottom"), action: () => onAlign?.("bottom") },
+              { label: t("context.alignCenterHorizontal"), action: () => onAlign?.("hcenter") },
+              { label: t("context.alignCenterVertical"), action: () => onAlign?.("vcenter") },
+              { label: t("context.distributeHorizontal"), action: () => onDistribute?.("x") },
+              { label: t("context.distributeVertical"), action: () => onDistribute?.("y") },
             ]
           : []),
       ]
     : [
-        { label: "粘贴", action: () => onPaste(state.world), icon: ClipboardPaste },
-        { label: "上传资源", upload: true, icon: Upload, disabled: !onUploadMedia },
-        { label: "从素材库插入", action: () => onOpenAssets?.(state.world), icon: FolderOpen, disabled: !onOpenAssets },
-        { label: "新建文本", action: () => onAdd("text", state.world), icon: Type },
-        { label: "新建图片", action: () => onAdd("image", state.world), icon: ImagePlus },
-        { label: "新建配置", action: () => onAdd("config", state.world), icon: Settings2 },
-        { label: "新建视频", action: () => onAdd("video", state.world), icon: Film },
-        { label: "新建音频", action: () => onAdd("audio", state.world), icon: Music2 },
-        { label: "新建全景", action: () => onAdd("panorama", state.world), icon: Globe2 },
-        { label: "新建导演台", action: () => onAdd("director", state.world), icon: Clapperboard },
+        { label: t("context.paste"), action: () => onPaste(state.world), icon: ClipboardPaste },
+        { label: t("context.uploadToCanvas"), upload: true, icon: Upload, disabled: !onUploadMedia },
+        { label: t("context.insertAsset"), action: () => onOpenAssets?.(state.world), icon: FolderOpen, disabled: !onOpenAssets },
+        { label: t("context.newText"), action: () => onAdd("text", state.world), icon: Type },
+        { label: t("context.newImage"), action: () => onAdd("image", state.world), icon: ImagePlus },
+        { label: t("context.newConfig"), action: () => onAdd("config", state.world), icon: Settings2 },
+        { label: t("context.newVideo"), action: () => onAdd("video", state.world), icon: Film },
+        { label: t("context.newAudio"), action: () => onAdd("audio", state.world), icon: Music2 },
+        { label: t("context.newPanorama"), action: () => onAdd("panorama", state.world), icon: Globe2 },
+        { label: t("context.newDirector"), action: () => onAdd("director", state.world), icon: Clapperboard },
         ...plugins.map((plugin) => ({
-          label: `插件 · ${plugin.name}`,
+          label: t("context.plugin", { name: plugin.name }),
           action: () => onAdd("plugin", state.world, plugin.id),
           icon: Puzzle,
         })),
       ];
-  if (state.nodeId && canGroup) items.unshift({ label: "组合", action: onGroup, icon: FolderPlus });
-  if (state.nodeId && canUngroup) items.unshift({ label: "取消组合", action: onUngroup, icon: FolderMinus });
+  if (state.nodeId && canGroup) items.unshift({ label: t("context.group"), action: onGroup, icon: FolderPlus });
+  if (state.nodeId && canUngroup) items.unshift({ label: t("context.ungroup"), action: onUngroup, icon: FolderMinus });
 
   const menuWidth = 176; // keep in sync with w-44
   const viewportWidth = window.innerWidth;
@@ -131,7 +133,7 @@ export function ContextMenu({
       <div className="fixed inset-0 z-[70]" data-canvas-control onPointerDown={onClose} />
       <div
         role="menu"
-        aria-label={state.nodeId ? "节点菜单" : "画布菜单"}
+        aria-label={state.nodeId ? t("context.nodeMenu") : t("context.canvasMenu")}
         data-canvas-control
         className="ob-menu fixed z-[80] w-44 overflow-y-auto"
         style={{
@@ -173,14 +175,14 @@ export function ContextMenu({
         accept="image/*,video/*,audio/*"
         multiple
         className="hidden"
-        aria-label="上传资源到画布"
+        aria-label={t("context.uploadToCanvas")}
         onChange={(event) => {
           const files = Array.from(event.target.files ?? []);
           event.currentTarget.value = "";
           onClose();
           if (!files.length || !onUploadMedia) return;
           void Promise.resolve(onUploadMedia(files, state.world)).catch((error: unknown) => {
-            window.alert(error instanceof Error ? error.message : "资源上传失败");
+            window.alert(error instanceof Error ? error.message : t("context.uploadFailed"));
           });
         }}
       />

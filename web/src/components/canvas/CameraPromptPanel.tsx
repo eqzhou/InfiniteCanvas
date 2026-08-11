@@ -6,6 +6,7 @@ import {
 import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useLayoutEffect, useRef, useState } from "react";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const FOCUSABLE_SELECTOR = [
   "button:not([disabled])",
@@ -23,6 +24,7 @@ type Props = {
 };
 
 export function CameraPromptPanel({ value, anchor, onChange, onClose }: Props) {
+  const { t } = useI18n();
   const patch = (next: Partial<CameraPromptConfig>) => onChange({ ...value, ...next });
   const panelRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
@@ -122,7 +124,7 @@ export function CameraPromptPanel({ value, anchor, onChange, onClose }: Props) {
     <section
       ref={panelRef}
       role="dialog"
-      aria-label="摄像机提示词"
+      aria-label={t("camera.aria")}
       className="ob-chrome fixed z-[100] w-[min(320px,calc(100vw-24px))] p-3 text-xs"
       style={position}
       onPointerDown={(event) => event.stopPropagation()}
@@ -130,10 +132,10 @@ export function CameraPromptPanel({ value, anchor, onChange, onClose }: Props) {
     >
       <div className="mb-3 flex items-center gap-2">
         <div>
-          <div className="font-semibold text-[var(--ob-ink)]">摄像机提示词</div>
-          <div className="text-[10px] text-[var(--ob-muted)]">生成时追加结构化镜头描述</div>
+          <div className="font-semibold text-[var(--ob-ink)]">{t("camera.aria")}</div>
+          <div className="text-[10px] text-[var(--ob-muted)]">{t("camera.description")}</div>
         </div>
-        <button type="button" className="ob-icon-btn ml-auto h-7 w-7" title="关闭摄像机设置" onClick={onClose}>
+        <button type="button" className="ob-icon-btn ml-auto h-7 w-7" title={t("camera.close")} onClick={onClose}>
           <X size={14} />
         </button>
       </div>
@@ -143,37 +145,37 @@ export function CameraPromptPanel({ value, anchor, onChange, onClose }: Props) {
           checked={value.enabled}
           onChange={(event) => patch({ enabled: event.target.checked })}
         />
-        启用摄像机提示词
+        {t("camera.enabled")}
       </label>
       <div className="grid grid-cols-2 gap-2" aria-disabled={!value.enabled}>
         <label className="flex flex-col gap-1">
-          相机
+          {t("camera.camera")}
           <select
-            aria-label="相机"
+            aria-label={t("camera.camera")}
             disabled={!value.enabled}
             className="rounded border border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-1.5"
             value={value.camera}
             onChange={(event) => patch({ camera: event.target.value as CameraPromptConfig["camera"] })}
           >
-            {CAMERA_PROMPT_CAMERAS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            {CAMERA_PROMPT_CAMERAS.map((item) => <option key={item.value} value={item.value}>{t(`camera.${item.value}` as "camera.cinema" | "camera.mirrorless" | "camera.dslr" | "camera.drone" | "camera.action")}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          镜头
+          {t("camera.lens")}
           <select
-            aria-label="镜头"
+            aria-label={t("camera.lens")}
             disabled={!value.enabled}
             className="rounded border border-[var(--ob-line)] bg-[var(--ob-panel)] px-2 py-1.5"
             value={value.lens}
             onChange={(event) => patch({ lens: event.target.value as CameraPromptConfig["lens"] })}
           >
-            {CAMERA_PROMPT_LENSES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            {CAMERA_PROMPT_LENSES.map((item) => <option key={item.value} value={item.value}>{t(`camera.${item.value}` as "camera.wide" | "camera.standard" | "camera.telephoto" | "camera.macro" | "camera.anamorphic")}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          焦距 (mm)
+          {t("camera.focalLengthLabel")}
           <input
-            aria-label="焦距"
+            aria-label={t("camera.focalLength")}
             type="number"
             min={8}
             max={600}
@@ -185,9 +187,9 @@ export function CameraPromptPanel({ value, anchor, onChange, onClose }: Props) {
           />
         </label>
         <label className="flex flex-col gap-1">
-          光圈 (f/)
+          {t("camera.apertureLabel")}
           <input
-            aria-label="光圈"
+            aria-label={t("camera.aperture")}
             type="number"
             min={0.7}
             max={64}

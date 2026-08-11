@@ -276,7 +276,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       const saved = await updateSitePolicy(next);
       setSitePolicy(saved);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "站点策略保存失败");
+      setError(cause instanceof Error ? cause.message : t("settings.sitePolicySaveFailed"));
     } finally {
       setSitePolicyBusy(false);
     }
@@ -289,7 +289,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     try {
       setSitePolicy(await updateSitePolicy({ ...sitePolicy, ...patch }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "模型目录保存失败");
+      setError(cause instanceof Error ? cause.message : t("settings.modelCatalogSaveFailed"));
     } finally {
       setSitePolicyBusy(false);
     }
@@ -305,9 +305,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       })
       .catch((cause) => {
         setClosing(false);
-        setError(cause instanceof Error ? cause.message : "配置保存失败");
+        setError(cause instanceof Error ? cause.message : t("settings.configSaveFailed"));
       });
-  }, [closing, flushConfig, onClose]);
+  }, [closing, flushConfig, onClose, t]);
   useEscapeDismiss(open, requestClose);
 
   const scrollToSection = (id: string) => {
@@ -406,7 +406,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       const list = await listModels(channel, kind);
       setModels((current) => ({ ...current, [kind]: list }));
       if (!list.length) {
-        setError("未拉取到模型（该服务可能不支持模型列表，请手动填写）");
+        setError(t("settings.modelsNotFound"));
         return;
       }
       // Now that the channel has told us what it serves, apply the tenant
@@ -592,7 +592,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 disabled={!personalChannelEditable}
                 onClick={() => {
                   if (!personalChannelEditable) {
-                    setError("管理员已关闭自定义模型渠道");
+                    setError(t("settings.customChannelDisabledError"));
                     return;
                   }
                   const next = createDefaultChannel();
@@ -1011,7 +1011,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       const next = importConfigFile(raw, state.config);
                       if (!canManageSitePolicy && !sitePolicy.allowCustomChannel &&
                         !hasSameChannelConfiguration(state.config, next)) {
-                        throw new Error("管理员已禁止修改个人渠道；请导入不改变渠道的偏好配置");
+                        throw new Error(t("settings.channelImportLocked"));
                       }
                       state.setConfig(next);
                       const applied = useBoardStore.getState().config;
@@ -1061,7 +1061,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       try {
                         const state = useBoardStore.getState();
                         const project = state.getActive();
-                        if (!project) throw new Error("当前没有可备份的画布");
+                        if (!project) throw new Error(t("settings.canvasBackupMissing"));
                         const bundle = await exportCompleteProjectBundle(project);
                         await webdavPutBlob(state.config, "openboard-current.openboard", bundle);
                         alert(t("settings.uploadCanvasSuccess"));

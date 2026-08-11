@@ -1,6 +1,7 @@
 import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { Layers, Star } from "lucide-react";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function batchResultCount(
   metadata: Pick<BoardNode["metadata"], "content" | "generationRunId" | "batchChildIds">,
@@ -12,6 +13,7 @@ export function batchResultCount(
 
 /** Controls for multi-result image batches (stack / expand / primary). */
 export function BatchGroupControls({ node }: { node: BoardNode }) {
+  const { t } = useI18n();
   const project = useBoardStore((s) => s.getActive());
   const updateActive = useBoardStore((s) => s.updateActive);
   const updateNode = useBoardStore((s) => s.updateNode);
@@ -83,16 +85,16 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
       onPointerDown={(e) => e.stopPropagation()}
     >
       <span className="px-1 text-[var(--ob-muted)]">
-        {panoramaBatch ? "全景组" : "组"} {batchResultCount(root.metadata, children.length)}
+        {panoramaBatch ? t("batch.panoramaGroup") : t("batch.group")} {batchResultCount(root.metadata, children.length)}
       </span>
       <button
         type="button"
         className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--ob-accent-soft)]"
-        title={expanded ? "叠卡收起" : "展开全部"}
+        title={expanded ? t("batch.collapseStack") : t("batch.expandAll")}
         onClick={toggleExpand}
       >
         <Layers size={12} />
-        {expanded ? "收起" : "展开"}
+        {expanded ? t("batch.collapse") : t("batch.expand")}
       </button>
       {isChild || (isRoot && node.metadata.content && !rootIsPreview) ? (
         <button
@@ -100,15 +102,15 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
           className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--ob-accent-soft)] ${
             primaryId === node.id ? "text-[var(--ob-accent)]" : ""
           }`}
-          title={panoramaBatch ? "设为主全景" : "设为主图"}
+          title={panoramaBatch ? t("batch.setPrimaryPanorama") : t("batch.setPrimaryImage")}
           aria-label={panoramaBatch
-            ? (primaryId === node.id ? "当前主全景" : "设为主全景")
-            : (primaryId === node.id ? "当前主图" : "设为主图")}
+            ? (primaryId === node.id ? t("batch.currentPrimaryPanorama") : t("batch.setPrimaryPanorama"))
+            : (primaryId === node.id ? t("batch.currentPrimaryImage") : t("batch.setPrimaryImage"))}
           aria-pressed={primaryId === node.id}
           onClick={() => setPrimary(node.id)}
         >
           <Star size={12} fill={primaryId === node.id ? "currentColor" : "none"} />
-          {panoramaBatch ? "主结果" : "主图"}
+          {panoramaBatch ? t("batch.primaryResult") : t("batch.primaryImage")}
         </button>
       ) : null}
     </div>

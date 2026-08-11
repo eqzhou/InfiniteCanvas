@@ -5,6 +5,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BoardNode } from "@/types/board";
 import { resolveObjectUrl, uploadMedia } from "@/services/storage";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type SourceOption = {
   id: string;
@@ -102,6 +103,7 @@ function mountCanvasFallback(container: HTMLDivElement, sourceUrl?: string): () 
 }
 
 export function PanoramaPluginNode({ node }: { node: BoardNode }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const updateNode = useBoardStore((state) => state.updateNode);
   const project = useBoardStore((state) => state.getActive());
@@ -111,17 +113,17 @@ export function PanoramaPluginNode({ node }: { node: BoardNode }) {
   const options = useMemo<SourceOption[]>(() => [
     ...(project?.nodes.filter((item) => item.type === "image").map((item) => ({
       id: `node:${item.id}`,
-      label: `画布 · ${item.title}`,
+      label: t("panoramaPlugin.canvasSource", { title: item.title }),
       storageKey: item.metadata.storageKey,
       fallback: item.metadata.content,
     })) ?? []),
     ...assets.filter((asset) => asset.kind === "image").map((asset) => ({
       id: `asset:${asset.id}`,
-      label: `素材 · ${asset.title}`,
+      label: t("panoramaPlugin.assetSource", { title: asset.title }),
       storageKey: asset.storageKey,
       fallback: asset.coverUrl,
     })),
-  ], [assets, project?.nodes]);
+  ], [assets, project?.nodes, t]);
 
   useEffect(() => {
     const storageKey = typeof node.metadata.pluginState?.storageKey === "string"
@@ -189,7 +191,7 @@ export function PanoramaPluginNode({ node }: { node: BoardNode }) {
         material.map?.dispose();
         material.map = texture;
         material.needsUpdate = true;
-      }, undefined, () => setError("全景图片无法读取"));
+      }, undefined, () => setError(t("panoramaPlugin.readFailed")));
     }
     return () => {
       disposed = true;
@@ -202,7 +204,7 @@ export function PanoramaPluginNode({ node }: { node: BoardNode }) {
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [sourceUrl]);
+  }, [sourceUrl, t]);
 
   const selectSource = async (id: string) => {
     const option = options.find((item) => item.id === id);
@@ -210,10 +212,10 @@ export function PanoramaPluginNode({ node }: { node: BoardNode }) {
     const url = option.storageKey
       ? await resolveObjectUrl("image", option.storageKey, option.fallback)
       : option.fallback;
-    if (!url) throw new Error("图片内容不可用");
+    if (!url) throw new Error(t("panoramaPlugin.contentUnavailable"));
     const uploaded = option.storageKey ? null : await uploadMedia(url, "image");
     const storageKey = option.storageKey ?? uploaded?.storageKey;
-    if (!storageKey) throw new Error("图片无法持久化");
+    if (!storageKey) throw new Error(t("panoramaPlugin.persistFailed"));
     setSourceUrl(url);
     updateNode(node.id, {
       metadata: {
@@ -224,20 +226,20 @@ export function PanoramaPluginNode({ node }: { node: BoardNode }) {
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden bg-[#0f766e]">
-      <div ref={containerRef} className="absolute inset-0" aria-label="3D 全景视图" />
+      <div ref={containerRef} className="absolute inset-0" aria-label={t("panoramaPlugin.aria")} />
       <div className="absolute left-2 top-2 flex max-w-[calc(100%-1rem)] items-center gap-1 rounded bg-white/90 p-1 text-[#202124] shadow-sm">
         <ImageIcon size={15} aria-hidden="true" />
         <select
-          aria-label="选择全景图片"
+          aria-label={t("panoramaPlugin.select")}
           className="min-w-0 max-w-44 bg-transparent text-xs outline-none"
           defaultValue=""
           onChange={(event) => void selectSource(event.target.value).catch((cause) =>
             setError(cause instanceof Error ? cause.message : String(cause)))}
         >
-          <option value="" disabled>选择画布或素材图片</option>
+          <option value="" disabled>{t("panoramaPlugin.optionPlaceholder")}</option>
           {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
         </select>
-        <label className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center" title="上传全景图片">
+        <label className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center" title={t("panoramaPlugin.upload")}>
           <Upload size={15} />
           <input
             type="file"

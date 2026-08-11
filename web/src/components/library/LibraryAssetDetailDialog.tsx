@@ -3,12 +3,10 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { LibraryAsset } from "@/services/library-assets";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
-const KIND_LABELS: Record<LibraryAsset["kind"], string> = {
-  text: "文本",
-  image: "图片",
-  video: "视频",
-  audio: "音频",
+const KIND_LABEL_KEYS: Record<LibraryAsset["kind"], "library.text" | "library.image" | "library.video" | "library.audio"> = {
+  text: "library.text", image: "library.image", video: "library.video", audio: "library.audio",
 };
 
 /** Read-only detail view for a server library asset. */
@@ -19,6 +17,7 @@ export function LibraryAssetDetailDialog({
   asset: LibraryAsset | null;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const dialogRef = useRef<HTMLDivElement>(null);
   const open = asset !== null;
   useEscapeDismiss(open, onClose, 100);
@@ -34,7 +33,7 @@ export function LibraryAssetDetailDialog({
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
-      aria-label="素材详情"
+      aria-label={t("library.detail")}
       tabIndex={-1}
       className="ob-overlay bg-black/60 p-3 sm:p-6"
       onPointerDown={(event) => {
@@ -47,11 +46,11 @@ export function LibraryAssetDetailDialog({
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold">{asset.title}</h2>
             <p className="mt-1 text-xs text-[var(--ob-muted)]">
-              {KIND_LABELS[asset.kind]}
+              {t(KIND_LABEL_KEYS[asset.kind])}
               {asset.source ? ` · ${asset.source}` : ""}
             </p>
           </div>
-          <button type="button" className="ob-icon-btn" aria-label="关闭素材详情" onClick={onClose}>
+          <button type="button" className="ob-icon-btn" aria-label={t("library.closeDetail")} onClick={onClose}>
             <X size={16} />
           </button>
         </header>

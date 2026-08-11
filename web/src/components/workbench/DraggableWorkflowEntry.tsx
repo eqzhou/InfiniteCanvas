@@ -7,6 +7,7 @@ import {
   parseWorkflowEntryPosition,
   type WorkflowEntryPosition,
 } from "@/lib/draggable-workflow-entry";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const STORAGE_KEY = "openboard.workbench.workflow-entry-position";
 
@@ -27,6 +28,7 @@ function initialPosition(): WorkflowEntryPosition {
 }
 
 export function DraggableWorkflowEntry() {
+  const { t } = useI18n();
   const [position, setPosition] = useState(initialPosition);
   const positionRef = useRef(position);
   const dragRef = useRef<Readonly<{ pointerId: number; offsetX: number; offsetY: number }> | null>(null);
@@ -54,8 +56,8 @@ export function DraggableWorkflowEntry() {
   return (
     <Link
       to="/workbench/workflows"
-      aria-label="打开图片创作工作流"
-      title="拖动入口，点击打开工作流"
+      aria-label={t("workflowEntry.open")}
+      title={t("workflowEntry.drag")}
       draggable={false}
       data-testid="draggable-workflow-entry"
       className="fixed z-40 flex h-12 w-44 touch-none select-none items-center gap-2 rounded-2xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-3 text-sm font-semibold text-[var(--ob-ink)] shadow-[var(--ob-elev-3)] no-underline backdrop-blur-md"
@@ -102,7 +104,7 @@ export function DraggableWorkflowEntry() {
     >
       <GripVertical size={16} aria-hidden className="text-[var(--ob-muted)]" />
       <Workflow size={18} aria-hidden className="text-[var(--ob-accent)]" />
-      <span>图片工作流</span>
+      <span>{t("workflowEntry.label")}</span>
     </Link>
   );
 }

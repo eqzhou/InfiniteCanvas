@@ -202,13 +202,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	const adoptAssetResult = useCallback(async (completedJob: GenerationJob, items: WorkbenchResultItem[]) => {
 		if (!filmAssetTarget?.projectId || !filmAssetTarget.assetId || !Number.isSafeInteger(filmAssetTarget.revision) || filmAssetTarget.revision < 1) return;
 		const first = items.find((item) => item.storageKey);
-		if (!first?.storageKey) throw new Error("生成结果没有可采用的持久媒体");
+		if (!first?.storageKey) throw new Error(t("creative.adoptMediaMissing"));
 		await adoptFilmCanvasMedia(filmAssetTarget.projectId, {
 			targetType: "asset", targetId: filmAssetTarget.assetId, targetField: "media",
 			expectedRevision: filmAssetTarget.revision, sourceNodeId: `workbench-${completedJob.id.slice(0, 100)}`,
 			storageKey: first.storageKey, generationJobId: completedJob.id,
 		});
-	}, [filmAssetTarget?.assetId, filmAssetTarget?.projectId, filmAssetTarget?.revision]);
+	}, [filmAssetTarget?.assetId, filmAssetTarget?.projectId, filmAssetTarget?.revision, t]);
 
 	useEffect(() => {
 		let active = true;
@@ -383,10 +383,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     // Files uploaded straight from disk have no asset to re-select, so say so
     // rather than letting the user believe the references came back.
     setReferences([]);
-    setError(unresolved
-      ? `已回填设置，但有 ${unresolved} 张参考图来自本地上传，需要重新选择`
-      : "");
-  }, [category, channelChoices, channelId, count, frameMode, generateAudio, kind, model, prompt, quality, ratio, reusableAssets, resolution, seconds, setConfig, size, smartDuration, transparent, watermark]);
+    setError(unresolved ? t("creative.refillWarning", { count: unresolved }) : "");
+  }, [category, channelChoices, channelId, count, frameMode, generateAudio, kind, model, prompt, quality, ratio, reusableAssets, resolution, seconds, setConfig, size, smartDuration, t, transparent, watermark]);
 
   const refresh = useCallback(async () => {
     const page = await listGenerationJobs({ projectId: project?.id, kind, page: 1, pageSize: 50 });
@@ -398,10 +396,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     const recovered = new Map((await Promise.all(interrupted.map((job) =>
       updateGenerationJob(job.id, {
         status: "failed",
-        error: "页面刷新后任务已中断，请重试",
+        error: t("creative.interrupted"),
       })))).map((job) => [job.id, job]));
     setJobs(page.items.map((job) => recovered.get(job.id) ?? job));
-  }, [kind, project?.id]);
+  }, [kind, project?.id, t]);
 
   const selectedVisibleIds = useMemo(
     () => visibleJobs.map((job) => job.id).filter((id) => selectedJobIds.includes(id)),
@@ -436,7 +434,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running")
       ));
       if (!removable.length) {
-        setError("进行中的任务请先取消，再批量删除");
+        setError(t("creative.runningDeleteWarning"));
         return;
       }
       const removableIds = new Set(removable.map((job) => job.id));
@@ -454,7 +452,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [refresh, selectedJobIds, visibleJobs]);
+  }, [refresh, selectedJobIds, t, visibleJobs]);
 
 
 
@@ -504,7 +502,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 			? sharedCapabilities.find((item) => item.model === runModel)
 			: undefined;
 		if (sharedChannelSelected && !runSharedCapability) {
-			setError("该共享渠道未发布当前媒体模型能力，请刷新渠道配置");
+				setError(t("creative.sharedCapabilityMissing"));
 			return;
 		}
 		const effectiveVideoRatio = kind === "video"
@@ -531,7 +529,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				Boolean(runProvider?.baseUrl.includes("/api/v3") || runProvider?.baseUrl.includes("/api/plan/v3"));
 		let runOnServer = usesServerGenerationJobs() && serverProtocolSupported;
     if (!runChannel || !runProvider?.baseUrl || (!runPrompt.trim() && !allowEmptyPrompt)) {
-			setError(!runProvider?.baseUrl ? "请先在设置中配置对应模型服务 URL" : "请输入提示词或自定义镜头");
+			setError(!runProvider?.baseUrl ? t("creative.providerUrlMissing") : t("creative.promptMissing"));
       return;
     }
     const controller = new AbortController();
@@ -577,7 +575,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             ...(storageKey ? { storageKey } : {}),
             ...(content ? { content } : {}),
           }], 1);
-          if (!resolved[0]) throw new Error(`素材“${asset.title}”的图片内容无法恢复`);
+          if (!resolved[0]) throw new Error(t("creative.assetRestoreFailed", { title: asset.title }));
           referenceData.push(resolved[0]);
           if (storageKey) {
             if (!referenceStorageKeys.includes(storageKey)) referenceStorageKeys.push(storageKey);
@@ -601,8 +599,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 			const mode = kind === "image"
 				? (referenceStorageKeys.length ? "image_to_image" : "text_to_image")
 				: (referenceStorageKeys.length || klingOptions.elements.length ? "image_to_video" : "text_to_video");
-			if (!runSharedCapability.modes.includes(mode)) throw new Error("当前共享模型不支持所选生成模式");
-			if (referenceStorageKeys.length > runSharedCapability.maxReferences) throw new Error(`当前共享模型最多支持 ${runSharedCapability.maxReferences} 个参考素材`);
+				if (!runSharedCapability.modes.includes(mode)) throw new Error(t("creative.modeUnsupported"));
+				if (referenceStorageKeys.length > runSharedCapability.maxReferences) throw new Error(t("creative.referenceLimit", { count: runSharedCapability.maxReferences }));
 		}
 		runOnServer = runOnServer && serverReferencesSupported;
 		const ownerClientId = runOnServer ? "" : getRuntimeOwnerId();
@@ -674,11 +672,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				});
 			}
 			if (kind === "image" && runProvider.protocol === "gemini" && Boolean(parameters.transparentBackground)) {
-				throw new Error("Gemini 图片生成不支持透明背景");
+					throw new Error(t("creative.transparentGemini"));
 			}
 			if (kind === "image" && runProvider.protocol === "template" && Boolean(parameters.transparentBackground) &&
 				!runProvider.template?.supportsTransparentBackground) {
-				throw new Error("当前图片模板不支持透明背景");
+					throw new Error(t("creative.transparentTemplate"));
 			}
 			job = kind === "image" ? await createServerImageGenerationJob({
 				projectId: project?.id,
@@ -721,7 +719,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				signal: controller.signal,
 				onUpdate: (next) => setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]),
 			});
-			if (completed.status === "failed") throw new Error(completed.error || `${kind === "image" ? "图片" : "视频"}生成失败`);
+				if (completed.status === "failed") throw new Error(completed.error || t("creative.generationFailed", { kind: t(kind === "image" ? "common.image" : "common.video") }));
 			if (completed.status === "cancelled" || completed.status === "deleted") return;
 			const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
 			await adoptAssetResult(completed, completedItems);
@@ -786,7 +784,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
           activitySurface: "video-workbench",
           deferActivitySuccess: true,
         });
-        if (!output.url) throw new Error("视频服务没有返回结果 URL");
+        if (!output.url) throw new Error(t("creative.videoUrlMissing"));
         try {
           const media = await uploadMedia(output.url, "media");
           items.push({
@@ -797,7 +795,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
           items.push({ url: output.url, mimeType: "video/mp4" });
         }
       }
-      if (!items.length) throw new Error("模型服务没有返回生成结果");
+      if (!items.length) throw new Error(t("creative.resultsMissing"));
 		const completedJob = await updateGenerationJob(job.id, { status: "succeeded", result: { items } });
 		await adoptAssetResult(completedJob, items);
       completeGenerationActivity(job.id, "succeeded");
@@ -811,11 +809,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         completeGenerationActivity(
           job.id,
           cancelled ? "cancelled" : "failed",
-          cancelled ? "已取消" : cause instanceof Error ? cause.message : String(cause),
+          cancelled ? t("creative.cancelled") : cause instanceof Error ? cause.message : String(cause),
         );
         await updateGenerationJob(job.id, {
           status: cancelled ? "cancelled" : "failed",
-          error: cancelled ? "已取消" : cause instanceof Error ? cause.message : String(cause),
+          error: cancelled ? t("creative.cancelled") : cause instanceof Error ? cause.message : String(cause),
         }).catch(() => undefined);
       }
       if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));

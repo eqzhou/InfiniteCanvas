@@ -18,6 +18,7 @@ import {
   type PromptEditorChild,
 } from "@/lib/prompt-chip-editor";
 import { isSubmitShortcut } from "@/lib/keyboard";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type MentionState = {
   query: string;
@@ -175,6 +176,7 @@ export function PromptChipInput({
   className?: string;
   style?: CSSProperties;
 }) {
+  const { t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
@@ -326,7 +328,7 @@ export function PromptChipInput({
       <div
         ref={editorRef}
         role="textbox"
-        aria-label="节点生成提示词"
+        aria-label={t("promptChip.aria")}
         aria-multiline="true"
         aria-placeholder={placeholder}
         contentEditable
@@ -355,7 +357,7 @@ export function PromptChipInput({
       {mention && filtered.length ? (
         <div
           role="listbox"
-          aria-label="媒体引用"
+          aria-label={t("promptChip.references")}
           className="absolute z-50 max-h-48 min-w-48 overflow-auto rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
           style={{ left: mention.x, top: mention.y }}
         >
@@ -375,7 +377,7 @@ export function PromptChipInput({
                 <img src={reference.content} alt="" className="h-8 w-8 rounded object-cover" />
               ) : (
                 <span className="grid h-8 w-8 place-items-center rounded bg-[var(--ob-accent-soft)]">
-                  {reference.kind === "video" ? "视" : "音"}
+                  {reference.kind === "video" ? t("promptChip.video") : t("promptChip.audio")}
                 </span>
               )}
               <span className="min-w-0">

@@ -5,21 +5,14 @@ import {
   type ImageToolbarAction,
   type ImageToolbarPreferences,
 } from "@/lib/image-toolbar-preferences";
+import { useI18n } from "@/i18n/I18nProvider";
+import type { MessageKey } from "@/i18n/core";
 
-const labels: Record<ImageToolbarAction, string> = {
-  generate: "生成/重试",
-  video: "生成视频",
-  reverse: "反推提示词",
-  crop: "裁剪",
-  rotate: "旋转",
-  angle: "多角度",
-  mask: "遮罩/局部编辑",
-  resize: "本地尺寸放大",
-  "ai-upscale": "AI 超分",
-  split: "切分",
-  copy: "复制图片（必显）",
-  download: "下载（必显）",
-  aspect: "等比/自由缩放",
+const labelKeys: Record<ImageToolbarAction, MessageKey> = {
+  generate: "toolbar.generate", video: "toolbar.video", reverse: "toolbar.reverse", crop: "toolbar.crop",
+  rotate: "toolbar.rotate", angle: "toolbar.angle", mask: "toolbar.mask", resize: "toolbar.resize",
+  "ai-upscale": "toolbar.upscale", split: "toolbar.split", copy: "toolbar.copy", download: "toolbar.download",
+  aspect: "toolbar.aspect",
 };
 
 function move(
@@ -42,6 +35,7 @@ export function ImageToolbarPreferencesEditor({
   value: unknown;
   onChange: (value: ImageToolbarPreferences) => void;
 }) {
+  const { t } = useI18n();
   const preferences = normalizeImageToolbarPreferences(value);
   const hidden = new Set(preferences.hidden);
   return (
@@ -53,21 +47,21 @@ export function ImageToolbarPreferencesEditor({
             checked={preferences.showLabels}
             onChange={(event) => onChange({ ...preferences, showLabels: event.target.checked })}
           />
-          显示工具名称
+          {t("toolbar.showLabels")}
         </label>
         <button
           type="button"
           className="ob-btn"
           onClick={() => onChange(normalizeImageToolbarPreferences(undefined))}
         >
-          <RotateCcw size={14} /> 恢复默认
+          <RotateCcw size={14} /> {t("toolbar.reset")}
         </button>
       </div>
       <div className="grid gap-1 sm:grid-cols-2">
         {preferences.order.map((action, index) => (
           <div key={action} className="flex items-center gap-2 rounded-lg border border-[var(--ob-line)] px-2 py-1.5">
             <input
-              aria-label={`显示${labels[action]}`}
+              aria-label={t("toolbar.show", { label: t(labelKeys[action]) })}
               type="checkbox"
               checked={action === "copy" || action === "download" || !hidden.has(action)}
               disabled={action === "copy" || action === "download"}
@@ -78,11 +72,11 @@ export function ImageToolbarPreferencesEditor({
                   : [...preferences.hidden, action],
               })}
             />
-            <span className="min-w-0 flex-1 truncate text-sm">{labels[action]}</span>
+            <span className="min-w-0 flex-1 truncate text-sm">{t(labelKeys[action])}</span>
             <button
               type="button"
               className="ob-icon-btn h-7 w-7"
-              aria-label={`上移${labels[action]}`}
+              aria-label={t("toolbar.moveUp", { label: t(labelKeys[action]) })}
               disabled={index === 0}
               onClick={() => onChange(move(preferences, action, -1))}
             >
@@ -91,7 +85,7 @@ export function ImageToolbarPreferencesEditor({
             <button
               type="button"
               className="ob-icon-btn h-7 w-7"
-              aria-label={`下移${labels[action]}`}
+              aria-label={t("toolbar.moveDown", { label: t(labelKeys[action]) })}
               disabled={index === IMAGE_TOOLBAR_ACTIONS.length - 1}
               onClick={() => onChange(move(preferences, action, 1))}
             >

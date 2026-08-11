@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export type AudioTimelineState = {
   currentTime: number;
@@ -50,6 +51,7 @@ export function audioTimelineState(currentTime: number, duration: number, ended:
 }
 
 export function AudioNodePlayer({ src }: { src: string }) {
+  const { t } = useI18n();
   const audioRef = useRef<HTMLAudioElement>(null);
   const frameRef = useRef<number | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -123,7 +125,7 @@ export function AudioNodePlayer({ src }: { src: string }) {
       <button
         type="button"
         className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[var(--ob-ink)] hover:bg-[var(--ob-accent-soft)]"
-        aria-label={playing ? "暂停音频" : "播放音频"}
+        aria-label={playing ? t("audioPlayer.pause") : t("audioPlayer.play")}
         onClick={() => void togglePlayback()}
       >
         {playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
@@ -133,7 +135,7 @@ export function AudioNodePlayer({ src }: { src: string }) {
       </span>
       <input
         type="range"
-        aria-label="音频播放进度"
+        aria-label={t("audioPlayer.progress")}
         className="h-1 min-w-0 flex-1 cursor-pointer accent-[var(--ob-accent)]"
         min={0}
         max={100}
@@ -150,7 +152,7 @@ export function AudioNodePlayer({ src }: { src: string }) {
       <button
         type="button"
         className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[var(--ob-ink)] hover:bg-[var(--ob-accent-soft)]"
-        aria-label={muted ? "取消静音" : "静音"}
+        aria-label={muted ? t("audioPlayer.unmute") : t("audioPlayer.mute")}
         onClick={() => {
           const nextMuted = !muted;
           if (audioRef.current) audioRef.current.muted = nextMuted;

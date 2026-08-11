@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { uid } from "@/lib/id";
 import { audioVoiceLabel, audioVoiceOptions, defaultAudioVoice } from "@/lib/audio-provider";
 import type { AiProtocol, AudioRolePreset } from "@/types/board";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function applyAudioRoleNameDraft(
   roles: readonly AudioRolePreset[],
@@ -27,6 +28,7 @@ export function AudioRoleEditor({
   disabled?: boolean;
   onChange: (roles: AudioRolePreset[]) => void;
 }) {
+  const { t } = useI18n();
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
   const voices = audioVoiceOptions(protocol);
   const update = (id: string, patch: Partial<AudioRolePreset>) => {
@@ -49,19 +51,19 @@ export function AudioRoleEditor({
     <div className="space-y-2 rounded-xl border border-[var(--ob-line)] p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-[var(--ob-ink)]">多角色配音</p>
-          <p className="text-xs text-[var(--ob-muted)]">角色只属于当前画布项目；每个音频服务可映射到不同声线。</p>
+          <p className="text-sm font-medium text-[var(--ob-ink)]">{t("audioRoles.title")}</p>
+          <p className="text-xs text-[var(--ob-muted)]">{t("audioRoles.description")}</p>
         </div>
         <button
           type="button"
           className="ob-btn"
           disabled={disabled || roles.length >= 32}
           onClick={() => onChange([...roles.map((role) => ({ ...role, voices: { ...role.voices } })), {
-            id: uid("role"), name: `角色 ${roles.length + 1}`, voices: { [protocol]: defaultAudioVoice(protocol) },
+            id: uid("role"), name: t("audioRoles.defaultName", { index: roles.length + 1 }), voices: { [protocol]: defaultAudioVoice(protocol) },
           }])}
-        ><Plus size={14} />添加角色</button>
+        ><Plus size={14} />{t("audioRoles.add")}</button>
       </div>
-      {roles.length === 0 ? <p className="text-xs text-[var(--ob-muted)]">尚未添加角色；音频节点将使用默认声音。</p> : null}
+      {roles.length === 0 ? <p className="text-xs text-[var(--ob-muted)]">{t("audioRoles.empty")}</p> : null}
       {roles.map((role) => {
         const current = role.voices[protocol] ?? defaultAudioVoice(protocol);
         const options = voices.includes(current as never) ? voices : [current, ...voices];
@@ -71,9 +73,9 @@ export function AudioRoleEditor({
           <div key={role.id} className="grid gap-2 sm:grid-cols-[minmax(120px,0.8fr)_minmax(220px,1.4fr)_40px]">
             <input
               className={`ob-field ${nameEmpty ? "!border-[var(--ob-danger)]" : ""}`}
-              aria-label={`${role.name}角色名称`}
+              aria-label={`${role.name} ${t("audioRoles.name")}`}
               aria-invalid={nameEmpty}
-              title={nameEmpty ? "角色名称不能为空；继续输入即可保存" : undefined}
+              title={nameEmpty ? t("audioRoles.nameInvalid") : undefined}
               maxLength={80}
               disabled={disabled}
               value={name}
@@ -82,7 +84,7 @@ export function AudioRoleEditor({
             />
             <select
               className="ob-field"
-              aria-label={`${role.name}声线`}
+              aria-label={`${role.name} ${t("audioRoles.voice")}`}
               disabled={disabled}
               value={current}
               onChange={(event) => updateVoice(role, event.target.value)}
@@ -92,7 +94,7 @@ export function AudioRoleEditor({
             <button
               type="button"
               className="ob-icon-btn"
-              aria-label={`删除角色 ${role.name}`}
+              aria-label={t("audioRoles.delete", { name: role.name })}
               disabled={disabled}
               onClick={() => onChange(roles.filter((item) => item.id !== role.id).map((item) => ({ ...item, voices: { ...item.voices } })))}
             ><Trash2 size={14} /></button>

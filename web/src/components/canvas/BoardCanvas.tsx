@@ -46,6 +46,7 @@ import {
   downloadCanvasSnapshot,
   renderCanvasSnapshot,
 } from "@/lib/canvas-export";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -62,6 +63,7 @@ type DragMode =
   | { kind: "connect"; from: string; current: Point };
 
 export function BoardCanvas() {
+  const { t } = useI18n();
   const project = useBoardStore((s) => s.getActive());
 	useCanvasGenerationRecovery();
   const configuredChannels = useBoardStore((s) => s.config.channels);
@@ -291,11 +293,11 @@ export function BoardCanvas() {
       const dataUrl = await renderCanvasSnapshot(surface);
       downloadCanvasSnapshot(dataUrl, canvasExportFilename(project.title));
     } catch (error) {
-      window.alert(error instanceof Error ? `画布导出失败：${error.message}` : "画布导出失败");
+      window.alert(error instanceof Error ? `${t("canvas.export")} ${t("tasks.failed")}：${error.message}` : `${t("canvas.export")} ${t("tasks.failed")}`);
     } finally {
       setExportingSnapshot(false);
     }
-  }, [exportingSnapshot, project]);
+  }, [exportingSnapshot, project, t]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -710,7 +712,7 @@ export function BoardCanvas() {
   if (!project) {
     return (
       <div className="grid h-full place-items-center text-[var(--ob-muted)]">
-        请先创建一个画布项目
+        {t("canvas.projectRequired")}
       </div>
     );
   }

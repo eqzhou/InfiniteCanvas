@@ -7,6 +7,7 @@ import {
   type ReleaseInfo,
 } from "@/lib/release";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function localReleases(): ReleaseInfo[] {
   return Array.isArray(__APP_RELEASES__) ? __APP_RELEASES__ : [];
@@ -31,6 +32,7 @@ export function VersionReleaseModal({
   onOpen?: () => void;
   onClose?: () => void;
 } = {}) {
+  const { t } = useI18n();
   const bundled = useMemo(localReleases, []);
   const [open, setOpen] = useState(false);
   const [latestVersion, setLatestVersion] = useState(APP_VERSION);
@@ -83,14 +85,14 @@ export function VersionReleaseModal({
         className={menuItem
           ? "relative flex w-full items-center rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--ob-accent-soft)]"
           : "relative rounded-md px-2 py-1 text-xs font-medium text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]"}
-        title="查看版本更新"
+        title={t("release.view")}
         onClick={() => {
           setOpen(true);
           onOpen?.();
           void checkLatest(true);
         }}
       >
-        {menuItem ? `版本更新 · ${APP_VERSION}` : APP_VERSION}
+        {menuItem ? t("release.menu", { version: APP_VERSION }) : APP_VERSION}
         {hasNew ? (
           <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />
         ) : null}
@@ -106,14 +108,14 @@ export function VersionReleaseModal({
             <header className="ob-dialog-header px-4 py-3">
               <div className="min-w-0">
                 <p className="ob-page-kicker">Release</p>
-                <h2 id="version-release-title" className="text-base font-semibold tracking-tight">版本更新</h2>
+                <h2 id="version-release-title" className="text-base font-semibold tracking-tight">{t("release.title")}</h2>
               </div>
               <button
                 ref={closeButtonRef}
                 type="button"
                 className="ob-icon-btn ml-auto"
-                aria-label="关闭版本说明"
-                title="关闭版本说明"
+                aria-label={t("release.close")}
+                title={t("release.close")}
                 onClick={close}
               >
                 ×
@@ -121,18 +123,18 @@ export function VersionReleaseModal({
             </header>
             <div className="grid grid-cols-2 gap-3 border-b border-[var(--ob-line)] p-4">
               <div className="rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] p-3 shadow-[var(--ob-elev-1)]">
-                <div className="text-xs text-[var(--ob-muted)]">当前版本</div>
+                <div className="text-xs text-[var(--ob-muted)]">{t("release.current")}</div>
                 <div className="mt-1 text-base font-semibold">{APP_VERSION}</div>
               </div>
               <div className="rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_55%,transparent)] p-3 shadow-[var(--ob-elev-1)]">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs text-[var(--ob-muted)]">最新版本</div>
+                  <div className="text-xs text-[var(--ob-muted)]">{t("release.latest")}</div>
                   <button
                     type="button"
                     className="text-[11px] font-medium text-[var(--ob-accent)] underline-offset-2 hover:underline"
                     onClick={() => void checkLatest(true)}
                   >
-                    {checking ? "检查中..." : "检查更新"}
+                    {checking ? t("release.checking") : t("release.check")}
                   </button>
                 </div>
                 <div className="mt-1 text-base font-semibold">{latestVersion}</div>
@@ -144,16 +146,16 @@ export function VersionReleaseModal({
                   <li key={`${release.version}-${release.date}`}>
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <span className="text-sm font-semibold">
-                        {release.version === "Unreleased" ? "未发布" : release.version}
+                        {release.version === "Unreleased" ? t("release.unreleased") : release.version}
                       </span>
                       {release.date ? (
                         <span className="text-xs text-[var(--ob-muted)]">{release.date}</span>
                       ) : null}
                       {release.version === latestVersion ? (
-                        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-700">最新</span>
+                        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-700">{t("release.newest")}</span>
                       ) : null}
                       {release.version === APP_VERSION ? (
-                        <span className="rounded bg-[var(--ob-accent-soft)] px-1.5 py-0.5 text-[10px]">当前</span>
+                        <span className="rounded bg-[var(--ob-accent-soft)] px-1.5 py-0.5 text-[10px]">{t("release.active")}</span>
                       ) : null}
                     </div>
                     <ul className="space-y-1.5">
@@ -171,8 +173,8 @@ export function VersionReleaseModal({
               </ol>
               {!releases.length ? (
                 <div className="ob-empty border-0 bg-transparent py-10">
-                  <p className="ob-empty-title">暂无更新日志</p>
-                  <p className="ob-empty-desc">本地 CHANGELOG 为空时会显示这里。</p>
+                  <p className="ob-empty-title">{t("release.empty")}</p>
+                  <p className="ob-empty-desc">{t("release.emptyDescription")}</p>
                 </div>
               ) : null}
             </div>

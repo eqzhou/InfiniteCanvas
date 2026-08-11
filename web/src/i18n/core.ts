@@ -7,11 +7,13 @@ import { canvasUiEnUS, canvasUiZhCN } from "./messages/canvas-ui";
 import { directorWorkflowsEnUS, directorWorkflowsZhCN } from "./messages/director-workflows";
 import { promptsEnUS, promptsZhCN } from "./messages/prompts";
 import { canvasNodesEnUS, canvasNodesZhCN } from "./messages/canvas-nodes";
+import { nonCoreUiEnUS, nonCoreUiZhCN } from "./messages/non-core-ui";
 
 export const SUPPORTED_LOCALES = ["zh-CN", "en-US"] as const;
 export type AppLocale = typeof SUPPORTED_LOCALES[number];
 
 const zhCN = {
+  ...nonCoreUiZhCN,
   ...canvasNodesZhCN,
   ...directorWorkflowsZhCN,
   ...promptsZhCN,
@@ -370,6 +372,7 @@ export type MessageKey = keyof typeof zhCN;
 type MessageParams = Readonly<Record<string, string | number>>;
 
 const enUS: Partial<Record<MessageKey, string>> = {
+  ...nonCoreUiEnUS,
   ...canvasNodesEnUS,
   ...directorWorkflowsEnUS,
   ...promptsEnUS,

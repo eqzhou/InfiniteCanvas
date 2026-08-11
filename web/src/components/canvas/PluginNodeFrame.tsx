@@ -18,6 +18,7 @@ import { generateImages, generateText, generateVideo } from "@/services/ai-clien
 import { storageKeyToDataUrl, uploadMedia } from "@/services/storage";
 import { nowIso, uid } from "@/lib/id";
 import type { AssetItem, BoardNode, PluginManifest } from "@/types/board";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const PanoramaPluginNode = lazy(async () => {
   const module = await import("@/components/canvas/PanoramaPluginNode");
@@ -30,9 +31,10 @@ type Props = {
 };
 
 export function PluginNodeFrame({ node, manifest }: Props) {
+  const { t } = useI18n();
   if (manifest.id === "openboard.panorama") {
     return (
-      <Suspense fallback={<div className="grid h-full place-items-center text-xs text-[var(--ob-muted)]">加载 3D 视图…</div>}>
+      <Suspense fallback={<div className="grid h-full place-items-center text-xs text-[var(--ob-muted)]">{t("plugin.loadingPanorama")}</div>}>
         <PanoramaPluginNode node={node} />
       </Suspense>
     );
@@ -41,6 +43,7 @@ export function PluginNodeFrame({ node, manifest }: Props) {
 }
 
 function SandboxedPluginNodeFrame({ node, manifest }: Props) {
+  const { t } = useI18n();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const updateNode = useBoardStore((state) => state.updateNode);
   const persistNow = useBoardStore((state) => state.persistNow);
@@ -318,7 +321,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
   if (quarantined) {
     return (
       <div className="grid h-full place-items-center px-4 text-center text-xs text-[var(--ob-danger)]">
-        插件消息超过资源配额，已停止运行。
+        {t("plugin.quotaExceeded")}
       </div>
     );
   }
@@ -327,7 +330,7 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
     <iframe
       key={`${manifest.id}:${manifest.version}`}
       ref={frameRef}
-      title={`${manifest.name} 插件`}
+      title={`${manifest.name} ${t("plugin.title")}`}
       sandbox="allow-scripts"
       srcDoc={sourceDocument}
       className="h-full w-full border-0 bg-transparent"
