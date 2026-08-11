@@ -32,20 +32,23 @@ import {
 } from "@/services/director-capture-store";
 import { directorModelStore } from "@/services/director-model-store";
 import { ProjectAudioRolesDialog } from "@/components/canvas/ProjectAudioRolesDialog";
+import { useI18n } from "@/i18n/I18nProvider";
+import type { MessageKey } from "@/i18n/core";
 
-const NODE_TYPE_LABELS: Record<BoardNode["type"], string> = {
-  text: "文本",
-  image: "图片",
-  config: "配置",
-  video: "视频",
-  audio: "音频",
-  panorama: "全景",
-  director: "导演台",
-  group: "分组",
-  plugin: "插件",
+const NODE_TYPE_KEYS: Record<BoardNode["type"], MessageKey> = {
+  text: "common.text",
+  image: "common.image",
+  config: "workspace.config",
+  video: "common.video",
+  audio: "common.audio",
+  panorama: "workspace.panorama",
+  director: "workspace.director",
+  group: "workspace.group",
+  plugin: "nav.plugins",
 };
 
 export function HomePage() {
+  const { locale, t } = useI18n();
   const navigate = useNavigate();
   const auth = useOptionalAuth();
   const ready = useBoardStore((s) => s.ready);
@@ -105,7 +108,10 @@ export function HomePage() {
   const createNewProject = async (projectKind: "canvas" | "film") => {
     if (projectKind === "film" && !filmCapability?.available) return;
     const count = projects.filter((project) => project.projectKind === projectKind).length + 1;
-    const id = createProject(projectKind === "film" ? `影片 ${count}` : `画布 ${count}`, projectKind);
+    const id = createProject(
+      projectKind === "film" ? t("workspace.filmName", { count }) : t("workspace.canvasName", { count }),
+      projectKind,
+    );
     await useBoardStore.getState().persistNow();
     setCreateOpen(false);
     if (projectKind === "film") navigate(`/film/${id}`);
@@ -122,7 +128,7 @@ export function HomePage() {
     let active = true;
     void loadFilmCapabilities()
       .then((capability) => { if (active) setFilmCapability(capability); })
-      .catch(() => { if (active) setFilmCapability({ available: false, reason: "影片制作服务不可用" }); });
+      .catch(() => { if (active) setFilmCapability({ available: false, reason: t("workspace.filmUnavailable") }); });
     return () => { active = false; };
   }, [ready]);
 
@@ -163,7 +169,7 @@ export function HomePage() {
       .querySelector<HTMLElement>('[data-testid="canvas-surface"]')
       ?.getBoundingClientRect();
     const assistantRect = document
-      .querySelector<HTMLElement>('aside[aria-label="画布 Agent"]')
+      .querySelector<HTMLElement>(`aside[aria-label="${CSS.escape(t("nav.canvasAgent"))}"]`)
       ?.getBoundingClientRect();
     const visibleCanvasWidth = canvasRect && assistantRect && assistantRect.left < canvasRect.right
       ? Math.max(1, assistantRect.left - canvasRect.left)
@@ -197,7 +203,7 @@ export function HomePage() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `画布元素-${selected.length}.zip`;
+    anchor.download = t("workspace.exportElementsName", { count: selected.length });
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -211,7 +217,7 @@ export function HomePage() {
     return (
       <div className="ob-loading" role="status" aria-live="polite">
         <span className="ob-loading-dot" aria-hidden />
-        <span>加载本地数据…</span>
+        <span>{t("workspace.loadingLocal")}</span>
       </div>
     );
   }
@@ -224,8 +230,8 @@ export function HomePage() {
       <button
         type="button"
         className={`ob-chrome absolute left-2 top-2 z-[60] grid h-10 w-10 place-items-center transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] ${projectsOpen ? "!hidden" : panelCollapsed ? "" : "md:hidden"}`}
-        title={panelCollapsed ? "展开侧栏" : "打开项目侧栏"}
-        aria-label={panelCollapsed ? "展开侧栏" : "打开项目侧栏"}
+        title={panelCollapsed ? t("workspace.expandSidebar") : t("workspace.openSidebar")}
+        aria-label={panelCollapsed ? t("workspace.expandSidebar") : t("workspace.openSidebar")}
         onClick={() => {
           if (window.innerWidth >= 768) {
             updatePanelConfig({ canvasPanelCollapsed: false });
@@ -240,26 +246,26 @@ export function HomePage() {
         <button
           type="button"
           className="absolute inset-0 z-40 bg-black/45 md:hidden"
-          aria-label="关闭项目面板"
+          aria-label={t("workspace.closePanel")}
           onClick={() => setProjectsOpen(false)}
         />
       ) : null}
       <aside
-        aria-label="项目侧栏"
+        aria-label={t("workspace.sidebar")}
         className={`${projectsOpen ? "absolute inset-y-0 left-0 z-50 flex" : "hidden"} ${panelCollapsed ? "md:hidden" : "md:relative md:flex"} z-40 w-[min(88vw,320px)] shrink-0 flex-col border-r border-[var(--ob-line)] bg-[var(--ob-panel-glass)] shadow-[var(--ob-elev-1)] backdrop-blur-md transition-opacity duration-200 md:w-[var(--canvas-panel-width)]`}
         style={{ "--canvas-panel-width": `${panelWidth}px` } as React.CSSProperties}
       >
         <div className="ob-toolbar-scroll flex min-h-12 min-w-0 items-center gap-px overflow-x-auto border-b border-[var(--ob-line)] px-1 py-2">
           {panelWidth >= 300 ? (
-            <strong className="mr-auto truncate text-sm">工作区</strong>
+            <strong className="mr-auto truncate text-sm">{t("workspace.title")}</strong>
           ) : (
-            <span className="mr-auto sr-only">工作区</span>
+            <span className="mr-auto sr-only">{t("workspace.title")}</span>
           )}
           <button
             type="button"
             className={`${panelActionClass} ob-panel-mobile-only`}
-            aria-label="关闭项目侧栏"
-            title="关闭项目侧栏"
+            aria-label={t("workspace.closeSidebar")}
+            title={t("workspace.closeSidebar")}
             onClick={() => setProjectsOpen(false)}
           >
             <X size={16} />
@@ -267,7 +273,7 @@ export function HomePage() {
           <button
             type="button"
             className={`${panelActionClass} ob-panel-desktop-only`}
-            title="收起侧栏"
+            title={t("workspace.collapseSidebar")}
             onClick={() => updatePanelConfig({ canvasPanelCollapsed: true })}
           >
             <PanelLeftClose size={16} />
@@ -277,7 +283,7 @@ export function HomePage() {
               <button
                 type="button"
                 className={panelActionClass}
-                title="新建"
+                title={t("workspace.new")}
                 onClick={() => setCreateOpen(true)}
               >
                 <FolderPlus size={16} />
@@ -285,8 +291,8 @@ export function HomePage() {
               <button
                 type="button"
                 className={panelActionClass}
-                aria-label="管理当前画布配音角色"
-                title="当前画布配音角色"
+                aria-label={t("workspace.manageVoices")}
+                title={t("workspace.currentVoices")}
                 disabled={!activeProject}
                 onClick={() => setAudioRolesOpen(true)}
               >
@@ -295,7 +301,7 @@ export function HomePage() {
               <button
                 type="button"
                 className={panelActionClass}
-                title="导入 JSON"
+                title={t("workspace.importJson")}
                 onClick={() => fileRef.current?.click()}
               >
                 <Upload size={16} />
@@ -303,7 +309,7 @@ export function HomePage() {
               <button
                 type="button"
                 className={panelActionClass}
-                title="导出当前"
+                title={t("workspace.exportCurrent")}
                 onClick={() => {
                   const p = exportActiveProject();
                   if (!p) return;
@@ -321,7 +327,7 @@ export function HomePage() {
               <button
                 type="button"
                 className={panelActionClass}
-                title="导出完整包"
+                title={t("workspace.exportBundle")}
                 onClick={() => {
                   void (async () => {
                     const project = exportActiveProject();
@@ -345,11 +351,11 @@ export function HomePage() {
               <button
                 type="button"
                 className={`${panelActionClass} !text-[var(--ob-danger)]`}
-                title="删除勾选"
+                title={t("workspace.deleteSelected")}
                 disabled={!checked.length}
                 onClick={() => {
                   if (!checked.length) return;
-                  if (confirm(`删除选中的 ${checked.length} 个项目？`)) {
+                  if (confirm(t("workspace.confirmDeleteProjects", { count: checked.length }))) {
                     deleteProjects(checked);
                     setChecked([]);
                   }
@@ -363,8 +369,8 @@ export function HomePage() {
             <>
               <button
                 type="button"
-                aria-label="全选元素"
-                title="全选元素"
+                aria-label={t("workspace.selectAllElements")}
+                title={t("workspace.selectAllElements")}
                 className="ob-icon-btn h-8 w-8 shrink-0"
                 disabled={!activeProject?.nodes.length}
                 onClick={() => {
@@ -377,8 +383,8 @@ export function HomePage() {
               </button>
               <button
                 type="button"
-                aria-label="导出所选元素"
-                title="导出所选元素"
+                aria-label={t("workspace.exportSelectedElements")}
+                title={t("workspace.exportSelectedElements")}
                 className="ob-icon-btn h-8 w-8 shrink-0"
                 disabled={!checkedNodes.length}
                 onClick={() => void exportCheckedNodes().catch((error) =>
@@ -410,19 +416,21 @@ export function HomePage() {
                   await importCompleteProjectBundle(file);
                 }
               } catch (error) {
-                alert(`导入失败：${error instanceof Error ? error.message : "文件格式不正确"}`);
+                alert(t("workspace.importFailed", {
+                  message: error instanceof Error ? error.message : t("workspace.invalidFile"),
+                }));
               } finally {
                 input.value = "";
               }
             }}
           />
         </div>
-        <div role="tablist" aria-label="工作区视图" className="ob-toolbar-scroll relative flex min-w-0 gap-0 overflow-x-auto border-b border-[var(--ob-line)] px-2 pt-1">
+        <div role="tablist" aria-label={t("workspace.views")} className="ob-toolbar-scroll relative flex min-w-0 gap-0 overflow-x-auto border-b border-[var(--ob-line)] px-2 pt-1">
           {([
-            ["projects", "项目"],
-            ["elements", "元素"],
-            ["assets", "素材"],
-            ["prompts", "提示词"],
+            ["projects", t("workspace.projects")],
+            ["elements", t("workspace.elements")],
+            ["assets", t("workspace.assets")],
+            ["prompts", t("workspace.prompts")],
           ] as const).map(([value, label]) => (
             <button
               key={value}
@@ -480,7 +488,7 @@ export function HomePage() {
                     onClick={(e) => e.stopPropagation()}
                   />
                   <div className="mt-1 text-[11px] text-[var(--ob-muted)]">
-                    {p.projectKind === "film" ? "影片制作" : `${p.nodes.length} 节点`} · {new Date(p.updatedAt).toLocaleString()}
+                    {p.projectKind === "film" ? t("workspace.filmProduction") : t("workspace.nodeCount", { count: p.nodes.length })} · {new Date(p.updatedAt).toLocaleString(locale)}
                   </div>
                 </button>
               </div>
@@ -491,15 +499,15 @@ export function HomePage() {
               <span className="ob-empty-icon" aria-hidden>
                 <FolderPlus size={16} />
               </span>
-              <p className="ob-empty-title">还没有项目</p>
-              <p className="ob-empty-desc">点击右上角「新建」创建第一个画布，开始编排节点与生成。</p>
+              <p className="ob-empty-title">{t("workspace.emptyProjects")}</p>
+              <p className="ob-empty-desc">{t("workspace.emptyProjectsDescription")}</p>
             </div>
           ) : null}
             </>
           ) : null}
           {panelTab === "elements" ? (
             activeProject?.nodes.length ? (
-              <ul role="list" aria-label="画布元素" className="space-y-1">
+              <ul role="list" aria-label={t("workspace.canvasElements")} className="space-y-1">
                 {activeProject.nodes.map((node) => {
                   const checkedNode = checkedNodes.includes(node.id);
                   const selected = selectedIds.includes(node.id);
@@ -514,7 +522,7 @@ export function HomePage() {
                     >
                       <input
                         type="checkbox"
-                        aria-label={`选择${node.title}`}
+                        aria-label={t("workspace.selectItem", { title: node.title })}
                         checked={checkedNode}
                         onChange={(event) => {
                           const next = event.target.checked
@@ -526,13 +534,13 @@ export function HomePage() {
                       />
                       <button
                         type="button"
-                        aria-label={`定位${node.title}`}
+                        aria-label={t("workspace.locateItem", { title: node.title })}
                         className="flex min-w-0 flex-1 items-center gap-2 text-left"
                         onClick={() => focusNode(node)}
                       >
                         <LocateFixed size={14} className="shrink-0 text-[var(--ob-accent)]" />
                         <span className="min-w-0 flex-1 truncate text-sm">{node.title}</span>
-                        <span className="text-[10px] text-[var(--ob-muted)]">{NODE_TYPE_LABELS[node.type]}</span>
+                        <span className="text-[10px] text-[var(--ob-muted)]">{t(NODE_TYPE_KEYS[node.type])}</span>
                       </button>
                     </li>
                   );
@@ -543,8 +551,8 @@ export function HomePage() {
                 <span className="ob-empty-icon" aria-hidden>
                   <LocateFixed size={16} />
                 </span>
-                <p className="ob-empty-title">当前画布没有元素</p>
-                <p className="ob-empty-desc">用顶部工具栏添加文本、图片或媒体节点。</p>
+                <p className="ob-empty-title">{t("workspace.emptyElements")}</p>
+                <p className="ob-empty-desc">{t("workspace.emptyElementsDescription")}</p>
               </div>
             )
           ) : null}
@@ -553,7 +561,7 @@ export function HomePage() {
         </div>
         <div
           role="separator"
-          aria-label="调整项目侧栏宽度"
+          aria-label={t("workspace.resizeSidebar")}
           aria-orientation="vertical"
           aria-valuemin={240}
           aria-valuemax={420}
@@ -600,10 +608,10 @@ export function HomePage() {
             <div className="ob-card max-w-md p-8 text-center">
               <Clapperboard className="mx-auto mb-4 text-[var(--ob-accent)]" size={36} aria-hidden />
               <h1 className="text-xl font-semibold">{activeProject.title}</h1>
-              <p className="mt-2 text-sm text-[var(--ob-muted)]">在影片工作台中管理剧本、镜头、制作阶段与交付。</p>
+              <p className="mt-2 text-sm text-[var(--ob-muted)]">{t("workspace.filmDescription")}</p>
               {filmCapability?.available ? <button type="button" className="ob-btn ob-btn-primary mt-5" onClick={() => navigate(`/film/${activeProject.id}`)}>
-                打开影片工作台
-              </button> : <p className="mt-4 text-sm text-[var(--ob-danger)]">{filmCapability?.reason || "正在检查影片制作服务…"}</p>}
+                {t("workspace.openFilm")}
+              </button> : <p className="mt-4 text-sm text-[var(--ob-danger)]">{filmCapability?.reason || t("workspace.checkingFilm")}</p>}
             </div>
           </div>
         ) : <BoardCanvas />}
@@ -618,19 +626,19 @@ export function HomePage() {
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 id="create-project-title" className="text-lg font-semibold">创建项目</h2>
-              <button type="button" className="ob-icon-btn" aria-label="关闭" onClick={() => setCreateOpen(false)}><X size={16} /></button>
+              <h2 id="create-project-title" className="text-lg font-semibold">{t("workspace.createProject")}</h2>
+              <button type="button" className="ob-icon-btn" aria-label={t("common.close")} onClick={() => setCreateOpen(false)}><X size={16} /></button>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <button type="button" className="rounded-xl border border-[var(--ob-line)] p-5 text-left hover:border-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)]" onClick={() => void createNewProject("canvas")}>
                 <FolderPlus className="mb-3 text-[var(--ob-accent)]" aria-hidden />
-                <strong className="block">无限画布</strong>
-                <span className="mt-1 block text-sm text-[var(--ob-muted)]">自由编排节点、生成与导演工具。</span>
+                <strong className="block">{t("workspace.canvasKind")}</strong>
+                <span className="mt-1 block text-sm text-[var(--ob-muted)]">{t("workspace.canvasKindDescription")}</span>
               </button>
               {filmCapability?.available ? <button type="button" className="rounded-xl border border-[var(--ob-line)] p-5 text-left hover:border-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)]" onClick={() => void createNewProject("film")}>
                 <Clapperboard className="mb-3 text-[var(--ob-accent)]" aria-hidden />
-                <strong className="block">影片制作</strong>
-                <span className="mt-1 block text-sm text-[var(--ob-muted)]">从剧本到镜头、时间线与交付。</span>
+                <strong className="block">{t("workspace.filmKind")}</strong>
+                <span className="mt-1 block text-sm text-[var(--ob-muted)]">{t("workspace.filmKindDescription")}</span>
               </button> : null}
             </div>
           </section>

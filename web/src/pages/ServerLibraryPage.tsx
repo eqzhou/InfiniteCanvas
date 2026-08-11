@@ -17,6 +17,7 @@ import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { nowIso, uid } from "@/lib/id";
 import { writeTextWithFallback } from "@/lib/clipboard";
 import type { AssetItem } from "@/types/board";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function emptyDraft(kind: LibraryAssetKind = "image"): LibraryAssetInput {
   return {
@@ -31,6 +32,7 @@ function emptyDraft(kind: LibraryAssetKind = "image"): LibraryAssetInput {
 }
 
 export function ServerLibraryPage() {
+  const { t } = useI18n();
   const auth = useOptionalAuth();
   const addNode = useBoardStore((s) => s.addNode);
   const getActive = useBoardStore((s) => s.getActive);
@@ -82,12 +84,12 @@ export function ServerLibraryPage() {
   const kindLabel = useMemo(
     () =>
       ({
-        text: "文本",
-        image: "图片",
-        video: "视频",
-        audio: "音频",
+        text: t("common.text"),
+        image: t("common.image"),
+        video: t("common.video"),
+        audio: t("common.audio"),
       }) as Record<LibraryAssetKind, string>,
-    [],
+    [t],
   );
 
   const openCreate = () => {
@@ -142,7 +144,7 @@ export function ServerLibraryPage() {
   };
 
   const removeAsset = async (asset: LibraryAsset) => {
-    if (!window.confirm(`删除服务器素材「${asset.title}」？`)) return;
+    if (!window.confirm(t("serverLibrary.confirmDelete", { title: asset.title }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -161,13 +163,13 @@ export function ServerLibraryPage() {
       ? (asset.content ?? "")
       : (asset.coverUrl || asset.content || "");
     if (!value) {
-      window.alert(asset.kind === "text" ? "无可复制文本" : "无可复制链接");
+      window.alert(asset.kind === "text" ? t("serverLibrary.noText") : t("serverLibrary.noLink"));
       return;
     }
     try {
       await writeTextWithFallback(value);
     } catch (cause) {
-      window.alert(cause instanceof Error ? cause.message : "复制失败");
+      window.alert(cause instanceof Error ? cause.message : t("serverLibrary.copyFailed"));
     }
   };
 
@@ -175,18 +177,18 @@ export function ServerLibraryPage() {
     setSavingId(asset.id);
     setError(null);
     try {
-      const t = nowIso();
+      const timestamp = nowIso();
       const item: AssetItem = {
         id: uid("asset"),
         kind: asset.kind,
         title: asset.title,
         tags: [...asset.tags],
         notes: asset.notes || undefined,
-        source: asset.source || "服务器素材库",
+        source: asset.source || t("serverLibrary.title"),
         content: asset.kind === "text" ? (asset.content ?? "") : undefined,
         coverUrl: asset.kind === "text" ? undefined : (asset.coverUrl || asset.content || undefined),
-        createdAt: t,
-        updatedAt: t,
+        createdAt: timestamp,
+        updatedAt: timestamp,
       };
       setAssets([item, ...useBoardStore.getState().assets]);
       await flushAssets();
@@ -200,7 +202,7 @@ export function ServerLibraryPage() {
   const insertToCanvas = async (asset: LibraryAsset) => {
     const project = getActive();
     if (!project) {
-      window.alert("请先打开一个画布项目");
+      window.alert(t("assets.openCanvasFirst"));
       return;
     }
     setInsertingId(asset.id);
@@ -242,14 +244,14 @@ export function ServerLibraryPage() {
     <div className="mx-auto flex h-full max-w-6xl flex-col gap-4 p-4 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--ob-ink)]">服务器素材库</h1>
+          <h1 className="text-xl font-semibold text-[var(--ob-ink)]">{t("serverLibrary.title")}</h1>
           <p className="mt-1 text-sm text-[var(--ob-muted)]">
-            租户共享的 URL/文本素材目录。用户可浏览、复制、加入“我的素材”并插入画布；管理员可新增、编辑、删除。
+            {t("serverLibrary.description")}
           </p>
         </div>
         {canManage ? (
           <button type="button" className="ob-btn-primary" onClick={openCreate}>
-            新建服务器素材
+            {t("serverLibrary.new")}
           </button>
         ) : null}
       </div>
@@ -257,7 +259,7 @@ export function ServerLibraryPage() {
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="ob-input min-w-[12rem] flex-1"
-          placeholder="搜索标题、标签、来源…"
+          placeholder={t("serverLibrary.search")}
           value={q}
           onChange={(event) => setQ(event.target.value)}
         />
@@ -266,21 +268,21 @@ export function ServerLibraryPage() {
           value={kind}
           onChange={(event) => setKind(event.target.value as "all" | LibraryAssetKind)}
         >
-          <option value="all">全部类型</option>
-          <option value="image">图片</option>
-          <option value="video">视频</option>
-          <option value="audio">音频</option>
-          <option value="text">文本</option>
+          <option value="all">{t("common.allTypes")}</option>
+          <option value="image">{t("common.image")}</option>
+          <option value="video">{t("common.video")}</option>
+          <option value="audio">{t("common.audio")}</option>
+          <option value="text">{t("common.text")}</option>
         </select>
         <input
           className="ob-input w-auto min-w-[8rem]"
-          aria-label="按标签筛选"
-          placeholder="标签筛选"
+          aria-label={t("serverLibrary.tagFilter")}
+          placeholder={t("serverLibrary.tagPlaceholder")}
           value={tag}
           onChange={(event) => { setTag(event.target.value); setPage(1); }}
         />
         <button type="button" className="ob-btn" onClick={() => void load()}>
-          刷新
+          {t("common.refresh")}
         </button>
       </div>
 
@@ -292,11 +294,11 @@ export function ServerLibraryPage() {
 
       {loading ? (
         <div className="rounded-xl border border-[var(--ob-line)] p-8 text-sm text-[var(--ob-muted)]">
-          正在加载服务器素材…
+          {t("serverLibrary.loading")}
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--ob-line)] p-8 text-sm text-[var(--ob-muted)]">
-          暂无服务器素材。{canManage ? "可点击右上角新建。" : "请联系管理员维护素材目录。"}
+          {t("serverLibrary.empty")}{canManage ? t("serverLibrary.emptyAdmin") : t("serverLibrary.emptyMember")}
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -351,17 +353,17 @@ export function ServerLibraryPage() {
                   disabled={insertingId === asset.id}
                   onClick={() => void insertToCanvas(asset)}
                 >
-                  {insertingId === asset.id ? "插入中" : "插入画布"}
+                  {insertingId === asset.id ? t("assets.inserting") : t("assets.insertCanvas")}
                 </button>
                 <button
                   type="button"
                   className="ob-btn"
                   onClick={() => void copyAssetValue(asset)}
                 >
-                  {asset.kind === "text" ? "复制文本" : "复制链接"}
+                  {asset.kind === "text" ? t("serverLibrary.copyText") : t("serverLibrary.copyLink")}
                 </button>
                 <button type="button" className="ob-btn" onClick={() => setDetail(asset)}>
-                  查看详情
+                  {t("serverLibrary.viewDetails")}
                 </button>
                 <button
                   type="button"
@@ -369,15 +371,15 @@ export function ServerLibraryPage() {
                   disabled={savingId === asset.id}
                   onClick={() => void addToMyAssets(asset)}
                 >
-                  {savingId === asset.id ? "加入中" : "加入我的素材"}
+                  {savingId === asset.id ? t("serverLibrary.adding") : t("serverLibrary.addMine")}
                 </button>
                 {canManage ? (
                   <>
                     <button type="button" className="ob-btn" onClick={() => openEdit(asset)}>
-                      编辑
+                      {t("common.edit")}
                     </button>
                     <button type="button" className="ob-btn" onClick={() => void removeAsset(asset)}>
-                      删除
+                      {t("common.delete")}
                     </button>
                   </>
                 ) : null}
@@ -390,7 +392,7 @@ export function ServerLibraryPage() {
       {totalPages > 1 ? (
         <div className="flex items-center justify-center gap-2">
           <button type="button" className="ob-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
+            {t("common.previousPage")}
           </button>
           <span className="text-sm text-[var(--ob-muted)]">
             {page} / {totalPages}
@@ -401,7 +403,7 @@ export function ServerLibraryPage() {
             disabled={page >= totalPages}
             onClick={() => setPage((p) => p + 1)}
           >
-            下一页
+            {t("common.nextPage")}
           </button>
         </div>
       ) : null}
@@ -410,16 +412,16 @@ export function ServerLibraryPage() {
         <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 p-4" onClick={closeEditor}>
           <div
             role="dialog"
-            aria-label={editing ? "编辑服务器素材" : "新建服务器素材"}
+            aria-label={editing ? t("serverLibrary.edit") : t("serverLibrary.new")}
             className="w-full max-w-lg rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-elev-2)]"
             onClick={(event) => event.stopPropagation()}
           >
             <h2 className="text-lg font-semibold text-[var(--ob-ink)]">
-              {editing ? "编辑服务器素材" : "新建服务器素材"}
+              {editing ? t("serverLibrary.edit") : t("serverLibrary.new")}
             </h2>
             <div className="mt-3 grid gap-2">
               <label className="text-sm text-[var(--ob-muted)]">
-                类型
+                {t("serverLibrary.kind")}
                 <select
                   className="ob-input mt-1"
                   value={draft.kind}
@@ -427,14 +429,14 @@ export function ServerLibraryPage() {
                     setDraft((current) => ({ ...current, kind: event.target.value as LibraryAssetKind }))
                   }
                 >
-                  <option value="image">图片</option>
-                  <option value="video">视频</option>
-                  <option value="audio">音频</option>
-                  <option value="text">文本</option>
+                  <option value="image">{t("common.image")}</option>
+                  <option value="video">{t("common.video")}</option>
+                  <option value="audio">{t("common.audio")}</option>
+                  <option value="text">{t("common.text")}</option>
                 </select>
               </label>
               <label className="text-sm text-[var(--ob-muted)]">
-                标题
+                {t("serverLibrary.assetTitle")}
                 <input
                   className="ob-input mt-1"
                   value={draft.title}
@@ -442,7 +444,7 @@ export function ServerLibraryPage() {
                 />
               </label>
               <label className="text-sm text-[var(--ob-muted)]">
-                标签（逗号分隔）
+                {t("serverLibrary.tags")}
                 <input
                   className="ob-input mt-1"
                   value={(draft.tags ?? []).join(", ")}
@@ -456,7 +458,7 @@ export function ServerLibraryPage() {
               </label>
               {draft.kind === "text" ? (
                 <label className="text-sm text-[var(--ob-muted)]">
-                  文本内容
+                  {t("serverLibrary.textContent")}
                   <textarea
                     className="ob-input mt-1 min-h-28"
                     value={draft.content ?? ""}
@@ -465,7 +467,7 @@ export function ServerLibraryPage() {
                 </label>
               ) : (
                 <label className="text-sm text-[var(--ob-muted)]">
-                  媒体 URL
+                  {t("serverLibrary.mediaUrl")}
                   <input
                     className="ob-input mt-1"
                     value={draft.coverUrl || draft.content || ""}
@@ -480,7 +482,7 @@ export function ServerLibraryPage() {
                 </label>
               )}
               <label className="text-sm text-[var(--ob-muted)]">
-                来源
+                {t("serverLibrary.source")}
                 <input
                   className="ob-input mt-1"
                   value={draft.source ?? ""}
@@ -488,7 +490,7 @@ export function ServerLibraryPage() {
                 />
               </label>
               <label className="text-sm text-[var(--ob-muted)]">
-                备注
+                {t("serverLibrary.notes")}
                 <textarea
                   className="ob-input mt-1 min-h-20"
                   value={draft.notes ?? ""}
@@ -498,10 +500,10 @@ export function ServerLibraryPage() {
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button type="button" className="ob-btn" disabled={busy} onClick={closeEditor}>
-                取消
+                {t("common.cancel")}
               </button>
               <button type="button" className="ob-btn-primary" disabled={busy} onClick={() => void saveDraft()}>
-                {busy ? "保存中" : "保存"}
+                {busy ? t("serverLibrary.saving") : t("serverLibrary.save")}
               </button>
             </div>
           </div>

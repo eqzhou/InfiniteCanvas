@@ -15,6 +15,7 @@ import {
 } from "@/services/ai-call-logs";
 import { invalidateAICallLogClientReportCache } from "@/services/generation-activity";
 import { readAICallRequestDetail } from "@/lib/ai-call-log-detail";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "-";
@@ -31,6 +32,7 @@ function prettyJSON(value: unknown): string {
 }
 
 export function AICallLogsPage() {
+  const { locale, t } = useI18n();
   const auth = useOptionalAuth();
   const canManage = canManageAdmin(auth);
   const [q, setQ] = useState("");
@@ -131,7 +133,7 @@ export function AICallLogsPage() {
 
   const deleteSelected = async () => {
     if (selected.size === 0) return;
-    if (!window.confirm(`删除选中的 ${selected.size} 条 AI 调用日志？`)) return;
+    if (!window.confirm(t("logs.confirmDelete", { count: selected.size }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -146,12 +148,12 @@ export function AICallLogsPage() {
 
   const cleanupOld = async () => {
     const days = Math.max(1, Math.min(3650, Math.floor(cleanupDays) || 30));
-    if (!window.confirm(`清理 ${days} 天前的 AI 调用日志？`)) return;
+    if (!window.confirm(t("logs.confirmCleanup", { days }))) return;
     setBusy(true);
     setError(null);
     try {
       const result = await deleteAICallLogs({ olderThanDays: days });
-      window.alert(`已清理 ${result.deleted} 条日志`);
+      window.alert(t("logs.cleaned", { count: result.deleted }));
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -163,8 +165,8 @@ export function AICallLogsPage() {
   if (!canManage) {
     return (
       <div className="mx-auto max-w-3xl p-6">
-        <h1 className="text-xl font-semibold text-[var(--ob-ink)]">AI 调用日志</h1>
-        <p className="mt-2 text-sm text-[var(--ob-muted)]">仅管理员可浏览与清理后端 AI 调用日志。</p>
+        <h1 className="text-xl font-semibold text-[var(--ob-ink)]">{t("logs.title")}</h1>
+        <p className="mt-2 text-sm text-[var(--ob-muted)]">{t("logs.forbidden")}</p>
       </div>
     );
   }
@@ -173,14 +175,14 @@ export function AICallLogsPage() {
     <div className="mx-auto flex h-full max-w-6xl flex-col gap-4 p-4 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--ob-ink)]">AI 调用日志</h1>
+          <h1 className="text-xl font-semibold text-[var(--ob-ink)]">{t("logs.title")}</h1>
           <p className="mt-1 text-sm text-[var(--ob-muted)]">
-            后端代理与（可选）浏览器本地直连的请求/响应摘要、耗时、模型与渠道。密钥与二进制内容已脱敏。
+            {t("logs.description")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <label className="inline-flex items-center gap-2 text-sm text-[var(--ob-muted)]">
-            保留天数
+            {t("logs.retentionDays")}
             <input
               type="number"
               min={1}
@@ -191,12 +193,12 @@ export function AICallLogsPage() {
             />
           </label>
           <button type="button" className="ob-btn" disabled={busy} onClick={() => void cleanupOld()}>
-            清理过期
+            {t("logs.cleanup")}
           </button>
           <label className="inline-flex items-center gap-2 text-sm text-[var(--ob-muted)]">
             <input
               type="checkbox"
-              aria-label="自动清理日志"
+              aria-label={t("logs.autoCleanupLabel")}
               checked={retention.enabled}
               disabled={busy}
               onChange={(event) => {
@@ -210,12 +212,14 @@ export function AICallLogsPage() {
                   .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
               }}
             />
-            自动清理{retention.enabled ? `（每 ${retention.retentionDays} 天）` : ""}
+            {retention.enabled
+              ? t("logs.autoCleanupEvery", { days: retention.retentionDays })
+              : t("logs.autoCleanup")}
           </label>
           <label className="inline-flex items-center gap-2 text-sm text-[var(--ob-muted)]">
             <input
               type="checkbox"
-              aria-label="本地直连日志上报"
+              aria-label={t("logs.localReportLabel")}
               checked={clientReport.enabled}
               disabled={busy}
               onChange={(event) => {
@@ -229,7 +233,7 @@ export function AICallLogsPage() {
                   .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
               }}
             />
-            本地直连上报
+            {t("logs.localReport")}
           </label>
           <button
             type="button"
@@ -237,10 +241,10 @@ export function AICallLogsPage() {
             disabled={busy || selected.size === 0}
             onClick={() => void deleteSelected()}
           >
-            删除选中
+            {t("logs.deleteSelected")}
           </button>
           <button type="button" className="ob-btn" disabled={busy} onClick={() => void load()}>
-            刷新
+            {t("common.refresh")}
           </button>
         </div>
       </div>
@@ -248,18 +252,18 @@ export function AICallLogsPage() {
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="ob-input min-w-[12rem] flex-1"
-          placeholder="搜索 job / model / channel / error…"
+          placeholder={t("logs.search")}
           value={q}
           onChange={(event) => setQ(event.target.value)}
         />
         <select className="ob-input w-auto" value={kind} onChange={(event) => setKind(event.target.value)}>
-          <option value="all">全部类型</option>
+          <option value="all">{t("common.allTypes")}</option>
           <option value="image">image</option>
           <option value="video">video</option>
           <option value="audio">audio</option>
         </select>
         <select className="ob-input w-auto" value={status} onChange={(event) => setStatus(event.target.value)}>
-          <option value="all">全部状态</option>
+          <option value="all">{t("tasks.allStatuses")}</option>
           <option value="succeeded">succeeded</option>
           <option value="failed">failed</option>
           <option value="cancelled">cancelled</option>
@@ -274,11 +278,11 @@ export function AICallLogsPage() {
 
       {loading ? (
         <div className="rounded-xl border border-[var(--ob-line)] p-8 text-sm text-[var(--ob-muted)]">
-          正在加载 AI 调用日志…
+          {t("logs.loading")}
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--ob-line)] p-8 text-sm text-[var(--ob-muted)]">
-          暂无 AI 调用日志。后端代理生成任务完成后会出现在此。
+          {t("logs.empty")}
         </div>
       ) : (
         <div className="overflow-auto rounded-xl border border-[var(--ob-line)]">
@@ -286,15 +290,15 @@ export function AICallLogsPage() {
             <thead className="bg-[var(--ob-canvas)] text-[var(--ob-muted)]">
               <tr>
                 <th className="px-3 py-2">
-                  <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="全选" />
+                  <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label={t("logs.selectAll")} />
                 </th>
-                <th className="px-3 py-2 font-medium">时间</th>
-                <th className="px-3 py-2 font-medium">类型</th>
-                <th className="px-3 py-2 font-medium">状态</th>
-                <th className="px-3 py-2 font-medium">模型</th>
-                <th className="px-3 py-2 font-medium">渠道</th>
-                <th className="px-3 py-2 font-medium">耗时</th>
-                <th className="px-3 py-2 font-medium">详情</th>
+                <th className="px-3 py-2 font-medium">{t("logs.time")}</th>
+                <th className="px-3 py-2 font-medium">{t("logs.type")}</th>
+                <th className="px-3 py-2 font-medium">{t("logs.status")}</th>
+                <th className="px-3 py-2 font-medium">{t("logs.model")}</th>
+                <th className="px-3 py-2 font-medium">{t("logs.channel")}</th>
+                <th className="px-3 py-2 font-medium">{t("logs.duration")}</th>
+                <th className="px-3 py-2 font-medium">{t("logs.details")}</th>
               </tr>
             </thead>
             <tbody>
@@ -305,11 +309,11 @@ export function AICallLogsPage() {
                       type="checkbox"
                       checked={selected.has(item.id)}
                       onChange={() => toggleOne(item.id)}
-                      aria-label={`选择 ${item.id}`}
+                      aria-label={t("logs.select", { id: item.id })}
                     />
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap text-[var(--ob-muted)]">
-                    {new Date(item.createdAt).toLocaleString()}
+                    {new Date(item.createdAt).toLocaleString(locale)}
                   </td>
                   <td className="px-3 py-2">{item.kind}</td>
                   <td className="px-3 py-2">{item.status}</td>
@@ -322,7 +326,7 @@ export function AICallLogsPage() {
                   <td className="px-3 py-2 whitespace-nowrap">{formatDuration(item.durationMs)}</td>
                   <td className="px-3 py-2">
                     <button type="button" className="ob-btn" disabled={busy} onClick={() => void openDetail(item.id)}>
-                      查看
+                      {t("logs.view")}
                     </button>
                   </td>
                 </tr>
@@ -335,10 +339,10 @@ export function AICallLogsPage() {
       {totalPages > 1 ? (
         <div className="flex items-center justify-center gap-2">
           <button type="button" className="ob-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            上一页
+            {t("common.previousPage")}
           </button>
           <span className="text-sm text-[var(--ob-muted)]">
-            {page} / {totalPages} · 共 {total}
+            {t("common.pageTotal", { page, pages: totalPages, total })}
           </span>
           <button
             type="button"
@@ -346,7 +350,7 @@ export function AICallLogsPage() {
             disabled={page >= totalPages}
             onClick={() => setPage((p) => p + 1)}
           >
-            下一页
+            {t("common.nextPage")}
           </button>
         </div>
       ) : null}
@@ -355,30 +359,30 @@ export function AICallLogsPage() {
         <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 p-4" onClick={() => setDetail(null)}>
           <div
             role="dialog"
-            aria-label="AI 调用日志详情"
+            aria-label={t("logs.detailLabel")}
             className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-elev-2)]"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold text-[var(--ob-ink)]">调用详情</h2>
+                <h2 className="text-lg font-semibold text-[var(--ob-ink)]">{t("logs.callDetails")}</h2>
                 <p className="mt-1 text-xs text-[var(--ob-muted)]">{detail.id}</p>
               </div>
               <button type="button" className="ob-btn" onClick={() => setDetail(null)}>
-                关闭
+                {t("common.close")}
               </button>
             </div>
             <div className="mt-3 grid gap-2 text-sm text-[var(--ob-muted)] sm:grid-cols-2">
-              <div>类型：{detail.kind}</div>
-              <div>状态：{detail.status}</div>
-              <div>模型：{detail.model || "-"}</div>
-              <div>协议：{detail.protocol || "-"}</div>
-              <div>渠道：{detail.channelName || detail.channelId || "-"}</div>
-              <div>耗时：{formatDuration(detail.durationMs)}</div>
+              <div>{t("logs.type")}：{detail.kind}</div>
+              <div>{t("logs.status")}：{detail.status}</div>
+              <div>{t("logs.model")}：{detail.model || "-"}</div>
+              <div>{t("logs.protocol")}：{detail.protocol || "-"}</div>
+              <div>{t("logs.channel")}：{detail.channelName || detail.channelId || "-"}</div>
+              <div>{t("logs.duration")}：{formatDuration(detail.durationMs)}</div>
               <div>Job：{detail.jobId || "-"}</div>
-              <div>时间：{new Date(detail.createdAt).toLocaleString()}</div>
+              <div>{t("logs.time")}：{new Date(detail.createdAt).toLocaleString(locale)}</div>
               <div className="break-all sm:col-span-2">
-                实际接口：{requestDetail?.endpoint ? `${requestDetail.method || "POST"} ${requestDetail.endpoint}` : "未记录"}
+                {t("logs.endpoint")}：{requestDetail?.endpoint ? `${requestDetail.method || "POST"} ${requestDetail.endpoint}` : t("logs.notRecorded")}
               </div>
             </div>
             {detail.error ? (
@@ -389,31 +393,31 @@ export function AICallLogsPage() {
             {requestDetail && requestDetail.referenceCount > 0 ? (
               <div className="mt-3 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-canvas)] p-3 text-sm">
                 <div className="font-medium text-[var(--ob-ink)]">
-                  {detail.kind === "video" ? "参考媒体" : "参考图（图生图）"} · {requestDetail.referenceCount}{detail.kind === "video" ? " 个" : " 张"}
+                  {detail.kind === "video" ? t("logs.referenceMedia") : t("logs.referenceImage")} · {requestDetail.referenceCount} {detail.kind === "video" ? t("logs.items") : t("logs.images")}
                 </div>
                 <div className="mt-2 space-y-1 text-xs text-[var(--ob-muted)]">
                   {requestDetail.references.map((reference) => (
                     <div key={reference.index} className="break-all">
-                      #{reference.index} · {reference.sourceKnown ? reference.storageKey : "来源未记录"}
+                      #{reference.index} · {reference.sourceKnown ? reference.storageKey : t("logs.sourceNotRecorded")}
                       {reference.mimeType ? ` · ${reference.mimeType}` : ""}
                       {reference.bytes ? ` · ${reference.bytes.toLocaleString()} bytes` : ""}
                     </div>
                   ))}
                 </div>
                 <p className="mt-2 text-xs text-[var(--ob-muted)]">
-                  仅记录存储键和基本元数据，未保存参考图二进制内容。
+                  {t("logs.referencePrivacy")}
                 </p>
               </div>
             ) : null}
             <div className="mt-4 grid gap-3 lg:grid-cols-2">
               <div>
-                <h3 className="mb-1 text-sm font-medium text-[var(--ob-ink)]">请求</h3>
+                <h3 className="mb-1 text-sm font-medium text-[var(--ob-ink)]">{t("logs.request")}</h3>
                 <pre className="overflow-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-canvas)] p-3 text-xs">
                   {prettyJSON(detail.request)}
                 </pre>
               </div>
               <div>
-                <h3 className="mb-1 text-sm font-medium text-[var(--ob-ink)]">响应</h3>
+                <h3 className="mb-1 text-sm font-medium text-[var(--ob-ink)]">{t("logs.response")}</h3>
                 <pre className="overflow-auto rounded-lg border border-[var(--ob-line)] bg-[var(--ob-canvas)] p-3 text-xs">
                   {prettyJSON(detail.response)}
                 </pre>
