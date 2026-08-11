@@ -157,3 +157,89 @@ func TestTenantStoragePoolAdminRoutesRejectMembersAndStayTenantScoped(t *testing
 		t.Fatal("storage pool state crossed tenant boundary")
 	}
 }
+
+func TestTenantWebDAVStoragePoolIsFeatureGatedEncryptedAndSelectable(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	t.Setenv(webDAVMediaFeatureEnv, "true")
+	var mu sync.Mutex
+	objects := map[string][]byte{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if !ok || user != "dav-user" || password != "dav-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method {
+		case http.MethodHead:
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			objects[r.URL.Path] = body
+			w.Header().Set("ETag", `"dav-v1"`)
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			body, exists := objects[r.URL.Path]
+			if !exists {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("ETag", `"dav-v1"`)
+			_, _ = w.Write(body)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer upstream.Close()
+
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+	config := []byte(`[{"id":"tenant-dav","kind":"webdav","endpoint":"` + upstream.URL + `/dav","prefix":"media","weight":1,"healthy":true,"allowInsecureLoopback":true}]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", config); got.Code != http.StatusOK {
+		t.Fatalf("put WebDAV = %d %s", got.Code, got.Body.String())
+	}
+	secret := []byte(`{"username":"dav-user","password":"dav-secret"}`)
+	if got := request(t, router, http.MethodPut, "/api/admin/storage-pool/tenant-dav/secret", secret); got.Code != http.StatusNoContent {
+		t.Fatalf("secret = %d %s", got.Code, got.Body.String())
+	}
+	stored := backend.state[tenantKey(store.DefaultTenantID, tenantStoragePoolSecretsStateKey)]
+	if bytes.Contains(stored, []byte("dav-secret")) || bytes.Contains(stored, []byte("dav-user")) {
+		t.Fatalf("WebDAV secret leaked: %s", stored)
+	}
+	if err := server.storeTenantBlob(t.Context(), store.DefaultTenantID, "user", "webdav-image", "image/png", []byte("dav-image")); err != nil {
+		t.Fatal(err)
+	}
+	if len(objects) != 1 {
+		t.Fatalf("WebDAV did not receive media: %#v", objects)
+	}
+	loaded, err := server.readTenantBlob(t.Context(), store.DefaultTenantID, "webdav-image", maxUploadBytes)
+	if err != nil || string(loaded.Data) != "dav-image" {
+		t.Fatalf("read=%#v err=%v", loaded, err)
+	}
+	listed := request(t, router, http.MethodGet, "/api/admin/storage-pool", nil)
+	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte(`"kind":"webdav"`)) || bytes.Contains(listed.Body.Bytes(), []byte("dav-user")) {
+		t.Fatalf("list=%d %s", listed.Code, listed.Body.String())
+	}
+}
+
+func TestTenantWebDAVStoragePoolFailsClosedWhenFeatureDisabled(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	t.Setenv(webDAVMediaFeatureEnv, "false")
+	server := NewServerWithStore(t.TempDir(), newMemoryStore())
+	server.SetProcessToken("test-token")
+	router := chi.NewRouter()
+	MountServer(router, server)
+	config := []byte(`[{"id":"tenant-dav","kind":"webdav","endpoint":"http://127.0.0.1:8080/dav","prefix":"media","weight":1,"healthy":true,"allowInsecureLoopback":true}]`)
+	if got := putAdminConfigForTest(t, router, "/api/admin/storage-pool", config); got.Code != http.StatusNotFound {
+		t.Fatalf("disabled WebDAV = %d %s", got.Code, got.Body.String())
+	}
+}
