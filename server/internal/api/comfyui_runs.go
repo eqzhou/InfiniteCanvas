@@ -106,6 +106,17 @@ func resolveApprovedComfyUIExecutor(id string) (approvedComfyUIExecutor, error) 
 	return executor, nil
 }
 
+func (s *Server) comfyUIBillingCredits(ctx context.Context, tenantID, billingModel string) (int, error) {
+	if s == nil || s.store == nil || strings.TrimSpace(billingModel) == "" {
+		return 0, errors.New("ComfyUI billing configuration is unavailable")
+	}
+	credits, err := s.store.GetModelCreditCost(ctx, tenantID, billingModel)
+	if err != nil || credits < 1 || credits > 1_000_000_000 {
+		return 0, errors.New("ComfyUI billing configuration is invalid")
+	}
+	return credits, nil
+}
+
 func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeServerGeneration(w, r) {
 		return
@@ -169,6 +180,11 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		ID: input.ID, ProjectID: input.ProjectID, Kind: kind, Status: "queued", Prompt: strings.TrimSpace(input.Values.Prompt),
 		ProviderID: approved.ID, Model: approved.BillingModel, Parameters: parameters, Result: result, CreatedAt: now, UpdatedAt: now,
 	}
+	estimatedCredits, err := s.comfyUIBillingCredits(r.Context(), tenantID, approved.BillingModel)
+	if err != nil {
+		http.Error(w, "ComfyUI billing configuration is unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if err := s.store.CheckGenerationQuota(r.Context(), tenantID); errors.Is(err, store.ErrQuotaExceeded) {
 		http.Error(w, "generation quota exceeded", http.StatusTooManyRequests)
 		return
@@ -177,7 +193,7 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": kind, "executor": comfyUIExecutorMarker, "manifestId": manifest.ID, "contractHash": manifest.ContractHash})
-	if err := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, 1, meta); errors.Is(err, store.ErrConflict) {
+	if err := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, estimatedCredits, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, job.ID)
 		if getErr == nil && matchingComfyUIRequest(existing, requestHash) {
 			writeJSON(w, publicGenerationJob(existing))
@@ -187,6 +203,18 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if errors.Is(err, store.ErrGone) {
 		http.Error(w, "generation job was deleted", http.StatusGone)
+		return
+	} else if errors.Is(err, store.ErrQuotaExceeded) {
+		http.Error(w, "generation quota exceeded", http.StatusTooManyRequests)
+		return
+	} else if errors.Is(err, store.ErrInsufficientCredits) {
+		http.Error(w, "insufficient credits", http.StatusPaymentRequired)
+		return
+	} else if errors.Is(err, store.ErrBanned) {
+		http.Error(w, "account banned", http.StatusForbidden)
+		return
+	} else if errors.Is(err, store.ErrUnauthorized) {
+		http.Error(w, "login required for billable generation", http.StatusUnauthorized)
 		return
 	} else if err != nil {
 		http.Error(w, "failed to create ComfyUI generation job", http.StatusInternalServerError)
