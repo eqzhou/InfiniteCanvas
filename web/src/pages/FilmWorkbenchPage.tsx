@@ -15,6 +15,8 @@ import { applyFilmStyleTemplate, copyFilmStyleTemplateAsProject } from "@/servic
 import { listMediaCapabilities, mediaOptionsForKind, type MediaCapability, type MediaCapabilityCatalog, type MediaKind } from "@/services/media-capabilities";
 import { estimateCredits, type CreditEstimate } from "@/services/auth-session";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useI18n } from "@/i18n/I18nProvider";
+import type { MessageKey } from "@/i18n/core";
 import {
   applyFilmAICandidate,
   applyFilmAIScriptCandidate,
@@ -86,6 +88,7 @@ function QualityPanel({ document, busy, onValidate, onApply, onRestore }: {
   onApply: (repair: FilmRepairProposal, generation?: { providerId: string; model: string; config: FilmGenerationConfig; idempotencyKey: string; expectedCredits: number }) => void;
   onRestore: (versionId: string, entityType: string, entityId: string) => void;
 }) {
+  const { t } = useI18n();
   const report = document.qualityReports.at(-1);
   const [catalog, setCatalog] = useState<MediaCapabilityCatalog | null>(null);
   const [catalogError, setCatalogError] = useState("");
@@ -121,17 +124,18 @@ function QualityPanel({ document, busy, onValidate, onApply, onRestore }: {
     if (!selected || !quote || quote.totalCredits < 1) return;
     onApply(repair, { providerId: selected.channelId, model: selected.model, config: repairDefaultConfig(repair.regenerationStage, document, repair.targetId, selected), idempotencyKey: `film-repair-${repair.id}-${repair.expectedRevision}`, expectedCredits: quote.totalCredits });
   };
-  return <WorkbenchSection id="quality" title="质量检查 / Quality"><button className="ob-btn ob-btn-primary" disabled={busy} onClick={onValidate}>运行检查</button>{report ? <><p className="mt-3 text-sm">{report.issues.length} 个问题，{report.repairs.length} 个修复建议</p>{report.repairs.slice(0, 10).map((repair) => { const generative = Boolean(repair.regenerationStage && repair.estimatedGenerations); const expanded = activeRepairId === repair.id; return <div key={repair.id} className="mt-2 rounded-lg border border-[var(--ob-line)] p-3 text-sm"><div className="flex items-center gap-2"><span className="flex-1">{repair.summary}<small className="ml-2 text-[var(--ob-muted)]">影响 {repair.affectedTargets?.length ?? 1} 项 · 预计 {repair.estimatedGenerations ?? 0} 次生成{repair.regenerationStage ? ` · ${repair.regenerationStage}` : ""}</small></span><button className="ob-btn" disabled={busy || Boolean(repair.appliedAt)} onClick={() => generative ? setActiveRepairId(expanded ? "" : repair.id) : confirmRepair(repair)}>{repair.appliedAt ? "已应用" : generative ? "配置并批准" : "批准并应用"}</button></div>{expanded ? <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><select aria-label="修复生成模型" className="ob-input" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}><option value="">{catalog ? "没有支持此修复阶段的模型" : "正在加载能力目录"}</option>{options.map((option) => <option key={`${option.channelId}:${option.model}`} value={`${option.channelId}:${option.model}`}>{option.channelName} · {option.model} · {option.modes.join(" / ")}</option>)}</select><button className="ob-btn ob-btn-primary" disabled={busy || !selectedModel || !quote || quote.totalCredits < 1} onClick={() => confirmRepair(repair)}>确认 {quote ? `${quote.totalCredits} 算力` : "费用"}并创建新版本</button><p className="text-xs text-[var(--ob-muted)] sm:col-span-2">将保存当前镜头版本，并按当前模型报价原子创建阶段父任务和单镜头子任务。{quoteError || catalogError}</p></div> : null}</div>; })}</> : <p className="mt-2 text-sm text-[var(--ob-muted)]">检查不自动修改制作数据。</p>}<div className="mt-4 border-t border-[var(--ob-line)] pt-3"><h3 className="text-sm font-medium">可恢复实体版本</h3>{(document.versions ?? []).slice(-10).reverse().map((version) => { const currentRevision = resolveFilmEntityRevision(document, version.entityType, version.entityId); return <div key={version.id} className="mt-2 flex items-center gap-2 text-xs"><span className="mr-auto">{version.entityType}:{version.entityId} · r{version.revision} · {version.reason}</span><button className="ob-btn" disabled={busy || currentRevision === undefined} onClick={() => currentRevision !== undefined && onRestore(version.id, version.entityType, version.entityId)}>恢复</button></div>; })}</div></WorkbenchSection>;
+  return <WorkbenchSection id="quality" title={t("film.quality.title")}><button className="ob-btn ob-btn-primary" disabled={busy} onClick={onValidate}>{t("film.quality.run")}</button>{report ? <><p className="mt-3 text-sm">{t("film.quality.summary", { issues: report.issues.length, repairs: report.repairs.length })}</p>{report.repairs.slice(0, 10).map((repair) => { const generative = Boolean(repair.regenerationStage && repair.estimatedGenerations); const expanded = activeRepairId === repair.id; return <div key={repair.id} className="mt-2 rounded-lg border border-[var(--ob-line)] p-3 text-sm"><div className="flex items-center gap-2"><span className="flex-1">{repair.summary}<small className="ml-2 text-[var(--ob-muted)]">{t("film.quality.impact", { targets: repair.affectedTargets?.length ?? 1, generations: repair.estimatedGenerations ?? 0 })}{repair.regenerationStage ? ` · ${repair.regenerationStage}` : ""}</small></span><button className="ob-btn" disabled={busy || Boolean(repair.appliedAt)} onClick={() => generative ? setActiveRepairId(expanded ? "" : repair.id) : confirmRepair(repair)}>{repair.appliedAt ? t("film.quality.applied") : generative ? t("film.quality.configureApprove") : t("film.quality.approveApply")}</button></div>{expanded ? <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><select aria-label={t("film.quality.repairModel")} className="ob-input" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}><option value="">{catalog ? t("film.quality.noModel") : t("film.quality.loadingCatalog")}</option>{options.map((option) => <option key={`${option.channelId}:${option.model}`} value={`${option.channelId}:${option.model}`}>{option.channelName} · {option.model} · {option.modes.join(" / ")}</option>)}</select><button className="ob-btn ob-btn-primary" disabled={busy || !selectedModel || !quote || quote.totalCredits < 1} onClick={() => confirmRepair(repair)}>{t("film.quality.confirmVersion", { cost: quote ? t("film.quality.credits", { credits: quote.totalCredits }) : t("film.quality.cost") })}</button><p className="text-xs text-[var(--ob-muted)] sm:col-span-2">{t("film.quality.generationHint")}{quoteError || catalogError}</p></div> : null}</div>; })}</> : <p className="mt-2 text-sm text-[var(--ob-muted)]">{t("film.quality.safeHint")}</p>}<div className="mt-4 border-t border-[var(--ob-line)] pt-3"><h3 className="text-sm font-medium">{t("film.quality.restorable")}</h3>{(document.versions ?? []).slice(-10).reverse().map((version) => { const currentRevision = resolveFilmEntityRevision(document, version.entityType, version.entityId); return <div key={version.id} className="mt-2 flex items-center gap-2 text-xs"><span className="mr-auto">{version.entityType}:{version.entityId} · r{version.revision} · {version.reason}</span><button className="ob-btn" disabled={busy || currentRevision === undefined} onClick={() => currentRevision !== undefined && onRestore(version.id, version.entityType, version.entityId)}>{t("film.quality.restore")}</button></div>; })}</div></WorkbenchSection>;
 }
 
-function friendlyError(cause: unknown): string {
-  if (cause instanceof FilmAPIError && cause.status === 409) return `修订冲突：${cause.message}。请刷新后重新应用本地修改。`;
-  if (cause instanceof FilmAPIError && (cause.code === "pdf_no_text" || cause.code === "source_no_text")) return "PDF 未提取到文本，请先 OCR 后再导入。";
-  if (cause instanceof Error && /PDF/i.test(cause.message) && /OCR/i.test(cause.message)) return "PDF 未提取到文本，请先 OCR 后再导入。";
+function friendlyError(cause: unknown, t: (key: MessageKey, params?: Readonly<Record<string, string | number>>) => string): string {
+  if (cause instanceof FilmAPIError && cause.status === 409) return t("film.error.conflict", { message: cause.message });
+  if (cause instanceof FilmAPIError && (cause.code === "pdf_no_text" || cause.code === "source_no_text")) return t("film.error.pdfOcr");
+  if (cause instanceof Error && /PDF/i.test(cause.message) && /OCR/i.test(cause.message)) return t("film.error.pdfOcr");
   return cause instanceof Error ? cause.message : String(cause);
 }
 
 export function FilmWorkbenchPage() {
+  const { t } = useI18n();
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
   const project = useBoardStore((state) => state.projects.find((candidate) => candidate.id === projectId));
@@ -160,7 +164,7 @@ export function FilmWorkbenchPage() {
   const statusRef = useRef<FilmStatus | null>(null);
   const draftRef = useRef<VersionedFilmDraftState>({ manuscript: "", manuscriptDirty: false, manuscriptVersion: 0, timelineDirty: false, timelineVersion: 0 });
   const document = status?.document;
-  const navigation = useMemo(() => [["manuscript", "原稿"], ["ai-decomposition", "AI 拆解"], ["ai-script", "AI 剧本"], ["style-templates", "风格模板"], ["assets", "资产"], ["episodes", "分集制作"], ["tasks", "任务"], ["projection", "投影"], ["timeline", "时间线"], ["quality", "质量"], ["delivery", "交付"], ["agent", "Agent"]] as const, []);
+  const navigation = useMemo(() => [["manuscript", t("film.nav.manuscript")], ["ai-decomposition", t("film.nav.decomposition")], ["ai-script", t("film.nav.script")], ["style-templates", t("film.nav.styles")], ["assets", t("film.nav.assets")], ["episodes", t("film.nav.episodes")], ["tasks", t("film.nav.tasks")], ["projection", t("film.nav.projection")], ["timeline", t("film.nav.timeline")], ["quality", t("film.nav.quality")], ["delivery", t("film.nav.delivery")], ["agent", t("film.nav.agent")]] as const, [t]);
 
   useEffect(() => {
     const selected = textChannels.find((channel) => channel.id === textChannelId) ?? textChannels[0];
@@ -194,19 +198,19 @@ export function FilmWorkbenchPage() {
   const run = async (label: string, operation: () => Promise<FilmStatus>, options: RunOptions = {}): Promise<boolean> => {
     const started = { manuscriptVersion: draftRef.current.manuscriptVersion, timelineVersion: draftRef.current.timelineVersion };
     setBusy(label); setError(null); setNotice(null);
-    try { applyStatus(await operation(), options, started); setNotice(options.notice ?? `${label}成功`); return true; }
-    catch (cause) { setError(friendlyError(cause)); return false; }
+    try { applyStatus(await operation(), options, started); setNotice(options.notice ?? t("film.actionSucceeded", { action: label })); return true; }
+    catch (cause) { setError(friendlyError(cause, t)); return false; }
     finally { setBusy(null); }
   };
 
   const refresh = async () => {
-    if (shouldConfirmFilmLeave(manuscriptDirty, timelineDirty) && !confirm("存在未保存的原稿或时间线编辑。刷新时保留本地草稿，继续吗？")) return;
-    await run("刷新", () => loadFilmStatus(projectId), { notice: "已刷新，未保存草稿保持不变" });
+    if (shouldConfirmFilmLeave(manuscriptDirty, timelineDirty) && !confirm(t("film.confirm.refreshDrafts"))) return;
+    await run(t("film.refresh"), () => loadFilmStatus(projectId), { notice: t("film.refreshedDrafts") });
   };
 
   useEffect(() => {
-    let active = true; setBusy("加载");
-    loadFilmStatus(projectId).catch((cause) => cause instanceof FilmAPIError && cause.status === 404 ? createFilmProduction(projectId) : Promise.reject(cause)).then((next) => { if (active) applyStatus(next, {}); }).catch((cause) => { if (active) setError(friendlyError(cause)); }).finally(() => { if (active) setBusy(null); });
+    let active = true; setBusy(t("film.loading"));
+    loadFilmStatus(projectId).catch((cause) => cause instanceof FilmAPIError && cause.status === 404 ? createFilmProduction(projectId) : Promise.reject(cause)).then((next) => { if (active) applyStatus(next, {}); }).catch((cause) => { if (active) setError(friendlyError(cause, t)); }).finally(() => { if (active) setBusy(null); });
     return () => { active = false; };
   }, [projectId]);
 
@@ -229,7 +233,7 @@ export function FilmWorkbenchPage() {
         }
       } catch (cause) {
         if (!active) return;
-        setError(friendlyError(cause));
+        setError(friendlyError(cause, t));
         const delay = filmImportPollDelay(failedAttempts, cause);
         failedAttempts++;
         if (delay !== null) timer = setTimeout(() => void poll(), delay);
@@ -244,7 +248,7 @@ export function FilmWorkbenchPage() {
   useEffect(() => {
     if (!shouldConfirmFilmLeave(manuscriptDirty, timelineDirty)) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    const navigate = (event: MouseEvent) => { const target = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null; if (target && isFilmNavigationAway(location.href, target.href) && !confirm("存在未保存修改，确定离开吗？")) { event.preventDefault(); event.stopImmediatePropagation(); } };
+    const navigate = (event: MouseEvent) => { const target = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null; if (target && isFilmNavigationAway(location.href, target.href) && !confirm(t("film.confirm.leave"))) { event.preventDefault(); event.stopImmediatePropagation(); } };
     window.addEventListener("beforeunload", warn); globalThis.document.addEventListener("click", navigate, true);
     return () => { window.removeEventListener("beforeunload", warn); globalThis.document.removeEventListener("click", navigate, true); };
   }, [manuscriptDirty, timelineDirty]);
@@ -254,7 +258,7 @@ export function FilmWorkbenchPage() {
   const persistProjection = async (nextStatus: FilmStatus) => {
     const board = useBoardStore.getState();
     const current = board.projects.find((candidate) => candidate.id === projectId);
-    if (!current) throw new Error("影视画布已不存在");
+    if (!current) throw new Error(t("film.canvasMissing"));
     board.replaceProjectFromAgent({
       ...refreshManagedFilmProjection(current, nextStatus.document),
       updatedAt: new Date().toISOString(),
@@ -263,18 +267,18 @@ export function FilmWorkbenchPage() {
   };
 
   const refreshCanvasProjection = async () => {
-    setBusy("刷新画布投影"); setError(null); setNotice(null);
+    setBusy(t("film.refresh")); setError(null); setNotice(null);
     try {
       const next = await loadFilmStatus(projectId);
       applyStatus(next, {});
       await persistProjection(next);
-      setNotice("影视主线已刷新到真实画布；用户节点和布局保持不变");
-    } catch (cause) { setError(friendlyError(cause)); throw cause; }
+      setNotice(t("film.projectionRefreshed"));
+    } catch (cause) { setError(friendlyError(cause, t)); throw cause; }
     finally { setBusy(null); }
   };
 
   const commitCanvasProjection = async (diffs: FilmProjectionDiff[]) => {
-    setBusy("回写画布投影"); setError(null); setNotice(null);
+    setBusy(t("film.nav.projection")); setError(null); setNotice(null);
     try {
       let next = statusRef.current!;
       for (const diff of diffs) {
@@ -286,8 +290,8 @@ export function FilmWorkbenchPage() {
       }
       applyStatus(next, {});
       await persistProjection(next);
-      setNotice(`已回写 ${diffs.length} 项画布修改，并刷新受管节点版本`);
-    } catch (cause) { setError(friendlyError(cause)); throw cause; }
+      setNotice(t("film.projectionCommitted", { count: diffs.length }));
+    } catch (cause) { setError(friendlyError(cause, t)); throw cause; }
     finally { setBusy(null); }
   };
 
@@ -314,7 +318,7 @@ export function FilmWorkbenchPage() {
   };
 
   const copyStyleTemplate = async (template: FilmStyleTemplate) => {
-    setBusy("复制影视模板"); setError(null); setNotice(null);
+    setBusy(t("film.styles.copy")); setError(null); setNotice(null);
     const store = useBoardStore.getState();
     try {
       const copiedProjectId = await copyFilmStyleTemplateAsProject(template.id, {
@@ -324,15 +328,15 @@ export function FilmWorkbenchPage() {
       });
       store.setActiveProject(copiedProjectId);
       navigate(`/film/${copiedProjectId}`);
-    } catch (cause) { setError(friendlyError(cause)); }
+    } catch (cause) { setError(friendlyError(cause, t)); }
     finally { setBusy(null); }
   };
 
   return <div className="h-full overflow-auto bg-[var(--ob-canvas)]" data-testid="film-workbench">
-    <header className="sticky top-0 z-20 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 backdrop-blur-md"><div className="mx-auto flex max-w-7xl items-center gap-3"><Link to="/" className="ob-btn">返回画布</Link><Clapperboard size={20} className="text-[var(--ob-accent)]" /><div className="min-w-0 flex-1"><h1 className="truncate font-semibold">{project.title}</h1><p className="text-xs text-[var(--ob-muted)]">Film Production Mode · 修订 {document?.revision ?? "—"}</p></div><button className="ob-btn" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={14} /> 刷新</button></div><nav aria-label="影片工作台分区" className="mx-auto mt-3 flex max-w-7xl gap-1 overflow-x-auto">{navigation.map(([id, label]) => <a key={id} href={`#${id}`} className="ob-tab shrink-0 text-xs">{label}</a>)}</nav></header>
+    <header className="sticky top-0 z-20 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 backdrop-blur-md"><div className="mx-auto flex max-w-7xl items-center gap-3"><Link to="/" className="ob-btn">{t("film.backCanvas")}</Link><Clapperboard size={20} className="text-[var(--ob-accent)]" /><div className="min-w-0 flex-1"><h1 className="truncate font-semibold">{project.title}</h1><p className="text-xs text-[var(--ob-muted)]">{t("film.modeRevision", { revision: document?.revision ?? "—" })}</p></div><button className="ob-btn" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={14} /> {t("film.refresh")}</button></div><nav aria-label={t("film.sections")} className="mx-auto mt-3 flex max-w-7xl gap-1 overflow-x-auto">{navigation.map(([id, label]) => <a key={id} href={`#${id}`} className="ob-tab shrink-0 text-xs">{label}</a>)}</nav></header>
     <main className="mx-auto grid max-w-7xl gap-4 p-4 pb-16 lg:grid-cols-2">{error ? <div role="alert" className="ob-banner lg:col-span-2" data-tone="danger"><AlertCircle size={16} />{error}</div> : null}{notice ? <div role="status" className="ob-banner lg:col-span-2" data-tone="success"><Check size={16} />{notice}</div> : null}
-      {!status || !document ? <div role="status" className="ob-card p-8 lg:col-span-2">正在加载影片制作数据…</div> : <>
-        <ManuscriptPanel document={document} capabilities={status.capabilities} manuscript={manuscript} busy={!!busy} onDraft={setDraft} onPreflight={(text, format) => preflightFilmManuscript(projectId, { text, format })} onImportText={(text, format, originalName) => run("导入原稿", () => importFilmManuscript(projectId, { revision: document.source.revision, text, format, originalName }), { clearManuscript: true, notice: "原稿已导入，确定性拆解产物等待审核" })} onImportFile={(file, format) => run("解析原稿", () => importFilmManuscriptFile(projectId, { revision: document.source.revision, file, format }), { clearManuscript: true, notice: "文件解析完成，拆解产物等待审核" })} />
+      {!status || !document ? <div role="status" className="ob-card p-8 lg:col-span-2">{t("film.loading")}</div> : <>
+        <ManuscriptPanel document={document} capabilities={status.capabilities} manuscript={manuscript} busy={!!busy} onDraft={setDraft} onPreflight={(text, format) => preflightFilmManuscript(projectId, { text, format })} onImportText={(text, format, originalName) => run(t("film.action.import"), () => importFilmManuscript(projectId, { revision: document.source.revision, text, format, originalName }), { clearManuscript: true, notice: t("film.notice.imported") })} onImportFile={(file, format) => run(t("film.action.parse"), () => importFilmManuscriptFile(projectId, { revision: document.source.revision, file, format }), { clearManuscript: true, notice: t("film.notice.parsed") })} />
         <AIDecompositionPanel document={document} busy={!!busy} channels={textChannels} channelId={textChannelId} model={textModel} onChannel={(channelId) => {
           setTextChannelId(channelId);
           setTextModel(textChannels.find((channel) => channel.id === channelId)?.models[0] ?? "");
@@ -340,17 +344,17 @@ export function FilmWorkbenchPage() {
           const stage = document.stages.find((item) => item.id === "decompose");
           if (!stage) return;
           const idempotencyKey = `film-decompose-${document.source.revision}-${Date.now().toString(36)}`;
-          void run("AI 故事拆解", () => requestFilmAIDecomposition(projectId, {
+          void run(t("film.action.decompose"), () => requestFilmAIDecomposition(projectId, {
             revision: stage.revision,
             providerId: textChannelId,
             model: textModel,
             idempotencyKey,
-          }), { notice: "AI 拆解任务已入队；完成后会生成待审候选" });
+          }), { notice: t("film.notice.decomposeQueued") });
         }} onApply={(candidateId) => {
           const candidate = document.aiCandidates?.find((item) => item.id === candidateId);
           if (!candidate) return;
-          void run("采用 AI 拆解候选", () => applyFilmAICandidate(projectId, candidateId, candidate.revision), { notice: "候选已采用并保存为可追溯结构版本；现在可以审批拆解阶段" });
-        }} onRestoreStructure={(versionId) => void run("恢复故事结构", () => restoreFilmStructureVersion(projectId, versionId, document.revision), { notice: "历史故事结构已恢复；恢复前的当前结构也已归档，可再次恢复" })} />
+          void run(t("film.action.applyDecomposition"), () => applyFilmAICandidate(projectId, candidateId, candidate.revision), { notice: t("film.notice.decompositionApplied") });
+        }} onRestoreStructure={(versionId) => void run(t("film.action.restoreStructure"), () => restoreFilmStructureVersion(projectId, versionId, document.revision), { notice: t("film.notice.structureRestored") })} />
         <AIScriptPanel document={document} busy={!!busy} channels={textChannels} channelId={textChannelId} model={textModel} episodeId={scriptEpisodeId} scriptMode={scriptMode} onChannel={(channelId) => {
           setTextChannelId(channelId);
           setTextModel(textChannels.find((channel) => channel.id === channelId)?.models[0] ?? "");
@@ -358,28 +362,28 @@ export function FilmWorkbenchPage() {
           const stage = document.stages.find((item) => item.id === "script");
           if (!stage || !scriptEpisodeId) return;
           const idempotencyKey = `film-script-${document.source.revision}-${Date.now().toString(36)}`;
-          void run("AI 分集剧本", () => requestFilmAIScript(projectId, {
+          void run(t("film.action.script"), () => requestFilmAIScript(projectId, {
             revision: stage.revision,
             episodeId: scriptEpisodeId,
             scriptMode,
             providerId: textChannelId,
             model: textModel,
             idempotencyKey,
-          }), { notice: "分集剧本任务已入队；完成后会生成待审候选" });
+          }), { notice: t("film.notice.scriptQueued") });
         }} onApply={(candidateId) => {
           const candidate = document.scriptCandidates?.find((item) => item.id === candidateId);
           if (!candidate) return;
-          void run("采用 AI 分集剧本", () => applyFilmAIScriptCandidate(projectId, candidateId, candidate.revision), { notice: "本集剧本候选已采用并保存旧结构版本；现在可以审批剧本阶段" });
+          void run(t("film.action.applyScript"), () => applyFilmAIScriptCandidate(projectId, candidateId, candidate.revision), { notice: t("film.notice.scriptApplied") });
         }} />
-        <FilmStyleTemplateLibrary busy={!!busy} onApply={(template) => void run("应用风格模板", () => applyFilmStyleTemplate(projectId, template.id), { notice: `已将“${template.title}”添加为项目风格资产` })} onCopy={(template) => void copyStyleTemplate(template)} />
-        <AssetsPanel status={status} busy={!!busy} onCreate={(input) => void run("创建资产", () => createFilmAsset(projectId, input))} onSave={(asset: FilmAsset, patch) => void run("保存资产", () => updateFilmAsset(projectId, asset.id, { revision: asset.revision, kind: patch.kind as FilmAssetKind | undefined, title: patch.title, description: patch.description, parentAssetId: patch.parentAssetId, voice: patch.voice, stylePrompt: patch.stylePrompt, aspectRatio: patch.aspectRatio, ageStage: patch.ageStage, costume: patch.costume, storyPeriod: patch.storyPeriod, isDefault: patch.isDefault, episodeIds: patch.episodeIds, sceneIds: patch.sceneIds, shotIds: patch.shotIds }))} />
-        <EpisodesPanel status={status} busy={!!busy} onSaveEpisode={(id, revision, title) => void run("保存集", () => updateFilmEpisode(projectId, id, { revision, title }))} onSaveShot={(shot: FilmShot, patch) => void run("保存镜头", () => updateFilmShot(projectId, shot.id, { revision: shot.revision, description: patch.description, durationSeconds: patch.durationSeconds, styleAssetId: patch.styleAssetId, identityVersionIds: patch.identityVersionIds }))} onCreateDialogue={(shotId, kind, text) => void run("创建对白", () => createFilmDialogue(projectId, { shotId, kind, text }))} onSaveDialogue={(dialogue, patch) => void run("保存对白", () => updateFilmDialogue(projectId, dialogue.id, { revision: dialogue.revision, kind: patch.kind, emotion: patch.emotion, text: patch.text, characterAssetId: patch.characterAssetId, voiceAssetId: patch.voiceAssetId }))} onDeleteDialogue={(dialogue) => void run("删除对白", () => deleteFilmDialogue(projectId, dialogue.id, dialogue.revision))} />
-        <ProductionPanel status={status} busy={!!busy} onLegacyStage={(stage, action) => void run(action === "run" ? "提交审核" : action === "approve" ? "批准阶段" : "退回阶段", () => changeFilmStage(projectId, stage.id, action, stage.revision), { notice: action === "run" ? "产物已提交审核；这不代表生成完成" : undefined })} onRun={(stage: FilmStageKind, request: FilmStageRunRequest) => run("开始生成", () => requestFilmStageRun(projectId, stage, request), { notice: "生成任务已入队，请以 GenerationJob 状态为准" })} onSynced={(next) => applyStatus(next, {})} onWaive={(stage, reason) => void run("创建阶段豁免", () => createFilmStageWaiver(projectId, stage.id, { revision: document.revision, stageRevision: stage.revision, reason, riskAccepted: true }), { notice: "阶段豁免已审计记录；质量检查和交付清单会持续披露" })} onRevokeWaiver={(waiverId, waiverRevision) => void run("撤销阶段豁免", () => revokeFilmStageWaiver(projectId, waiverId, { revision: document.revision, waiverRevision }), { notice: "阶段豁免已撤销，依赖闸门立即恢复" })} />
-        <ProjectionPanel project={project} status={status} busy={!!busy} onStatus={(label, operation) => void run(label, operation)} onRefreshCanvas={refreshCanvasProjection} onCommitCanvas={commitCanvasProjection} onAdopt={async (input) => { const ok = await run("采用画布候选", () => adoptFilmCanvasMedia(projectId, input), { notice: "候选媒体已采用并记录画布、任务、模型和媒体版本来源" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onAdoptDirector={async (input) => { const ok = await run("采用 Director 拍摄版本", () => adoptFilmDirectorCapture(projectId, input), { notice: "Director 构图已验证并冻结为正式镜头媒体版本" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onBindDirectorScene={async (input) => { const ok = await run("绑定 Director 场景版本", () => bindFilmDirectorScene(projectId, input), { notice: "Director 场景、机位和角色站位快照已冻结" }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onOpenDirector={openSceneDirector} />
-        <TimelinePanel timeline={document.timeline} mediaSources={[...document.shots.filter((shot) => shot.videoStorageKey || shot.audioStorageKey).map((shot) => ({ value: `shot:${shot.id}`, label: `${shot.title}（镜头媒体）` })), ...document.assets.filter((asset) => asset.mediaStorageKey).map((asset) => ({ value: asset.mediaStorageKey!, label: `${asset.title}（${asset.kind}）` }))]} dirty={timelineDirty} busy={!!busy} onChange={updateTimeline} onSave={() => void run("保存时间线", () => saveFilmTimeline(projectId, document.timeline), { clearTimeline: true, notice: "时间线已保存" })} />
-        <QualityPanel document={document} busy={!!busy} onValidate={() => void run("质量检查", () => validateFilm(projectId))} onApply={(repair, generation) => void run("批准并应用修复", () => applyFilmRepair(projectId, repair.id, repair.expectedRevision, generation))} onRestore={(versionId, entityType, entityId) => { const currentRevision = resolveFilmEntityRevision(document, entityType, entityId); if (currentRevision !== undefined) void run("恢复历史版本", () => restoreFilmEntityVersion(projectId, versionId, currentRevision)); }} />
-        <DeliveryPanel status={status} busy={!!busy} onExport={(kind) => void run("请求导出", () => requestFilmExport(projectId, kind, document.revision), { notice: "导出请求已提交，请刷新查看异步状态" })} onCancel={(jobId) => void run("取消导出", () => cancelFilmExport(projectId, jobId), { notice: "导出取消请求已提交" })} onRefresh={() => void refresh()} />
-        <AgentPanel status={status} onValidate={() => void run("Agent 质量检查", () => validateFilm(projectId))} />
+        <FilmStyleTemplateLibrary busy={!!busy} onApply={(template) => void run(t("film.action.applyStyle"), () => applyFilmStyleTemplate(projectId, template.id), { notice: t("film.notice.styleApplied", { title: template.title }) })} onCopy={(template) => void copyStyleTemplate(template)} />
+        <AssetsPanel status={status} busy={!!busy} onCreate={(input) => void run(t("film.action.createAsset"), () => createFilmAsset(projectId, input))} onSave={(asset: FilmAsset, patch) => void run(t("film.action.saveAsset"), () => updateFilmAsset(projectId, asset.id, { revision: asset.revision, kind: patch.kind as FilmAssetKind | undefined, title: patch.title, description: patch.description, parentAssetId: patch.parentAssetId, voice: patch.voice, stylePrompt: patch.stylePrompt, aspectRatio: patch.aspectRatio, ageStage: patch.ageStage, costume: patch.costume, storyPeriod: patch.storyPeriod, isDefault: patch.isDefault, episodeIds: patch.episodeIds, sceneIds: patch.sceneIds, shotIds: patch.shotIds }))} />
+        <EpisodesPanel status={status} busy={!!busy} onSaveEpisode={(id, revision, title) => void run(t("film.action.saveEpisode"), () => updateFilmEpisode(projectId, id, { revision, title }))} onSaveShot={(shot: FilmShot, patch) => void run(t("film.action.saveShot"), () => updateFilmShot(projectId, shot.id, { revision: shot.revision, description: patch.description, durationSeconds: patch.durationSeconds, styleAssetId: patch.styleAssetId, identityVersionIds: patch.identityVersionIds }))} onCreateDialogue={(shotId, kind, text) => void run(t("film.action.createDialogue"), () => createFilmDialogue(projectId, { shotId, kind, text }))} onSaveDialogue={(dialogue, patch) => void run(t("film.action.saveDialogue"), () => updateFilmDialogue(projectId, dialogue.id, { revision: dialogue.revision, kind: patch.kind, emotion: patch.emotion, text: patch.text, characterAssetId: patch.characterAssetId, voiceAssetId: patch.voiceAssetId }))} onDeleteDialogue={(dialogue) => void run(t("film.action.deleteDialogue"), () => deleteFilmDialogue(projectId, dialogue.id, dialogue.revision))} />
+        <ProductionPanel status={status} busy={!!busy} onLegacyStage={(stage, action) => void run(action === "run" ? t("film.action.submitReview") : action === "approve" ? t("film.action.approveStage") : t("film.action.rejectStage"), () => changeFilmStage(projectId, stage.id, action, stage.revision), { notice: action === "run" ? t("film.notice.submittedReview") : undefined })} onRun={(stage: FilmStageKind, request: FilmStageRunRequest) => run(t("film.action.startGeneration"), () => requestFilmStageRun(projectId, stage, request), { notice: t("film.notice.generationQueued") })} onSynced={(next) => applyStatus(next, {})} onWaive={(stage, reason) => void run(t("film.action.createWaiver"), () => createFilmStageWaiver(projectId, stage.id, { revision: document.revision, stageRevision: stage.revision, reason, riskAccepted: true }), { notice: t("film.notice.waiverCreated") })} onRevokeWaiver={(waiverId, waiverRevision) => void run(t("film.action.revokeWaiver"), () => revokeFilmStageWaiver(projectId, waiverId, { revision: document.revision, waiverRevision }), { notice: t("film.notice.waiverRevoked") })} />
+        <ProjectionPanel project={project} status={status} busy={!!busy} onStatus={(label, operation) => void run(label, operation)} onRefreshCanvas={refreshCanvasProjection} onCommitCanvas={commitCanvasProjection} onAdopt={async (input) => { const ok = await run(t("film.action.adoptCanvas"), () => adoptFilmCanvasMedia(projectId, input), { notice: t("film.notice.canvasAdopted") }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onAdoptDirector={async (input) => { const ok = await run(t("film.action.adoptDirector"), () => adoptFilmDirectorCapture(projectId, input), { notice: t("film.notice.directorAdopted") }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onBindDirectorScene={async (input) => { const ok = await run(t("film.action.bindDirector"), () => bindFilmDirectorScene(projectId, input), { notice: t("film.notice.directorBound") }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onOpenDirector={openSceneDirector} />
+        <TimelinePanel timeline={document.timeline} mediaSources={[...document.shots.filter((shot) => shot.videoStorageKey || shot.audioStorageKey).map((shot) => ({ value: `shot:${shot.id}`, label: `${shot.title} (${t("film.shotMedia")})` })), ...document.assets.filter((asset) => asset.mediaStorageKey).map((asset) => ({ value: asset.mediaStorageKey!, label: `${asset.title} (${asset.kind})` }))]} dirty={timelineDirty} busy={!!busy} onChange={updateTimeline} onSave={() => void run(t("film.action.saveTimeline"), () => saveFilmTimeline(projectId, document.timeline), { clearTimeline: true, notice: t("film.notice.timelineSaved") })} />
+        <QualityPanel document={document} busy={!!busy} onValidate={() => void run(t("film.action.validate"), () => validateFilm(projectId))} onApply={(repair, generation) => void run(t("film.action.applyRepair"), () => applyFilmRepair(projectId, repair.id, repair.expectedRevision, generation))} onRestore={(versionId, entityType, entityId) => { const currentRevision = resolveFilmEntityRevision(document, entityType, entityId); if (currentRevision !== undefined) void run(t("film.action.restoreVersion"), () => restoreFilmEntityVersion(projectId, versionId, currentRevision)); }} />
+        <DeliveryPanel status={status} busy={!!busy} onExport={(kind) => void run(t("film.action.export"), () => requestFilmExport(projectId, kind, document.revision), { notice: t("film.notice.exportRequested") })} onCancel={(jobId) => void run(t("film.action.cancelExport"), () => cancelFilmExport(projectId, jobId), { notice: t("film.notice.exportCanceled") })} onRefresh={() => void refresh()} />
+        <AgentPanel status={status} onValidate={() => void run(t("film.action.agentValidate"), () => validateFilm(projectId))} />
       </>}
     </main>
   </div>;
