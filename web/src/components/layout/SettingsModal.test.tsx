@@ -42,6 +42,7 @@ describe("settings section navigation", () => {
     const adminSections = settingsSectionsFor(true);
 
     expect(memberSections.map((section) => section.id)).toEqual([
+      "interface",
       "channel",
       "usage",
       "model",
@@ -53,6 +54,7 @@ describe("settings section navigation", () => {
       "webdav",
     ]);
     expect(adminSections.map((section) => section.id)).toEqual([
+      "interface",
       "channel",
       "usage",
       "model",

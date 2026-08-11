@@ -4,6 +4,12 @@ import { COMMUNITY_PROMPT_SOURCE_PRESETS } from "@/services/prompt-source-preset
 import { createDefaultConfig } from "@/lib/defaults";
 
 describe("application configuration", () => {
+  test("persists only supported interface locales", () => {
+    const base = createDefaultConfig();
+    expect(normalizeAppConfig({ ...base, locale: "en-US" }).locale).toBe("en-US");
+    expect(normalizeAppConfig({ ...base, locale: "fr-FR" } as never).locale).toBeUndefined();
+  });
+
   test("normalizes missing and oversized system prompts without mutating input", () => {
     const missing = { ...createDefaultConfig(), systemPrompt: undefined };
     const oversized = { ...createDefaultConfig(), systemPrompt: "x".repeat(SYSTEM_PROMPT_MAX_LENGTH + 5) };
