@@ -46,6 +46,16 @@ type filmAgentRepairArguments struct {
 	ExpectedCredits   *int                  `json:"expectedCredits,omitempty"`
 	ConfirmationToken string                `json:"confirmationToken"`
 }
+
+type filmAgentWaiverArguments struct {
+	ProjectID         string `json:"projectId"`
+	Stage             string `json:"stage"`
+	Revision          int    `json:"revision"`
+	StageRevision     int    `json:"stageRevision"`
+	Reason            string `json:"reason"`
+	RiskAccepted      bool   `json:"riskAccepted"`
+	ConfirmationToken string `json:"confirmationToken"`
+}
 type filmAgentExportArguments struct {
 	ProjectID         string `json:"projectId"`
 	Kind              string `json:"kind"`
@@ -213,6 +223,8 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 			return document.Assets, nil
 		case "stages":
 			return document.Stages, nil
+		case "stage_waivers":
+			return document.StageWaivers, nil
 		case "tasks":
 			return document.Tasks, nil
 		case "deliverables":
@@ -252,6 +264,30 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 			return nil, err
 		}
 		next, err := updateFilmStage(document, args.Stage, "approve", args.Revision, time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return nil, badToolRequest(err.Error())
+		}
+		return saveFilmForAgent(ctx, backend, tenantID, record, next)
+	}
+	if tool == "film.waive_stage" {
+		if !incrementFeatureEnabled(filmStageWaiverFeatureEnv) {
+			return nil, &toolError{status: http.StatusNotFound, message: "Film stage waivers are disabled"}
+		}
+		var args filmAgentWaiverArguments
+		if err := decodeToolArguments(raw, &args); err != nil {
+			return nil, err
+		}
+		actor, ok := authUserFrom(ctx)
+		if !ok || !filmWaiverActorAllowed(actor) {
+			return nil, &toolError{status: http.StatusForbidden, message: "Film stage waiver requires an owner or admin"}
+		}
+		backend, record, document, err := s.loadFilmForAgent(ctx, tenantID, args.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		next, err := createFilmStageWaiver(document, args.Stage, filmStageWaiverRequest{
+			Revision: args.Revision, StageRevision: args.StageRevision, Reason: args.Reason, RiskAccepted: args.RiskAccepted,
+		}, actor, time.Now().UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return nil, badToolRequest(err.Error())
 		}

@@ -165,6 +165,22 @@ export type FilmStage = {
   error?: string;
 };
 
+export type FilmStageWaiver = {
+  id: string;
+  revision: number;
+  stageId: FilmStageKind;
+  stageRevision: number;
+  reason: string;
+  actorId: string;
+  actorRole: "owner" | "admin";
+  createdAt: string;
+  projectRevision: number;
+  riskAccepted: true;
+  affectedDownstream: FilmStageKind[];
+  revokedAt?: string;
+  revokedBy?: string;
+};
+
 export type FilmTask = {
   id: string;
   revision: number;
@@ -444,6 +460,7 @@ export type FilmDocument = {
   dialogues?: FilmDialogue[];
   assets: FilmAsset[];
   stages: FilmStage[];
+  stageWaivers?: FilmStageWaiver[];
   tasks: FilmTask[];
   aiCandidates?: FilmAICandidate[];
   scriptCandidates?: FilmAIScriptCandidate[];

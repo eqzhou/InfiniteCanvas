@@ -272,6 +272,20 @@ var boardTools = []toolDefinition{
 		Annotations: map[string]any{"destructiveHint": true},
 	},
 	{
+		Name: "film.waive_stage", Title: "Create audited film stage waiver",
+		Description: "Record an explicit, revision-bound stage waiver after owner/admin confirmation. Protected stages cannot be waived and the waiver remains disclosed in quality reports and delivery manifests.",
+		InputSchema: objectSchema(map[string]any{
+			"projectId":         projectIDProperty(),
+			"stage":             map[string]any{"type": "string", "enum": []string{"script", "storyboard", "first_frame", "audio", "video"}},
+			"revision":          map[string]any{"type": "integer", "minimum": 1},
+			"stageRevision":     map[string]any{"type": "integer", "minimum": 1},
+			"reason":            map[string]any{"type": "string", "minLength": 1, "maxLength": 2000},
+			"riskAccepted":      map[string]any{"type": "boolean", "const": true},
+			"confirmationToken": map[string]any{"type": "string", "minLength": 64, "maxLength": 64},
+		}, "projectId", "stage", "revision", "stageRevision", "reason", "riskAccepted", "confirmationToken"),
+		Annotations: map[string]any{"destructiveHint": true},
+	},
+	{
 		Name: "film.apply_repair", Title: "Apply approved film repair",
 		Description: "Apply a version-checked repair only when approved=true after host/user confirmation. Generative proposals also require the selected provider/model/config, idempotency key, and exact quoted credits.",
 		InputSchema: objectSchema(map[string]any{"projectId": projectIDProperty(), "repairId": projectIDProperty(), "revision": map[string]any{"type": "integer", "minimum": 1}, "approved": map[string]any{"type": "boolean", "const": true}, "providerId": projectIDProperty(), "model": map[string]any{"type": "string", "maxLength": 500}, "config": map[string]any{"type": "object"}, "idempotencyKey": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "expectedCredits": map[string]any{"type": "integer", "minimum": 1, "maximum": 1000000000}, "confirmationToken": map[string]any{"type": "string", "minLength": 64, "maxLength": 64}}, "projectId", "repairId", "revision", "approved", "confirmationToken"),

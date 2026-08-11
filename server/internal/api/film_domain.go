@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 var (
@@ -334,6 +336,13 @@ func validateFilmDocument(document filmDocument) (filmQualityReport, error) {
 		issues = append(issues, issue)
 		return nil
 	}
+	for _, stage := range document.Stages {
+		if waiver, active := activeFilmStageWaiver(document, stage); active {
+			if err := appendIssue(newFilmIssue("stage_waived", "stage", stage.ID, "Stage dependency is satisfied by an audited waiver: "+waiver.Reason, "warning")); err != nil {
+				return filmQualityReport{}, err
+			}
+		}
+	}
 	shotsByScene := map[string]int{}
 	for _, shot := range document.Shots {
 		shotsByScene[shot.SceneID]++
@@ -653,6 +662,120 @@ var filmStageDependencies = map[string][]string{
 	"delivery":    {"compose"},
 }
 
+var nonWaivableFilmStages = map[string]struct{}{
+	"decompose": {},
+	"compose":   {},
+	"delivery":  {},
+}
+
+type filmStageWaiverRequest struct {
+	Revision      int    `json:"revision"`
+	StageRevision int    `json:"stageRevision"`
+	Reason        string `json:"reason"`
+	RiskAccepted  bool   `json:"riskAccepted"`
+}
+
+type filmStageWaiverRevokeRequest struct {
+	Revision       int `json:"revision"`
+	WaiverRevision int `json:"waiverRevision"`
+}
+
+func filmWaiverActorAllowed(actor store.AuthUser) bool {
+	role := strings.ToLower(strings.TrimSpace(actor.Role))
+	return actor.ID != "" && strings.EqualFold(actor.Status, "active") && (role == "owner" || role == "admin")
+}
+
+func filmStageDownstream(stageID string) []string {
+	result := make([]string, 0, len(filmStageDependencies))
+	for candidate := range filmStageDependencies {
+		if candidate != stageID && filmStageAffectedBy(candidate, stageID) {
+			result = append(result, candidate)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := slices.Index(filmStageOrder, result[i]), slices.Index(filmStageOrder, result[j])
+		return left < right
+	})
+	return result
+}
+
+func activeFilmStageWaiver(document filmDocument, stage filmStage) (filmStageWaiver, bool) {
+	for index := len(document.StageWaivers) - 1; index >= 0; index-- {
+		waiver := document.StageWaivers[index]
+		if waiver.StageID == stage.ID && waiver.StageRevision == stage.Revision && waiver.RevokedAt == "" {
+			return waiver, true
+		}
+	}
+	return filmStageWaiver{}, false
+}
+
+func createFilmStageWaiver(document filmDocument, stageID string, input filmStageWaiverRequest, actor store.AuthUser, now string) (filmDocument, error) {
+	if !filmWaiverActorAllowed(actor) {
+		return filmDocument{}, errors.New("film stage waiver requires an owner or admin")
+	}
+	if document.Revision != input.Revision {
+		return filmDocument{}, errors.New("project revision conflict")
+	}
+	index, stage, err := findFilmStage(document, stageID)
+	if err != nil {
+		return filmDocument{}, err
+	}
+	if _, forbidden := nonWaivableFilmStages[stageID]; forbidden {
+		return filmDocument{}, fmt.Errorf("stage %s cannot be waived", stageID)
+	}
+	if stage.Revision != input.StageRevision {
+		return filmDocument{}, errors.New("stage revision conflict")
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if !input.RiskAccepted || !validFilmText(reason, 2_000, true) {
+		return filmDocument{}, errors.New("a bounded reason and explicit risk acceptance are required")
+	}
+	if _, exists := activeFilmStageWaiver(document, stage); exists {
+		return filmDocument{}, errors.New("stage revision already has an active waiver")
+	}
+	next := cloneFilmDocument(document)
+	waiver := filmStageWaiver{
+		ID: stableFilmID("waiver", document.ProjectID, stageID, stage.Revision, document.Revision, now), Revision: 1,
+		StageID: stageID, StageRevision: stage.Revision, Reason: reason, ActorID: actor.ID,
+		ActorRole: strings.ToLower(strings.TrimSpace(actor.Role)), CreatedAt: now, ProjectRevision: document.Revision,
+		RiskAccepted: true, AffectedDownstream: filmStageDownstream(stageID),
+	}
+	next.StageWaivers = append(next.StageWaivers, waiver)
+	next.Revision++
+	next.UpdatedAt = now
+	next.Stages[index] = stage
+	return next, nil
+}
+
+func revokeFilmStageWaiver(document filmDocument, waiverID string, input filmStageWaiverRevokeRequest, actor store.AuthUser, now string) (filmDocument, error) {
+	if !filmWaiverActorAllowed(actor) {
+		return filmDocument{}, errors.New("film stage waiver requires an owner or admin")
+	}
+	if document.Revision != input.Revision {
+		return filmDocument{}, errors.New("project revision conflict")
+	}
+	next := cloneFilmDocument(document)
+	for index, waiver := range next.StageWaivers {
+		if waiver.ID != waiverID {
+			continue
+		}
+		if waiver.Revision != input.WaiverRevision {
+			return filmDocument{}, errors.New("waiver revision conflict")
+		}
+		if waiver.RevokedAt != "" {
+			return filmDocument{}, errors.New("film stage waiver is already revoked")
+		}
+		waiver.Revision++
+		waiver.RevokedAt = now
+		waiver.RevokedBy = actor.ID
+		next.StageWaivers[index] = waiver
+		next.Revision++
+		next.UpdatedAt = now
+		return next, nil
+	}
+	return filmDocument{}, errors.New("film stage waiver is missing")
+}
+
 func filmStageAffectedBy(stageID, changedStageID string) bool {
 	if stageID == changedStageID {
 		return true
@@ -700,7 +823,7 @@ func validateFilmAggregateLimits(document filmDocument) error {
 	if entityCount > maxFilmEntities {
 		return errors.New("film aggregate entity limit reached")
 	}
-	if len(document.Tasks) > 1_000 || len(document.AICandidates) > 100 || len(document.ScriptCandidates) > 100 || len(document.StructureVersions) > 100 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 {
+	if len(document.Tasks) > 1_000 || len(document.AICandidates) > 100 || len(document.ScriptCandidates) > 100 || len(document.StructureVersions) > 100 || len(document.QualityReports) > 20 || len(document.Deliverables) > 100 || len(document.Adoptions) > 1_000 || len(document.Versions) > 1_000 || len(document.StageWaivers) > 1_000 {
 		return errors.New("film aggregate retention limit reached")
 	}
 	relationCount := len(document.Scenes) + len(document.Shots) + len(document.Dialogues)
@@ -777,7 +900,10 @@ func validateFilmStageDependencies(document filmDocument, stageID string) error 
 			return err
 		}
 		if dependency.Status != filmStatusApproved {
-			return fmt.Errorf("stage %s requires approved stage %s", stageID, dependencyID)
+			if _, waived := activeFilmStageWaiver(document, dependency); waived {
+				continue
+			}
+			return fmt.Errorf("stage %s requires approved or actively waived stage %s", stageID, dependencyID)
 		}
 	}
 	return nil

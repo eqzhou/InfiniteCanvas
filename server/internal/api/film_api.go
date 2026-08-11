@@ -108,6 +108,8 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/structure-versions/{versionId}/restore", server.restoreFilmStructureVersionHandler)
 		r.Post("/stages/{stageId}/approve", server.approveFilmStage)
 		r.Post("/stages/{stageId}/reject", server.rejectFilmStage)
+		r.Post("/stages/{stageId}/waivers", server.createFilmStageWaiver)
+		r.Delete("/stage-waivers/{waiverId}", server.revokeFilmStageWaiver)
 		r.Post("/validate", server.validateFilmProduction)
 		r.Post("/repairs/{repairId}/apply", server.applyFilmRepairProposal)
 		r.Post("/versions/{versionId}/restore", server.restoreFilmEntityVersion)
@@ -184,7 +186,7 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 		"importMaxBytes":    filmImportByteLimit(),
 		"mp4Export":         renderAvailable,
 		"mp4Diagnostic":     renderDiagnostic,
-		"agentOperations":   []string{"status", "list", "validate", "run_stage", "next_steps", "approve_stage", "apply_repair", "export"},
+		"agentOperations":   []string{"status", "list", "validate", "run_stage", "next_steps", "approve_stage", "waive_stage", "apply_repair", "export"},
 	}
 }
 
@@ -507,6 +509,48 @@ func (s *Server) approveFilmStage(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) rejectFilmStage(w http.ResponseWriter, r *http.Request) {
 	s.changeFilmStage(w, r, "reject")
+}
+
+func (s *Server) createFilmStageWaiver(w http.ResponseWriter, r *http.Request) {
+	if !incrementFeatureEnabled(filmStageWaiverFeatureEnv) {
+		writeFilmError(w, http.StatusNotFound, "feature_disabled", "Film stage waivers are disabled")
+		return
+	}
+	actor, ok := authUserFrom(r.Context())
+	if !ok || !filmWaiverActorAllowed(actor) {
+		writeFilmError(w, http.StatusForbidden, "waiver_permission_denied", "Film stage waiver requires an owner or admin")
+		return
+	}
+	var input filmStageWaiverRequest
+	if err := decodeFilmRequest(w, r, 4096, &input); err != nil {
+		writeFilmError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	record, document, saved := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
+		return createFilmStageWaiver(document, chi.URLParam(r, "stageId"), input, actor, time.Now().UTC().Format(time.RFC3339Nano))
+	})
+	if saved {
+		s.writeFilmDocument(w, r, http.StatusCreated, record, document)
+	}
+}
+
+func (s *Server) revokeFilmStageWaiver(w http.ResponseWriter, r *http.Request) {
+	actor, ok := authUserFrom(r.Context())
+	if !ok || !filmWaiverActorAllowed(actor) {
+		writeFilmError(w, http.StatusForbidden, "waiver_permission_denied", "Film stage waiver requires an owner or admin")
+		return
+	}
+	var input filmStageWaiverRevokeRequest
+	if err := decodeFilmRequest(w, r, 4096, &input); err != nil {
+		writeFilmError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	record, document, saved := s.mutateFilmProduction(w, r, func(document filmDocument) (filmDocument, error) {
+		return revokeFilmStageWaiver(document, chi.URLParam(r, "waiverId"), input, actor, time.Now().UTC().Format(time.RFC3339Nano))
+	})
+	if saved {
+		s.writeFilmDocument(w, r, http.StatusOK, record, document)
+	}
 }
 
 func (s *Server) validateFilmProduction(w http.ResponseWriter, r *http.Request) {

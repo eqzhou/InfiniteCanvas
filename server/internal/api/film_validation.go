@@ -114,6 +114,33 @@ func validateFilmStages(stages []filmStage) error {
 	return nil
 }
 
+func validateFilmStageWaivers(document filmDocument) error {
+	seen := map[string]struct{}{}
+	for _, waiver := range document.StageWaivers {
+		if err := addUniqueFilmID(seen, waiver.ID, "stage waiver"); err != nil {
+			return err
+		}
+		if waiver.Revision < 1 || waiver.StageRevision < 1 || waiver.ProjectRevision < 1 || waiver.ProjectRevision > document.Revision || !waiver.RiskAccepted || !validFilmText(waiver.Reason, 2_000, true) || !validFilmText(waiver.ActorID, 255, true) || !validFilmText(waiver.ActorRole, 20, true) || !validFilmTimestamp(waiver.CreatedAt) {
+			return fmt.Errorf("film stage waiver %s is invalid", waiver.ID)
+		}
+		if _, supported := filmStageDependencies[waiver.StageID]; !supported {
+			return fmt.Errorf("film stage waiver %s references an unsupported stage", waiver.ID)
+		}
+		if _, forbidden := nonWaivableFilmStages[waiver.StageID]; forbidden {
+			return fmt.Errorf("film stage waiver %s references a protected stage", waiver.ID)
+		}
+		if (waiver.RevokedAt == "") != (waiver.RevokedBy == "") || (waiver.RevokedAt != "" && (!validFilmTimestamp(waiver.RevokedAt) || !validFilmText(waiver.RevokedBy, 255, true))) {
+			return fmt.Errorf("film stage waiver %s revocation is invalid", waiver.ID)
+		}
+		for _, downstream := range waiver.AffectedDownstream {
+			if _, supported := filmStageDependencies[downstream]; !supported || downstream == waiver.StageID || !filmStageAffectedBy(downstream, waiver.StageID) {
+				return fmt.Errorf("film stage waiver %s has invalid downstream disclosure", waiver.ID)
+			}
+		}
+	}
+	return nil
+}
+
 func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[string]filmScene, map[string]filmShot, map[string]filmAsset, error) {
 	episodes := make(map[string]filmEpisode, len(document.Episodes))
 	scenes := make(map[string]filmScene, len(document.Scenes))
@@ -737,6 +764,9 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 		return err
 	}
 	if err := validateFilmStages(document.Stages); err != nil {
+		return err
+	}
+	if err := validateFilmStageWaivers(document); err != nil {
 		return err
 	}
 	_, scenes, shots, assets, err := validateFilmEntities(document)

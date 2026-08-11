@@ -32,7 +32,7 @@ type agentConfirmationRecord struct {
 
 func highImpactFilmAgentTool(tool string) bool {
 	switch tool {
-	case "film.validate", "film.run_stage", "film.approve_stage", "film.apply_repair", "film.export":
+	case "film.validate", "film.run_stage", "film.approve_stage", "film.waive_stage", "film.apply_repair", "film.export":
 		return true
 	default:
 		return false
@@ -284,7 +284,7 @@ func isBrowserRuntimeTool(tool string) bool {
 
 func (s *Server) runAgentTool(ctx context.Context, tenantID string, tool string, raw json.RawMessage) (any, error) {
 	switch tool {
-	case "film.status", "film.list", "film.check", "film.proposals", "film.next_steps", "film.validate", "film.run_stage", "film.approve_stage", "film.apply_repair", "film.export":
+	case "film.status", "film.list", "film.check", "film.proposals", "film.next_steps", "film.validate", "film.run_stage", "film.approve_stage", "film.waive_stage", "film.apply_repair", "film.export":
 		return s.runFilmAgentTool(ctx, tenantID, tool, raw)
 	case "board.list_nodes":
 		var args projectArguments

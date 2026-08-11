@@ -158,6 +158,22 @@ type filmStage struct {
 	Error     string `json:"error,omitempty"`
 }
 
+type filmStageWaiver struct {
+	ID                 string   `json:"id"`
+	Revision           int      `json:"revision"`
+	StageID            string   `json:"stageId"`
+	StageRevision      int      `json:"stageRevision"`
+	Reason             string   `json:"reason"`
+	ActorID            string   `json:"actorId"`
+	ActorRole          string   `json:"actorRole"`
+	CreatedAt          string   `json:"createdAt"`
+	ProjectRevision    int      `json:"projectRevision"`
+	RiskAccepted       bool     `json:"riskAccepted"`
+	AffectedDownstream []string `json:"affectedDownstream"`
+	RevokedAt          string   `json:"revokedAt,omitempty"`
+	RevokedBy          string   `json:"revokedBy,omitempty"`
+}
+
 type filmStoryRelationship struct {
 	CharacterAssetID        string `json:"characterAssetId"`
 	RelatedCharacterAssetID string `json:"relatedCharacterAssetId"`
@@ -433,6 +449,7 @@ type filmDocument struct {
 	Dialogues          []filmDialogue          `json:"dialogues,omitempty"`
 	Assets             []filmAsset             `json:"assets"`
 	Stages             []filmStage             `json:"stages"`
+	StageWaivers       []filmStageWaiver       `json:"stageWaivers,omitempty"`
 	Tasks              []filmTask              `json:"tasks"`
 	AICandidates       []filmAICandidate       `json:"aiCandidates,omitempty"`
 	ScriptCandidates   []filmAIScriptCandidate `json:"scriptCandidates,omitempty"`

@@ -63,7 +63,7 @@ export type FilmIncrementFeatures = {
   stageWaiver: boolean;
 };
 
-export type FilmAgentOperation = "status" | "list" | "validate" | "run_stage" | "next_steps" | "approve_stage" | "apply_repair" | "export";
+export type FilmAgentOperation = "status" | "list" | "validate" | "run_stage" | "next_steps" | "approve_stage" | "waive_stage" | "apply_repair" | "export";
 
 export function resolveFilmEntityRevision(document: FilmDocument, entityType: string, entityId: string): number | undefined {
   if (entityType === "scene") return document.scenes.find((scene) => scene.id === entityId)?.revision;
@@ -162,7 +162,7 @@ type RawFilmCapabilities = Omit<Partial<Omit<FilmCapabilities, "agentOperations"
 };
 
 const DEFAULT_MAX_IMPORT_BYTES = 50 * 1024 * 1024;
-const SAFE_AGENT_OPERATIONS = new Set<FilmAgentOperation>(["status", "list", "validate", "run_stage", "next_steps", "approve_stage", "apply_repair", "export"]);
+const SAFE_AGENT_OPERATIONS = new Set<FilmAgentOperation>(["status", "list", "validate", "run_stage", "next_steps", "approve_stage", "waive_stage", "apply_repair", "export"]);
 const capabilitiesByProject = new Map<string, FilmCapabilities>();
 
 export function normalizeFilmCapabilities(raw: RawFilmCapabilities | null | undefined): FilmCapabilities {
@@ -468,6 +468,29 @@ export function changeFilmStage(
   revision: number,
 ): Promise<FilmStatus> {
   return requestFilm(projectId, `/stages/${encodeURIComponent(stage)}/${action}`, { method: "POST", body: JSON.stringify({ revision }) });
+}
+
+export function createFilmStageWaiver(
+  projectId: string,
+  stage: FilmStageKind,
+  input: { revision: number; stageRevision: number; reason: string; riskAccepted: true },
+): Promise<FilmStatus> {
+  return requestFilm(projectId, `/stages/${encodeURIComponent(stage)}/waivers`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function revokeFilmStageWaiver(
+  projectId: string,
+  waiverId: string,
+  input: { revision: number; waiverRevision: number },
+): Promise<FilmStatus> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(waiverId)) throw new Error("Invalid film stage waiver id");
+  return requestFilm(projectId, `/stage-waivers/${encodeURIComponent(waiverId)}`, {
+    method: "DELETE",
+    body: JSON.stringify(input),
+  });
 }
 
 export function requestFilmStageRun(

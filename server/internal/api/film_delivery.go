@@ -24,6 +24,7 @@ func filmManifest(document filmDocument) ([]byte, error) {
 		"version": 2, "projectId": document.ProjectID, "revision": document.Revision,
 		"episodes": document.Episodes, "scenes": document.Scenes, "shots": document.Shots,
 		"dialogues": document.Dialogues, "assets": document.Assets, "tasks": document.Tasks,
+		"stageWaivers": document.StageWaivers,
 		"adoptions": document.Adoptions, "versions": document.Versions, "timeline": document.Timeline,
 	}, "", "  ")
 }

@@ -79,6 +79,7 @@ export function createFilmDocument(projectId: string, timestamp = new Date().toI
     dialogues: [],
     assets: [],
     stages: STAGE_IDS.map((id) => ({ id, revision: 1, status: "draft", updatedAt: timestamp })),
+    stageWaivers: [],
     tasks: [],
     qualityReports: [],
     timeline: defaultFilmTimeline(),
