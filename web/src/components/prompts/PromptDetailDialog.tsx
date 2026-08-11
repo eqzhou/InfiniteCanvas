@@ -3,6 +3,10 @@ import { X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
+import { translate, type MessageKey } from "@/i18n/core";
+
+type PromptTranslator = (key: MessageKey, params?: Readonly<Record<string, string | number>>) => string;
 
 function isSafeMarkdownLink(href: string | undefined): href is string {
   if (!href) return false;
@@ -19,11 +23,13 @@ type PromptDetailDialogProps = {
   onAddAsset: () => void;
   onInsert?: () => void;
   onPreviewImage?: (src: string, alt: string) => void;
+  t?: PromptTranslator;
 };
 
 export function PromptDetailDialog(props: PromptDetailDialogProps) {
+  const { t } = useI18n();
   useEscapeDismiss(props.open && Boolean(props.prompt), props.onClose);
-  return <PromptDetailDialogContent {...props} />;
+  return <PromptDetailDialogContent {...props} t={t} />;
 }
 
 export function PromptDetailDialogContent({
@@ -34,6 +40,7 @@ export function PromptDetailDialogContent({
   onAddAsset,
   onInsert,
   onPreviewImage,
+  t = (key, params) => translate("zh-CN", key, params),
 }: PromptDetailDialogProps) {
   if (!open || !prompt) return null;
   return (
@@ -47,9 +54,9 @@ export function PromptDetailDialogContent({
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
             <h2 id="prompt-detail-title" className="text-lg font-semibold">{prompt.title}</h2>
-            <p className="text-xs text-[var(--ob-muted)]">来源：{prompt.source}</p>
+            <p className="text-xs text-[var(--ob-muted)]">{t("promptDetail.source", { source: prompt.source })}</p>
           </div>
-          <button type="button" title="关闭详情" className="ob-btn-ghost p-1 text-[var(--ob-muted)]" onClick={onClose}>
+          <button type="button" title={t("promptDetail.close")} className="ob-btn-ghost p-1 text-[var(--ob-muted)]" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
@@ -57,8 +64,8 @@ export function PromptDetailDialogContent({
           <button
             type="button"
             className="mb-3 block w-full overflow-hidden rounded-md bg-[var(--ob-canvas)]"
-            title="查看封面"
-            aria-label={`查看封面：${prompt.title}`}
+            title={t("promptDetail.viewCover")}
+            aria-label={t("promptDetail.viewCoverLabel", { title: prompt.title })}
             onClick={() => onPreviewImage?.(prompt.coverUrl!, prompt.title)}
           >
             <img
@@ -77,13 +84,13 @@ export function PromptDetailDialogContent({
                 key={`${url}-${index}`}
                 type="button"
                 className="overflow-hidden rounded-md bg-[var(--ob-canvas)]"
-                title={`查看结果图 ${index + 1}`}
-                aria-label={`查看结果图 ${index + 1}`}
-                onClick={() => onPreviewImage?.(url, `${prompt.title} · 结果图 ${index + 1}`)}
+                title={t("promptDetail.viewResult", { index: index + 1 })}
+                aria-label={t("promptDetail.viewResult", { index: index + 1 })}
+                onClick={() => onPreviewImage?.(url, `${prompt.title} · ${t("promptDetail.resultAlt", { index: index + 1 })}`)}
               >
                 <img
                   src={url}
-                  alt={`结果图 ${index + 1}`}
+                  alt={t("promptDetail.resultAlt", { index: index + 1 })}
                   crossOrigin="anonymous"
                   referrerPolicy="no-referrer"
                   className="aspect-square w-full object-contain"
@@ -102,7 +109,7 @@ export function PromptDetailDialogContent({
                   {children}
                 </a>
               ) : <span>{children}</span>,
-              img: () => <span className="text-[var(--ob-muted)]">[图片]</span>,
+              img: () => <span className="text-[var(--ob-muted)]">{t("promptDetail.imagePlaceholder")}</span>,
               pre: ({ children }) => (
                 <pre className="max-w-full overflow-auto whitespace-pre-wrap rounded bg-[var(--ob-accent-soft)] p-2">
                   {children}
@@ -136,14 +143,14 @@ export function PromptDetailDialogContent({
             className="ob-btn text-sm"
             onClick={onCopy}
           >
-            复制提示词
+            {t("promptDetail.copy")}
           </button>
           <button
             type="button"
             className="ob-btn text-sm"
             onClick={onAddAsset}
           >
-            加入素材
+            {t("promptDetail.addAsset")}
           </button>
           {onInsert ? (
             <button
@@ -151,7 +158,7 @@ export function PromptDetailDialogContent({
               className="ob-btn-primary text-sm"
               onClick={onInsert}
             >
-              插入当前画布文本节点
+              {t("promptDetail.insert")}
             </button>
           ) : null}
         </div>

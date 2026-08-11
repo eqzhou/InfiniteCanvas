@@ -8,6 +8,8 @@ import type {
 } from "@/types/board";
 import { uid } from "@/lib/id";
 import { parsePromptSourceConfig } from "@/services/prompt-sources";
+import { useI18n } from "@/i18n/I18nProvider";
+import type { MessageKey } from "@/i18n/core";
 
 type Props = {
   open: boolean;
@@ -20,23 +22,23 @@ type Props = {
   onRemove: (source: PromptSourceConfig) => Promise<boolean | void> | boolean | void;
 };
 
-const JSON_FIELDS: Array<[keyof PromptSourceMapping, string, string]> = [
-  ["itemsPath", "条目路径", "payload.entries"],
-  ["idPath", "ID 路径", "slug"],
-  ["titlePath", "标题路径", "title"],
-  ["bodyPath", "正文路径", "prompt"],
-  ["tagsPath", "标签路径", "metadata.tags"],
-  ["coverUrlPath", "封面路径", "media.cover"],
-  ["resultUrlsPath", "结果图路径", "media.results"],
+const JSON_FIELDS: Array<[keyof PromptSourceMapping, MessageKey, string]> = [
+  ["itemsPath", "promptSources.itemsPath", "payload.entries"],
+  ["idPath", "promptSources.idPath", "slug"],
+  ["titlePath", "promptSources.titlePath", "title"],
+  ["bodyPath", "promptSources.bodyPath", "prompt"],
+  ["tagsPath", "promptSources.tagsPath", "metadata.tags"],
+  ["coverUrlPath", "promptSources.coverUrlPath", "media.cover"],
+  ["resultUrlsPath", "promptSources.resultUrlsPath", "media.results"],
 ];
 
-const HTML_FIELDS: Array<[keyof PromptSourceHtmlMapping, string, string]> = [
-  ["itemSelector", "条目选择器", ".prompt-card"],
-  ["titleSelector", "标题选择器", ".title"],
-  ["bodySelector", "正文选择器", ".prompt"],
-  ["tagsSelector", "标签选择器", ".tag"],
-  ["coverSelector", "封面选择器", "img.cover"],
-  ["resultSelector", "结果图选择器", ".results img"],
+const HTML_FIELDS: Array<[keyof PromptSourceHtmlMapping, MessageKey, string]> = [
+  ["itemSelector", "promptSources.itemSelector", ".prompt-card"],
+  ["titleSelector", "promptSources.titleSelector", ".title"],
+  ["bodySelector", "promptSources.bodySelector", ".prompt"],
+  ["tagsSelector", "promptSources.tagsSelector", ".tag"],
+  ["coverSelector", "promptSources.coverSelector", "img.cover"],
+  ["resultSelector", "promptSources.resultSelector", ".results img"],
 ];
 
 function newSource(): PromptSourceConfig {
@@ -69,6 +71,7 @@ export function PromptSourceManagerDialog({
   onRefresh,
   onRemove,
 }: Props) {
+  const { locale, t } = useI18n();
   const [draft, setDraft] = useState<PromptSourceConfig>(() => {
     const custom = sources.find((source) => !source.builtIn);
     return custom ? cloneSource(custom) : newSource();
@@ -110,8 +113,8 @@ export function PromptSourceManagerDialog({
         className="ob-dialog flex flex-col max-w-5xl"
       >
         <header className="ob-dialog-header px-4 py-3">
-          <h2 id="prompt-source-manager-title" className="text-base font-semibold">管理提示词来源</h2>
-          <button type="button" className="ob-btn-ghost ml-auto p-1" title="关闭来源管理" onClick={onClose}>
+          <h2 id="prompt-source-manager-title" className="text-base font-semibold">{t("promptSources.title")}</h2>
+          <button type="button" className="ob-btn-ghost ml-auto p-1" title={t("promptSources.close")} onClick={onClose}>
             <X size={17} />
           </button>
         </header>
@@ -127,9 +130,9 @@ export function PromptSourceManagerDialog({
                 setError(null);
               }}
             >
-              <Plus size={15} /> 新增来源
+              <Plus size={15} /> {t("promptSources.new")}
             </button>
-            <div className="space-y-1" role="list" aria-label="提示词来源列表">
+            <div className="space-y-1" role="list" aria-label={t("promptSources.list")}>
               {sources.map((source) => (
                 <div key={source.id} role="listitem">
                   <button
@@ -143,34 +146,34 @@ export function PromptSourceManagerDialog({
                   >
                     <span className="block truncate text-sm font-medium">{source.name}</span>
                     <span className="block truncate text-[11px] text-[var(--ob-muted)]">
-                      {source.format} · {source.enabled ? "已启用" : "已停用"}
-                      {typeof source.itemCount === "number" ? ` · ${source.itemCount} 条` : ""}
-                      {source.lastError ? " · 失败" : source.lastSuccessAt ? " · 正常" : " · 未同步"}
+                      {source.format} · {source.enabled ? t("promptSources.enabled") : t("promptSources.disabled")}
+                      {typeof source.itemCount === "number" ? ` · ${t("promptSources.items", { count: source.itemCount })}` : ""}
+                      {` · ${source.lastError ? t("promptSources.failed") : source.lastSuccessAt ? t("promptSources.healthy") : t("promptSources.notSynced")}`}
                     </span>
                     {source.lastSuccessAt ? (
                       <span className="block truncate text-[10px] text-[var(--ob-muted)]">
-                        上次成功 {new Date(source.lastSuccessAt).toLocaleString()}
+                        {t("promptSources.lastSuccess", { time: new Date(source.lastSuccessAt).toLocaleString(locale) })}
                       </span>
                     ) : null}
                   </button>
                 </div>
               ))}
-              {!sources.length ? <p className="px-2 py-5 text-center text-xs text-[var(--ob-muted)]">暂无远程来源</p> : null}
+              {!sources.length ? <p className="px-2 py-5 text-center text-xs text-[var(--ob-muted)]">{t("promptSources.empty")}</p> : null}
             </div>
           </aside>
 
           <div className="min-h-0 overflow-auto p-4">
             {draftIsBuiltIn ? (
               <p className="mb-3 rounded-sm border border-[var(--ob-line)] bg-[var(--ob-canvas)] px-3 py-2 text-xs text-[var(--ob-muted)]">
-                内置 Image Prompts 来源的地址与映射由注册表维护，仅可启用/停用和设置自动刷新。
+                {t("promptSources.builtinHint")}
               </p>
             ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="text-sm">来源名称
-                <input aria-label="来源名称" className="ob-field mt-1 disabled:opacity-60" maxLength={120} value={draft.name} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
+              <label className="text-sm">{t("promptSources.name")}
+                <input aria-label={t("promptSources.name")} className="ob-field mt-1 disabled:opacity-60" maxLength={120} value={draft.name} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
               </label>
-              <label className="text-sm">解析格式
-                <select aria-label="来源解析格式" className="ob-field mt-1 disabled:opacity-60" value={draft.format} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({
+              <label className="text-sm">{t("promptSources.format")}
+                <select aria-label={t("promptSources.format")} className="ob-field mt-1 disabled:opacity-60" value={draft.format} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({
                   ...current,
                   format: event.target.value as PromptSourceConfig["format"],
                   html: event.target.value === "html" ? current.html ?? { itemSelector: "", bodySelector: "" } : current.html,
@@ -178,43 +181,43 @@ export function PromptSourceManagerDialog({
                     ? (current.script ?? "const data = helpers.parseJson(text);\nreturn Array.isArray(data) ? data : (data.items ?? data.prompts ?? []);")
                     : current.script,
                 }))}>
-                  <option value="auto">自动识别</option>
-                  <option value="json">JSON</option>
-                  <option value="markdown">Markdown</option>
-                  <option value="html">HTML</option>
-                  <option value="script">脚本转换</option>
+                  <option value="auto">{t("promptSources.auto")}</option>
+                  <option value="json">{t("promptSources.json")}</option>
+                  <option value="markdown">{t("promptSources.markdown")}</option>
+                  <option value="html">{t("promptSources.html")}</option>
+                  <option value="script">{t("promptSources.script")}</option>
                 </select>
               </label>
-              <label className="text-sm sm:col-span-2">来源 URL
-                <input aria-label="来源 URL" className="ob-field mt-1 disabled:opacity-60" placeholder="https://example.com/prompts.json 或 Image Prompts 标准 JSON" value={draft.url} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
+              <label className="text-sm sm:col-span-2">{t("promptSources.url")}
+                <input aria-label={t("promptSources.url")} className="ob-field mt-1 disabled:opacity-60" placeholder={t("promptSources.urlPlaceholder")} value={draft.url} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, url: event.target.value }))} />
               </label>
-              <label className="text-sm sm:col-span-2">主页（可选）
-                <input aria-label="来源主页" className="ob-field mt-1 disabled:opacity-60" placeholder="https://github.com/..." value={draft.homepage ?? ""} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, homepage: event.target.value || undefined }))} />
+              <label className="text-sm sm:col-span-2">{t("promptSources.homepage")}
+                <input aria-label={t("promptSources.homepage")} className="ob-field mt-1 disabled:opacity-60" placeholder="https://github.com/..." value={draft.homepage ?? ""} disabled={draftIsBuiltIn} onChange={(event) => setDraft((current) => ({ ...current, homepage: event.target.value || undefined }))} />
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} />
-                启用来源
+                {t("promptSources.enable")}
               </label>
-              <label className="text-sm">自动刷新
-                <select aria-label="自动刷新周期" className="ob-field ml-2 w-auto" value={draft.refreshMinutes} onChange={(event) => setDraft((current) => ({ ...current, refreshMinutes: Number(event.target.value) }))}>
-                  <option value={0}>关闭</option>
-                  <option value={5}>5 分钟</option>
-                  <option value={15}>15 分钟</option>
-                  <option value={30}>30 分钟</option>
-                  <option value={60}>1 小时</option>
-                  <option value={360}>6 小时</option>
-                  <option value={1440}>每天</option>
+              <label className="text-sm">{t("promptSources.refreshInterval")}
+                <select aria-label={t("promptSources.refreshIntervalLabel")} className="ob-field ml-2 w-auto" value={draft.refreshMinutes} onChange={(event) => setDraft((current) => ({ ...current, refreshMinutes: Number(event.target.value) }))}>
+                  <option value={0}>{t("promptSources.refreshOff")}</option>
+                  <option value={5}>{t("promptSources.minutes", { count: 5 })}</option>
+                  <option value={15}>{t("promptSources.minutes", { count: 15 })}</option>
+                  <option value={30}>{t("promptSources.minutes", { count: 30 })}</option>
+                  <option value={60}>{t("promptSources.hours", { count: 1 })}</option>
+                  <option value={360}>{t("promptSources.hours", { count: 6 })}</option>
+                  <option value={1440}>{t("promptSources.daily")}</option>
                 </select>
               </label>
             </div>
 
             {!draftIsBuiltIn && (draft.format === "json" || draft.format === "auto") ? (
               <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
-                <legend className="px-1 text-sm font-medium">JSON 字段映射</legend>
+                <legend className="px-1 text-sm font-medium">{t("promptSources.jsonMapping")}</legend>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {JSON_FIELDS.map(([key, label, placeholder]) => (
-                    <label key={key} className="text-xs text-[var(--ob-muted)]">{label}
-                      <input aria-label={label} className="ob-field mt-1" placeholder={placeholder} value={draft.mapping?.[key] ?? ""} onChange={(event) => updateMapping(key, event.target.value)} />
+                  {JSON_FIELDS.map(([key, labelKey, placeholder]) => (
+                    <label key={key} className="text-xs text-[var(--ob-muted)]">{t(labelKey)}
+                      <input aria-label={t(labelKey)} className="ob-field mt-1" placeholder={placeholder} value={draft.mapping?.[key] ?? ""} onChange={(event) => updateMapping(key, event.target.value)} />
                     </label>
                   ))}
                 </div>
@@ -223,11 +226,11 @@ export function PromptSourceManagerDialog({
 
             {!draftIsBuiltIn && draft.format === "html" ? (
               <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
-                <legend className="px-1 text-sm font-medium">HTML 选择器</legend>
+                <legend className="px-1 text-sm font-medium">{t("promptSources.htmlSelectors")}</legend>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {HTML_FIELDS.map(([key, label, placeholder]) => (
-                    <label key={key} className="text-xs text-[var(--ob-muted)]">{label}
-                      <input aria-label={label} className="ob-field mt-1" placeholder={placeholder} value={draft.html?.[key] ?? ""} onChange={(event) => updateHtml(key, event.target.value)} />
+                  {HTML_FIELDS.map(([key, labelKey, placeholder]) => (
+                    <label key={key} className="text-xs text-[var(--ob-muted)]">{t(labelKey)}
+                      <input aria-label={t(labelKey)} className="ob-field mt-1" placeholder={placeholder} value={draft.html?.[key] ?? ""} onChange={(event) => updateHtml(key, event.target.value)} />
                     </label>
                   ))}
                 </div>
@@ -236,12 +239,9 @@ export function PromptSourceManagerDialog({
 
             {!draftIsBuiltIn && draft.format === "script" ? (
               <fieldset className="mt-5 border-t border-[var(--ob-line)] pt-4">
-                <legend className="px-1 text-sm font-medium">自定义抓取脚本</legend>
+                <legend className="px-1 text-sm font-medium">{t("promptSources.customScript")}</legend>
                 <p className="mb-2 text-xs text-[var(--ob-muted)]">
-                  本地执行：参数为 <code>text</code>（来源 URL 正文，可空）、<code>url</code>、<code>helpers</code>。
-                  可同步或 <code>async</code> <code>return</code> 提示词数组；每项至少含 <code>title</code>/<code>body</code>（或 <code>prompt</code>）。
-                  helpers：<code>parseJson</code>、<code>fetchText</code>、<code>fetchJson</code>、<code>queryAll</code>、<code>absoluteUrl</code>。
-                  支持本机 <code>http://127.0.0.1</code> / <code>localhost</code> 源。
+                  {t("promptSources.scriptHint")}
                 </p>
                 <div className="mb-2 flex flex-wrap gap-2">
                   <button
@@ -252,7 +252,7 @@ export function PromptSourceManagerDialog({
                       script: "const data = helpers.parseJson(text);\nreturn Array.isArray(data)\n  ? data\n  : (data.items ?? data.prompts ?? []);",
                     }))}
                   >
-                    插入同步模板
+                    {t("promptSources.insertSyncTemplate")}
                   </button>
                   <button
                     type="button"
@@ -262,11 +262,11 @@ export function PromptSourceManagerDialog({
                       script: "const textBody = await helpers.fetchText(url);\nconst data = helpers.parseJson(textBody);\nreturn (Array.isArray(data) ? data : (data.items ?? data.prompts ?? [])).map((item) => ({\n  id: item.id,\n  title: item.title ?? item.name,\n  body: item.prompt ?? item.body ?? item.content,\n  tags: item.tags,\n  coverUrl: item.coverUrl,\n}));",
                     }))}
                   >
-                    插入异步抓取模板
+                    {t("promptSources.insertAsyncTemplate")}
                   </button>
                 </div>
                 <textarea
-                  aria-label="转换脚本"
+                  aria-label={t("promptSources.scriptLabel")}
                   className="ob-field min-h-48 font-mono text-xs"
                   spellCheck={false}
                   value={draft.script ?? ""}
@@ -279,8 +279,8 @@ export function PromptSourceManagerDialog({
             {error ? <p role="alert" className="mt-3 text-sm text-[var(--ob-danger)]">{error}</p> : null}
             {preview.length ? (
               <div className="mt-4 border-t border-[var(--ob-line)] pt-3">
-                <p className="mb-2 text-xs text-[var(--ob-muted)]">预览 {preview.length} 条，显示前 10 条</p>
-                <ul className="divide-y divide-[var(--ob-line)]" aria-label="来源预览">
+                <p className="mb-2 text-xs text-[var(--ob-muted)]">{t("promptSources.previewSummary", { count: preview.length })}</p>
+                <ul className="divide-y divide-[var(--ob-line)]" aria-label={t("promptSources.previewList")}>
                   {preview.slice(0, 10).map((item) => (
                     <li key={`${item.id}-${item.title}`} className="py-2">
                       <strong className="block text-sm">{item.title}</strong>
@@ -295,7 +295,7 @@ export function PromptSourceManagerDialog({
 
         <footer className="ob-dialog-footer flex-wrap items-center gap-2 px-4 py-3">
           {persisted && !draftIsBuiltIn ? (
-            <button type="button" disabled={busy || working} className="ob-btn-danger grid h-9 w-9 place-items-center disabled:opacity-50" title="删除来源" onClick={() => {
+            <button type="button" disabled={busy || working} className="ob-btn-danger grid h-9 w-9 place-items-center disabled:opacity-50" title={t("promptSources.delete")} onClick={() => {
               setWorking(true);
               setError(null);
               void Promise.resolve(onRemove(draft)).then((removed) => {
@@ -317,7 +317,7 @@ export function PromptSourceManagerDialog({
             } catch (cause) {
               setError(cause instanceof Error ? cause.message : String(cause));
             }
-          }}><Eye size={15} /> 预览</button>
+          }}><Eye size={15} /> {t("promptSources.preview")}</button>
           {persisted ? <button type="button" disabled={busy || working} className="ob-btn gap-1.5 text-sm disabled:opacity-50" onClick={() => {
             try {
               const valid = validate();
@@ -326,7 +326,7 @@ export function PromptSourceManagerDialog({
             } catch (cause) {
               setError(cause instanceof Error ? cause.message : String(cause));
             }
-          }}><RefreshCw size={15} /> 刷新</button> : null}
+          }}><RefreshCw size={15} /> {t("promptSources.refresh")}</button> : null}
           <button type="button" disabled={busy || working} className="ob-btn-primary gap-1.5 text-sm disabled:opacity-50" onClick={() => {
             try {
               const valid = validate();
@@ -338,7 +338,7 @@ export function PromptSourceManagerDialog({
             } catch (cause) {
               setError(cause instanceof Error ? cause.message : String(cause));
             }
-          }}><Save size={15} /> 保存来源</button>
+          }}><Save size={15} /> {t("promptSources.save")}</button>
         </footer>
       </section>
     </div>

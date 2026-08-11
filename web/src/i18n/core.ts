@@ -4,11 +4,13 @@ import { filmEnUS, filmZhCN } from "./messages/film";
 import { agentHelpEnUS, agentHelpZhCN } from "./messages/agent-help";
 import { contentEditorsEnUS, contentEditorsZhCN } from "./messages/content-editors";
 import { canvasUiEnUS, canvasUiZhCN } from "./messages/canvas-ui";
+import { promptsEnUS, promptsZhCN } from "./messages/prompts";
 
 export const SUPPORTED_LOCALES = ["zh-CN", "en-US"] as const;
 export type AppLocale = typeof SUPPORTED_LOCALES[number];
 
 const zhCN = {
+  ...promptsZhCN,
   ...canvasUiZhCN,
   ...contentEditorsZhCN,
   ...agentHelpZhCN,
@@ -364,6 +366,7 @@ export type MessageKey = keyof typeof zhCN;
 type MessageParams = Readonly<Record<string, string | number>>;
 
 const enUS: Partial<Record<MessageKey, string>> = {
+  ...promptsEnUS,
   ...canvasUiEnUS,
   ...contentEditorsEnUS,
   ...agentHelpEnUS,

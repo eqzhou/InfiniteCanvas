@@ -43,6 +43,7 @@ import {
   type PromptEditorValues,
 } from "@/components/prompts/PromptEditorDialog";
 import { PromptSourceManagerDialog } from "@/components/prompts/PromptSourceManagerDialog";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const BUILTIN: PromptItem[] = [
   {
@@ -76,6 +77,7 @@ const BUILTIN: PromptItem[] = [
 ];
 
 export function PromptsPage() {
+  const { locale, t } = useI18n();
   const navigate = useNavigate();
   const prompts = useBoardStore((s) => s.prompts);
   const setPrompts = useBoardStore((s) => s.setPrompts);
@@ -184,7 +186,7 @@ export function PromptsPage() {
       return;
     }
     if (!existing && current.length >= PROMPT_SOURCE_LIMITS.maxSources) {
-      throw new Error(`提示词来源最多保存 ${PROMPT_SOURCE_LIMITS.maxSources} 个`);
+      throw new Error(t("prompts.maxSources", { count: PROMPT_SOURCE_LIMITS.maxSources }));
     }
     setConfig({
       ...latest,
@@ -197,7 +199,7 @@ export function PromptsPage() {
 
   const pullRemote = async () => {
     if (!remoteUrl.trim()) {
-      alert("请填写远程提示词源 URL（JSON 数组或 Markdown）");
+      alert(t("prompts.remoteUrlRequired"));
       return;
     }
     setBusy(true);
@@ -298,7 +300,7 @@ export function PromptsPage() {
         }
       }
       if (failures.length) {
-        setErr(`部分来源更新失败（已保留上次成功内容）：${failures.join("；")}`);
+        setErr(t("prompts.someSourcesFailed", { failures: failures.join("; ") }));
       }
     } finally {
       setBusy(false);
@@ -307,7 +309,7 @@ export function PromptsPage() {
 
   const removeRemote = async (sourceConfig: PromptSourceConfig) => {
     if (sourceConfig.builtIn) {
-      throw new Error("内置提示词来源不能删除，可停用或刷新");
+      throw new Error(t("prompts.builtinCannotDelete"));
     }
     setBusy(true);
     const latest = useBoardStore.getState().config;
@@ -357,11 +359,11 @@ export function PromptsPage() {
   useEffect(() => {
     const report = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: unknown }>).detail;
-      if (typeof detail?.message === "string") setErr(`提示词来源自动刷新失败：${detail.message}`);
+      if (typeof detail?.message === "string") setErr(t("prompts.autoRefreshFailed", { message: detail.message }));
     };
     window.addEventListener("openboard:prompt-source-error", report);
     return () => window.removeEventListener("openboard:prompt-source-error", report);
-  }, []);
+  }, [t]);
 
   const addPromptAsset = async (prompt: PromptItem) => {
     const t = nowIso();
@@ -471,13 +473,13 @@ export function PromptsPage() {
             <div className="min-w-0 flex-1">
               <p className="ob-page-kicker">Library</p>
               <h1
-                aria-label="提示词库"
+                aria-label={t("prompts.library")}
                 className="text-2xl font-bold tracking-tight text-[var(--ob-ink)]"
               >
-                提示词中心
+                {t("prompts.title")}
               </h1>
               <p className="mt-1.5 text-sm font-medium text-[var(--ob-muted)]">
-                浏览、筛选并插入画布 · 库 {libraryPrompts.length} · 我的 {minePrompts.length}
+                {t("prompts.description", { library: libraryPrompts.length, mine: minePrompts.length })}
               </p>
             </div>
             <div className="ml-auto flex flex-wrap items-center gap-2.5">
@@ -489,11 +491,11 @@ export function PromptsPage() {
                   aria-expanded={sourcesOpen}
                 >
                   {sourcesOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                  来源
+                  {t("prompts.sources")}
                   <span className="ob-chip">{enabledSources}/{savedSources.length || 0}</span>
                   {failedSources ? (
                     <span className="rounded-full bg-[color-mix(in_srgb,var(--ob-danger)_14%,transparent)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--ob-danger)]">
-                      {failedSources} 失败
+                      {t("prompts.failedCount", { count: failedSources })}
                     </span>
                   ) : null}
                 </button>
@@ -504,11 +506,11 @@ export function PromptsPage() {
                 disabled={busy}
                 onClick={restoreBuiltinPrompts}
               >
-                恢复内置
+                {t("prompts.restoreBuiltin")}
               </button>
               <button
                 type="button"
-                aria-label="新建提示词"
+                aria-label={t("prompts.newPrompt")}
                 className="ob-btn-primary ob-btn-sm rounded-lg shadow-sm shadow-[var(--ob-accent)]/20"
                 onClick={() => {
                   setActiveTab("mine");
@@ -517,7 +519,7 @@ export function PromptsPage() {
                   setEditorMode("create");
                 }}
               >
-                <Plus size={15} /> 新建
+                <Plus size={15} /> {t("prompts.new")}
               </button>
             </div>
           </div>
@@ -526,7 +528,7 @@ export function PromptsPage() {
             <div
               className="inline-flex rounded-xl bg-[var(--ob-canvas)]/80 p-0.5 shadow-inner border border-[var(--ob-line)]/40"
               role="tablist"
-              aria-label="提示词中心分类"
+              aria-label={t("prompts.categories")}
             >
               <button
                 type="button"
@@ -540,7 +542,7 @@ export function PromptsPage() {
                 onClick={() => setActiveTab("library")}
               >
                 <Library size={14} className="mr-1" />
-                提示词库
+                {t("prompts.library")}
                 <span className="tabular-nums opacity-80 ml-1">{libraryPrompts.length}</span>
               </button>
               <button
@@ -555,13 +557,13 @@ export function PromptsPage() {
                 onClick={() => setActiveTab("mine")}
               >
                 <UserRound size={14} className="mr-1" />
-                我的
+                {t("prompts.mine")}
                 <span className="tabular-nums opacity-80 ml-1">{minePrompts.length}</span>
               </button>
             </div>
 
             <label className="relative min-w-[12rem] flex-1 sm:max-w-sm">
-              <span className="sr-only">搜索提示词</span>
+              <span className="sr-only">{t("prompts.search")}</span>
               <Search
                 size={15}
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ob-muted)]"
@@ -569,7 +571,7 @@ export function PromptsPage() {
               />
               <input
                 className="w-full bg-transparent px-3 py-1.5 pl-9 text-sm text-[var(--ob-ink)] placeholder-[var(--ob-muted)] outline-none transition-all focus:ring-2 focus:ring-[var(--ob-accent)]/30 rounded-xl"
-                placeholder="搜索标题 / 内容 / 标签 / 来源"
+                placeholder={t("prompts.searchPlaceholder")}
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
@@ -579,26 +581,26 @@ export function PromptsPage() {
               <>
                 <div className="h-4 w-px bg-[var(--ob-line)]/80 hidden sm:block mx-1" />
                 <select
-                  aria-label="提示词来源"
+                  aria-label={t("prompts.sourceFilter")}
                   className="bg-transparent text-sm font-medium text-[var(--ob-ink)] cursor-pointer outline-none hover:text-[var(--ob-accent)] transition-colors pr-1"
                   value={source}
                   onChange={(e) => setSource(e.target.value)}
                 >
                   {sources.map((s) => (
                     <option key={s} value={s} className="bg-[var(--ob-panel)]">
-                      {s === "all" ? "全部来源" : s}
+                      {s === "all" ? t("prompts.allSources") : s}
                     </option>
                   ))}
                 </select>
                 <select
-                  aria-label="提示词标签"
+                  aria-label={t("prompts.tagFilter")}
                   className="bg-transparent text-sm font-medium text-[var(--ob-ink)] cursor-pointer outline-none hover:text-[var(--ob-accent)] transition-colors pr-2"
                   value={tag}
                   onChange={(event) => setTag(event.target.value)}
                 >
                   {tags.map((value) => (
                     <option key={value} value={value} className="bg-[var(--ob-panel)]">
-                      {value === "all" ? "全部标签" : value}
+                      {value === "all" ? t("prompts.allTags") : value}
                     </option>
                   ))}
                 </select>
@@ -606,8 +608,8 @@ export function PromptsPage() {
             ) : null}
 
             <span className="ml-auto hidden text-xs font-medium text-[var(--ob-muted)] sm:inline pr-2">
-              显示 {filtered.length}
-              {(q || source !== "all" || tag !== "all") ? " · 已筛选" : ""}
+              {t("prompts.showing", { count: filtered.length })}
+              {(q || source !== "all" || tag !== "all") ? t("prompts.filtered") : ""}
             </span>
           </div>
 
@@ -625,17 +627,17 @@ export function PromptsPage() {
             <section className="ob-card overflow-hidden p-0">
               <header className="flex flex-wrap items-center gap-2 border-b border-[var(--ob-line)] px-4 py-3">
                 <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-[var(--ob-ink)]">提示词源</h2>
-                  <p className="text-[11px] text-[var(--ob-muted)]">社区目录 · 远程 JSON/Markdown · 同步状态</p>
+                  <h2 className="text-sm font-semibold text-[var(--ob-ink)]">{t("prompts.sourceTitle")}</h2>
+                  <p className="text-[11px] text-[var(--ob-muted)]">{t("prompts.sourceDescription")}</p>
                 </div>
                 <div className="ml-auto flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    aria-label="管理来源"
+                    aria-label={t("prompts.manageSources")}
                     className="ob-btn ob-btn-sm"
                     onClick={() => setSourceManagerOpen(true)}
                   >
-                    <SlidersHorizontal size={14} /> 管理
+                    <SlidersHorizontal size={14} /> {t("prompts.manage")}
                   </button>
                   {enabledSources ? (
                     <button
@@ -644,7 +646,7 @@ export function PromptsPage() {
                       disabled={busy}
                       onClick={() => void refreshAllRemote()}
                     >
-                      <RefreshCw size={14} className={busy ? "animate-spin" : undefined} /> 刷新全部
+                      <RefreshCw size={14} className={busy ? "animate-spin" : undefined} /> {t("prompts.refreshAll")}
                     </button>
                   ) : null}
                 </div>
@@ -653,9 +655,9 @@ export function PromptsPage() {
               <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="border-b border-[var(--ob-line)] p-4 lg:border-b-0 lg:border-r">
                   <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--ob-muted)] pl-1">
-                    社区一键接入
+                    {t("prompts.communityConnect")}
                   </div>
-                  <ul className="grid gap-3 sm:grid-cols-2" aria-label="社区提示词源">
+                  <ul className="grid gap-3 sm:grid-cols-2" aria-label={t("prompts.communitySources")}>
                     {COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => {
                       const installed = savedSources.some((item) =>
                         item.id === preset.source.id || item.url === preset.source.url);
@@ -676,7 +678,7 @@ export function PromptsPage() {
                             disabled={busy}
                             onClick={() => void addCommunityPreset(preset.id)}
                           >
-                            {installed ? "刷新" : "接入"}
+                            {installed ? t("common.refresh") : t("prompts.connect")}
                           </button>
                         </li>
                       );
@@ -686,23 +688,23 @@ export function PromptsPage() {
 
                 <div className="p-4">
                   <div className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--ob-muted)]">
-                    自定义远程源
+                    {t("prompts.customRemoteSource")}
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input
                       className="ob-field min-w-0 flex-1"
-                      placeholder="远程源 URL（raw JSON / Markdown）"
+                      placeholder={t("prompts.remoteUrlPlaceholder")}
                       value={remoteUrl}
                       onChange={(e) => setRemoteUrl(e.target.value)}
                     />
                     <button
                       type="button"
-                      aria-label="拉取远程提示词"
+                      aria-label={t("prompts.fetchRemote")}
                       className="ob-btn-primary ob-btn-sm shrink-0"
                       disabled={busy}
                       onClick={() => void pullRemote()}
                     >
-                      {busy ? "拉取中…" : "拉取"}
+                      {busy ? t("prompts.fetching") : t("prompts.fetch")}
                     </button>
                   </div>
 
@@ -716,34 +718,34 @@ export function PromptsPage() {
                                 {sourceConfig.name}
                               </span>
                               <span className="ob-chip uppercase">{sourceConfig.format}</span>
-                              {sourceConfig.builtIn ? <span className="ob-chip">内置</span> : null}
-                              {!sourceConfig.enabled ? <span className="ob-chip">已停用</span> : null}
+                              {sourceConfig.builtIn ? <span className="ob-chip">{t("prompts.builtin")}</span> : null}
+                              {!sourceConfig.enabled ? <span className="ob-chip">{t("prompts.disabled")}</span> : null}
                               {sourceConfig.lastError ? (
                                 <span
                                   className="rounded-full bg-[color-mix(in_srgb,var(--ob-danger)_14%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ob-danger)]"
                                   title={sourceConfig.lastError}
                                 >
-                                  失败
+                                  {t("prompts.failed")}
                                 </span>
                               ) : sourceConfig.lastSuccessAt ? (
                                 <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
-                                  正常
+                                  {t("prompts.healthy")}
                                 </span>
                               ) : (
-                                <span className="ob-chip">未同步</span>
+                                <span className="ob-chip">{t("prompts.notSynced")}</span>
                               )}
                             </div>
                             <p className="mt-0.5 truncate text-[11px] text-[var(--ob-muted)]">
                               {sourceConfig.homepage || sourceConfig.url}
-                              {typeof sourceConfig.itemCount === "number" ? ` · ${sourceConfig.itemCount} 条` : ""}
+                              {typeof sourceConfig.itemCount === "number" ? ` · ${t("prompts.items", { count: sourceConfig.itemCount })}` : ""}
                               {sourceConfig.lastSuccessAt
-                                ? ` · ${new Date(sourceConfig.lastSuccessAt).toLocaleString()}`
-                                : " · 尚未成功拉取"}
+                                ? ` · ${new Date(sourceConfig.lastSuccessAt).toLocaleString(locale)}`
+                                : ` · ${t("prompts.neverFetched")}`}
                             </p>
                           </div>
                           <button
                             type="button"
-                            title="刷新提示词源"
+                            title={t("prompts.refreshSource")}
                             className="ob-icon-btn ob-icon-btn-sm"
                             disabled={busy || !sourceConfig.enabled}
                             onClick={() => void refreshRemote(sourceConfig).catch(() => undefined)}
@@ -753,11 +755,11 @@ export function PromptsPage() {
                           {!sourceConfig.builtIn ? (
                             <button
                               type="button"
-                              title="移除提示词源"
+                              title={t("prompts.removeSource")}
                               className="ob-btn-danger ob-btn-sm p-1.5"
                               disabled={busy}
                               onClick={() => {
-                                if (window.confirm(`移除提示词来源“${sourceConfig.name}”？`)) {
+                                if (window.confirm(t("prompts.confirmRemoveSource", { name: sourceConfig.name }))) {
                                   void removeRemote(sourceConfig).catch((cause) =>
                                     setErr(cause instanceof Error ? cause.message : String(cause)));
                                 }
@@ -771,7 +773,7 @@ export function PromptsPage() {
                     </ul>
                   ) : (
                     <p className="mt-3 rounded-xl border border-dashed border-[var(--ob-line)] px-3 py-4 text-center text-xs text-[var(--ob-muted)]">
-                      尚未接入来源。可一键接入社区目录，或粘贴远程 URL。
+                      {t("prompts.noSources")}
                     </p>
                   )}
                 </div>
@@ -792,8 +794,8 @@ export function PromptsPage() {
                       <button
                         type="button"
                         className="relative h-32 w-full overflow-hidden border-b border-[var(--ob-line)]/50 bg-[var(--ob-canvas)] text-left"
-                        title="查看封面"
-                        aria-label={`查看封面：${p.title}`}
+                        title={t("prompts.viewCover")}
+                        aria-label={t("prompts.viewCoverLabel", { title: p.title })}
                         onClick={() => setPreviewImage({ src: p.coverUrl!, alt: p.title })}
                       >
                         <div className="absolute inset-0 z-10 bg-black/5 transition-colors pointer-events-none group-hover:bg-transparent" />
@@ -805,7 +807,7 @@ export function PromptsPage() {
                           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                         />
                         <span className="pointer-events-none absolute bottom-2 right-2 z-20 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
-                          点击查看
+                          {t("prompts.clickToView")}
                         </span>
                       </button>
                     ) : null}
@@ -841,25 +843,25 @@ export function PromptsPage() {
                       <div className="mt-4 flex items-center gap-1.5 pt-3 border-t border-[var(--ob-line)]/40 transition-all duration-200">
                         <button
                           type="button"
-                          aria-label="插入画布"
+                          aria-label={t("prompts.insertCanvas")}
                           className="ob-btn-primary ob-btn-sm flex-1 rounded-lg h-7"
                           onClick={() => usePrompt(p)}
                         >
-                          <SendToBack size={13} /> 插入
+                          <SendToBack size={13} /> {t("prompts.insert")}
                         </button>
                         <button
                           type="button"
                           className="ob-btn ob-btn-sm rounded-lg h-7"
-                          aria-label="详情"
-                          title="详情"
+                          aria-label={t("prompts.details")}
+                          title={t("prompts.details")}
                           onClick={() => setSelectedPrompt(p)}
                         >
                           <Eye size={13} aria-hidden />
                         </button>
                         <button
                           type="button"
-                          title="复制提示词"
-                          aria-label="复制提示词"
+                          title={t("prompts.copy")}
+                          aria-label={t("prompts.copy")}
                           className="ob-icon-btn ob-icon-btn-sm bg-[var(--ob-canvas)] h-7 w-7"
                           onClick={() => void writeTextWithFallback(p.body).catch(() => undefined)}
                         >
@@ -867,8 +869,8 @@ export function PromptsPage() {
                         </button>
                         <button
                           type="button"
-                          title="加入素材"
-                          aria-label="加入素材"
+                          title={t("prompts.addAsset")}
+                          aria-label={t("prompts.addAsset")}
                           className="ob-icon-btn ob-icon-btn-sm bg-[var(--ob-canvas)] h-7 w-7"
                           onClick={() => void addPromptAsset(p).catch((cause) =>
                             setErr(cause instanceof Error ? cause.message : String(cause)))}
@@ -880,8 +882,8 @@ export function PromptsPage() {
                             <button
                               type="button"
                               className="ob-icon-btn ob-icon-btn-sm bg-[var(--ob-canvas)] h-7 w-7"
-                              title="编辑"
-                              aria-label="编辑"
+                              title={t("prompts.edit")}
+                              aria-label={t("prompts.edit")}
                               onClick={() => {
                                 setEditingPrompt(p);
                                 setEditorMode("edit");
@@ -892,10 +894,10 @@ export function PromptsPage() {
                             <button
                               type="button"
                               className="ob-btn-danger ob-btn-sm p-1 ml-auto rounded-lg h-7 w-7 flex items-center justify-center"
-                              title="删除"
-                              aria-label="删除"
+                              title={t("prompts.delete")}
+                              aria-label={t("prompts.delete")}
                               onClick={() => {
-                                if (!window.confirm(`删除提示词“${p.title}”？`)) return;
+                                if (!window.confirm(t("prompts.confirmDelete", { title: p.title }))) return;
                                 void (async () => {
                                   try {
                                     const next = structuredClone(
@@ -919,7 +921,7 @@ export function PromptsPage() {
                             onClick={() => void saveToMine(p).catch((cause) =>
                               setErr(cause instanceof Error ? cause.message : String(cause)))}
                           >
-                            收藏
+                            {t("prompts.saveToMine")}
                           </button>
                         )}
                       </div>
@@ -936,12 +938,12 @@ export function PromptsPage() {
               </div>
               <div className="relative z-10">
                 <p className="text-xl font-bold text-[var(--ob-ink)] tracking-tight">
-                  {activeTab === "mine" ? "还没有专属提示词" : "当前没有可显示的提示词"}
+                  {activeTab === "mine" ? t("prompts.emptyMine") : t("prompts.emptyLibrary")}
                 </p>
                 <p className="mt-3 max-w-md text-[15px] leading-relaxed text-[var(--ob-muted)] font-medium">
                   {activeTab === "mine"
-                    ? "浏览库中丰富的提示词收藏到这里，或者点击新建打造你的专属模板库。"
-                    : "你可以展开「来源」一键接入社区目录，或恢复内置的优秀示例。"}
+                    ? t("prompts.emptyMineDescription")
+                    : t("prompts.emptyLibraryDescription")}
                 </p>
               </div>
               <div className="mt-2 relative z-10 flex gap-3">
@@ -949,11 +951,11 @@ export function PromptsPage() {
                   <>
                     {!sourcesOpen ? (
                       <button type="button" className="ob-btn-primary rounded-xl px-5 py-2.5 font-bold shadow-md shadow-[var(--ob-accent)]/20 transition-transform hover:-translate-y-0.5" onClick={() => setSourcesOpen(true)}>
-                        <RefreshCw size={15} className="mr-2" /> 接入来源
+                        <RefreshCw size={15} className="mr-2" /> {t("prompts.connect")}
                       </button>
                     ) : null}
                     <button type="button" className="ob-btn rounded-xl px-5 py-2.5 font-bold transition-transform hover:-translate-y-0.5" onClick={restoreBuiltinPrompts}>
-                      加载内置示例
+                      {t("prompts.loadBuiltin")}
                     </button>
                   </>
                 ) : (
@@ -966,7 +968,7 @@ export function PromptsPage() {
                       setEditorMode("create");
                     }}
                   >
-                    <Plus size={16} className="-ml-0.5 mr-1" /> 新建提示词
+                    <Plus size={16} className="-ml-0.5 mr-1" /> {t("prompts.newPrompt")}
                   </button>
                 )}
               </div>
@@ -996,7 +998,7 @@ export function PromptsPage() {
       <ImagePreviewDialog
         open={previewImage !== null}
         src={previewImage?.src ?? ""}
-        alt={previewImage?.alt ?? "图片预览"}
+        alt={previewImage?.alt ?? t("prompts.imagePreview")}
         onClose={() => setPreviewImage(null)}
       />
       <PromptEditorDialog
@@ -1019,7 +1021,7 @@ export function PromptsPage() {
         onPreview={fetchPromptSource}
         onRefresh={refreshRemote}
         onRemove={async (sourceConfig) => {
-          if (!window.confirm(`移除提示词来源“${sourceConfig.name}”？`)) return false;
+          if (!window.confirm(t("prompts.confirmRemoveSource", { name: sourceConfig.name }))) return false;
           await removeRemote(sourceConfig);
           return true;
         }}
