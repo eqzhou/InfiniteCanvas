@@ -220,6 +220,7 @@ export const adminZhCN = {
   "admin.storage.accessKeyId": "Access Key ID",
   "admin.storage.secretAccessKey": "Secret Access Key",
   "admin.storage.confirmDelete": "确定删除存储提供商“{id}”吗？",
+  "admin.storage.webdavDisabled": "服务器尚未启用 WebDAV 媒体后端；现有配置可保留，但不能新增。",
 } as const;
 
 export const adminEnUS: Record<keyof typeof adminZhCN, string> = {
@@ -444,4 +445,5 @@ export const adminEnUS: Record<keyof typeof adminZhCN, string> = {
   "admin.storage.accessKeyId": "Access key ID",
   "admin.storage.secretAccessKey": "Secret access key",
   "admin.storage.confirmDelete": "Delete storage provider “{id}”?",
+  "admin.storage.webdavDisabled": "The WebDAV media backend is disabled on this server. Existing entries can be retained, but new ones cannot be added.",
 };

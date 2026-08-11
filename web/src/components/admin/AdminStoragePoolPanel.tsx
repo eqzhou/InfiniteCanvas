@@ -64,6 +64,7 @@ export function AdminStoragePoolPanel() {
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [revision, setRevision] = useState("");
+  const [webdavEnabled, setWebdavEnabled] = useState(false);
   const [error, setError] = useState("");
   const [secretFor, setSecretFor] = useState("");
   const [accessKeyId, setAccessKeyId] = useState("");
@@ -74,7 +75,7 @@ export function AdminStoragePoolPanel() {
   const load = async () => {
     setLoading(true);
     setLoaded(false);
-    try { const result = await getAdminStoragePoolStatus(); setItems(result.items); setDrafts(persistedStorageProviderDrafts(result.items)); setRevision(result.revision); setError(""); setLoaded(true); }
+    try { const result = await getAdminStoragePoolStatus(); setItems(result.items); setDrafts(persistedStorageProviderDrafts(result.items)); setRevision(result.revision); setWebdavEnabled(result.webdavEnabled); setError(""); setLoaded(true); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setLoading(false); }
   };
@@ -111,13 +112,14 @@ export function AdminStoragePoolPanel() {
       <div className="flex flex-wrap gap-2"><button type="button" className="ob-btn" disabled={loading || !loaded} onClick={() => setDrafts((current) => [...current, newStorageProviderDraft(crypto.randomUUID())])}><Plus size={15} />{t("admin.storage.new")}</button><button type="button" className="ob-btn ob-btn-primary" disabled={loading || !loaded} onClick={() => void save()}><Save size={15} />{t("admin.storage.save")}</button><button type="button" className="ob-btn" disabled={loading} onClick={() => void load()}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />{loaded ? t("common.refresh") : t("admin.channels.reload")}</button></div>
     </div>
     {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
+    {!loading && loaded && !webdavEnabled ? <p className="text-sm text-[var(--ob-muted)]">{t("admin.storage.webdavDisabled")}</p> : null}
     {!loading && loaded && drafts.length === 0 ? <div className="ob-surface p-5 text-sm text-[var(--ob-muted)]">{t("admin.storage.empty")}</div> : null}
     {items.some((item) => item.endpoint === undefined) ? <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{items.filter((item) => item.endpoint === undefined).map((item) => <article key={item.id} className="ob-surface space-y-2 p-4"><div className="flex justify-between gap-3"><div><h3 className="font-medium">{item.id}</h3><p className="text-xs text-[var(--ob-muted)]">{t("admin.storage.fallback", { kind: item.kind })}</p></div><span className="text-xs">{t("admin.storage.weight")} {item.weight}</span></div><p className="text-sm">{storageProbeLabel(item, locale)} · {storageCapacityLabel(item, locale)}</p></article>)}</div> : null}
     <div className="space-y-3">
       {drafts.map((draft) => { const item = draft.value; const status = storageDraftStatus(draft, items); return <article key={draft.clientKey} className="ob-surface space-y-3 p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-sm">{t("admin.storage.stableId")}<input className="ob-input mt-1 w-full" value={item.id} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { id: event.target.value })} /></label>
-          <label className="text-sm">{t("admin.storage.kind")}<select className="ob-input mt-1 w-full" value={item.kind ?? "s3"} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { kind: event.target.value === "webdav" ? "webdav" : "s3", bucket: "", region: event.target.value === "webdav" ? "" : "auto", allowPrivate: false })}><option value="s3">S3 / R2</option><option value="webdav">{t("admin.storage.webdav")}</option></select></label>
+          <label className="text-sm">{t("admin.storage.kind")}<select className="ob-input mt-1 w-full" value={item.kind ?? "s3"} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { kind: event.target.value === "webdav" ? "webdav" : "s3", bucket: "", region: event.target.value === "webdav" ? "" : "auto", allowPrivate: false })}><option value="s3">S3 / R2</option><option value="webdav" disabled={!webdavEnabled}>{t("admin.storage.webdav")}</option></select></label>
           <label className="text-sm xl:col-span-2">{item.kind === "webdav" ? t("admin.storage.webdavEndpoint") : t("admin.storage.s3Endpoint")}<input className="ob-input mt-1 w-full" value={item.endpoint} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { endpoint: event.target.value })} /></label>
           {item.kind !== "webdav" ? <><label className="text-sm">{t("admin.storage.bucket")}<input className="ob-input mt-1 w-full" value={item.bucket} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { bucket: event.target.value })} /></label>
           <label className="text-sm">{t("admin.storage.region")}<input className="ob-input mt-1 w-full" value={item.region} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { region: event.target.value })} /></label></> : null}

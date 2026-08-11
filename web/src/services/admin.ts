@@ -332,9 +332,10 @@ export async function putAdminModelCosts(input: AdminModelCosts): Promise<AdminM
   return json(response);
 }
 
-export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStoragePoolProviderStatus[]; revision: string }> {
+export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStoragePoolProviderStatus[]; revision: string; webdavEnabled: boolean }> {
   const response = await authFetch("admin/storage-pool");
   const revision = readAdminRevision(response);
+  const webdavEnabled = response.headers.get("X-OpenBoard-WebDAV-Media-Enabled") === "true";
   const values = await json<unknown>(response);
   if (!Array.isArray(values)) throw new Error("存储池状态响应无效");
   const items = values.map((value) => {
@@ -380,7 +381,7 @@ export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStorage
       ...(typeof item.error === "string" && item.error.length <= 500 ? { error: item.error } : {}),
     };
   });
-  return { items, revision };
+  return { items, revision, webdavEnabled };
 }
 
 export type AdminStoragePoolProviderInput = {
