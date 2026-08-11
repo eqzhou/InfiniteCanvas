@@ -180,6 +180,35 @@ func (s *webDAVBlobObjectStore) request(ctx context.Context, method, tenantID, n
 	return request, nil
 }
 
+func (s *webDAVBlobObjectStore) ensureParentCollections(ctx context.Context, objectEndpoint *url.URL) error {
+	basePath := strings.TrimRight(s.endpoint.Path, "/")
+	parentPath := path.Dir(objectEndpoint.Path)
+	relative := strings.TrimPrefix(parentPath, basePath)
+	if relative == parentPath || strings.Trim(relative, "/") == "" {
+		return nil
+	}
+	currentPath := basePath
+	for _, segment := range strings.Split(strings.Trim(relative, "/"), "/") {
+		currentPath = path.Join(currentPath, segment)
+		collectionEndpoint := *s.endpoint
+		collectionEndpoint.Path = currentPath
+		request, err := http.NewRequestWithContext(ctx, "MKCOL", collectionEndpoint.String(), nil)
+		if err != nil {
+			return err
+		}
+		request.SetBasicAuth(s.username, s.password)
+		response, err := s.client.Do(request)
+		if err != nil {
+			return err
+		}
+		_ = response.Body.Close()
+		if (response.StatusCode < 200 || response.StatusCode >= 300) && response.StatusCode != http.StatusMethodNotAllowed {
+			return fmt.Errorf("WebDAV MKCOL failed with status %d", response.StatusCode)
+		}
+	}
+	return nil
+}
+
 func (s *webDAVBlobObjectStore) Ping(ctx context.Context) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodHead, s.endpoint.String(), nil)
 	if err != nil {
@@ -270,6 +299,13 @@ func (s *webDAVBlobObjectStore) Get(ctx context.Context, tenantID, name string, 
 func (s *webDAVBlobObjectStore) Put(ctx context.Context, tenantID, name string, value blobObject, expectedVersion string) (string, error) {
 	body, err := encodeWebDAVBlob(value)
 	if err != nil {
+		return "", err
+	}
+	objectEndpoint, err := s.objectURL(tenantID, name)
+	if err != nil {
+		return "", err
+	}
+	if err := s.ensureParentCollections(ctx, objectEndpoint); err != nil {
 		return "", err
 	}
 	request, err := s.request(ctx, http.MethodPut, tenantID, name, body)

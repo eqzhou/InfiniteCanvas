@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
@@ -43,6 +42,13 @@ type adminStoragePoolProvider struct {
 	TotalBytes            int64  `json:"totalBytes,omitempty"`
 	AvailableBytes        int64  `json:"availableBytes,omitempty"`
 	Error                 string `json:"error,omitempty"`
+}
+
+func sameStoragePoolProviderConfiguration(left, right tenantStoragePoolProvider) bool {
+	return left.ID == right.ID && left.Kind == right.Kind && left.Endpoint == right.Endpoint &&
+		left.Bucket == right.Bucket && left.Region == right.Region && left.Prefix == right.Prefix &&
+		left.Weight == right.Weight && left.Healthy == right.Healthy && left.Deleted == right.Deleted &&
+		left.AllowInsecureLoopback == right.AllowInsecureLoopback && left.AllowPrivate == right.AllowPrivate
 }
 
 func (s *Server) getAdminStoragePool(w http.ResponseWriter, r *http.Request) {
@@ -139,11 +145,8 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 	}
 	next := make([]tenantStoragePoolProvider, 0, len(current)+len(input))
 	seen := make(map[string]struct{}, len(input))
+	webDAVEnabled := incrementFeatureEnabled(webDAVMediaFeatureEnv)
 	for _, raw := range input {
-		if strings.EqualFold(strings.TrimSpace(raw.Kind), "webdav") && !incrementFeatureEnabled(webDAVMediaFeatureEnv) {
-			http.Error(w, "WebDAV media storage is disabled", http.StatusNotFound)
-			return
-		}
 		provider, normalizeErr := normalizeTenantStoragePoolProvider(raw)
 		if normalizeErr != nil {
 			http.Error(w, "invalid storage provider", http.StatusBadRequest)
@@ -159,12 +162,20 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "deleted storage provider id is permanently reserved; create a new id", http.StatusConflict)
 				return
 			}
+			if provider.Kind == "webdav" && !webDAVEnabled && !sameStoragePoolProviderConfiguration(previous, provider) {
+				http.Error(w, "WebDAV media storage is disabled", http.StatusNotFound)
+				return
+			}
 			if previous.Kind != provider.Kind || previous.Endpoint != provider.Endpoint || previous.Bucket != provider.Bucket || previous.Prefix != provider.Prefix || previous.Region != provider.Region || previous.AllowInsecureLoopback != provider.AllowInsecureLoopback || previous.AllowPrivate != provider.AllowPrivate {
 				http.Error(w, "storage provider id cannot be rebound; create a new id", http.StatusConflict)
 				return
 			}
 			provider.SecretBindingID = previous.SecretBindingID
 		} else {
+			if provider.Kind == "webdav" && !webDAVEnabled {
+				http.Error(w, "WebDAV media storage is disabled", http.StatusNotFound)
+				return
+			}
 			if s.processBlobProviderIDExists(provider.ID) {
 				http.Error(w, "storage provider id conflicts with process storage", http.StatusConflict)
 				return
@@ -178,6 +189,10 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 	// placement records and their encrypted credentials remain resolvable.
 	for _, previous := range current {
 		if _, retained := seen[previous.ID]; !retained {
+			if previous.Kind == "webdav" && !webDAVEnabled && !previous.Deleted {
+				next = append(next, previous)
+				continue
+			}
 			previous.Deleted, previous.Healthy, previous.Weight = true, false, 0
 			next = append(next, previous)
 		}
