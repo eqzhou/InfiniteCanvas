@@ -7,8 +7,10 @@ import { downloadStorageKey, uploadMedia } from "@/services/storage";
 import { filenameForMimeType } from "@/lib/download-filename";
 import { AssetEditorDialog, type AssetEditorValues } from "@/components/assets/AssetEditorDialog";
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function AssetsPage() {
+  const { t } = useI18n();
   const assets = useBoardStore((s) => s.assets);
   const setAssets = useBoardStore((s) => s.setAssets);
   const flushAssets = useBoardStore((s) => s.flushAssets);
@@ -44,16 +46,16 @@ export function AssetsPage() {
   }, [totalPages]);
 
   const addText = () => {
-    const t = nowIso();
+    const timestamp = nowIso();
     setCreating(true);
     setEditing({
       id: uid("asset"),
       kind: "text",
-      title: "文本素材",
+      title: t("assets.defaultTextTitle"),
       content: "",
       tags: [],
-      createdAt: t,
-      updatedAt: t,
+      createdAt: timestamp,
+      updatedAt: timestamp,
     });
   };
 
@@ -136,16 +138,16 @@ export function AssetsPage() {
       <header className="ob-page-header">
         <div className="min-w-0">
           <p className="ob-page-kicker">Library</p>
-          <h1 className="ob-page-title">我的素材</h1>
-          <p className="ob-page-desc">沉淀可复用的文本、图片、视频与音频原料，随时插入画布。</p>
+          <h1 className="ob-page-title">{t("assets.title")}</h1>
+          <p className="ob-page-desc">{t("assets.description")}</p>
         </div>
       </header>
 
       <div className="ob-toolbar-strip">
         <input
           className="ob-field w-full sm:max-w-xs sm:flex-1"
-          aria-label="搜索素材"
-          placeholder="搜索标题、标签、备注…"
+          aria-label={t("assets.search")}
+          placeholder={t("assets.searchPlaceholder")}
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -153,20 +155,20 @@ export function AssetsPage() {
           className="ob-field w-auto cursor-pointer"
           value={kind}
           onChange={(e) => setKind(e.target.value as typeof kind)}
-          aria-label="素材类型"
+          aria-label={t("assets.kind")}
         >
-          <option value="all">全部类型</option>
-          <option value="text">文本</option>
-          <option value="image">图片</option>
-          <option value="video">视频</option>
-          <option value="audio">音频</option>
+          <option value="all">{t("common.allTypes")}</option>
+          <option value="text">{t("common.text")}</option>
+          <option value="image">{t("common.image")}</option>
+          <option value="video">{t("common.video")}</option>
+          <option value="audio">{t("common.audio")}</option>
         </select>
         <div className="ob-page-actions !ml-0 sm:ml-auto">
           <button type="button" className="ob-btn" onClick={addText}>
-            新增文本
+            {t("assets.newText")}
           </button>
           <label className="ob-btn cursor-pointer">
-            上传图片
+            {t("assets.uploadImage")}
             <input
               type="file"
               accept="image/*"
@@ -179,7 +181,7 @@ export function AssetsPage() {
             />
           </label>
           <label className="ob-btn cursor-pointer">
-            上传视频
+            {t("assets.uploadVideo")}
             <input
               type="file"
               accept="video/*"
@@ -192,7 +194,7 @@ export function AssetsPage() {
             />
           </label>
           <label className="ob-btn cursor-pointer">
-            上传音频
+            {t("assets.uploadAudio")}
             <input
               type="file"
               accept="audio/*"
@@ -235,7 +237,7 @@ export function AssetsPage() {
               <div className="flex items-start gap-2">
                 <h3 className="min-w-0 flex-1 font-semibold text-[var(--ob-ink)]">{a.title}</h3>
                 <span className="ob-chip shrink-0">
-                  {a.kind === "text" ? "文本" : a.kind === "image" ? "图片" : a.kind === "video" ? "视频" : "音频"}
+                  {a.kind === "text" ? t("common.text") : a.kind === "image" ? t("common.image") : a.kind === "video" ? t("common.video") : t("common.audio")}
                 </span>
               </div>
               {a.source ? <p className="mt-0.5 truncate text-xs text-[var(--ob-muted)]">{a.source}</p> : null}
@@ -252,7 +254,7 @@ export function AssetsPage() {
                 onClick={() => {
                   const project = useBoardStore.getState().getActive();
                   if (!project) {
-                    alert("请先打开一个画布项目");
+                    alert(t("assets.openCanvasFirst"));
                     return;
                   }
                   setInsertingId(a.id);
@@ -265,7 +267,7 @@ export function AssetsPage() {
                   }).finally(() => setInsertingId(null));
                 }}
               >
-                {insertingId === a.id ? "插入中" : "插入画布"}
+                {insertingId === a.id ? t("assets.inserting") : t("assets.insertCanvas")}
               </button>
               {a.kind === "text" ? (
                 <button
@@ -273,7 +275,7 @@ export function AssetsPage() {
                   className="ob-btn"
                   onClick={() => void writeTextWithFallback(a.content ?? "").catch(() => undefined)}
                 >
-                  复制
+                  {t("common.copy")}
                 </button>
               ) : null}
               {a.kind !== "text" && a.storageKey ? (
@@ -287,7 +289,7 @@ export function AssetsPage() {
                     )
                   }
                 >
-                  下载
+                  {t("common.download")}
                 </button>
               ) : null}
               <button
@@ -298,13 +300,13 @@ export function AssetsPage() {
                   setEditing(a);
                 }}
               >
-                编辑
+                {t("common.edit")}
               </button>
               <button
                 type="button"
                 className="ob-btn-danger ml-auto rounded-lg px-2.5 py-1.5 text-sm font-medium"
                 onClick={() => {
-                  if (!window.confirm(`删除素材“${a.title}”？`)) return;
+                  if (!window.confirm(t("assets.confirmDelete", { title: a.title }))) return;
                   void (async () => {
                     const nextAssets = structuredClone(
                       useBoardStore.getState().assets.filter((item) => item.id !== a.id),
@@ -320,7 +322,7 @@ export function AssetsPage() {
                   })();
                 }}
               >
-                删除
+                {t("common.delete")}
               </button>
             </div>
           </article>
@@ -331,8 +333,8 @@ export function AssetsPage() {
           <span className="ob-empty-icon" aria-hidden>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
           </span>
-          <p className="ob-empty-title">暂无素材</p>
-          <p className="ob-empty-desc">上传图片/视频，或新增文本素材，沉淀可复用的创作原料。</p>
+          <p className="ob-empty-title">{t("assets.empty")}</p>
+          <p className="ob-empty-desc">{t("assets.emptyDescription")}</p>
         </div>
       ) : (
         <div className="mt-8 flex items-center justify-center gap-4 text-sm">
@@ -342,10 +344,10 @@ export function AssetsPage() {
             disabled={page <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
           >
-            上一页
+            {t("common.previousPage")}
           </button>
           <span className="ob-chip px-4 py-1.5 text-xs">
-            {page} / {totalPages} <span className="mx-2 opacity-50">·</span> 共 {filtered.length}
+            {t("common.pageTotal", { page, pages: totalPages, total: filtered.length })}
           </span>
           <button
             type="button"
@@ -353,7 +355,7 @@ export function AssetsPage() {
             disabled={page >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
           >
-            下一页
+            {t("common.nextPage")}
           </button>
         </div>
       )}

@@ -14,6 +14,7 @@ import { BUILTIN_PLUGINS } from "@/plugins/builtins";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { PluginManifest, PluginPermission, PluginRegistryEntry } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function PluginCard({
   manifest,
@@ -36,6 +37,7 @@ function PluginCard({
   onEnabledChange: (enabled: boolean) => void;
   disabled?: boolean;
 }) {
+  const { t } = useI18n();
   return (
     <article className="ob-card flex min-h-48 flex-col p-5">
       <div className="flex min-w-0 items-start gap-4">
@@ -45,7 +47,7 @@ function PluginCard({
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-semibold text-[var(--ob-ink)]">{manifest.name}</h2>
           <p className="text-xs text-[var(--ob-muted)]">
-            {builtin ? "内置" : "已安装"} · {manifest.id} · v{manifest.version}
+            {builtin ? t("plugins.builtin") : t("plugins.installed")} · {manifest.id} · v{manifest.version}
           </p>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-[var(--ob-muted)]">
@@ -53,18 +55,18 @@ function PluginCard({
             type="button"
             role="switch"
             aria-checked={enabled}
-            aria-label={`${manifest.name} 启用状态`}
+            aria-label={t("plugins.enabledState", { name: manifest.name })}
             disabled={disabled}
             className="ob-switch"
             data-checked={enabled ? "true" : "false"}
             onClick={() => onEnabledChange(!enabled)}
           />
-          <span aria-hidden="true">{enabled ? "已启用" : "已停用"}</span>
+          <span aria-hidden="true">{enabled ? t("plugins.enabled") : t("plugins.disabled")}</span>
         </div>
       </div>
       <p className="mt-3 line-clamp-3 text-sm text-[var(--ob-muted)]">{manifest.description}</p>
       <p className="mt-2 text-xs text-[var(--ob-muted)]">
-        权限：{manifest.permissions.length ? manifest.permissions.join("、") : "无"}
+        {t("plugins.permissions", { permissions: manifest.permissions.length ? manifest.permissions.join(", ") : t("common.none") })}
       </p>
       <div className="mt-auto flex items-center gap-2 pt-4">
         <button
@@ -73,18 +75,18 @@ function PluginCard({
           disabled={!enabled}
           onClick={onAdd}
         >
-          <Plus size={15} /> 添加到画布
+          <Plus size={15} /> {t("plugins.addCanvas")}
         </button>
         {update && onUpdate ? (
           <button type="button" className="ob-btn" onClick={onUpdate}>
-            <RefreshCw size={15} /> 升级到 v{update.version}
+            <RefreshCw size={15} /> {t("plugins.upgrade", { version: update.version })}
           </button>
         ) : null}
         {onRemove ? (
           <button
             type="button"
             className="ob-btn-danger ml-auto rounded-lg p-2"
-            title="卸载插件"
+            title={t("plugins.uninstall")}
             onClick={onRemove}
           >
             <Trash2 size={17} />
@@ -96,6 +98,7 @@ function PluginCard({
 }
 
 export function PluginsPage() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const config = useBoardStore((state) => state.config);
   const setConfig = useBoardStore((state) => state.setConfig);
@@ -199,7 +202,7 @@ export function PluginsPage() {
 
   const addToCanvas = (manifest: PluginManifest) => {
     if (!active) {
-      setError("请先创建或打开一个画布项目");
+      setError(t("plugins.openCanvasFirst"));
       return;
     }
     const { viewport } = active;
@@ -221,15 +224,15 @@ export function PluginsPage() {
       <header className="ob-page-header">
         <div className="min-w-0">
           <p className="ob-page-kicker">Extensions</p>
-          <h1 className="ob-page-title">插件</h1>
-          <p className="ob-page-desc">插件运行在不同源浏览器沙箱中；远程插件仍属于可执行第三方代码。</p>
+          <h1 className="ob-page-title">{t("plugins.title")}</h1>
+          <p className="ob-page-desc">{t("plugins.description")}</p>
         </div>
       </header>
 
       <section className="ob-card mb-6 p-4 sm:p-5">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row">
           <label className="min-w-0 flex-1">
-            <span className="sr-only">OpenBoard 插件注册表 URL</span>
+            <span className="sr-only">{t("plugins.registryUrl")}</span>
             <input
               type="url"
               inputMode="url"
@@ -245,12 +248,12 @@ export function PluginsPage() {
             disabled={busy || !registrySource.trim()}
             onClick={() => void loadRegistry()}
           >
-            <RefreshCw size={16} className={busy ? "animate-spin" : ""} /> 刷新注册表
+            <RefreshCw size={16} className={busy ? "animate-spin" : ""} /> {t("plugins.refreshRegistry")}
           </button>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <label className="min-w-0 flex-1">
-            <span className="sr-only">HTTPS 插件清单 URL</span>
+            <span className="sr-only">{t("plugins.manifestUrl")}</span>
             <input
               type="url"
               inputMode="url"
@@ -267,12 +270,12 @@ export function PluginsPage() {
             onClick={() => void install()}
           >
             {busy ? <RefreshCw size={16} className="animate-spin" /> : <Download size={16} />}
-            {busy ? "验证中" : "安装清单"}
+            {busy ? t("plugins.validating") : t("plugins.installManifest")}
           </button>
         </div>
         {error ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{error}</p> : null}
         <p className="mt-2 flex items-center gap-1 text-xs text-[var(--ob-muted)]">
-          <ExternalLink size={13} /> 仅接受不跳转的 HTTPS JSON 清单，安装前会验证权限和大小。
+          <ExternalLink size={13} /> {t("plugins.securityHint")}
         </p>
       </section>
 
@@ -338,7 +341,7 @@ export function PluginsPage() {
               : undefined}
             onAdd={() => addToCanvas(manifest)}
             onRemove={() => {
-              if (!window.confirm(`卸载 ${manifest.name}？现有节点会保留数据，但无法渲染。`)) return;
+              if (!window.confirm(t("plugins.confirmUninstall", { name: manifest.name }))) return;
               const current = useBoardStore.getState().config;
               setConfig({
                 ...current,
@@ -358,11 +361,11 @@ export function PluginsPage() {
             <div className="flex items-start gap-4">
               <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"><Box size={20} /></span>
               <div className="min-w-0 flex-1"><h2 className="truncate font-semibold text-[var(--ob-ink)]">{entry.name}</h2><p className="text-xs text-[var(--ob-muted)]">{entry.id} · v{entry.version}</p></div>
-              <span className="ob-chip ml-auto">注册表</span>
+              <span className="ob-chip ml-auto">{t("plugins.registry")}</span>
             </div>
             <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-[var(--ob-muted)]">{entry.description}</p>
             <button type="button" disabled={busy} className="ob-btn-primary mt-auto w-fit rounded-lg px-4 py-1.5 text-sm font-medium" onClick={() => void prepareRegistryInstall(entry)}>
-              <Download size={15} /> 安装
+              <Download size={15} /> {t("plugins.install")}
             </button>
           </article>
         ))}
@@ -377,15 +380,15 @@ export function PluginsPage() {
             className="ob-surface-glass w-full max-w-lg p-6"
           >
             <h2 id="plugin-install-title" className="text-lg font-semibold text-[var(--ob-ink)]">
-              安装 {pendingManifest.name}
+              {t("plugins.installTitle", { name: pendingManifest.name })}
             </h2>
             <p className="mt-2 text-sm text-[var(--ob-muted)]">
-              远程插件包含可执行代码，可能通过页面导航或网络请求发送插件内的数据。仅安装你信任来源的插件。
+              {t("plugins.installWarning")}
             </p>
             <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
-              <dt className="text-[var(--ob-muted)]">标识</dt>
+              <dt className="text-[var(--ob-muted)]">{t("plugins.identifier")}</dt>
               <dd className="break-all">{pendingManifest.id} · v{pendingManifest.version}</dd>
-              <dt className="text-[var(--ob-muted)]">权限</dt>
+              <dt className="text-[var(--ob-muted)]">{t("plugins.permissionLabel")}</dt>
               <dd className="space-y-2">
                 {pendingManifest.permissions.length ? pendingManifest.permissions.map((permission) => (
                   <label key={permission} className="flex items-center gap-2">
@@ -398,7 +401,7 @@ export function PluginsPage() {
                     />
                     <span>{permission}</span>
                   </label>
-                )) : "无"}
+                )) : t("common.none")}
               </dd>
             </dl>
             <div className="mt-5 flex justify-end gap-2">
@@ -410,7 +413,7 @@ export function PluginsPage() {
                   setConsented([]);
                 }}
               >
-                取消
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -418,7 +421,7 @@ export function PluginsPage() {
                 className="ob-btn-primary rounded-lg px-4 py-2 text-sm font-medium"
                 onClick={() => void confirmInstall()}
               >
-                同意并安装
+                {t("plugins.consentInstall")}
               </button>
             </div>
           </div>
