@@ -2,11 +2,39 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/openboard/openboard/server/internal/store"
 )
+
+func TestFilmStageWaiverAPIHonorsFeatureGateAndPersistsAudit(t *testing.T) {
+	t.Setenv(filmStageWaiverFeatureEnv, "true")
+	_, handler := filmAPIHandler(t)
+	created := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/script/waivers", []byte(`{"revision":1,"stageRevision":1,"reason":"External approved screenplay supplied.","riskAccepted":true}`))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create waiver: %d %s", created.Code, created.Body.String())
+	}
+	document := decodeFilmResponse(t, created)
+	if len(document.StageWaivers) != 1 {
+		t.Fatalf("persisted waivers = %d", len(document.StageWaivers))
+	}
+	revokeBody, _ := json.Marshal(filmStageWaiverRevokeRequest{Revision: document.Revision, WaiverRevision: 1})
+	revoked := request(t, handler, http.MethodDelete, "/api/film/projects/film-api/stage-waivers/"+document.StageWaivers[0].ID, revokeBody)
+	if revoked.Code != http.StatusOK || decodeFilmResponse(t, revoked).StageWaivers[0].RevokedAt == "" {
+		t.Fatalf("revoke waiver: %d %s", revoked.Code, revoked.Body.String())
+	}
+}
+
+func TestFilmStageWaiverAPIFailsClosedWhenDisabled(t *testing.T) {
+	t.Setenv(filmStageWaiverFeatureEnv, "false")
+	_, handler := filmAPIHandler(t)
+	response := request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/script/waivers", []byte(`{"revision":1,"stageRevision":1,"reason":"External approved screenplay supplied.","riskAccepted":true}`))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("disabled waiver status = %d body=%s", response.Code, response.Body.String())
+	}
+}
 
 func TestFilmStageWaiverIsAuditedAndUnblocksOnlyMatchingRevision(t *testing.T) {
 	document := newFilmDocument("film-waiver")
