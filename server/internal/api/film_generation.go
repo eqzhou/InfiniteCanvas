@@ -154,7 +154,7 @@ func filmStageGenerationKind(stage string) string {
 }
 
 func filmTaskGenerationKind(stage string) string {
-	if stage == "decompose" || stage == "script" {
+	if stage == "decompose" || stage == "script" || stage == "style_extraction" {
 		return "text"
 	}
 	return filmStageGenerationKind(stage)
@@ -795,7 +795,7 @@ func filmJobBinding(job store.GenerationJob) (*filmGenerationBinding, string) {
 func matchingFilmGenerationJob(job store.GenerationJob, binding filmGenerationBinding) bool {
 	storedBinding, requestHash := filmJobBinding(job)
 	expectedKind := filmStageGenerationKind(binding.Stage)
-	if binding.Stage == "decompose" || binding.Stage == "script" {
+	if binding.Stage == "decompose" || binding.Stage == "script" || binding.Stage == "style_extraction" {
 		expectedKind = "text"
 	}
 	return storedBinding != nil && requestHash == binding.RequestHash && *storedBinding == binding && job.ProjectID == binding.ProjectID && job.Kind == expectedKind

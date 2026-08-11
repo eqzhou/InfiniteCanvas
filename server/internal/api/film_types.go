@@ -109,28 +109,29 @@ type filmDirectorSource struct {
 }
 
 type filmAsset struct {
-	ID                 string   `json:"id"`
-	Revision           int      `json:"revision"`
-	Kind               string   `json:"kind"`
-	Title              string   `json:"title"`
-	Status             string   `json:"status"`
-	ParentAssetID      string   `json:"parentAssetId,omitempty"`
-	Description        string   `json:"description"`
-	MediaStorageKey    string   `json:"mediaStorageKey,omitempty"`
-	MediaMIMEType      string   `json:"mediaMimeType,omitempty"`
-	MediaSHA256        string   `json:"mediaSha256,omitempty"`
-	MediaObjectVersion string   `json:"mediaObjectVersion,omitempty"`
-	MediaProvenance    string   `json:"mediaProvenance,omitempty"`
-	Voice              string   `json:"voice,omitempty"`
-	StylePrompt        string   `json:"stylePrompt,omitempty"`
-	AspectRatio        string   `json:"aspectRatio,omitempty"`
-	AgeStage           string   `json:"ageStage,omitempty"`
-	Costume            string   `json:"costume,omitempty"`
-	StoryPeriod        string   `json:"storyPeriod,omitempty"`
-	IsDefault          bool     `json:"isDefault,omitempty"`
-	EpisodeIDs         []string `json:"episodeIds,omitempty"`
-	SceneIDs           []string `json:"sceneIds,omitempty"`
-	ShotIDs            []string `json:"shotIds,omitempty"`
+	ID                 string          `json:"id"`
+	Revision           int             `json:"revision"`
+	Kind               string          `json:"kind"`
+	Title              string          `json:"title"`
+	Status             string          `json:"status"`
+	ParentAssetID      string          `json:"parentAssetId,omitempty"`
+	Description        string          `json:"description"`
+	MediaStorageKey    string          `json:"mediaStorageKey,omitempty"`
+	MediaMIMEType      string          `json:"mediaMimeType,omitempty"`
+	MediaSHA256        string          `json:"mediaSha256,omitempty"`
+	MediaObjectVersion string          `json:"mediaObjectVersion,omitempty"`
+	MediaProvenance    string          `json:"mediaProvenance,omitempty"`
+	Voice              string          `json:"voice,omitempty"`
+	StylePrompt        string          `json:"stylePrompt,omitempty"`
+	StyleBible         *filmStyleBible `json:"styleBible,omitempty"`
+	AspectRatio        string          `json:"aspectRatio,omitempty"`
+	AgeStage           string          `json:"ageStage,omitempty"`
+	Costume            string          `json:"costume,omitempty"`
+	StoryPeriod        string          `json:"storyPeriod,omitempty"`
+	IsDefault          bool            `json:"isDefault,omitempty"`
+	EpisodeIDs         []string        `json:"episodeIds,omitempty"`
+	SceneIDs           []string        `json:"sceneIds,omitempty"`
+	ShotIDs            []string        `json:"shotIds,omitempty"`
 }
 
 type filmDialogue struct {
@@ -204,23 +205,73 @@ type filmStoryBible struct {
 }
 
 type filmTask struct {
-	ID                    string                      `json:"id"`
-	Revision              int                         `json:"revision"`
-	Stage                 string                      `json:"stage"`
-	ShotID                string                      `json:"shotId,omitempty"`
-	DialogueID            string                      `json:"dialogueId,omitempty"`
-	Title                 string                      `json:"title"`
-	Status                string                      `json:"status"`
-	Progress              float64                     `json:"progress"`
-	CreatedAt             string                      `json:"createdAt"`
-	UpdatedAt             string                      `json:"updatedAt"`
-	GenerationJobID       string                      `json:"generationJobId,omitempty"`
-	ParentGenerationJobID string                      `json:"parentGenerationJobId,omitempty"`
-	IdempotencyKey        string                      `json:"idempotencyKey,omitempty"`
-	RequestHash           string                      `json:"requestHash,omitempty"`
-	Error                 string                      `json:"error,omitempty"`
-	Snapshot              *filmGenerationSnapshot     `json:"snapshot,omitempty"`
-	TextSnapshot          *filmTextGenerationSnapshot `json:"textSnapshot,omitempty"`
+	ID                    string                       `json:"id"`
+	Revision              int                          `json:"revision"`
+	Stage                 string                       `json:"stage"`
+	ShotID                string                       `json:"shotId,omitempty"`
+	DialogueID            string                       `json:"dialogueId,omitempty"`
+	Title                 string                       `json:"title"`
+	Status                string                       `json:"status"`
+	Progress              float64                      `json:"progress"`
+	CreatedAt             string                       `json:"createdAt"`
+	UpdatedAt             string                       `json:"updatedAt"`
+	GenerationJobID       string                       `json:"generationJobId,omitempty"`
+	ParentGenerationJobID string                       `json:"parentGenerationJobId,omitempty"`
+	IdempotencyKey        string                       `json:"idempotencyKey,omitempty"`
+	RequestHash           string                       `json:"requestHash,omitempty"`
+	Error                 string                       `json:"error,omitempty"`
+	Snapshot              *filmGenerationSnapshot      `json:"snapshot,omitempty"`
+	TextSnapshot          *filmTextGenerationSnapshot  `json:"textSnapshot,omitempty"`
+	StyleSnapshot         *filmStyleExtractionSnapshot `json:"styleSnapshot,omitempty"`
+}
+
+type filmStyleExtractionParameters struct {
+	DetailLevel           string `json:"detailLevel"`
+	IncludeNegativePrompt bool   `json:"includeNegativePrompt"`
+	Focus                 string `json:"focus,omitempty"`
+}
+
+type filmStyleBible struct {
+	Summary        string   `json:"summary"`
+	StylePrompt    string   `json:"stylePrompt"`
+	NegativePrompt string   `json:"negativePrompt,omitempty"`
+	Palette        []string `json:"palette,omitempty"`
+	Lighting       string   `json:"lighting,omitempty"`
+	Composition    string   `json:"composition,omitempty"`
+	Camera         string   `json:"camera,omitempty"`
+	Texture        string   `json:"texture,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+}
+
+type filmStyleExtractionSnapshot struct {
+	SourceAsset          filmAsset                     `json:"sourceAsset"`
+	ProviderID           string                        `json:"providerId"`
+	Model                string                        `json:"model"`
+	PromptVersion        string                        `json:"promptVersion"`
+	OutputSchema         string                        `json:"outputSchema"`
+	Parameters           filmStyleExtractionParameters `json:"parameters"`
+	EstimatedGenerations int                           `json:"estimatedGenerations"`
+	EstimatedCredits     int                           `json:"estimatedCredits"`
+	CreatedAt            string                        `json:"createdAt"`
+}
+
+type filmStyleExtractionCandidate struct {
+	ID              string                        `json:"id"`
+	Revision        int                           `json:"revision"`
+	Status          string                        `json:"status"`
+	SourceAsset     filmAsset                     `json:"sourceAsset"`
+	ProviderID      string                        `json:"providerId"`
+	Model           string                        `json:"model"`
+	PromptVersion   string                        `json:"promptVersion"`
+	OutputSchema    string                        `json:"outputSchema"`
+	Parameters      filmStyleExtractionParameters `json:"parameters"`
+	TaskID          string                        `json:"taskId"`
+	GenerationJobID string                        `json:"generationJobId"`
+	RequestHash     string                        `json:"requestHash"`
+	Bible           filmStyleBible                `json:"bible"`
+	AdoptedAssetID  string                        `json:"adoptedAssetId,omitempty"`
+	CreatedAt       string                        `json:"createdAt"`
+	AppliedAt       string                        `json:"appliedAt,omitempty"`
 }
 
 type filmTextGenerationSnapshot struct {
@@ -446,31 +497,32 @@ type filmCropRect struct {
 }
 
 type filmDocument struct {
-	SchemaVersion      int                     `json:"schemaVersion"`
-	ProjectID          string                  `json:"projectId"`
-	Revision           int                     `json:"revision"`
-	CreatedAt          string                  `json:"createdAt"`
-	UpdatedAt          string                  `json:"updatedAt"`
-	AspectRatio        string                  `json:"aspectRatio"`
-	Source             filmSource              `json:"source"`
-	Story              filmStoryBible          `json:"story,omitempty"`
-	Episodes           []filmEpisode           `json:"episodes"`
-	Scenes             []filmScene             `json:"scenes"`
-	Shots              []filmShot              `json:"shots"`
-	Dialogues          []filmDialogue          `json:"dialogues,omitempty"`
-	Assets             []filmAsset             `json:"assets"`
-	Stages             []filmStage             `json:"stages"`
-	StageWaivers       []filmStageWaiver       `json:"stageWaivers,omitempty"`
-	Tasks              []filmTask              `json:"tasks"`
-	AICandidates       []filmAICandidate       `json:"aiCandidates,omitempty"`
-	ScriptCandidates   []filmAIScriptCandidate `json:"scriptCandidates,omitempty"`
-	StructureVersions  []filmStructureVersion  `json:"structureVersions,omitempty"`
-	QualityReports     []filmQualityReport     `json:"qualityReports"`
-	Timeline           filmTimeline            `json:"timeline"`
-	Deliverables       []filmDeliverable       `json:"deliverables"`
-	Adoptions          []filmMediaAdoption     `json:"adoptions,omitempty"`
-	Versions           []filmEntityVersion     `json:"versions,omitempty"`
-	ProjectionRevision int                     `json:"projectionRevision"`
+	SchemaVersion      int                            `json:"schemaVersion"`
+	ProjectID          string                         `json:"projectId"`
+	Revision           int                            `json:"revision"`
+	CreatedAt          string                         `json:"createdAt"`
+	UpdatedAt          string                         `json:"updatedAt"`
+	AspectRatio        string                         `json:"aspectRatio"`
+	Source             filmSource                     `json:"source"`
+	Story              filmStoryBible                 `json:"story,omitempty"`
+	Episodes           []filmEpisode                  `json:"episodes"`
+	Scenes             []filmScene                    `json:"scenes"`
+	Shots              []filmShot                     `json:"shots"`
+	Dialogues          []filmDialogue                 `json:"dialogues,omitempty"`
+	Assets             []filmAsset                    `json:"assets"`
+	Stages             []filmStage                    `json:"stages"`
+	StageWaivers       []filmStageWaiver              `json:"stageWaivers,omitempty"`
+	Tasks              []filmTask                     `json:"tasks"`
+	AICandidates       []filmAICandidate              `json:"aiCandidates,omitempty"`
+	ScriptCandidates   []filmAIScriptCandidate        `json:"scriptCandidates,omitempty"`
+	StyleCandidates    []filmStyleExtractionCandidate `json:"styleCandidates,omitempty"`
+	StructureVersions  []filmStructureVersion         `json:"structureVersions,omitempty"`
+	QualityReports     []filmQualityReport            `json:"qualityReports"`
+	Timeline           filmTimeline                   `json:"timeline"`
+	Deliverables       []filmDeliverable              `json:"deliverables"`
+	Adoptions          []filmMediaAdoption            `json:"adoptions,omitempty"`
+	Versions           []filmEntityVersion            `json:"versions,omitempty"`
+	ProjectionRevision int                            `json:"projectionRevision"`
 }
 
 type filmExportRequest struct {

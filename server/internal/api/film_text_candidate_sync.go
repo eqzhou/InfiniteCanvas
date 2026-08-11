@@ -29,16 +29,24 @@ func (s *Server) syncFilmTextJobCandidate(ctx context.Context, tenantID string, 
 			return err
 		}
 		alreadyStored := false
-		for _, candidate := range document.AICandidates {
-			if candidate.GenerationJobID == job.ID {
-				alreadyStored = true
-				break
+		if parameters.Operation == "film_style_extraction" {
+			for _, candidate := range document.StyleCandidates {
+				alreadyStored = alreadyStored || candidate.GenerationJobID == job.ID
+			}
+		} else {
+			for _, candidate := range document.AICandidates {
+				alreadyStored = alreadyStored || candidate.GenerationJobID == job.ID
 			}
 		}
 		if alreadyStored {
 			return nil
 		}
-		next, err := integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano))
+		var next filmDocument
+		if parameters.Operation == "film_style_extraction" {
+			next, err = integrateFilmStyleExtractionResult(document, job, parameters, time.Now().UTC().Format(time.RFC3339Nano))
+		} else {
+			next, err = integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano))
+		}
 		if err != nil {
 			return err
 		}

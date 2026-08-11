@@ -209,6 +209,9 @@ func setFilmTaskFromJob(s *Server, r *http.Request, document *filmDocument, task
 }
 
 func setFilmTextTaskFromJob(document *filmDocument, taskIndex int, task filmTask, job store.GenerationJob) error {
+	if task.Stage == "style_extraction" {
+		return setFilmStyleTaskFromJob(document, taskIndex, task, job)
+	}
 	if latestFilmTaskIndex(*document, task) != taskIndex {
 		return errors.New("generation job is historical and cannot update the current film text task")
 	}
@@ -244,6 +247,35 @@ func setFilmTextTaskFromJob(document *filmDocument, taskIndex int, task filmTask
 		stage.Status, stage.Error = filmStatusFailed, "Text generation requires retry"
 	}
 	document.Stages[stageIndex] = stage
+	document.Revision++
+	document.UpdatedAt = now
+	return nil
+}
+
+func setFilmStyleTaskFromJob(document *filmDocument, taskIndex int, task filmTask, job store.GenerationJob) error {
+	if latestFilmTaskIndex(*document, task) != taskIndex || task.StyleSnapshot == nil {
+		return errors.New("generation job is historical and cannot update the current style extraction task")
+	}
+	binding := filmGenerationBinding{ProjectID: document.ProjectID, Stage: task.Stage, TaskID: task.ID, RequestHash: task.RequestHash}
+	if !matchingFilmGenerationJob(job, binding) {
+		return errors.New("generation job binding is invalid")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch job.Status {
+	case "queued":
+		task.Status, task.Progress, task.Error = filmStatusRunning, 0, ""
+	case "running":
+		task.Status, task.Progress, task.Error = filmStatusRunning, 0.5, ""
+	case "failed":
+		task.Status, task.Progress, task.Error = filmStatusFailed, 0, stableFilmJobError(job.Status)
+	case "cancelled", "canceled":
+		task.Status, task.Progress, task.Error = filmStatusCanceled, 0, stableFilmJobError(job.Status)
+	default:
+		return errors.New("style extraction job state is unsupported")
+	}
+	task.Revision++
+	task.UpdatedAt = now
+	document.Tasks[taskIndex] = task
 	document.Revision++
 	document.UpdatedAt = now
 	return nil
@@ -353,7 +385,7 @@ func retryFilmJobClone(job store.GenerationJob, task filmTask, projectID string,
 	retryTask := filmTask{
 		ID: newTaskID, Revision: 1, Stage: task.Stage, ShotID: task.ShotID, DialogueID: task.DialogueID, Title: task.Title,
 		Status: filmStatusRunning, CreatedAt: now, UpdatedAt: now, GenerationJobID: newJobID,
-		IdempotencyKey: "retry:" + job.ID, RequestHash: requestHash, Snapshot: task.Snapshot, TextSnapshot: task.TextSnapshot,
+		IdempotencyKey: "retry:" + job.ID, RequestHash: requestHash, Snapshot: task.Snapshot, TextSnapshot: task.TextSnapshot, StyleSnapshot: task.StyleSnapshot,
 	}
 	return job, retryTask, nil
 }
@@ -420,6 +452,16 @@ func (s *Server) retryFilmGenerationJob(w http.ResponseWriter, r *http.Request) 
 		snapshot := *retryTask.TextSnapshot
 		snapshot.ProviderID, snapshot.Model, snapshot.EstimatedCredits = retryJob.ProviderID, retryJob.Model, estimatedCredits
 		retryTask.TextSnapshot = &snapshot
+	}
+	if retryTask.StyleSnapshot != nil {
+		snapshot := *retryTask.StyleSnapshot
+		snapshot.ProviderID, snapshot.Model, snapshot.EstimatedCredits = retryJob.ProviderID, retryJob.Model, estimatedCredits
+		retryTask.StyleSnapshot = &snapshot
+		var parameters persistedTextJobParameters
+		if json.Unmarshal(retryJob.Parameters, &parameters) == nil {
+			parameters.Style = &snapshot
+			retryJob.Parameters, _ = json.Marshal(parameters)
+		}
 	}
 	jobExists := false
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), retryJob.ID); getErr == nil {

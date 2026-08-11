@@ -177,7 +177,7 @@ func validateFilmEntities(document filmDocument) (map[string]filmEpisode, map[st
 		if err := addUniqueFilmID(ids, asset.ID, "asset"); err != nil {
 			return nil, nil, nil, nil, err
 		}
-		if _, supported := filmAssetKinds[asset.Kind]; !supported || asset.Revision < 1 || !validFilmStatus(asset.Status) || !validFilmText(asset.Title, 500, true) || !validFilmText(asset.Description, 50_000, false) || !validFilmText(asset.Voice, 500, false) || !validFilmText(asset.StylePrompt, 20_000, false) || !validFilmText(asset.AspectRatio, 20, false) || !validFilmText(asset.AgeStage, 200, false) || !validFilmText(asset.Costume, 1_000, false) || !validFilmText(asset.StoryPeriod, 500, false) || !validFilmStorageKey(asset.MediaStorageKey) || (asset.Kind != "identity" && (asset.AgeStage != "" || asset.Costume != "" || asset.StoryPeriod != "" || asset.IsDefault)) {
+		if _, supported := filmAssetKinds[asset.Kind]; !supported || asset.Revision < 1 || !validFilmStatus(asset.Status) || !validFilmText(asset.Title, 500, true) || !validFilmText(asset.Description, 50_000, false) || !validFilmText(asset.Voice, 500, false) || !validFilmText(asset.StylePrompt, 20_000, false) || !validFilmText(asset.AspectRatio, 20, false) || !validFilmText(asset.AgeStage, 200, false) || !validFilmText(asset.Costume, 1_000, false) || !validFilmText(asset.StoryPeriod, 500, false) || !validFilmStorageKey(asset.MediaStorageKey) || (asset.Kind != "identity" && (asset.AgeStage != "" || asset.Costume != "" || asset.StoryPeriod != "" || asset.IsDefault)) || (asset.StyleBible != nil && (asset.Kind != "style" || validateFilmStyleBible(*asset.StyleBible) != nil)) {
 			return nil, nil, nil, nil, fmt.Errorf("film asset %s is invalid", asset.ID)
 		}
 		assets[asset.ID] = asset
@@ -319,11 +319,12 @@ func validateFilmTasks(tasks []filmTask) error {
 			return err
 		}
 		generationKind := filmTaskGenerationKind(task.Stage)
-		projectLevelTextTask := generationKind == "text" && task.ShotID == "" && task.TextSnapshot != nil && task.Snapshot == nil
+		projectLevelTextTask := generationKind == "text" && task.ShotID == "" && task.Snapshot == nil && ((task.Stage == "style_extraction" && task.StyleSnapshot != nil && task.TextSnapshot == nil) || (task.Stage != "style_extraction" && task.TextSnapshot != nil && task.StyleSnapshot == nil))
 		shotMediaTask := generationKind != "" && generationKind != "text" && validProjectID(task.ShotID) && task.Snapshot != nil && task.TextSnapshot == nil
 		dialogueTaskInvalid := task.DialogueID != "" && (task.Stage != "audio" || !validProjectID(task.DialogueID))
 		parentBindingInvalid := task.ParentGenerationJobID != "" && (!shotMediaTask || !validProjectID(task.ParentGenerationJobID))
-		if _, exists := filmStageDependencies[task.Stage]; !exists || task.Revision < 1 || !validFilmStatus(task.Status) || !validFilmText(task.Title, 500, true) || math.IsNaN(task.Progress) || math.IsInf(task.Progress, 0) || task.Progress < 0 || task.Progress > 1 || !validFilmTimestamp(task.CreatedAt) || !validFilmTimestamp(task.UpdatedAt) || !validFilmText(task.Error, 2_000, false) || parentBindingInvalid || dialogueTaskInvalid || (task.GenerationJobID != "" && (!validProjectID(task.GenerationJobID) || (!projectLevelTextTask && !shotMediaTask) || !validFilmIdempotencyKey(task.IdempotencyKey) || !validFilmRequestHash(task.RequestHash))) || (task.GenerationJobID == "" && (task.ShotID != "" || task.DialogueID != "" || task.ParentGenerationJobID != "" || task.IdempotencyKey != "" || task.RequestHash != "" || task.Snapshot != nil || task.TextSnapshot != nil)) {
+		_, regularStage := filmStageDependencies[task.Stage]
+		if (!regularStage && task.Stage != "style_extraction") || task.Revision < 1 || !validFilmStatus(task.Status) || !validFilmText(task.Title, 500, true) || math.IsNaN(task.Progress) || math.IsInf(task.Progress, 0) || task.Progress < 0 || task.Progress > 1 || !validFilmTimestamp(task.CreatedAt) || !validFilmTimestamp(task.UpdatedAt) || !validFilmText(task.Error, 2_000, false) || parentBindingInvalid || dialogueTaskInvalid || (task.GenerationJobID != "" && (!validProjectID(task.GenerationJobID) || (!projectLevelTextTask && !shotMediaTask) || !validFilmIdempotencyKey(task.IdempotencyKey) || !validFilmRequestHash(task.RequestHash))) || (task.GenerationJobID == "" && (task.ShotID != "" || task.DialogueID != "" || task.ParentGenerationJobID != "" || task.IdempotencyKey != "" || task.RequestHash != "" || task.Snapshot != nil || task.TextSnapshot != nil || task.StyleSnapshot != nil)) {
 			return fmt.Errorf("film task %s is invalid", task.ID)
 		}
 		if task.Snapshot != nil {
@@ -374,6 +375,16 @@ func validateFilmTasks(tasks []filmTask) error {
 			}
 			if task.Stage == "script" && snapshot.ScriptMode != "" && !validFilmScriptMode(snapshot.ScriptMode) {
 				return fmt.Errorf("film task %s script mode snapshot is invalid", task.ID)
+			}
+		}
+		if task.StyleSnapshot != nil {
+			snapshot := task.StyleSnapshot
+			if task.Stage != "style_extraction" || snapshot.SourceAsset.Revision < 1 || snapshot.SourceAsset.MediaStorageKey == "" ||
+				!strings.HasPrefix(snapshot.SourceAsset.MediaMIMEType, "image/") || !validSHA256Hex(snapshot.SourceAsset.MediaSHA256) || snapshot.SourceAsset.MediaObjectVersion == "" ||
+				!validFilmText(snapshot.ProviderID, 500, true) || !validFilmText(snapshot.Model, 500, true) || !validFilmText(snapshot.PromptVersion, 100, true) ||
+				!validFilmText(snapshot.OutputSchema, 100, true) || !validFilmStyleParameters(snapshot.Parameters) || snapshot.EstimatedGenerations != 1 ||
+				snapshot.EstimatedCredits < 0 || !validFilmTimestamp(snapshot.CreatedAt) {
+				return fmt.Errorf("film task %s style snapshot is invalid", task.ID)
 			}
 		}
 	}
@@ -440,6 +451,38 @@ func validateFilmAIScriptCandidates(candidates []filmAIScriptCandidate, tasks []
 			!validFilmTimestamp(candidate.CreatedAt) || (candidate.AppliedAt != "" && !validFilmTimestamp(candidate.AppliedAt)) ||
 			validateFilmAIScript(candidate.Script) != nil {
 			return fmt.Errorf("film AI script candidate %s is invalid", candidate.ID)
+		}
+	}
+	return nil
+}
+
+func validateFilmStyleCandidates(candidates []filmStyleExtractionCandidate, tasks []filmTask, assets map[string]filmAsset) error {
+	if len(candidates) > 100 {
+		return errors.New("film style candidate retention limit reached")
+	}
+	taskIDs := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		taskIDs[task.ID] = struct{}{}
+	}
+	ids, jobs := map[string]struct{}{}, map[string]struct{}{}
+	for _, candidate := range candidates {
+		if err := addUniqueFilmID(ids, candidate.ID, "style candidate"); err != nil {
+			return err
+		}
+		if _, duplicate := jobs[candidate.GenerationJobID]; duplicate {
+			return errors.New("film style candidate generation jobs must be unique")
+		}
+		jobs[candidate.GenerationJobID] = struct{}{}
+		_, taskExists := taskIDs[candidate.TaskID]
+		validStatus := candidate.Status == filmStatusNeedsReview || candidate.Status == filmAICandidateStale || candidate.Status == filmAICandidateRejected || candidate.Status == filmAICandidateApplied
+		adoptionValid := candidate.Status != filmAICandidateApplied && candidate.AdoptedAssetID == "" && candidate.AppliedAt == "" ||
+			candidate.Status == filmAICandidateApplied && assets[candidate.AdoptedAssetID].Kind == "style" && validFilmTimestamp(candidate.AppliedAt)
+		if candidate.Revision < 1 || !validStatus || candidate.SourceAsset.Revision < 1 || candidate.SourceAsset.MediaStorageKey == "" ||
+			!strings.HasPrefix(candidate.SourceAsset.MediaMIMEType, "image/") || !validSHA256Hex(candidate.SourceAsset.MediaSHA256) || candidate.SourceAsset.MediaObjectVersion == "" ||
+			!validFilmText(candidate.ProviderID, 500, true) || !validFilmText(candidate.Model, 500, true) || !validFilmText(candidate.PromptVersion, 100, true) ||
+			!validFilmText(candidate.OutputSchema, 100, true) || !validFilmStyleParameters(candidate.Parameters) || !taskExists || !validProjectID(candidate.GenerationJobID) ||
+			!validFilmRequestHash(candidate.RequestHash) || validateFilmStyleBible(candidate.Bible) != nil || !validFilmTimestamp(candidate.CreatedAt) || !adoptionValid {
+			return fmt.Errorf("film style candidate %s is invalid", candidate.ID)
 		}
 	}
 	return nil
@@ -784,6 +827,9 @@ func validateFilmAggregate(document filmDocument, projectID string) error {
 		return err
 	}
 	if err := validateFilmAIScriptCandidates(document.ScriptCandidates, document.Tasks); err != nil {
+		return err
+	}
+	if err := validateFilmStyleCandidates(document.StyleCandidates, document.Tasks, assets); err != nil {
 		return err
 	}
 	if err := validateFilmStructureVersions(document.StructureVersions); err != nil {

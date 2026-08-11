@@ -15,22 +15,23 @@ import (
 )
 
 type persistedTextJobParameters struct {
-	Executor         string                     `json:"executor"`
-	RequestHash      string                     `json:"requestHash"`
-	Operation        string                     `json:"operation"`
-	PromptVersion    string                     `json:"promptVersion"`
-	OutputSchema     string                     `json:"outputSchema"`
-	ScriptMode       string                     `json:"scriptMode,omitempty"`
-	SystemPrompt     string                     `json:"systemPrompt"`
-	SourceRevision   int                        `json:"sourceRevision"`
-	SourceSHA256     string                     `json:"sourceSha256"`
-	FilmRevision     int                        `json:"filmRevision"`
-	TargetEntityID   string                     `json:"targetEntityId,omitempty"`
-	TargetRevision   int                        `json:"targetRevision,omitempty"`
-	TargetSHA256     string                     `json:"targetSha256,omitempty"`
-	EstimatedCredits int                        `json:"estimatedCredits,omitempty"`
-	SharedChannel    *generationChannelSnapshot `json:"sharedChannel,omitempty"`
-	Film             *filmGenerationBinding     `json:"film,omitempty"`
+	Executor         string                       `json:"executor"`
+	RequestHash      string                       `json:"requestHash"`
+	Operation        string                       `json:"operation"`
+	PromptVersion    string                       `json:"promptVersion"`
+	OutputSchema     string                       `json:"outputSchema"`
+	ScriptMode       string                       `json:"scriptMode,omitempty"`
+	SystemPrompt     string                       `json:"systemPrompt"`
+	SourceRevision   int                          `json:"sourceRevision"`
+	SourceSHA256     string                       `json:"sourceSha256"`
+	FilmRevision     int                          `json:"filmRevision"`
+	TargetEntityID   string                       `json:"targetEntityId,omitempty"`
+	TargetRevision   int                          `json:"targetRevision,omitempty"`
+	TargetSHA256     string                       `json:"targetSha256,omitempty"`
+	EstimatedCredits int                          `json:"estimatedCredits,omitempty"`
+	SharedChannel    *generationChannelSnapshot   `json:"sharedChannel,omitempty"`
+	Film             *filmGenerationBinding       `json:"film,omitempty"`
+	Style            *filmStyleExtractionSnapshot `json:"style,omitempty"`
 }
 
 type textExecutor interface {
@@ -64,7 +65,7 @@ func validatePersistedTextJob(job store.GenerationJob, parameters persistedTextJ
 		len(parameters.SystemPrompt) > maxProviderTextSystemRunes {
 		return errors.New("invalid server text job parameters")
 	}
-	if parameters.Operation != "film_decompose" && parameters.Operation != "film_script" {
+	if parameters.Operation != "film_decompose" && parameters.Operation != "film_script" && parameters.Operation != "film_style_extraction" {
 		return errors.New("unsupported server text operation")
 	}
 	if parameters.SourceRevision < 0 || (parameters.SourceRevision > 0 && !validFilmRequestHash(parameters.SourceSHA256)) || parameters.FilmRevision < 0 {
@@ -75,6 +76,18 @@ func validatePersistedTextJob(job store.GenerationJob, parameters persistedTextJ
 	}
 	if parameters.Operation == "film_script" && parameters.ScriptMode != "" && !validFilmScriptMode(parameters.ScriptMode) {
 		return errors.New("invalid server text script mode")
+	}
+	if parameters.Operation == "film_style_extraction" {
+		if parameters.Style == nil || parameters.Film == nil || parameters.Film.Stage != "style_extraction" ||
+			parameters.Style.SourceAsset.Revision < 1 || parameters.Style.SourceAsset.MediaStorageKey == "" ||
+			!strings.HasPrefix(parameters.Style.SourceAsset.MediaMIMEType, "image/") ||
+			!validSHA256Hex(parameters.Style.SourceAsset.MediaSHA256) || parameters.Style.SourceAsset.MediaObjectVersion == "" ||
+			parameters.Style.PromptVersion != parameters.PromptVersion || parameters.Style.OutputSchema != parameters.OutputSchema ||
+			!validFilmStyleParameters(parameters.Style.Parameters) {
+			return errors.New("invalid server style extraction snapshot")
+		}
+	} else if parameters.Style != nil {
+		return errors.New("unexpected server style extraction snapshot")
 	}
 	return nil
 }
@@ -154,6 +167,14 @@ func (s *Server) resolveTextGenerationRequest(
 	if strings.TrimSpace(parameters.SystemPrompt) != "" {
 		request.SystemPrompt = parameters.SystemPrompt
 	}
+	if parameters.Operation == "film_style_extraction" {
+		asset := parameters.Style.SourceAsset
+		value, err := s.readTenantBlob(ctx, tenantID, asset.MediaStorageKey, maxProviderTextImageBytes)
+		if err != nil || verifyFilmBlob(value, "image/", asset.MediaMIMEType, asset.MediaSHA256, asset.MediaObjectVersion, 0) != nil {
+			return providerModelConnection{}, providerTextRequest{}, errors.New("frozen style source image is unavailable or changed")
+		}
+		request.Images = []string{styleDataURL(asset, value)}
+	}
 	if err := validateProviderTextRequest(request); err != nil {
 		return providerModelConnection{}, providerTextRequest{}, err
 	}
@@ -229,6 +250,11 @@ func (s *Server) executeClaimedTextJob(claimed store.TenantGenerationJob) {
 	} else if parameters.Operation == "film_script" {
 		if _, err := parseFilmAIScriptCandidate([]byte(text)); err != nil {
 			finish("failed", nil, "文本生成结果不符合分集剧本合同", providerTextAuditPayload(request, connection.Protocol))
+			return
+		}
+	} else if parameters.Operation == "film_style_extraction" {
+		if _, err := parseFilmStyleBible([]byte(text)); err != nil {
+			finish("failed", nil, "风格提取结果不符合风格圣经合同", providerTextAuditPayload(request, connection.Protocol))
 			return
 		}
 	}

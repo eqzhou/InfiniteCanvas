@@ -148,6 +148,23 @@ func TestFilmStyleExtractionLoadsFrozenImageAndSupportsRetry(t *testing.T) {
 	created := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/style-extractions", styleExtractionBody(t, document.Revision, source.ID, "style-retry-1", "texture")))
 	task := created.Tasks[0]
 	job, _ := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	channel := adminChannelPublic{ID: job.ProviderID, BaseURL: "https://text.example/v1", Protocol: "openai", TimeoutSeconds: 45, DefaultTextModel: job.Model}
+	secret, err := server.sealGenerationChannelSecret(store.DefaultTenantID, job.ID, job.Kind, channel, "sk-frozen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted persistedTextJobParameters
+	if json.Unmarshal(job.Parameters, &persisted) != nil {
+		t.Fatal("decode style job parameters")
+	}
+	persisted.SharedChannel = &generationChannelSnapshot{ProviderID: channel.ID, BaseURL: channel.BaseURL, Protocol: channel.Protocol, Model: channel.DefaultTextModel, TimeoutSeconds: channel.TimeoutSeconds, Secret: secret}
+	job.Parameters, _ = json.Marshal(persisted)
+	if err := backend.PutGenerationJob(t.Context(), store.DefaultTenantID, job); err != nil {
+		t.Fatal(err)
+	}
 	_, providerRequest, err := server.resolveTextGenerationRequest(t.Context(), store.DefaultTenantID, job)
 	if err != nil || len(providerRequest.Images) != 1 || !strings.HasPrefix(providerRequest.Images[0], "data:image/png;base64,") {
 		t.Fatalf("frozen image request = %#v err=%v", providerRequest, err)

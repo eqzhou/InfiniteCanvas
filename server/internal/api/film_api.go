@@ -97,6 +97,8 @@ func mountFilmRoutes(r chi.Router, server *Server) {
 		r.Post("/assets", server.createFilmAsset)
 		r.Put("/assets/{entityId}", server.updateFilmAsset)
 		r.Delete("/assets/{entityId}", server.deleteFilmAsset)
+		r.Post("/style-extractions", server.runFilmStyleExtraction)
+		r.Post("/style-extractions/{candidateId}/adopt", server.adoptFilmStyleCandidate)
 		r.Post("/stages/{stageId}/run", server.runFilmStage)
 		r.Post("/stages/{stageId}/sync", server.syncFilmStage)
 		r.Get("/generation-jobs", server.listFilmGenerationJobs)
