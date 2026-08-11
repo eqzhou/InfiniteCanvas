@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { PromptItem } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export type PromptEditorValues = {
   title: string;
@@ -22,6 +23,7 @@ export function PromptEditorDialog({
   onClose: () => void;
   onSave: (values: PromptEditorValues) => Promise<void> | void;
 }) {
+  const { t } = useI18n();
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");
@@ -40,16 +42,16 @@ export function PromptEditorDialog({
   useEscapeDismiss(open && !busy, onClose);
   if (!open) return null;
 
-  const heading = mode === "edit" ? "编辑提示词" : "新建提示词";
+  const heading = mode === "edit" ? t("promptEditor.edit") : t("promptEditor.create");
   const submit = () => {
     const normalizedTitle = title.trim();
     const normalizedBody = body.trim();
     if (!normalizedTitle) {
-      setError("请输入标题");
+      setError(t("promptEditor.titleRequired"));
       return;
     }
     if (!normalizedBody) {
-      setError("请输入提示词内容");
+      setError(t("promptEditor.bodyRequired"));
       return;
     }
     const normalizedTags = Array.from(new Set(
@@ -80,8 +82,8 @@ export function PromptEditorDialog({
           <h2 id="prompt-editor-title" className="text-base font-semibold">{heading}</h2>
           <button
             type="button"
-            title="关闭提示词编辑器"
-            aria-label="关闭提示词编辑器"
+            title={t("promptEditor.close")}
+            aria-label={t("promptEditor.close")}
             className="ob-btn-ghost ml-auto p-1"
             disabled={busy}
             onClick={onClose}
@@ -91,7 +93,7 @@ export function PromptEditorDialog({
         </header>
         <div className="ob-dialog-body flex-1 space-y-4 min-h-0 overflow-y-auto p-4 sm:p-5">
           <label className="grid gap-1 text-sm">
-            <span className="text-[var(--ob-muted)]">标题</span>
+            <span className="text-[var(--ob-muted)]">{t("promptEditor.title")}</span>
             <input
               className="ob-field"
               maxLength={120}
@@ -101,7 +103,7 @@ export function PromptEditorDialog({
             />
           </label>
           <label className="grid gap-1 text-sm">
-            <span className="text-[var(--ob-muted)]">提示词内容</span>
+            <span className="text-[var(--ob-muted)]">{t("promptEditor.body")}</span>
             <textarea
               className="ob-field min-h-56 resize-y"
               maxLength={20_000}
@@ -110,22 +112,22 @@ export function PromptEditorDialog({
             />
           </label>
           <label className="grid gap-1 text-sm">
-            <span className="text-[var(--ob-muted)]">标签</span>
+            <span className="text-[var(--ob-muted)]">{t("promptEditor.tags")}</span>
             <input
               className="ob-field"
               value={tags}
               onChange={(event) => setTags(event.target.value)}
-              placeholder="商品, 摄影, 海报"
+              placeholder={t("promptEditor.tagsPlaceholder")}
             />
           </label>
           {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
         </div>
         <footer className="ob-dialog-footer gap-2 px-4 py-3 sm:px-5">
           <button type="button" disabled={busy} className="ob-btn text-sm disabled:opacity-50" onClick={onClose}>
-            取消
+            {t("common.cancel")}
           </button>
           <button type="button" disabled={busy} className="ob-btn-primary text-sm disabled:opacity-50" onClick={submit}>
-            {busy ? "保存中" : "保存提示词"}
+            {busy ? t("promptEditor.saving") : t("promptEditor.save")}
           </button>
         </footer>
       </div>

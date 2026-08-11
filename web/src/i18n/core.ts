@@ -2,11 +2,13 @@ import { settingsEnUS, settingsZhCN } from "./messages/settings";
 import { adminEnUS, adminZhCN } from "./messages/admin";
 import { filmEnUS, filmZhCN } from "./messages/film";
 import { agentHelpEnUS, agentHelpZhCN } from "./messages/agent-help";
+import { contentEditorsEnUS, contentEditorsZhCN } from "./messages/content-editors";
 
 export const SUPPORTED_LOCALES = ["zh-CN", "en-US"] as const;
 export type AppLocale = typeof SUPPORTED_LOCALES[number];
 
 const zhCN = {
+  ...contentEditorsZhCN,
   ...agentHelpZhCN,
   ...filmZhCN,
   ...adminZhCN,
@@ -360,6 +362,7 @@ export type MessageKey = keyof typeof zhCN;
 type MessageParams = Readonly<Record<string, string | number>>;
 
 const enUS: Partial<Record<MessageKey, string>> = {
+  ...contentEditorsEnUS,
   ...agentHelpEnUS,
   ...filmEnUS,
   ...adminEnUS,

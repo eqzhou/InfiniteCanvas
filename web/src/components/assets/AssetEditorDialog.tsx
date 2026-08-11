@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { AssetItem } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export type AssetEditorValues = {
   title: string;
@@ -23,6 +24,7 @@ export function AssetEditorDialog({
   onClose: () => void;
   onSave: (values: AssetEditorValues) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [title, setTitle] = useState("");
   const [tags, setTags] = useState("");
   const [source, setSource] = useState("");
@@ -70,45 +72,45 @@ export function AssetEditorDialog({
         }}
       >
         <div className="mb-4 flex items-center gap-2">
-          <h2 id="asset-editor-title" className="font-semibold">{mode === "create" ? "新增素材" : "编辑素材"}</h2>
-          <button type="button" title="关闭编辑" className="ob-btn-ghost ml-auto p-1" onClick={onClose}>
+          <h2 id="asset-editor-title" className="font-semibold">{mode === "create" ? t("assetEditor.create") : t("assetEditor.edit")}</h2>
+          <button type="button" title={t("assetEditor.close")} className="ob-btn-ghost ml-auto p-1" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm">
-            <span>标题</span>
-            <input id="asset-title" aria-label="标题" className="ob-field" value={title} onChange={(event) => setTitle(event.target.value)} />
+            <span>{t("assetEditor.title")}</span>
+            <input id="asset-title" aria-label={t("assetEditor.title")} className="ob-field" value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm">
-            <span>来源</span>
-            <input aria-label="来源" className="ob-field" value={source} onChange={(event) => setSource(event.target.value)} />
+            <span>{t("assetEditor.source")}</span>
+            <input aria-label={t("assetEditor.source")} className="ob-field" value={source} onChange={(event) => setSource(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm sm:col-span-2">
-            标签
+            {t("assetEditor.tags")}
             <input className="ob-field" value={tags} onChange={(event) => setTags(event.target.value)} />
           </label>
           <label className="grid gap-1 text-sm sm:col-span-2">
-            备注
+            {t("assetEditor.notes")}
             <textarea className="ob-field min-h-20 resize-y" value={notes} onChange={(event) => setNotes(event.target.value)} />
           </label>
           {asset.kind === "text" ? (
             <label className="grid gap-1 text-sm sm:col-span-2">
-              <span>内容</span>
-              <textarea aria-label="内容" className="ob-field min-h-40 resize-y" value={content} onChange={(event) => setContent(event.target.value)} />
+              <span>{t("assetEditor.content")}</span>
+              <textarea aria-label={t("assetEditor.content")} className="ob-field min-h-40 resize-y" value={content} onChange={(event) => setContent(event.target.value)} />
             </label>
           ) : (
             <label className="grid gap-1 text-sm sm:col-span-2">
-              替换{asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : "音频"}
+              {t(asset.kind === "image" ? "assetEditor.replaceImage" : asset.kind === "video" ? "assetEditor.replaceVideo" : "assetEditor.replaceAudio")}
               <input type="file" accept={`${asset.kind}/*`} onChange={(event) => setReplacement(event.target.files?.[0])} />
             </label>
           )}
         </div>
         {error ? <p role="alert" className="mt-3 text-sm text-[var(--ob-danger)]">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" className="ob-btn text-sm" onClick={onClose}>取消</button>
+          <button type="button" className="ob-btn text-sm" onClick={onClose}>{t("common.cancel")}</button>
           <button type="submit" disabled={busy || !title.trim()} className="ob-btn-primary text-sm disabled:opacity-50">
-            {busy ? "保存中" : "保存"}
+            {busy ? t("assetEditor.saving") : t("assetEditor.save")}
           </button>
         </div>
       </form>
