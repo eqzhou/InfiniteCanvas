@@ -10,6 +10,8 @@ import (
 	"github.com/openboard/openboard/server/internal/store"
 )
 
+const webDAVMediaEnabledHeader = "X-OpenBoard-WebDAV-Media-Enabled"
+
 func decodeAdminStorageJSON(body io.Reader, target any, limit int64) error {
 	decoder := json.NewDecoder(io.LimitReader(body, limit+1))
 	decoder.DisallowUnknownFields()
@@ -55,6 +57,11 @@ func (s *Server) getAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 	if !s.requireTenantAdmin(w, r, "storage pool unavailable") {
 		return
 	}
+	webDAVEnabled := "false"
+	if incrementFeatureEnabled(webDAVMediaFeatureEnv) {
+		webDAVEnabled = "true"
+	}
+	w.Header().Set(webDAVMediaEnabledHeader, webDAVEnabled)
 	configRaw, rawErr := getOptionalState(r.Context(), s.store, tenantIDFrom(r), tenantStoragePoolStateKey)
 	if rawErr != nil {
 		http.Error(w, "failed to load storage pool", http.StatusInternalServerError)
