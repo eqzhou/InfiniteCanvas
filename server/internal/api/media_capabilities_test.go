@@ -212,6 +212,9 @@ func TestSharedVideoAndAudioJobsFreezeCatalogResolution(t *testing.T) {
 		if json.Unmarshal(job.Parameters, &parameters) != nil || len(parameters.CapabilityVersion) != 64 || parameters.GenerationMode != expectedMode {
 			t.Fatalf("%s catalog resolution was not frozen: %s", id, job.Parameters)
 		}
+		if id == "shared-video" && parameters.ResolvedMode != "text_to_video" {
+			t.Fatalf("%s resolved video mode was not frozen: %s", id, job.Parameters)
+		}
 	}
 }
 
