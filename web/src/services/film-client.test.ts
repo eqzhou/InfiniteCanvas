@@ -103,14 +103,15 @@ describe("film client", () => {
   });
 
   test("normalizes legacy status capabilities into conservative feature flags", () => {
-    expect(normalizeFilmCapabilities({
+    const capabilities = normalizeFilmCapabilities({
       plainTextImport: true,
       markdownImport: true,
       docxImport: false,
       pdfImport: false,
       mp4Export: false,
       mp4Diagnostic: "renderer unavailable",
-    })).toMatchObject({
+    });
+    expect(capabilities).toMatchObject({
       plainTextImport: true,
       markdownImport: true,
       docxImport: false,
@@ -120,6 +121,31 @@ describe("film client", () => {
       generationJobs: false,
       assetBundleExport: false,
       mp4Export: false,
+    });
+    expect(capabilities.features).toEqual({
+      webdavMedia: false,
+      advancedVoice: false,
+      localWorkflows: false,
+      styleExtraction: false,
+      stageWaiver: false,
+    });
+  });
+
+  test("accepts only explicit boolean increment feature capabilities", () => {
+    expect(normalizeFilmCapabilities({
+      features: {
+        webdavMedia: true,
+        advancedVoice: "true",
+        localWorkflows: 1,
+        styleExtraction: false,
+        stageWaiver: true,
+      },
+    } as never).features).toEqual({
+      webdavMedia: true,
+      advancedVoice: false,
+      localWorkflows: false,
+      styleExtraction: false,
+      stageWaiver: true,
     });
   });
 

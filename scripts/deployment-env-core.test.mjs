@@ -81,3 +81,18 @@ test("the deployment sample documents bounded film resource controls", () => {
     assert.ok(documented.includes(name), `${name} must be documented`);
   }
 });
+
+test("incremental feature gates are documented and forwarded to the container", () => {
+  const documented = documentedEnvNames(readFileSync(join(root, ".env.example"), "utf8"));
+  const compose = readFileSync(join(root, "compose.yaml"), "utf8");
+  for (const name of [
+    "OPENBOARD_WEBDAV_MEDIA",
+    "OPENBOARD_ADVANCED_VOICE",
+    "OPENBOARD_LOCAL_WORKFLOWS",
+    "OPENBOARD_STYLE_EXTRACTION",
+    "OPENBOARD_FILM_STAGE_WAIVER",
+  ]) {
+    assert.ok(documented.includes(name), `${name} must be documented`);
+    assert.ok(compose.includes(`${name}:`), `${name} must reach the container`);
+  }
+});

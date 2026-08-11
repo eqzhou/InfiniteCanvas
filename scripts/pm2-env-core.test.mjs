@@ -155,6 +155,18 @@ test("the PM2 allowlist includes bounded media and PDF executables", () => {
   assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PDF_SANDBOX_PATH"));
 });
 
+test("the PM2 allowlist carries every incremental feature gate", () => {
+  for (const name of [
+    "OPENBOARD_WEBDAV_MEDIA",
+    "OPENBOARD_ADVANCED_VOICE",
+    "OPENBOARD_LOCAL_WORKFLOWS",
+    "OPENBOARD_STYLE_EXTRACTION",
+    "OPENBOARD_FILM_STAGE_WAIVER",
+  ]) {
+    assert.ok(DEPLOYMENT_ENV_KEYS.includes(name), `${name} must reach the API process`);
+  }
+});
+
 test("final capability overrides can clear stale inherited media paths", () => {
   const resolved = resolveDeploymentEnv(
     {},
