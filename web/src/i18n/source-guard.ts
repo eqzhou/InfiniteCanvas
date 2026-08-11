@@ -31,24 +31,35 @@ function isTranslationCall(node: ts.Node): boolean {
     && (node.expression.text === "t" || node.expression.text === "translate");
 }
 
-function visibleChinese(node: ts.Node): string | undefined {
-  if (ts.isJsxText(node)) return HAN.test(node.text) ? node.text.trim() : undefined;
+function staticTexts(node: ts.Node): string[] {
+  const value = staticText(node);
+  if (value !== undefined) return [value];
+  if (ts.isConditionalExpression(node)) return [...staticTexts(node.whenTrue), ...staticTexts(node.whenFalse)];
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    return [...staticTexts(node.left), ...staticTexts(node.right)];
+  }
+  return [];
+}
+
+function visibleChinese(node: ts.Node): string[] {
+  if (ts.isJsxText(node)) return HAN.test(node.text) ? [node.text.trim()] : [];
   if (ts.isJsxAttribute(node) && VISIBLE_ATTRIBUTES.has(node.name.getText())) {
     const initializer = node.initializer;
-    if (!initializer) return undefined;
-    if (ts.isStringLiteral(initializer)) return HAN.test(initializer.text) ? initializer.text : undefined;
+    if (!initializer) return [];
+    if (ts.isStringLiteral(initializer)) return HAN.test(initializer.text) ? [initializer.text] : [];
     if (ts.isJsxExpression(initializer) && initializer.expression) {
-      if (isTranslationCall(initializer.expression)) return undefined;
-      const value = staticText(initializer.expression);
-      return value && HAN.test(value) ? value : undefined;
+      if (isTranslationCall(initializer.expression)) return [];
+      return staticTexts(initializer.expression).filter((value) => HAN.test(value));
     }
   }
-  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
-    && (node.expression.text === "alert" || node.expression.text === "confirm")) {
-    const value = node.arguments[0] && staticText(node.arguments[0]);
-    return value && HAN.test(value) ? value : undefined;
+  if (ts.isJsxExpression(node) && node.expression && !isTranslationCall(node.expression)) {
+    return staticTexts(node.expression).filter((value) => HAN.test(value));
   }
-  return undefined;
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
+    && (node.expression.text === "alert" || node.expression.text === "confirm" || node.expression.text === "setError" || node.expression.text === "setErr")) {
+    return node.arguments[0] ? staticTexts(node.arguments[0]).filter((value) => HAN.test(value)) : [];
+  }
+  return [];
 }
 
 export function findHardcodedUserFacingChinese(
@@ -58,8 +69,8 @@ export function findHardcodedUserFacingChinese(
   for (const [relativeFile, sourceText] of Object.entries(sources)) {
     const source = ts.createSourceFile(relativeFile, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const visit = (node: ts.Node) => {
-      const text = visibleChinese(node);
-      if (text) {
+      const texts = visibleChinese(node);
+      for (const text of texts) {
         const position = source.getLineAndCharacterOfPosition(node.getStart(source));
         violations.push({
           file: relativeFile,
