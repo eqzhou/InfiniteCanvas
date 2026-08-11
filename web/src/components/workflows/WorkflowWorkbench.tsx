@@ -29,6 +29,7 @@ import {
 import { useBoardStore } from "@/stores/use-board-store";
 import type { GenerationJob } from "@/types/board";
 import type { WorkflowTemplate } from "@/types/workflow";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export const DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT = [
   "你是图片创作工作流设计助手。",
@@ -65,6 +66,7 @@ function extractJSONObject(value: string): unknown {
 }
 
 export function WorkflowWorkbench() {
+  const { t } = useI18n();
   const config = useBoardStore((state) => state.config);
   const project = useBoardStore((state) => state.getActive());
   const commitWorkflowResultNodes = useBoardStore((state) => state.commitWorkflowResultNodes);
@@ -155,7 +157,7 @@ export function WorkflowWorkbench() {
   };
 
   const createDraft = () => {
-    const next = createPersonalWorkflowTemplate("新图片工作流", nowIso(), uid("workflow"));
+    const next = createPersonalWorkflowTemplate(t("workflow.newTitle"), nowIso(), uid("workflow"));
     setSelectedId("");
     setDraft(next);
     setValues(initialValues(next));
@@ -168,7 +170,7 @@ export function WorkflowWorkbench() {
     try {
       const copy = draft.id && templates.some((template) => template.id === draft.id)
         ? await duplicateWorkflowTemplate(draft.id)
-        : await savePersonalWorkflowTemplate({ ...structuredClone(draft), id: uid("workflow"), revision: 1, scope: "personal", title: `${draft.title} 副本`, createdAt: nowIso(), updatedAt: nowIso() });
+        : await savePersonalWorkflowTemplate({ ...structuredClone(draft), id: uid("workflow"), revision: 1, scope: "personal", title: t("workflow.copySuffix", { title: draft.title }), createdAt: nowIso(), updatedAt: nowIso() });
       await refreshTemplates();
       setSelectedId(copy.id);
       setDraft(copy);
@@ -180,7 +182,7 @@ export function WorkflowWorkbench() {
   };
 
   const deleteDraft = async () => {
-    if (!draft || draft.scope !== "personal" || !window.confirm(`删除“${draft.title}”？历史运行不会删除。`)) return;
+    if (!draft || draft.scope !== "personal" || !window.confirm(t("workflow.confirmDelete", { title: draft.title }))) return;
     setBusy(true);
     try {
       await removePersonalWorkflowTemplate(draft.id);
@@ -289,7 +291,7 @@ export function WorkflowWorkbench() {
         y: (260 - active.viewport.y) / active.viewport.k + Math.floor(index / 4) * 360,
       }, {
         id: uid("workflow_image"),
-        title: step?.title ?? "工作流结果",
+        title: step?.title ?? t("workflow.result"),
         metadata: {
           content,
           storageKey,
@@ -311,51 +313,51 @@ export function WorkflowWorkbench() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--ob-canvas)]">
       <header className="flex flex-wrap items-center gap-3 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3">
-        <div className="mr-auto"><p className="ob-page-kicker">Workflow</p><h1 className="text-base font-semibold">图片创作工作流</h1></div>
-        <div className="ob-segment" role="tablist" aria-label="工作台类型">
-          <Link role="tab" aria-selected={false} className="ob-segment-item no-underline" to="/workbench/image">图片</Link>
-          <Link role="tab" aria-selected={false} className="ob-segment-item no-underline" to="/workbench/video">视频</Link>
-          <Link role="tab" aria-selected className="ob-segment-item no-underline" to="/workbench/workflows">工作流</Link>
+        <div className="mr-auto"><p className="ob-page-kicker">Workflow</p><h1 className="text-base font-semibold">{t("workflow.title")}</h1></div>
+        <div className="ob-segment" role="tablist" aria-label={t("workbench.kind")}>
+          <Link role="tab" aria-selected={false} className="ob-segment-item no-underline" to="/workbench/image">{t("common.image")}</Link>
+          <Link role="tab" aria-selected={false} className="ob-segment-item no-underline" to="/workbench/video">{t("common.video")}</Link>
+          <Link role="tab" aria-selected className="ob-segment-item no-underline" to="/workbench/workflows">{t("workbench.workflow")}</Link>
         </div>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto xl:grid-cols-[260px_minmax(420px,1fr)_360px]">
-        <aside className="border-b border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 xl:border-b-0 xl:border-r" aria-label="工作流模板">
-          <div className="mb-3 flex items-center gap-2"><strong className="mr-auto text-sm">模板</strong>
-            <button type="button" className="ob-icon-btn" title="新建个人模板" onClick={createDraft}><Plus size={15} /></button>
-            <button type="button" className="ob-icon-btn" title="刷新模板" onClick={() => void refreshTemplates()}><RefreshCw size={15} /></button></div>
-          <input className="ob-field mb-2" aria-label="搜索工作流模板" placeholder="搜索模板" value={search} onChange={(event) => setSearch(event.target.value)} />
+        <aside className="border-b border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 xl:border-b-0 xl:border-r" aria-label={t("workflow.templates")}>
+          <div className="mb-3 flex items-center gap-2"><strong className="mr-auto text-sm">{t("workflow.template")}</strong>
+            <button type="button" className="ob-icon-btn" title={t("workflow.newPersonal")} onClick={createDraft}><Plus size={15} /></button>
+            <button type="button" className="ob-icon-btn" title={t("workflow.refreshTemplates")} onClick={() => void refreshTemplates()}><RefreshCw size={15} /></button></div>
+          <input className="ob-field mb-2" aria-label={t("workflow.search")} placeholder={t("workflow.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
           <div className="mb-2 grid grid-cols-2 gap-2">
-            <select className="ob-field" aria-label="模板范围" value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}>
-              <option value="all">全部</option><option value="public">公开</option><option value="personal">个人</option>
+            <select className="ob-field" aria-label={t("workflow.scope")} value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}>
+              <option value="all">{t("workflow.all")}</option><option value="public">{t("workflow.public")}</option><option value="personal">{t("workflow.personal")}</option>
             </select>
-            <select className="ob-field" aria-label="模板分类" value={category} onChange={(event) => setCategory(event.target.value)}>
-              <option value="all">全部分类</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}
+            <select className="ob-field" aria-label={t("workflow.category")} value={category} onChange={(event) => setCategory(event.target.value)}>
+              <option value="all">{t("workflow.allCategories")}</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </div>
           <div className="space-y-2">
             {filtered.map((template) => <button key={template.id} type="button" aria-pressed={draft?.id === template.id}
               className={`w-full rounded-lg border p-3 text-left ${draft?.id === template.id ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]" : "border-[var(--ob-line)]"}`}
-              onClick={() => selectTemplate(template)}><strong className="block truncate text-sm">{template.title}</strong><span className="mt-1 block text-xs text-[var(--ob-muted)]">{template.scope === "public" ? "公开" : "个人"} · {template.steps.length} 步</span></button>)}
+              onClick={() => selectTemplate(template)}><strong className="block truncate text-sm">{template.title}</strong><span className="mt-1 block text-xs text-[var(--ob-muted)]">{template.scope === "public" ? t("workflow.public") : t("workflow.personal")} · {t("workflow.steps", { count: template.steps.length })}</span></button>)}
           </div>
         </aside>
 
         <main className="min-w-0 space-y-5 p-5">
           <section className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4">
-            <div className="mb-2 flex items-center gap-2"><Sparkles size={16} /><strong className="text-sm">AI 创建工作流</strong><span className="text-xs text-[var(--ob-muted)]">生成后先预览，保存才入个人模板</span></div>
-            <textarea className="ob-field min-h-20" aria-label="AI 工作流描述" placeholder="例如：先生成产品主图，再生成三个不同场景的系列图" value={agentPrompt} onChange={(event) => setAgentPrompt(event.target.value)} />
-            <button type="button" className="ob-btn-secondary mt-2 inline-flex items-center gap-1 px-3 py-2 text-xs" disabled={busy} onClick={() => void createWithAI()}><Sparkles size={13} />生成草稿</button>
+            <div className="mb-2 flex items-center gap-2"><Sparkles size={16} /><strong className="text-sm">{t("workflow.aiCreate")}</strong><span className="text-xs text-[var(--ob-muted)]">{t("workflow.aiCreateHint")}</span></div>
+            <textarea className="ob-field min-h-20" aria-label={t("workflow.aiDescription")} placeholder={t("workflow.aiPlaceholder")} value={agentPrompt} onChange={(event) => setAgentPrompt(event.target.value)} />
+            <button type="button" className="ob-btn-secondary mt-2 inline-flex items-center gap-1 px-3 py-2 text-xs" disabled={busy} onClick={() => void createWithAI()}><Sparkles size={13} />{t("workflow.generateDraft")}</button>
           </section>
-          {draft ? <WorkflowTemplateEditor draft={draft} busy={busy} onChange={setDraft} onSave={() => void saveDraft()} onDelete={() => void deleteDraft()} onDuplicate={() => void duplicateDraft()} /> : <p className="text-sm text-[var(--ob-muted)]">请选择或创建模板</p>}
+          {draft ? <WorkflowTemplateEditor draft={draft} busy={busy} onChange={setDraft} onSave={() => void saveDraft()} onDelete={() => void deleteDraft()} onDuplicate={() => void duplicateDraft()} /> : <p className="text-sm text-[var(--ob-muted)]">{t("workflow.selectTemplate")}</p>}
         </main>
 
-        <aside className="border-t border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 xl:border-l xl:border-t-0" aria-label="工作流运行">
+        <aside className="border-t border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 xl:border-l xl:border-t-0" aria-label={t("workflow.runPanel")}>
           {draft ? <WorkflowVariableForm template={draft} values={values} imageFiles={imageFiles} disabled={busy}
             onValuesChange={setValues} onImageFilesChange={(id, files) => setImageFiles((current) => ({ ...current, [id]: files }))} /> : null}
-          <button type="button" className="ob-btn-primary mt-4 w-full rounded-xl px-4 py-3 font-semibold" disabled={!draft || busy} onClick={() => void startRun()}>{busy ? "处理中…" : "运行工作流"}</button>
+          <button type="button" className="ob-btn-primary mt-4 w-full rounded-xl px-4 py-3 font-semibold" disabled={!draft || busy} onClick={() => void startRun()}>{busy ? t("workflow.processing") : t("workflow.run")}</button>
           {error ? <p role="alert" className="mt-3 rounded-lg bg-[color-mix(in_srgb,var(--ob-danger)_10%,transparent)] p-2 text-xs text-[var(--ob-danger)]">{error}</p> : null}
           {notice ? <p role="status" className="mt-3 rounded-lg bg-[var(--ob-accent-soft)] p-2 text-xs text-[var(--ob-accent)]">{notice}</p> : null}
           <div className="my-4 border-t border-[var(--ob-line)]" />
-          <div className="mb-3 flex items-center"><strong className="mr-auto text-sm">运行历史</strong><button type="button" className="ob-icon-btn" title="刷新运行历史" onClick={() => void refreshRuns()}><RefreshCw size={15} /></button></div>
+          <div className="mb-3 flex items-center"><strong className="mr-auto text-sm">{t("workflow.history")}</strong><button type="button" className="ob-icon-btn" title={t("workflow.refreshHistory")} onClick={() => void refreshRuns()}><RefreshCw size={15} /></button></div>
           <div className="space-y-3">
             {runs.map((job) => <WorkflowRunCard key={job.id} job={job} busy={busy}
               onCancel={() => {
@@ -368,7 +370,7 @@ export function WorkflowWorkbench() {
                 setError("");
                 setNotice("");
                 void insertResults(job, keys)
-                  .then(() => setNotice("工作流结果已发送到当前画布"))
+                  .then(() => setNotice(t("workflow.inserted")))
                   .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
                   .finally(() => setBusy(false));
               }} />)}

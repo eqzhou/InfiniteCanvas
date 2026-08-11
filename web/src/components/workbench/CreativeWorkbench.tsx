@@ -91,8 +91,10 @@ import {
   MAX_REFERENCE_FILES,
   mergeReferenceFiles,
 } from "@/lib/reference-files";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
+	const { t } = useI18n();
 	const [searchParams] = useSearchParams();
 	const filmAssetTarget = kind === "image" ? {
 		projectId: searchParams.get("filmProjectId") ?? "",
@@ -847,7 +849,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       if (blob) content = URL.createObjectURL(blob);
     }
     addNode(kind, { x: (420 - viewport.x) / viewport.k, y: (260 - viewport.y) / viewport.k }, {
-      title: kind === "image" ? "工作台图片" : "工作台视频",
+      title: kind === "image" ? t("workbench.imageNode") : t("workbench.videoNode"),
       metadata: {
         content,
         storageKey: item.storageKey,
@@ -868,17 +870,17 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         <div className="min-w-0">
           <p className="ob-page-kicker">{kind === "image" ? "Image" : "Video"}</p>
           <h1 className="text-base font-semibold tracking-tight">
-            {kind === "image" ? "图片创作工作台" : "视频创作工作台"}
+            {kind === "image" ? t("workbench.imageTitle") : t("workbench.videoTitle")}
           </h1>
         </div>
-        <div className="ob-segment" role="tablist" aria-label="工作台类型">
+        <div className="ob-segment" role="tablist" aria-label={t("workbench.kind")}>
           <Link
             role="tab"
             aria-selected={kind === "image"}
             className="ob-segment-item no-underline"
             to="/workbench/image"
           >
-            图片
+            {t("common.image")}
           </Link>
           <Link
             role="tab"
@@ -886,7 +888,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             className="ob-segment-item no-underline"
             to="/workbench/video"
           >
-            视频
+            {t("common.video")}
           </Link>
           <Link
             role="tab"
@@ -894,17 +896,17 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             className="ob-segment-item no-underline"
             to="/workbench/workflows"
           >
-            工作流
+            {t("workbench.workflow")}
           </Link>
         </div>
-        <div className="ob-segment ml-auto" role="group" aria-label="工作台布局">
+        <div className="ob-segment ml-auto" role="group" aria-label={t("workbench.layout")}>
           <button
             type="button"
             className="ob-segment-item inline-flex items-center gap-1.5"
             aria-pressed={layout === "side"}
             onClick={() => setLayout("side")}
           >
-            <PanelLeft size={15} /> 侧边
+            <PanelLeft size={15} /> {t("workbench.side")}
           </button>
           <button
             type="button"
@@ -912,7 +914,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             aria-pressed={layout === "bottom"}
             onClick={() => setLayout("bottom")}
           >
-            <PanelBottom size={15} /> 底部
+            <PanelBottom size={15} /> {t("workbench.bottom")}
           </button>
         </div>
       </header>
@@ -928,23 +930,23 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         >
           <div className="space-y-4 text-sm">
             <label className="block">
-              <span className="ob-label">提示词</span>
+              <span className="ob-label">{t("workbench.prompt")}</span>
               <textarea
                 className="ob-field min-h-32 resize-y"
                 value={prompt}
-                placeholder={kind === "image" ? "描述想生成的图片…" : "描述想生成的视频…"}
+                placeholder={kind === "image" ? t("workbench.imagePrompt") : t("workbench.videoPrompt")}
                 onChange={(event) => setPrompt(event.target.value)}
               />
             </label>
             {kind === "image" ? (
               <label className="block">
-                <span className="ob-label">分类</span>
+                <span className="ob-label">{t("workbench.category")}</span>
                 <input
                   className="ob-field"
                   value={category}
                   maxLength={100}
                   list="workbench-category-options"
-                  placeholder="例如：海报、角色、分镜"
+                  placeholder={t("workbench.categoryPlaceholder")}
                   onChange={(event) => setCategory(event.target.value)}
                 />
                 <datalist id="workbench-category-options">
@@ -955,7 +957,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               </label>
             ) : null}
             <label className="block">
-              <span className="ob-label">渠道</span>
+              <span className="ob-label">{t("workbench.channel")}</span>
               <select
                 className="ob-field cursor-pointer"
                 value={channelId}
@@ -967,7 +969,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               </select>
             </label>
             <label className="block">
-              <span className="ob-label">模型</span>
+              <span className="ob-label">{t("workbench.model")}</span>
               {(sharedChannelSelected ? sharedModelOptions : provider?.models)?.length ? (
                 <select
                   className="ob-field cursor-pointer"
@@ -991,9 +993,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             {kind === "image" ? (
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="ob-label">比例</span>
+                  <span className="ob-label">{t("workbench.ratio")}</span>
                   <select
-                    aria-label="图片比例"
+                    aria-label={t("workbench.imageRatio")}
                     className="ob-field cursor-pointer"
                     value={imageAspect}
                     onChange={(event) => {
@@ -1011,13 +1013,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     {aspectOptions.map((preset) => (
                       <option key={preset.aspect} value={preset.aspect}>{preset.label}</option>
                     ))}
-                    <option value="custom">自定义</option>
+                    <option value="custom">{t("workbench.custom")}</option>
                   </select>
                 </label>
                 <label className="block">
-                  <span className="ob-label">尺寸</span>
+                  <span className="ob-label">{t("workbench.size")}</span>
                   <select
-                    aria-label="图片尺寸"
+                    aria-label={t("workbench.imageSize")}
                     className="ob-field cursor-pointer"
                     value={size}
                     onChange={(event) => {
@@ -1034,9 +1036,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 </label>
                 {imageAspect === "custom" ? (
                   <label className="block">
-                    <span className="ob-label">自定义尺寸</span>
+                    <span className="ob-label">{t("workbench.customSize")}</span>
                     <input
-                      aria-label="自定义图片尺寸"
+                      aria-label={t("workbench.customImageSize")}
                       className="ob-field"
                       value={customImageSize}
                       onChange={(event) => {
@@ -1047,9 +1049,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   </label>
                 ) : null}
                 <label className="block">
-                  <span className="ob-label">质量</span>
+                  <span className="ob-label">{t("workbench.quality")}</span>
                   <select
-                    aria-label="图片质量"
+                    aria-label={t("workbench.imageQuality")}
                     className="ob-field cursor-pointer"
                     value={quality}
                     onChange={(event) => setQuality(event.target.value)}
@@ -1060,7 +1062,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   </select>
                 </label>
                 <label className="block">
-                  <span className="ob-label">数量</span>
+                  <span className="ob-label">{t("workbench.count")}</span>
                   <input
                     type="number"
                     min={1}
@@ -1075,24 +1077,24 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     type="button"
                     role="switch"
                     aria-checked={transparent}
-                    aria-label="透明背景"
+                    aria-label={t("workbench.transparent")}
                     className="ob-switch"
                     data-checked={transparent ? "true" : "false"}
                     onClick={() => setTransparent((value) => !value)}
                   />
-                  <span aria-hidden="true">透明背景</span>
+                  <span aria-hidden="true">{t("workbench.transparent")}</span>
                 </div>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="ob-label">秒数</span>
+                  <span className="ob-label">{t("workbench.seconds")}</span>
                   {sharedCapability?.durations.length ? <select
-					aria-label="视频秒数"
+					aria-label={t("workbench.videoSeconds")}
 					className="ob-field cursor-pointer"
 					value={seconds}
 					onChange={(event) => setSeconds(Number(event.target.value))}
-				  >{sharedCapability.durations.map((value) => <option key={value} value={value}>{value} 秒</option>)}</select> : <input
+				  >{sharedCapability.durations.map((value) => <option key={value} value={value}>{t("workbench.secondsValue", { seconds: value })}</option>)}</select> : <input
 					type="number"
 					min={4}
 					max={15}
@@ -1103,10 +1105,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				  />}
                 </label>
                 <label className="block">
-                  <span className="ob-label">比例</span>
+                  <span className="ob-label">{t("workbench.ratio")}</span>
                   {sharedCapability?.ratios.length || videoCapability?.aspectRatios.length ? (
                     <select
-                      aria-label="视频比例"
+                      aria-label={t("workbench.videoRatio")}
                       className="ob-field cursor-pointer"
                       value={ratio}
                       onChange={(event) => setRatio(event.target.value)}
@@ -1117,7 +1119,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     </select>
                   ) : (
                     <input
-                      aria-label="视频比例"
+                      aria-label={t("workbench.videoRatio")}
                       className="ob-field"
                       list="video-ratio-options"
                       value={ratio}
@@ -1131,10 +1133,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   ) : null}
                 </label>
                 <label className="block">
-                  <span className="ob-label">清晰度</span>
+                  <span className="ob-label">{t("workbench.resolution")}</span>
                   {sharedCapability?.resolutions.length || videoCapability?.resolutions?.length ? (
                     <select
-                      aria-label="视频清晰度"
+                      aria-label={t("workbench.videoResolution")}
                       className="ob-field cursor-pointer"
                       value={resolution}
                       onChange={(event) => setResolution(event.target.value)}
@@ -1145,7 +1147,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     </select>
                   ) : (
                     <input
-                      aria-label="视频清晰度"
+                      aria-label={t("workbench.videoResolution")}
                       className="ob-field"
                       list="video-resolution-options"
                       value={resolution}
@@ -1159,9 +1161,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   ) : null}
                 </label>
                 <div className="col-span-2 flex items-center justify-between rounded-lg bg-[color-mix(in_srgb,var(--ob-accent-soft)_45%,transparent)] px-2.5 py-2 text-xs">
-                  <span className="text-[var(--ob-muted)]">自动尺寸</span>
-                  <output aria-label="视频自动尺寸" className="font-medium text-[var(--ob-ink)]">
-                    {videoSizePreset === "auto" ? "由模型决定" : videoSizePreset}
+                  <span className="text-[var(--ob-muted)]">{t("workbench.autoSize")}</span>
+                  <output aria-label={t("workbench.videoAutoSize")} className="font-medium text-[var(--ob-ink)]">
+                    {videoSizePreset === "auto" ? t("workbench.modelDecides") : videoSizePreset}
                   </output>
                 </div>
                 <div className="flex items-center gap-2 self-end pb-2.5 text-[var(--ob-muted)]">
@@ -1169,51 +1171,51 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     type="button"
                     role="switch"
                     aria-checked={smartDuration}
-                    aria-label="智能时长"
+                    aria-label={t("workbench.smartDuration")}
                     className="ob-switch"
                     data-checked={smartDuration ? "true" : "false"}
                     onClick={() => setSmartDuration((value) => !value)}
                   />
-                  <span aria-hidden="true">智能时长</span>
+                  <span aria-hidden="true">{t("workbench.smartDuration")}</span>
                 </div>
                 <div className="flex items-center gap-2 text-[var(--ob-muted)]">
                   <button
                     type="button"
                     role="switch"
                     aria-checked={generateAudio}
-                    aria-label="生成声音"
+                    aria-label={t("workbench.generateAudio")}
                     className="ob-switch"
                     data-checked={generateAudio ? "true" : "false"}
                     onClick={() => setGenerateAudio((value) => !value)}
                   />
-                  <span aria-hidden="true">生成声音</span>
+                  <span aria-hidden="true">{t("workbench.generateAudio")}</span>
                 </div>
                 <div className="flex items-center gap-2 text-[var(--ob-muted)]">
                   <button
                     type="button"
                     role="switch"
                     aria-checked={watermark}
-                    aria-label="水印"
+                    aria-label={t("workbench.watermark")}
                     className="ob-switch"
                     data-checked={watermark ? "true" : "false"}
                     onClick={() => setWatermark((value) => !value)}
                   />
-                  <span aria-hidden="true">水印</span>
+                  <span aria-hidden="true">{t("workbench.watermark")}</span>
                 </div>
                 <label className="col-span-2 block">
-                  <span className="ob-label">图片参考模式</span>
+                  <span className="ob-label">{t("workbench.referenceMode")}</span>
                   <select
-                    aria-label="图片参考模式"
+                    aria-label={t("workbench.referenceMode")}
                     className="ob-field"
                     value={frameMode}
                     onChange={(event) => setFrameMode(event.target.value === "first-last" ? "first-last" : "references")}
                   >
-                    <option value="references">普通参考图</option>
-                    <option value="first-last">首尾帧</option>
+                    <option value="references">{t("workbench.references")}</option>
+                    <option value="first-last">{t("workbench.firstLast")}</option>
                   </select>
                   {frameMode === "first-last" ? (
                     <p className="mt-1.5 text-xs text-[var(--ob-muted)]">
-                      按参考图片顺序：第 1 张为首帧，第 2 张为尾帧；其余仍作为参考图。
+                      {t("workbench.firstLastHint")}
                     </p>
                   ) : null}
                 </label>
@@ -1223,7 +1225,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               </div>
             )}
             <label
-              aria-label="参考素材拖放区"
+              aria-label={t("workbench.dropzone")}
               className={`block rounded-xl border border-dashed p-3 transition-colors ${
                 referenceDropActive
                   ? "border-[var(--ob-accent)] bg-[var(--ob-accent-soft)]"
@@ -1255,9 +1257,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 ));
               }}
             >
-              <span className="ob-label">参考素材</span>
+              <span className="ob-label">{t("workbench.referenceAssets")}</span>
               <span className="mt-1 block text-xs text-[var(--ob-muted)]">
-                拖拽文件到这里，或点击选择（最多 {MAX_REFERENCE_FILES} 个）
+                {t("workbench.dropHint", { count: MAX_REFERENCE_FILES })}
               </span>
               <input
                 type="file"
@@ -1276,13 +1278,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 }}
               />
               {references.length ? (
-                <p className="mt-1.5 text-xs text-[var(--ob-muted)]">已选 {references.length} 个参考文件</p>
+                <p className="mt-1.5 text-xs text-[var(--ob-muted)]">{t("workbench.selectedFiles", { count: references.length })}</p>
               ) : null}
               <FileReferencePreviews files={references} />
             </label>
             {reusableAssets.length ? (
               <fieldset className="rounded-xl border border-[var(--ob-line)] p-3">
-                <legend className="px-1 text-xs font-semibold text-[var(--ob-muted)]">从“我的素材”复用</legend>
+                <legend className="px-1 text-xs font-semibold text-[var(--ob-muted)]">{t("workbench.reuseAssets")}</legend>
                 <div className="mt-1 grid max-h-40 grid-cols-2 gap-2 overflow-auto">
                   {reusableAssets.map((asset) => {
                     const selected = selectedAssetIds.includes(asset.id);
@@ -1301,26 +1303,26 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                     );
                   })}
                 </div>
-                <p className="mt-2 text-xs text-[var(--ob-muted)]">已选 {selectedAssetIds.length} 个素材</p>
+                <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("workbench.selectedAssets", { count: selectedAssetIds.length })}</p>
               </fieldset>
             ) : null}
             <div className="space-y-2 pt-1">
               <div className="flex gap-2">
                 <button
                   type="button"
-                  aria-label="生成"
+                  aria-label={t("workbench.generate")}
                   className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold"
                   disabled={!prompt.trim() && !allowsEmptyKlingPrompt && !allowsEmptySeedancePrompt}
                   onClick={() => void run()}
                 >
                   {kind === "image" ? <ImagePlus size={18} /> : <Video size={18} />}
                   {activeRuns
-                    ? `继续生成（${activeRuns} 个进行中）`
-                    : `开始生成${formatEstimateSuffix(creditEstimate)}`}
+                    ? t("workbench.continueGenerate", { count: activeRuns })
+                    : t("workbench.startGenerate", { estimate: formatEstimateSuffix(creditEstimate) })}
                 </button>
                 <button
                   type="button"
-                  title="停止"
+                  title={t("workbench.stop")}
                   className="ob-btn-danger rounded-xl p-3"
                   disabled={!activeRuns}
                   onClick={() => void stopActiveJobs()}
@@ -1330,7 +1332,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               </div>
               {creditEstimate && !creditEstimate.sufficient ? (
                 <p role="status" className="text-xs text-[var(--ob-danger)]">
-                  算力不足：余额 {creditEstimate.balance}，本次预计 {creditEstimate.totalCredits}
+                  {t("workbench.insufficientCredits", { balance: creditEstimate.balance, credits: creditEstimate.totalCredits })}
                 </p>
               ) : null}
             </div>
@@ -1344,13 +1346,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         <section className="min-w-0 p-5 sm:p-6">
           <div className="mb-4 flex items-center justify-between gap-2">
             <div>
-              <h2 className="text-base font-semibold text-[var(--ob-ink)]">生成历史</h2>
-              <p className="text-xs text-[var(--ob-muted)]">最近任务与结果预览</p>
+              <h2 className="text-base font-semibold text-[var(--ob-ink)]">{t("workbench.history")}</h2>
+              <p className="text-xs text-[var(--ob-muted)]">{t("workbench.historyDescription")}</p>
             </div>
             <div className="flex items-center gap-2">
               {kind === "image" ? (
                 <select
-                  aria-label="生成历史分类"
+                  aria-label={t("workbench.historyCategory")}
                   className="ob-field min-w-28 py-1.5 text-xs"
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
@@ -1361,27 +1363,27 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               <label className="flex items-center gap-1 text-xs text-[var(--ob-muted)]">
                 <input
                   type="checkbox"
-                  aria-label="全选当前历史"
+                  aria-label={t("workbench.selectCurrentHistory")}
                   checked={allVisibleSelected}
                   disabled={!visibleJobs.length}
                   onChange={() => toggleSelectAllVisible()}
                 />
-                全选
+                {t("workbench.selectAll")}
               </label>
               <button
                 type="button"
-                title="批量删除"
+                title={t("workbench.deleteBatch")}
                 className="ob-btn-danger rounded-lg p-1.5"
                 disabled={!selectedVisibleIds.length}
                 onClick={() => void deleteSelectedHistory()}
               >
                 <Trash2 size={16} />
-                <span className="sr-only">批量删除</span>
+                <span className="sr-only">{t("workbench.deleteBatch")}</span>
               </button>
               {selectedVisibleIds.length ? (
-                <span className="text-xs text-[var(--ob-muted)]">已选 {selectedVisibleIds.length}</span>
+                <span className="text-xs text-[var(--ob-muted)]">{t("workbench.selectedCount", { count: selectedVisibleIds.length })}</span>
               ) : null}
-              <button type="button" title="刷新" className="ob-icon-btn" onClick={() => void refresh()}>
+              <button type="button" title={t("common.refresh")} className="ob-icon-btn" onClick={() => void refresh()}>
                 <RefreshCw size={18} />
               </button>
             </div>
@@ -1427,8 +1429,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               <span className="ob-empty-icon" aria-hidden>
                 {kind === "image" ? <ImagePlus size={16} /> : <Video size={16} />}
               </span>
-              <p className="ob-empty-title">暂无生成记录</p>
-              <p className="ob-empty-desc">填写提示词后开始生成，结果会显示在这里，并可插入画布。</p>
+              <p className="ob-empty-title">{t("workbench.empty")}</p>
+              <p className="ob-empty-desc">{t("workbench.emptyDescription")}</p>
             </div>
           ) : null}
         </section>
