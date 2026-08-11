@@ -6,6 +6,7 @@ import { AgentPanel, EpisodesPanel, ProductionPanel, ProjectionPanel } from "@/c
 import { AIDecompositionPanel, AIScriptPanel, AssetsPanel, ManuscriptPanel } from "@/components/film/ManuscriptAssetsPanels";
 import { DeliveryPanel, TimelinePanel } from "@/components/film/TimelineDeliveryPanels";
 import { FilmStyleTemplateLibrary } from "@/components/film/FilmStyleTemplateLibrary";
+import { AdvancedFilmToolsPanel } from "@/components/film/AdvancedFilmToolsPanel";
 import { WorkbenchSection } from "@/components/film/WorkbenchSection";
 import { isFilmNavigationAway, resolvePendingFilmResponse, shouldConfirmFilmLeave, type VersionedFilmDraftState } from "@/lib/film-drafts";
 import { ensureFilmSceneDirectorNode, refreshFilmProjection as refreshManagedFilmProjection, type FilmProjectionDiff } from "@/lib/film-document";
@@ -150,6 +151,14 @@ export function FilmWorkbenchPage() {
       models: [...new Set([defaultModel, ...(channel.models ?? []).map((item) => item.trim()).filter(Boolean)])],
     }];
   }), [sharedChannels]);
+  const advancedChannels = useMemo(() => sharedChannels.map((channel) => ({
+    id: channel.id,
+    name: channel.name,
+    models: [...new Set([
+      channel.defaultTextModel, channel.defaultImageModel, channel.defaultVideoModel, channel.defaultAudioModel,
+      ...(channel.models ?? []),
+    ].map((item) => item?.trim()).filter((item): item is string => Boolean(item)))],
+  })).filter((channel) => channel.models.length > 0), [sharedChannels]);
   const [textChannelId, setTextChannelId] = useState(config.activeSharedChannelId ?? "");
   const [textModel, setTextModel] = useState("");
   const [scriptEpisodeId, setScriptEpisodeId] = useState("");
@@ -164,7 +173,7 @@ export function FilmWorkbenchPage() {
   const statusRef = useRef<FilmStatus | null>(null);
   const draftRef = useRef<VersionedFilmDraftState>({ manuscript: "", manuscriptDirty: false, manuscriptVersion: 0, timelineDirty: false, timelineVersion: 0 });
   const document = status?.document;
-  const navigation = useMemo(() => [["manuscript", t("film.nav.manuscript")], ["ai-decomposition", t("film.nav.decomposition")], ["ai-script", t("film.nav.script")], ["style-templates", t("film.nav.styles")], ["assets", t("film.nav.assets")], ["episodes", t("film.nav.episodes")], ["tasks", t("film.nav.tasks")], ["projection", t("film.nav.projection")], ["timeline", t("film.nav.timeline")], ["quality", t("film.nav.quality")], ["delivery", t("film.nav.delivery")], ["agent", t("film.nav.agent")]] as const, [t]);
+  const navigation = useMemo(() => [["manuscript", t("film.nav.manuscript")], ["ai-decomposition", t("film.nav.decomposition")], ["ai-script", t("film.nav.script")], ["style-templates", t("film.nav.styles")], ["assets", t("film.nav.assets")], ["advanced-tools", t("film.nav.advanced")], ["episodes", t("film.nav.episodes")], ["tasks", t("film.nav.tasks")], ["projection", t("film.nav.projection")], ["timeline", t("film.nav.timeline")], ["quality", t("film.nav.quality")], ["delivery", t("film.nav.delivery")], ["agent", t("film.nav.agent")]] as const, [t]);
 
   useEffect(() => {
     const selected = textChannels.find((channel) => channel.id === textChannelId) ?? textChannels[0];
@@ -377,6 +386,7 @@ export function FilmWorkbenchPage() {
         }} />
         <FilmStyleTemplateLibrary busy={!!busy} onApply={(template) => void run(t("film.action.applyStyle"), () => applyFilmStyleTemplate(projectId, template.id), { notice: t("film.notice.styleApplied", { title: template.title }) })} onCopy={(template) => void copyStyleTemplate(template)} />
         <AssetsPanel status={status} busy={!!busy} onCreate={(input) => void run(t("film.action.createAsset"), () => createFilmAsset(projectId, input))} onSave={(asset: FilmAsset, patch) => void run(t("film.action.saveAsset"), () => updateFilmAsset(projectId, asset.id, { revision: asset.revision, kind: patch.kind as FilmAssetKind | undefined, title: patch.title, description: patch.description, parentAssetId: patch.parentAssetId, voice: patch.voice, stylePrompt: patch.stylePrompt, aspectRatio: patch.aspectRatio, ageStage: patch.ageStage, costume: patch.costume, storyPeriod: patch.storyPeriod, isDefault: patch.isDefault, episodeIds: patch.episodeIds, sceneIds: patch.sceneIds, shotIds: patch.shotIds }))} />
+        <AdvancedFilmToolsPanel status={status} channels={advancedChannels} onFilmStatus={(next) => applyStatus(next, {})} />
         <EpisodesPanel status={status} busy={!!busy} onSaveEpisode={(id, revision, title) => void run(t("film.action.saveEpisode"), () => updateFilmEpisode(projectId, id, { revision, title }))} onSaveShot={(shot: FilmShot, patch) => void run(t("film.action.saveShot"), () => updateFilmShot(projectId, shot.id, { revision: shot.revision, description: patch.description, durationSeconds: patch.durationSeconds, styleAssetId: patch.styleAssetId, identityVersionIds: patch.identityVersionIds }))} onCreateDialogue={(shotId, kind, text) => void run(t("film.action.createDialogue"), () => createFilmDialogue(projectId, { shotId, kind, text }))} onSaveDialogue={(dialogue, patch) => void run(t("film.action.saveDialogue"), () => updateFilmDialogue(projectId, dialogue.id, { revision: dialogue.revision, kind: patch.kind, emotion: patch.emotion, text: patch.text, characterAssetId: patch.characterAssetId, voiceAssetId: patch.voiceAssetId }))} onDeleteDialogue={(dialogue) => void run(t("film.action.deleteDialogue"), () => deleteFilmDialogue(projectId, dialogue.id, dialogue.revision))} />
         <ProductionPanel status={status} busy={!!busy} onLegacyStage={(stage, action) => void run(action === "run" ? t("film.action.submitReview") : action === "approve" ? t("film.action.approveStage") : t("film.action.rejectStage"), () => changeFilmStage(projectId, stage.id, action, stage.revision), { notice: action === "run" ? t("film.notice.submittedReview") : undefined })} onRun={(stage: FilmStageKind, request: FilmStageRunRequest) => run(t("film.action.startGeneration"), () => requestFilmStageRun(projectId, stage, request), { notice: t("film.notice.generationQueued") })} onSynced={(next) => applyStatus(next, {})} onWaive={(stage, reason) => void run(t("film.action.createWaiver"), () => createFilmStageWaiver(projectId, stage.id, { revision: document.revision, stageRevision: stage.revision, reason, riskAccepted: true }), { notice: t("film.notice.waiverCreated") })} onRevokeWaiver={(waiverId, waiverRevision) => void run(t("film.action.revokeWaiver"), () => revokeFilmStageWaiver(projectId, waiverId, { revision: document.revision, waiverRevision }), { notice: t("film.notice.waiverRevoked") })} />
         <ProjectionPanel project={project} status={status} busy={!!busy} onStatus={(label, operation) => void run(label, operation)} onRefreshCanvas={refreshCanvasProjection} onCommitCanvas={commitCanvasProjection} onAdopt={async (input) => { const ok = await run(t("film.action.adoptCanvas"), () => adoptFilmCanvasMedia(projectId, input), { notice: t("film.notice.canvasAdopted") }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onAdoptDirector={async (input) => { const ok = await run(t("film.action.adoptDirector"), () => adoptFilmDirectorCapture(projectId, input), { notice: t("film.notice.directorAdopted") }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onBindDirectorScene={async (input) => { const ok = await run(t("film.action.bindDirector"), () => bindFilmDirectorScene(projectId, input), { notice: t("film.notice.directorBound") }); if (ok && statusRef.current) await persistProjection(statusRef.current); }} onOpenDirector={openSceneDirector} />

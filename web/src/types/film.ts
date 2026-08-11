@@ -184,7 +184,7 @@ export type FilmStageWaiver = {
 export type FilmTask = {
   id: string;
   revision: number;
-  stage: FilmStageKind;
+  stage: FilmStageKind | "style_extraction";
   title: string;
   status: FilmEntityStatus;
   progress: number;
@@ -449,6 +449,37 @@ export type FilmMediaAdoption = {
   adoptedAt: string;
 };
 
+export type FilmStyleBible = {
+  summary: string;
+  stylePrompt: string;
+  negativePrompt?: string;
+  palette?: string[];
+  lighting?: string;
+  composition?: string;
+  camera?: string;
+  texture?: string;
+  tags?: string[];
+};
+
+export type FilmStyleExtractionCandidate = {
+  id: string;
+  revision: number;
+  status: "needs_review" | "stale" | "rejected" | "applied";
+  sourceAsset: FilmAsset;
+  providerId: string;
+  model: string;
+  promptVersion: string;
+  outputSchema: string;
+  parameters: { detailLevel: "low" | "medium" | "high"; focus?: string };
+  taskId: string;
+  generationJobId: string;
+  requestHash: string;
+  bible: FilmStyleBible;
+  adoptedAssetId?: string;
+  createdAt: string;
+  appliedAt?: string;
+};
+
 export type FilmDocument = {
   schemaVersion: 1;
   projectId: string;
@@ -468,6 +499,7 @@ export type FilmDocument = {
   tasks: FilmTask[];
   aiCandidates?: FilmAICandidate[];
   scriptCandidates?: FilmAIScriptCandidate[];
+  styleCandidates?: FilmStyleExtractionCandidate[];
   structureVersions?: FilmStructureVersion[];
   qualityReports: FilmQualityReport[];
   timeline: FilmTimeline;

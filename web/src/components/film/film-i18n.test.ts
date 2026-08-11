@@ -16,6 +16,8 @@ describe("Film localization catalog", () => {
     expect(filmEnUS["film.timeline.title"]).toBe("Visual timeline editor");
     expect(filmZhCN["film.voice.identity"]).toBe("声音身份");
     expect(filmEnUS["film.voice.identity"]).toBe("Voice identity");
+    expect(filmZhCN["film.advanced.adoptedStyleTitle"]).toBe("{title} 风格");
+    expect(filmEnUS["film.advanced.adoptedStyleTitle"]).toBe("{title} style");
   });
 
   test("does not put user, model, or audit examples in translation values", () => {

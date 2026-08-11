@@ -1,5 +1,6 @@
 import { authFetch } from "@/services/auth-session";
-import { cancelServerGenerationJob, getGenerationJob } from "@/services/generation-jobs";
+import { cancelServerGenerationJob, getGenerationJob, generationRequestError, validateGenerationJob } from "@/services/generation-jobs";
+import type { GenerationJob } from "@/types/board";
 import type { FilmAssetKind, FilmDialogue, FilmDocument, FilmProjectionCommit, FilmSourceImportStatus, FilmStageKind, FilmTask, FilmTimeline } from "@/types/film";
 
 export class FilmAPIError extends Error {
@@ -212,6 +213,23 @@ function filmPath(projectId: string, suffix = ""): string {
     throw new Error("Invalid film project id");
   }
   return `film/projects/${encodeURIComponent(projectId)}${suffix}`;
+}
+
+function filmEntitySegment(value: string, label: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)) throw new Error(`Invalid ${label}`);
+  return encodeURIComponent(value);
+}
+
+async function readFilmData<T>(responseValue: Response | Promise<Response>): Promise<T> {
+  const response = await responseValue;
+  const value = await response.json().catch(() => null) as { data?: T; error?: { code?: unknown; message?: unknown } } | null;
+  if (!response.ok) {
+    const code = typeof value?.error?.code === "string" ? value.error.code : "film_request_failed";
+    const message = typeof value?.error?.message === "string" ? value.error.message : `Film request failed: HTTP ${response.status}`;
+    throw new FilmAPIError(response.status, code, message);
+  }
+  if (!value || !("data" in value)) throw new Error("Film server response is invalid");
+  return value.data as T;
 }
 
 async function readFilmResponse(projectId: string, response: Response): Promise<FilmStatus> {
@@ -725,6 +743,7 @@ export async function retryFilmGenerationJob(projectId: string, jobId: string): 
     const [status, job] = await Promise.all([loadFilmStatus(projectId), getGenerationJob(jobId)]);
     const task = status.document.tasks.find((candidate) => candidate.generationJobId === jobId && candidate.shotId);
     if (!task || !job) throw new Error("Film generation retry binding is unavailable");
+    if (task.stage === "style_extraction") throw new Error("Style extraction retries must create a new reviewed request");
     if (job.status !== "failed" && job.status !== "cancelled") throw new Error("Only failed or canceled film generation jobs can be retried");
     const stage = status.document.stages.find((candidate) => candidate.id === task.stage);
     if (!stage) throw new Error("Film generation retry stage is unavailable");
@@ -897,4 +916,94 @@ export function restoreFilmProduction(
 
 export function filmDeliverableDownloadURL(projectId: string, deliverableId: string): string {
   return `/api/${filmPath(projectId, `/deliverables/${encodeURIComponent(deliverableId)}/download`)}`;
+}
+
+export type FilmStyleExtractionInput = {
+  revision: number;
+  sourceAssetId: string;
+  providerId: string;
+  model: string;
+  idempotencyKey: string;
+  parameters: { detailLevel: "low" | "medium" | "high"; focus: string };
+};
+
+export function requestFilmStyleExtraction(projectId: string, input: FilmStyleExtractionInput): Promise<FilmStatus> {
+  return requestFilm(projectId, "/style-extractions", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function adoptFilmStyleCandidate(projectId: string, candidateId: string, input: { revision: number; candidateRevision: number; title: string }): Promise<FilmStatus> {
+  return requestFilm(projectId, `/style-candidates/${filmEntitySegment(candidateId, "style candidate id")}/adopt`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export type FilmVoiceIdentity = {
+  id: string; projectId: string; revision: number; title: string; description?: string;
+  currentVersionId?: string; createdAt: string; updatedAt: string;
+};
+export type FilmVoiceSample = {
+  id: string; projectId: string; voiceIdentityId: string; label?: string; storageKey: string;
+  mimeType: string; sha256: string; mediaObjectVersion?: string; createdAt: string;
+};
+export type FilmVoiceConsent = {
+  id: string; projectId: string; voiceIdentityId: string; accepted: boolean; rightsBasis: "self" | "licensed" | "authorized";
+  subjectDisplayName: string; termsVersion: string; evidenceStorageKey: string; evidenceMimeType: string;
+  evidenceSHA256: string; evidenceObjectVersion: string; actorId: string; acceptedAt: string;
+};
+export type FilmVoiceVersion = {
+  id: string; projectId: string; voiceIdentityId: string; revision: number;
+  status: "queued" | "running" | "ready" | "failed" | "canceled";
+  sampleIds: string[]; consentId: string; providerId: string; model: string;
+  providerVoiceId?: string; generationJobId: string; error?: string; createdAt: string; updatedAt: string;
+};
+
+export function listFilmVoiceIdentities(projectId: string): Promise<FilmVoiceIdentity[]> {
+  return readFilmData(authFetch(filmPath(projectId, "/voice-identities")));
+}
+
+export function createFilmVoiceIdentity(projectId: string, input: { title: string; description?: string }): Promise<FilmVoiceIdentity> {
+  return readFilmData(authFetch(filmPath(projectId, "/voice-identities"), { method: "POST", body: JSON.stringify(input) }));
+}
+
+export function addFilmVoiceSample(projectId: string, voiceId: string, input: { storageKey: string; label?: string }): Promise<FilmVoiceSample> {
+  return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/samples`), { method: "POST", body: JSON.stringify(input) }));
+}
+
+export function createFilmVoiceConsent(projectId: string, voiceId: string, input: {
+  accepted: true; rightsBasis: "self" | "licensed" | "authorized"; subjectDisplayName: string;
+  termsVersion: string; evidenceStorageKey: string;
+}): Promise<FilmVoiceConsent> {
+  return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/consents`), { method: "POST", body: JSON.stringify(input) }));
+}
+
+export function createFilmVoiceClone(projectId: string, voiceId: string, input: {
+  providerId: string; model: string; sampleIds: string[]; consentId: string; idempotencyKey: string;
+}): Promise<FilmVoiceVersion> {
+  return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/clone`), { method: "POST", body: JSON.stringify(input) }));
+}
+
+export function listFilmVoiceVersions(projectId: string, voiceId: string): Promise<FilmVoiceVersion[]> {
+  return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/versions`)));
+}
+
+export function syncFilmVoiceVersion(projectId: string, voiceId: string, versionId: string): Promise<FilmVoiceVersion> {
+  return readFilmData(authFetch(filmPath(projectId, `/voice-identities/${filmEntitySegment(voiceId, "voice identity id")}/versions/${filmEntitySegment(versionId, "voice version id")}/sync`), { method: "POST" }));
+}
+
+export type FilmComfyUIValues = {
+  prompt?: string; negativePrompt?: string; references?: string[]; firstFrame?: string; lastFrame?: string;
+  seed?: number; width?: number; height?: number; duration?: number;
+};
+export type FilmComfyUIJobInput = { id: string; projectId: string; manifestId: string; values: FilmComfyUIValues };
+
+export async function createFilmComfyUIJob(input: FilmComfyUIJobInput): Promise<GenerationJob> {
+  const response = await authFetch("generation-jobs/comfyui", { method: "POST", body: JSON.stringify(input) });
+  if (!response.ok) throw generationRequestError(response.status, await response.text().catch(() => ""));
+  return validateGenerationJob(await response.json() as GenerationJob);
+}
+
+export function getFilmAdvancedGenerationJob(jobId: string): Promise<GenerationJob | undefined> {
+  return getGenerationJob(jobId);
+}
+
+export function cancelFilmAdvancedGenerationJob(jobId: string): Promise<GenerationJob> {
+  return cancelServerGenerationJob(jobId);
 }
