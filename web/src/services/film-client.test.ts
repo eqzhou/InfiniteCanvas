@@ -28,6 +28,8 @@ import {
   restoreFilmStructureVersion,
   resolveFilmEntityRevision,
   updateFilmAsset,
+  createFilmStageWaiver,
+  revokeFilmStageWaiver,
 } from "./film-client";
 import { createFilmDocument } from "@/lib/film-document";
 
@@ -35,6 +37,22 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe("film client", () => {
+  test("sends explicit risk and revision facts for stage waiver lifecycle", async () => {
+    const film = createFilmDocument("film-1", "2026-08-08T00:00:00.000Z");
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET", body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ data: film, meta: { recordRevision: 2 } }), { status: 200 });
+    }) as typeof fetch;
+
+    await createFilmStageWaiver("film-1", "script", { revision: 3, stageRevision: 2, reason: "External approved screenplay supplied.", riskAccepted: true });
+    await revokeFilmStageWaiver("film-1", "waiver-1", { revision: 4, waiverRevision: 1 });
+
+    expect(requests).toEqual([
+      { url: "/api/film/projects/film-1/stages/script/waivers", method: "POST", body: { revision: 3, stageRevision: 2, reason: "External approved screenplay supplied.", riskAccepted: true } },
+      { url: "/api/film/projects/film-1/stage-waivers/waiver-1", method: "DELETE", body: { revision: 4, waiverRevision: 1 } },
+    ]);
+  });
   test("resolves every persisted restorable entity revision without enabling unknown version types", () => {
     const document = createFilmDocument("film-versions");
     document.scenes = [{ id: "scene-1", revision: 3, episodeId: "episode-1", order: 0, heading: "Scene", synopsis: "", status: "draft" }];

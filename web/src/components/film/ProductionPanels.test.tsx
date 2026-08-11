@@ -41,6 +41,16 @@ describe("Film Director projection workflow", () => {
 });
 
 describe("Film media capability selection", () => {
+  test("shows audited waiver controls only when the server enables them", () => {
+    const document = createFilmDocument("film-waiver", "2026-08-08T00:00:00.000Z");
+    document.stageWaivers = [{ id: "waiver-1", revision: 1, stageId: "script", stageRevision: 1, reason: "External screenplay", actorId: "owner-1", actorRole: "owner", createdAt: document.createdAt, projectRevision: 1, riskAccepted: true, affectedDownstream: ["storyboard"] }];
+    const status = { document, recordRevision: 1, capabilities: { ...({} as FilmStatus["capabilities"]), available: true, reason: "", generationStages: [], agentOperations: [], features: { webdavMedia: false, advancedVoice: false, localWorkflows: false, styleExtraction: false, stageWaiver: true } } };
+    const html = renderToStaticMarkup(<ProductionPanel status={status} busy={false} onLegacyStage={() => {}} onRun={async () => false} onSynced={() => {}} onWaive={() => {}} onRevokeWaiver={() => {}} />);
+    expect(html).toContain("审计豁免");
+    expect(html).toContain("撤销豁免");
+    expect(html).toContain("External screenplay");
+  });
+
   test("fails closed while the server capability catalog is unavailable", () => {
     const document = createFilmDocument("film-catalog", "2026-08-08T00:00:00.000Z");
     const status: FilmStatus = { document, recordRevision: 1, capabilities: { available: true, reason: "", plainTextImport: true, markdownImport: true, docxImport: true, pdfImport: true, fileUploadImport: true, maxImportBytes: 1, stageGeneration: true, generationJobs: true, generationStages: ["storyboard", "video", "audio"], assetBundleExport: true, mp4Export: false, mp4Diagnostic: "", agentOperations: [] } };
