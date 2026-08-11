@@ -1,5 +1,6 @@
 import type { BoardNode, Viewport } from "@/types/board";
 import { useMemo } from "react";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function MiniMap({
   nodes,
@@ -16,6 +17,7 @@ export function MiniMap({
   onJump: (v: Viewport) => void;
   className?: string;
 }) {
+  const { t } = useI18n();
   const bounds = useMemo(() => {
     if (!nodes.length) return { minX: -400, minY: -300, maxX: 400, maxY: 300 };
     let minX = Infinity,
@@ -54,7 +56,7 @@ export function MiniMap({
   return (
     <button
       type="button"
-      aria-label="画布小地图"
+      aria-label={t("canvas.minimapLabel")}
       data-canvas-control
       className={className ?? "ob-chrome absolute bottom-3 right-3 overflow-hidden sm:bottom-4 sm:right-4"}
       style={{ width: mw, height: mh }}

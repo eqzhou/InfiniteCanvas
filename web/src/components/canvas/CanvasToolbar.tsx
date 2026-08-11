@@ -20,6 +20,7 @@ import {
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function CanvasToolbar({
   onAdd,
@@ -42,6 +43,7 @@ export function CanvasToolbar({
   exportingSnapshot?: boolean;
   reservePanelToggle?: boolean;
 }) {
+  const { t } = useI18n();
   const undo = useBoardStore((s) => s.undo);
   const redo = useBoardStore((s) => s.redo);
   const backgroundMode = useBoardStore((s) => s.getActive()?.backgroundMode);
@@ -54,39 +56,39 @@ export function CanvasToolbar({
   return (
     <div
       role="toolbar"
-      aria-label="画布工具栏"
+      aria-label={t("canvas.toolbar")}
       className={cn(
         "ob-toolbar-scroll z-30 flex min-h-12 w-full min-w-0 max-w-full flex-nowrap items-center gap-1 overflow-x-auto border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] py-1.5 pr-2 shadow-[var(--ob-elev-1)] backdrop-blur-md",
         reservePanelToggle ? "pl-14" : "pl-14 sm:pl-3",
       )}
     >
-      <Tool label="选择工具" onClick={() => setConfig({ ...config, canvasInteractionTool: "select" })} active={(config.canvasInteractionTool ?? "select") === "select"}><MousePointer2 size={16} /></Tool>
-      <Tool label="移动画布" onClick={() => setConfig({ ...config, canvasInteractionTool: "pan" })} active={config.canvasInteractionTool === "pan"}><Hand size={16} /></Tool>
+      <Tool label={t("canvas.select")} onClick={() => setConfig({ ...config, canvasInteractionTool: "select" })} active={(config.canvasInteractionTool ?? "select") === "select"}><MousePointer2 size={16} /></Tool>
+      <Tool label={t("canvas.pan")} onClick={() => setConfig({ ...config, canvasInteractionTool: "pan" })} active={config.canvasInteractionTool === "pan"}><Hand size={16} /></Tool>
       <div className="mx-1 h-5 w-px shrink-0 bg-[var(--ob-line)]" />
-      <Tool label="文本" onClick={() => onAdd("text")}>
+      <Tool label={t("canvas.text")} onClick={() => onAdd("text")}>
         <Type size={16} />
       </Tool>
-      <Tool label="图片" onClick={() => onAdd("image")}>
+      <Tool label={t("canvas.image")} onClick={() => onAdd("image")}>
         <ImagePlus size={16} />
       </Tool>
-      <Tool label="配置" onClick={() => onAdd("config")} compact>
+      <Tool label={t("canvas.config")} onClick={() => onAdd("config")} compact>
         <Settings2 size={16} />
       </Tool>
-      <Tool label="视频" onClick={() => onAdd("video")} compact>
+      <Tool label={t("canvas.video")} onClick={() => onAdd("video")} compact>
         <Film size={16} />
       </Tool>
-      <Tool label="音频" onClick={() => onAdd("audio")} compact>
+      <Tool label={t("canvas.audio")} onClick={() => onAdd("audio")} compact>
         <Music2 size={16} />
       </Tool>
-      <Tool label="全景" onClick={() => onAdd("panorama")} compact>
+      <Tool label={t("canvas.panorama")} onClick={() => onAdd("panorama")} compact>
         <Globe2 size={16} />
       </Tool>
-      <Tool label="导演台" onClick={() => onAdd("director")} compact>
+      <Tool label={t("canvas.director")} onClick={() => onAdd("director")} compact>
         <Clapperboard size={16} />
       </Tool>
-      <label aria-label="导入图片" title="导入图片" className="ob-file-btn shrink-0">
+      <label aria-label={t("canvas.importImage")} title={t("canvas.importImage")} className="ob-file-btn shrink-0">
         <Upload size={16} />
-        <span className="sr-only">导入图片</span>
+        <span className="sr-only">{t("canvas.importImage")}</span>
         <input
           type="file"
           accept="image/*"
@@ -95,16 +97,16 @@ export function CanvasToolbar({
           onChange={(e) => {
             const files = Array.from(e.target.files ?? []);
             void Promise.resolve(onImportImages(files)).catch((error: unknown) => {
-              window.alert(error instanceof Error ? error.message : "图片导入失败");
+              window.alert(error instanceof Error ? error.message : t("canvas.importImageFailed"));
             });
             e.currentTarget.value = "";
           }}
         />
       </label>
       {onImportVideos ? (
-        <label aria-label="导入视频" title="导入视频" className="ob-file-btn shrink-0">
+        <label aria-label={t("canvas.importVideo")} title={t("canvas.importVideo")} className="ob-file-btn shrink-0">
           <Film size={16} />
-          <span className="sr-only">导入视频</span>
+          <span className="sr-only">{t("canvas.importVideo")}</span>
           <input
             type="file"
             accept="video/*"
@@ -113,7 +115,7 @@ export function CanvasToolbar({
             onChange={(e) => {
               const files = Array.from(e.target.files ?? []);
               void Promise.resolve(onImportVideos(files)).catch((error: unknown) => {
-                window.alert(error instanceof Error ? error.message : "视频导入失败");
+                window.alert(error instanceof Error ? error.message : t("canvas.importVideoFailed"));
               });
               e.currentTarget.value = "";
             }}
@@ -121,9 +123,9 @@ export function CanvasToolbar({
         </label>
       ) : null}
       {onImportAudios ? (
-        <label aria-label="导入音频" title="导入音频" className="ob-file-btn shrink-0">
+        <label aria-label={t("canvas.importAudio")} title={t("canvas.importAudio")} className="ob-file-btn shrink-0">
           <Music2 size={16} />
-          <span className="sr-only">导入音频</span>
+          <span className="sr-only">{t("canvas.importAudio")}</span>
           <input
             type="file"
             accept="audio/*"
@@ -132,7 +134,7 @@ export function CanvasToolbar({
             onChange={(e) => {
               const files = Array.from(e.target.files ?? []);
               void Promise.resolve(onImportAudios(files)).catch((error: unknown) => {
-                window.alert(error instanceof Error ? error.message : "音频导入失败");
+                window.alert(error instanceof Error ? error.message : t("canvas.importAudioFailed"));
               });
               e.currentTarget.value = "";
             }}
@@ -140,14 +142,14 @@ export function CanvasToolbar({
         </label>
       ) : null}
       <div className="mx-1.5 h-5 w-px shrink-0 bg-[color-mix(in_srgb,var(--ob-line)_80%,var(--ob-ink)_10%)]" />
-      <Tool label="撤销" onClick={undo} compact>
+      <Tool label={t("canvas.undo")} onClick={undo} compact>
         <Undo2 size={16} />
       </Tool>
-      <Tool label="重做" onClick={redo} compact>
+      <Tool label={t("canvas.redo")} onClick={redo} compact>
         <Redo2 size={16} />
       </Tool>
       <Tool
-        label="背景"
+        label={t("canvas.background")}
         compact
         onClick={() => {
           const order = ["dots", "lines", "blank"] as const;
@@ -157,22 +159,22 @@ export function CanvasToolbar({
       >
         <Grid3X3 size={16} />
       </Tool>
-      <Tool label="小地图" onClick={() => setShowMinimap(!showMinimap)} active={showMinimap} compact>
+      <Tool label={t("canvas.minimap")} onClick={() => setShowMinimap(!showMinimap)} active={showMinimap} compact>
         <Map size={16} />
       </Tool>
       {onOpenAssets ? (
-        <Tool label="素材" onClick={onOpenAssets} compact>
+        <Tool label={t("canvas.assets")} onClick={onOpenAssets} compact>
           <Bookmark size={16} />
         </Tool>
       ) : null}
       {onFitView ? (
-        <Tool label="适应" onClick={onFitView} compact>
+        <Tool label={t("canvas.fit")} onClick={onFitView} compact>
           <Focus size={16} />
         </Tool>
       ) : null}
       {onExportSnapshot ? (
         <Tool
-          label={exportingSnapshot ? "导出中" : "导出画布"}
+          label={exportingSnapshot ? t("canvas.exporting") : t("canvas.export")}
           onClick={() => void onExportSnapshot()}
           compact
           disabled={exportingSnapshot}
