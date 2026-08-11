@@ -12,6 +12,7 @@ import {
   directorObjectRenderSignature,
 } from "@/lib/director-three-cast";
 import { flatEnvironmentLayout, isSafeDirectorFrameSphere } from "@/lib/director-framing";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function aspectValue(aspect: DirectorCamera["aspect"]): number {
   const [width, height] = aspect.split(":").map(Number);
@@ -188,11 +189,11 @@ function enqueueModelLoad(runtime: DirectorRuntime, task: (complete: () => void)
   pumpModelLoads(runtime);
 }
 
-function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+function canvasBlob(canvas: HTMLCanvasElement, errorMessage: string): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
-      else reject(new Error("导演台截图生成失败"));
+      else reject(new Error(errorMessage));
     }, "image/png");
   });
 }
@@ -227,6 +228,7 @@ export function DirectorViewport({
   onTransformCommit: (id: string, transform: DirectorTransform) => void;
   onModelStatus: (id: string, status: "loading" | "loaded" | "missing" | "error") => void;
 }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<DirectorRuntime | null>(null);
@@ -236,12 +238,14 @@ export function DirectorViewport({
   const onViewChangeRef = useRef(onViewChange);
   const onTransformCommitRef = useRef(onTransformCommit);
   const onModelStatusRef = useRef(onModelStatus);
+  const tRef = useRef(t);
   const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
   documentRef.current = document;
   onSelectRef.current = onSelect;
   onViewChangeRef.current = onViewChange;
   onTransformCommitRef.current = onTransformCommit;
   onModelStatusRef.current = onModelStatus;
+  tRef.current = t;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -263,7 +267,7 @@ export function DirectorViewport({
       renderer = new THREE.WebGLRenderer({ antialias: true });
       setRuntimeError(null);
     } catch {
-      const message = "当前浏览器无法创建 3D 渲染环境，请启用 WebGL 或关闭其他 3D 页面后重试";
+      const message = tRef.current("director.webglUnavailable");
       setRuntimeError(message);
       captureRef.current = () => Promise.reject(new Error(message));
       mount.replaceChildren();
@@ -402,11 +406,11 @@ export function DirectorViewport({
     captureRef.current = async () => {
       const current = runtimeRef.current;
       if (current?.environmentUrl && !current.environmentReady) {
-        throw new Error("全景环境仍在加载，请稍后再渲染");
+        throw new Error(tRef.current("director.environmentLoading"));
       }
-      if (current?.modelLoading.size) throw new Error("本地模型仍在加载，请稍后再渲染");
+      if (current?.modelLoading.size) throw new Error(tRef.current("director.modelsLoading"));
       if (current?.environmentUrl && current.environmentError && !current.environmentSphere.material.map) {
-        throw new Error("全景环境加载失败，请重新选择或上传全景图");
+        throw new Error(tRef.current("director.environmentFailed"));
       }
       const shot = getActiveDirectorCamera(documentRef.current);
       const priorPosition = camera.position.clone();
@@ -428,7 +432,7 @@ export function DirectorViewport({
       renderer.render(scene, camera);
       try {
         return {
-          blob: await canvasBlob(renderer.domElement),
+          blob: await canvasBlob(renderer.domElement, tRef.current("director.captureFailed")),
           width: renderer.domElement.width,
           height: renderer.domElement.height,
         };

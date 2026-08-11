@@ -32,11 +32,11 @@ import type { WorkflowTemplate } from "@/types/workflow";
 import { useI18n } from "@/i18n/I18nProvider";
 
 export const DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT = [
-  "你是图片创作工作流设计助手。",
-  "只返回一个 JSON 对象，不要 Markdown。",
-  "对象必须包含 title、description、category、variables、steps。",
-  "variables 支持 text、textarea、select、number、boolean、image；steps 为 1-16 个图片步骤。",
-  "提示词变量只能使用 {{变量ID}}，步骤图片依赖必须放在 references。",
+  "You are an image-creation workflow design assistant.",
+  "Return exactly one JSON object, without Markdown.",
+  "The object must include title, description, category, variables, and steps.",
+  "variables supports text, textarea, select, number, boolean, and image; steps contains 1-16 image steps.",
+  "Prompt variables may only use {{variableId}}, and step image dependencies must be in references.",
 ].join("\n");
 
 /**
@@ -44,8 +44,8 @@ export const DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT = [
  * prompt. An administrator may override it; an unset or blank value falls back
  * to the built-in default so the agent never runs without guidance.
  */
-export function resolveWorkflowAgentSystemPrompt(configured: string | undefined): string {
-  return configured?.trim() || DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT;
+export function resolveWorkflowAgentSystemPrompt(configured: string | undefined, fallback = DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT): string {
+  return configured?.trim() || fallback;
 }
 
 function initialValues(template: WorkflowTemplate): Record<string, unknown> {
@@ -58,10 +58,10 @@ function initialValues(template: WorkflowTemplate): Record<string, unknown> {
   }));
 }
 
-function extractJSONObject(value: string): unknown {
+function extractJSONObject(value: string, invalidMessage: string): unknown {
   const start = value.indexOf("{");
   const end = value.lastIndexOf("}");
-  if (start < 0 || end <= start || end - start > 256 * 1024) throw new Error("AI 没有返回有效工作流 JSON");
+  if (start < 0 || end <= start || end - start > 256 * 1024) throw new Error(invalidMessage);
   return JSON.parse(value.slice(start, end + 1));
 }
 
@@ -199,7 +199,7 @@ export function WorkflowWorkbench() {
     const channel = config.channels.find((item) => item.id === config.activeChannelId) ?? config.channels[0];
     const provider = channel ? getProvider(channel, "text") : undefined;
     if (!channel || !provider?.baseUrl || !provider.model || !agentPrompt.trim()) {
-      setError(!agentPrompt.trim() ? "请描述想创建的工作流" : "请先配置文本模型渠道");
+      setError(t(!agentPrompt.trim() ? "workflow.describeRequired" : "workflow.textProviderRequired"));
       return;
     }
     setBusy(true);
@@ -208,11 +208,11 @@ export function WorkflowWorkbench() {
       const output = await generateText({
         channel,
         model: provider.model,
-        systemPrompt: resolveWorkflowAgentSystemPrompt(config.workflowAgentSystemPrompt),
+        systemPrompt: resolveWorkflowAgentSystemPrompt(config.workflowAgentSystemPrompt, t("workflow.agent.defaultPrompt")),
         systemPromptProfile: "workflow",
         prompt: agentPrompt.trim(),
       });
-      const candidate = extractJSONObject(output) as Record<string, unknown>;
+      const candidate = extractJSONObject(output, t("workflow.noDraft")) as Record<string, unknown>;
       const timestamp = nowIso();
       const next = parseWorkflowTemplate({
         ...candidate,
@@ -228,7 +228,7 @@ export function WorkflowWorkbench() {
       setValues(initialValues(next));
       setImageFiles({});
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "AI 工作流草稿无效");
+      setError(cause instanceof Error ? cause.message : t("workflow.invalidDraft"));
     } finally {
       setBusy(false);
     }
@@ -274,9 +274,9 @@ export function WorkflowWorkbench() {
 
   const insertResults = async (job: GenerationJob, storageKeys: string[]) => {
     const active = useBoardStore.getState().getActive();
-    if (!active) throw new Error("请先创建画布");
+    if (!active) throw new Error(t("workflow.noCanvas"));
     if (active.nodes.some((node) => node.metadata.workflowRunId === job.id && storageKeys.includes(node.metadata.storageKey ?? ""))) {
-      throw new Error("该运行结果已经插入当前画布");
+      throw new Error(t("workflow.inserted"));
     }
     const parameters = parseWorkflowRunParameters(job.parameters);
     const result = parseWorkflowRunResult(job.result, parameters.templateSnapshot);
@@ -284,7 +284,7 @@ export function WorkflowWorkbench() {
     for (const [index, storageKey] of storageKeys.entries()) {
       const blob = await getBlob("image", storageKey);
       const content = await resolveObjectUrl("image", storageKey);
-      if (!blob || !content) throw new Error("工作流结果媒体已丢失");
+      if (!blob || !content) throw new Error(t("workflow.missingMedia"));
       const step = parameters.templateSnapshot.steps.find((candidate) => result.steps[candidate.id]?.storageKeys?.includes(storageKey));
       nodes.push(createNode("image", {
         x: (420 - active.viewport.x) / active.viewport.k + (index % 4) * 360,

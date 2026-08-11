@@ -5,6 +5,7 @@ import {
   DIRECTOR_POSE_PRESETS,
 } from "@/lib/director-cast";
 import { buildDirectorFigurePreview } from "@/lib/director-figure-preview";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function DirectorFigureThumbnail({
   preset,
@@ -72,6 +73,7 @@ export function DirectorFigurePicker({
   onPresetChange: (preset: DirectorCharacterPreset) => void;
   onPoseChange: (pose: DirectorPosePreset) => void;
 }) {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const options: PickerOption[] = kind === "character"
@@ -79,7 +81,7 @@ export function DirectorFigurePicker({
     : DIRECTOR_POSE_PRESETS.map((option) => ({ id: option.id, label: option.label, preset, pose: option.id }));
   const selectedId = kind === "character" ? preset : pose;
   const selected = options.find((option) => option.id === selectedId) ?? options[0]!;
-  const title = kind === "character" ? "人物外观" : "动作姿态";
+  const title = t(kind === "character" ? "director.figure.character" : "director.figure.pose");
 
   const select = (option: PickerOption) => {
     if (kind === "character") onPresetChange(option.preset);
@@ -101,7 +103,7 @@ export function DirectorFigurePicker({
   };
 
   return (
-    <section aria-label={`${title}选择器`} className="rounded border border-white/10 bg-black/15 p-2">
+    <section aria-label={t("director.figure.picker", { title })} className="rounded border border-white/10 bg-black/15 p-2">
       <button
         type="button"
         className="flex w-full items-center gap-3 rounded border border-white/10 bg-[#222] p-2 text-left hover:border-lime-200/50 hover:bg-white/10"
@@ -115,14 +117,14 @@ export function DirectorFigurePicker({
         <span className="min-w-0 flex-1">
           <span className="block text-[10px] uppercase tracking-wider text-slate-500">{title}</span>
           <span className="mt-1 block truncate font-medium text-slate-100">{selected.label}</span>
-          <span className="mt-1 block text-[10px] text-lime-200">{expanded ? "收起目录" : `浏览全部 ${options.length} 项`}</span>
+          <span className="mt-1 block text-[10px] text-lime-200">{expanded ? t("director.figure.collapse") : t("director.figure.browse", { count: options.length })}</span>
         </span>
       </button>
       {expanded ? (
         <div
           id={`director-${kind}-catalog`}
           role="listbox"
-          aria-label={`${title}视觉目录`}
+          aria-label={t("director.figure.catalog", { title })}
           className={`mt-2 grid max-h-80 gap-1.5 overflow-y-auto pr-1 ${kind === "character" ? "grid-cols-2" : "grid-cols-3"}`}
         >
           {options.map((option, index) => (
@@ -132,7 +134,7 @@ export function DirectorFigurePicker({
               type="button"
               role="option"
               aria-selected={option.id === selectedId}
-              aria-label={`选择${title} ${option.label}`}
+              aria-label={t("director.figure.select", { title, name: option.label })}
               tabIndex={option.id === selectedId ? 0 : -1}
               className="group rounded border border-white/10 bg-[#202020] p-1 text-center text-[10px] text-slate-300 hover:border-lime-200/60 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime-200 aria-selected:border-lime-200 aria-selected:bg-lime-200/10 aria-selected:text-lime-100"
               onClick={() => select(option)}

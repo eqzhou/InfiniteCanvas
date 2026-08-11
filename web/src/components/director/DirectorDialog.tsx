@@ -41,14 +41,15 @@ import { uid } from "@/lib/id";
 import type { TransformControlsMode } from "three/examples/jsm/controls/TransformControls.js";
 import { DIRECTOR_CHARACTER_PRESETS, DIRECTOR_POSE_PRESETS, DIRECTOR_PRIMITIVES } from "@/lib/director-cast";
 import { createDirectorShotSnapshot } from "@/lib/director-shot";
+import { useI18n } from "@/i18n/I18nProvider";
 
-const KIND_LABEL: Record<DirectorObjectKind, string> = {
-  character: "角色",
-  crowd: "群众",
-  prop: "几何体",
-  light: "灯光",
-  model: "模型",
-};
+const KIND_LABEL_KEY = {
+  character: "director.kind.character",
+  crowd: "director.kind.crowd",
+  prop: "director.kind.prop",
+  light: "director.kind.light",
+  model: "director.kind.model",
+} satisfies Record<DirectorObjectKind, string>;
 
 export function DirectorDialog({
   open,
@@ -83,6 +84,7 @@ export function DirectorDialog({
   activePanoramaId: string | null;
   onPanoramaChange: (panoramaId: string | null) => void;
 }) {
+  const { t } = useI18n();
   const captureRef = useRef<(() => Promise<DirectorRenderedCapture>) | null>(null);
   const viewportActionsRef = useRef<DirectorViewportActions | null>(null);
   const captureInFlightRef = useRef(false);
@@ -171,7 +173,7 @@ export function DirectorDialog({
         await refreshCaptures();
         setSelectedCaptureIds(new Set([record.id]));
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "导演台截图保存失败");
+        setCaptureError(error instanceof Error ? error.message : t("director.captureSaveFailed"));
       } finally {
         captureInFlightRef.current = false;
         setCapturing(false);
@@ -222,7 +224,7 @@ export function DirectorDialog({
     }
     let active = true;
     void refreshModels(scene).catch((error) => {
-      if (active) setCaptureError(error instanceof Error ? error.message : "本地模型读取失败");
+      if (active) setCaptureError(error instanceof Error ? error.message : t("director.modelReadFailed"));
     });
     return () => { active = false; };
   }, [modelDescriptorSignature, open, refreshModels]);
@@ -264,7 +266,7 @@ export function DirectorDialog({
     void directorCaptureStore.list(ownerScope, projectId, directorNodeId).then((records) => {
       if (active) setCaptureRecords(records);
     }).catch((error) => {
-      if (active) setCaptureError(error instanceof Error ? error.message : "截图托盘读取失败");
+      if (active) setCaptureError(error instanceof Error ? error.message : t("director.captureReadFailed"));
     });
     return () => { active = false; };
   }, [directorNodeId, open, ownerScope, projectId]);
@@ -319,13 +321,13 @@ export function DirectorDialog({
     try {
       const next = updateDirectorCrowd(scene, selected.id, patch);
       if (next === scene && Object.keys(patch).some((key) => selected.crowd?.[key as keyof typeof selected.crowd] !== patch[key as keyof typeof patch])) {
-        setCaptureError("群众阵列超过单阵列 1024 人或场景 4096 人上限");
+        setCaptureError(t("director.crowdLimit"));
         return;
       }
       setCaptureError(null);
       onChange(next);
     } catch (error) {
-      setCaptureError(error instanceof Error ? error.message : "群众阵列设置无效");
+      setCaptureError(error instanceof Error ? error.message : t("director.crowdInvalid"));
     }
   };
 
@@ -335,26 +337,26 @@ export function DirectorDialog({
       className="fixed inset-0 z-[150] flex bg-[#111] text-slate-100"
       role="dialog"
       aria-modal="true"
-      aria-label="3D 导演台"
+      aria-label={t("director.dialog")}
       onPointerDown={(event) => event.stopPropagation()}
     >
       <aside className="flex w-60 shrink-0 flex-col border-r border-white/10 bg-[#1b1b1b]">
         <header className="border-b border-white/10 px-4 py-3">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">Scene</div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500">{t("director.scene")}</div>
           <h2 className="truncate text-sm font-semibold">{title}</h2>
         </header>
-        <div className="grid grid-cols-5 gap-1 border-b border-white/10 p-2" role="group" aria-label="快速添加场景对象">
-          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" disabled={population >= 4096} onClick={() => onChange(addDirectorCharacter(scene, { preset: "studio", pose: "neutral", role: "actor" }))}><UserRound size={14} className="mx-auto mb-1" />角色</button>
-          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" disabled={population >= 4096} onClick={() => onChange(addDirectorCharacter(scene, { preset: "casual", pose: "talk", role: "extra" }))}><Users size={14} className="mx-auto mb-1" />群演</button>
-          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" disabled={population + 9 > 4096} onClick={() => onChange(addDirectorCrowd(scene))}><Users size={14} className="mx-auto mb-1" />阵列</button>
-          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" onClick={() => onChange(addDirectorPrimitive(scene, "box"))}><Shapes size={14} className="mx-auto mb-1" />几何体</button>
-          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" onClick={() => onChange(addDirectorObject(scene, "light"))}><Lightbulb size={14} className="mx-auto mb-1" />灯光</button>
+        <div className="grid grid-cols-5 gap-1 border-b border-white/10 p-2" role="group" aria-label={t("director.quickAdd")}>
+          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" disabled={population >= 4096} onClick={() => onChange(addDirectorCharacter(scene, { preset: "studio", pose: "neutral", role: "actor" }))}><UserRound size={14} className="mx-auto mb-1" />{t("director.addCharacter")}</button>
+          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" disabled={population >= 4096} onClick={() => onChange(addDirectorCharacter(scene, { preset: "casual", pose: "talk", role: "extra" }))}><Users size={14} className="mx-auto mb-1" />{t("director.addExtra")}</button>
+          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" disabled={population + 9 > 4096} onClick={() => onChange(addDirectorCrowd(scene))}><Users size={14} className="mx-auto mb-1" />{t("director.addCrowd")}</button>
+          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" onClick={() => onChange(addDirectorPrimitive(scene, "box"))}><Shapes size={14} className="mx-auto mb-1" />{t("director.addPrimitive")}</button>
+          <button type="button" className="rounded bg-white/5 px-1 py-2 text-[10px] hover:bg-white/10" onClick={() => onChange(addDirectorObject(scene, "light"))}><Lightbulb size={14} className="mx-auto mb-1" />{t("director.addLight")}</button>
         </div>
         <div className="border-b border-white/10 p-2">
           <button type="button" className="flex w-full items-center justify-center gap-2 rounded bg-white/5 px-2 py-2 text-xs hover:bg-white/10 disabled:opacity-40" disabled={modelBusy || scene.objects.length >= 200} onClick={() => {
             setRelinkObjectId(null);
             modelInputRef.current?.click();
-          }}><FileBox size={14} />导入 GLB 模型</button>
+          }}><FileBox size={14} />{t("director.importGlb")}</button>
           <input ref={modelInputRef} type="file" accept=".glb,model/gltf-binary,application/octet-stream" className="hidden" onChange={(event) => {
             const file = event.target.files?.[0];
             event.currentTarget.value = "";
@@ -366,7 +368,7 @@ export function DirectorDialog({
               try {
                 if (relinkObjectId) {
                   const object = sceneRef.current.objects.find((item) => item.id === relinkObjectId && item.kind === "model");
-                  if (!object?.modelAsset) throw new Error("待重新关联的模型已不存在");
+                  if (!object?.modelAsset) throw new Error(t("director.modelNotFound"));
                   const assetId = uid("model_asset");
                   await directorModelStore.put({
                     ownerScope,
@@ -381,7 +383,7 @@ export function DirectorDialog({
                   const currentObject = current.objects.find((item) => item.id === object.id && item.kind === "model");
                   if (operation !== modelOperationRef.current || !openRef.current || !currentObject?.modelAsset || currentObject.modelAsset.assetId !== object.modelAsset.assetId) {
                     await directorModelStore.delete({ ownerScope, projectId, directorNodeId, objectId: object.id, assetId });
-                    throw new Error("模型在导入期间已变更，请重试重新关联");
+                    throw new Error(t("director.modelChanged"));
                   }
                   const next = relinkDirectorModel(current, object.id, { assetId, fileName: file.name, bytes: file.size });
                   onModelCommit(next);
@@ -398,13 +400,13 @@ export function DirectorDialog({
                   const next = addDirectorModel(current, { assetId, fileName: file.name, bytes: file.size }, objectId);
                   if (next === current) {
                     await directorModelStore.delete({ ownerScope, projectId, directorNodeId, objectId, assetId });
-                    throw new Error("导演台模型数量已达到上限");
+                    throw new Error(t("director.modelLimit"));
                   }
                   onModelCommit(next);
                   await refreshModels(next);
                 }
               } catch (error) {
-                setCaptureError(error instanceof Error ? error.message : "GLB 模型导入失败");
+                setCaptureError(error instanceof Error ? error.message : t("director.modelImportFailed"));
               } finally {
                 setRelinkObjectId(null);
                 setModelBusy(false);
@@ -412,8 +414,8 @@ export function DirectorDialog({
             })();
           }} />
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-2" aria-label="场景层级">
-          <div className="mb-2 flex items-center gap-1 text-xs text-slate-400"><Plus size={12} />舞台元素 · {population} 人</div>
+        <div className="min-h-0 flex-1 overflow-auto p-2" aria-label={t("director.sceneTree")}>
+          <div className="mb-2 flex items-center gap-1 text-xs text-slate-400"><Plus size={12} />{t("director.stageElements", { count: population })}</div>
           {scene.objects.map((object) => (
             <button
               key={object.id}
@@ -424,18 +426,18 @@ export function DirectorDialog({
             >
               {object.kind === "character" ? <UserRound size={14} /> : object.kind === "crowd" ? <Users size={14} /> : object.kind === "prop" ? <Box size={14} /> : object.kind === "light" ? <Lightbulb size={14} /> : <FileBox size={14} />}
               <span className="min-w-0 flex-1 truncate">{object.name}</span>
-              <span className={`text-[9px] uppercase ${object.kind === "model" && modelStatuses[object.id] !== "loaded" ? "text-amber-300" : "text-slate-500"}`}>{object.kind === "model" ? ({ loading: "加载中", loaded: "已关联", missing: "缺失", error: "错误" } as const)[modelStatuses[object.id] ?? "missing"] : object.kind === "crowd" && object.crowd ? `${object.crowd.rows}×${object.crowd.columns} · ${object.crowd.rows * object.crowd.columns}人` : KIND_LABEL[object.kind]}</span>
+              <span className={`text-[9px] uppercase ${object.kind === "model" && modelStatuses[object.id] !== "loaded" ? "text-amber-300" : "text-slate-500"}`}>{object.kind === "model" ? t((`director.status.${modelStatuses[object.id] ?? "missing"}`) as Parameters<typeof t>[0]) : object.kind === "crowd" && object.crowd ? t("director.crowdArray", { count: object.crowd.rows * object.crowd.columns }) : t(KIND_LABEL_KEY[object.kind] as Parameters<typeof t>[0])}</span>
             </button>
           ))}
           <div className="mt-4 mb-2 flex items-center gap-1 text-xs text-slate-400">
-            <Camera size={12} />机位
-            <button type="button" aria-label="添加机位" className="ml-auto rounded p-1 hover:bg-white/10" disabled={scene.cameras.length >= 32} onClick={() => onChange(addDirectorCamera(scene))}><Plus size={13} /></button>
+            <Camera size={12} />{t("director.cameras")}
+            <button type="button" aria-label={t("director.addCamera")} className="ml-auto rounded p-1 hover:bg-white/10" disabled={scene.cameras.length >= 32} onClick={() => onChange(addDirectorCamera(scene))}><Plus size={13} /></button>
           </div>
           {scene.cameras.map((camera) => (
             <button
               key={camera.id}
               type="button"
-              aria-label={`选择机位 ${camera.name}`}
+              aria-label={t("director.selectCamera", { name: camera.name })}
               aria-current={camera.id === scene.activeCameraId ? "true" : undefined}
               className={`mb-1 flex w-full items-center gap-2 rounded border px-2 py-2 text-left text-xs ${camera.id === scene.activeCameraId ? "border-[#f0f269]/40 bg-[#f0f269]/15 text-[#f0f269]" : "border-white/5 text-slate-400 hover:bg-white/5"}`}
               onClick={() => onChange(selectDirectorCamera(scene, camera.id))}
@@ -450,8 +452,8 @@ export function DirectorDialog({
 
       <main className="relative min-w-0 flex-1">
         <div className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded border border-white/10 bg-black/55 p-1 text-xs backdrop-blur">
-          <button type="button" aria-pressed={scene.viewMode === "director"} className={`rounded px-2 py-1 ${scene.viewMode === "director" ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => onChange(setDirectorViewMode(scene, "director"))}>导演视角</button>
-          <button type="button" aria-pressed={scene.viewMode === "camera"} className={`rounded px-2 py-1 ${scene.viewMode === "camera" ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => onChange(setDirectorViewMode(scene, "camera"))}>机位视角</button>
+          <button type="button" aria-pressed={scene.viewMode === "director"} className={`rounded px-2 py-1 ${scene.viewMode === "director" ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => onChange(setDirectorViewMode(scene, "director"))}>{t("director.directorView")}</button>
+          <button type="button" aria-pressed={scene.viewMode === "camera"} className={`rounded px-2 py-1 ${scene.viewMode === "camera" ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => onChange(setDirectorViewMode(scene, "camera"))}>{t("director.cameraView")}</button>
           <span className="px-1 text-slate-400">{activeCamera.name} · {activeCamera.focalLength}mm</span>
         </div>
         <DirectorViewport
@@ -467,10 +469,10 @@ export function DirectorDialog({
           onTransformCommit={(id, transform) => onTransformCommit(updateDirectorObjectTransform(scene, id, transform))}
           onModelStatus={(id, status) => setModelStatuses((current) => current[id] === status ? current : { ...current, [id]: status })}
         />
-        <div className="absolute bottom-44 left-1/2 z-10 flex max-w-[min(92%,48rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded border border-white/10 bg-black/65 p-1 text-xs backdrop-blur" aria-label="3D 变换工具">
+        <div className="absolute bottom-44 left-1/2 z-10 flex max-w-[min(92%,48rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded border border-white/10 bg-black/65 p-1 text-xs backdrop-blur" aria-label={t("director.transformTools")}>
           {(["translate", "rotate", "scale"] as const).map((mode) => (
             <button key={mode} type="button" aria-pressed={transformMode === mode} className={`rounded px-3 py-1.5 ${transformMode === mode ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => setTransformMode(mode)}>
-              {{ translate: "移动", rotate: "旋转", scale: "缩放" }[mode]}
+              {t({ translate: "director.translate", rotate: "director.rotate", scale: "director.scale" }[mode] as Parameters<typeof t>[0])}
             </button>
           ))}
           <span className="mx-1 h-5 border-l border-white/15" />
@@ -479,24 +481,24 @@ export function DirectorDialog({
             className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
             disabled={!selected || !selected.visible || selected.kind === "light"}
             onClick={() => applyDirectorFraming("focusSelected")}
-          >聚焦选中对象</button>
+          >{t("director.focusSelected")}</button>
           <button
             type="button"
             className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
             disabled={!scene.objects.some((object) => object.visible && object.kind !== "light")}
             onClick={() => applyDirectorFraming("fitScene")}
-          >适应全部场景</button>
+          >{t("director.fitScene")}</button>
           <button
             type="button"
             className="rounded px-2 py-1.5 hover:bg-white/10"
             onClick={() => onChange(resetDirectorView(scene))}
-          >重置导演视角</button>
+          >{t("director.resetView")}</button>
           <button
             type="button"
             className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
             disabled={!selected || selected.locked}
             onClick={() => selected && onTransformCommit(resetDirectorObjectTransform(scene, selected.id))}
-          >重置选中对象变换</button>
+          >{t("director.resetObject")}</button>
         </div>
         <DirectorCaptureTray
           captures={captureViews}
@@ -521,7 +523,7 @@ export function DirectorDialog({
                 setSelectedCaptureIds(new Set());
                 await refreshCaptures();
               } catch (error) {
-                setCaptureError(error instanceof Error ? error.message : "截图删除失败");
+                setCaptureError(error instanceof Error ? error.message : t("director.captureDeleteFailed"));
               } finally {
                 setCapturing(false);
               }
@@ -535,7 +537,7 @@ export function DirectorDialog({
                 setSelectedCaptureIds(new Set());
                 await refreshCaptures();
               } catch (error) {
-                setCaptureError(error instanceof Error ? error.message : "截图清空失败");
+                setCaptureError(error instanceof Error ? error.message : t("director.captureClearFailed"));
               } finally {
                 setCapturing(false);
               }
@@ -550,7 +552,7 @@ export function DirectorDialog({
               try {
                 await onSendCaptures(await Promise.all(selectedRecords.map((record) => directorCaptureStore.resolve(record))));
               } catch (error) {
-                setCaptureError(error instanceof Error ? error.message : "截图发送画布失败");
+                setCaptureError(error instanceof Error ? error.message : t("director.captureSendFailed"));
               } finally {
                 setCapturing(false);
               }
@@ -565,7 +567,7 @@ export function DirectorDialog({
               try {
                 await onGenerateCapture(await directorCaptureStore.resolve(selectedRecord));
               } catch (error) {
-                setCaptureError(error instanceof Error ? error.message : "正式镜头生成失败");
+                setCaptureError(error instanceof Error ? error.message : t("director.shotGenerateFailed"));
               } finally {
                 setCapturing(false);
               }
@@ -578,23 +580,23 @@ export function DirectorDialog({
       <aside className="flex w-72 shrink-0 flex-col border-l border-white/10 bg-[#1b1b1b]">
         <header className="flex items-center border-b border-white/10 px-4 py-3">
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">Inspector</div>
-            <div className="text-sm font-semibold">属性</div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500">{t("director.inspector")}</div>
+            <div className="text-sm font-semibold">{t("director.inspector")}</div>
           </div>
-          <button ref={closeButtonRef} type="button" disabled={modelBusy} className="ml-auto rounded p-1 hover:bg-white/10 disabled:opacity-40" aria-label="关闭导演台" onClick={onClose}><X size={18} /></button>
+          <button ref={closeButtonRef} type="button" disabled={modelBusy} className="ml-auto rounded p-1 hover:bg-white/10 disabled:opacity-40" aria-label={t("director.close")} onClick={onClose}><X size={18} /></button>
         </header>
         <div className="min-h-0 flex-1 overflow-auto p-4 text-xs">
           {selected ? (
             <>
               <div className="mb-4 flex items-center gap-2">
-                <input aria-label="对象名称" className="min-w-0 flex-1 rounded border border-white/10 bg-white/5 px-2 py-1.5" value={selected.name} onChange={(event) => patchObject({ name: event.target.value.slice(0, 100) || selected.name })} />
-                <button type="button" aria-label="删除对象" className="rounded p-1.5 text-red-300 hover:bg-red-500/10" onClick={() => onChange(removeDirectorObject(scene, selected.id))}><Trash2 size={15} /></button>
+                <input aria-label={t("director.objectName")} className="min-w-0 flex-1 rounded border border-white/10 bg-white/5 px-2 py-1.5" value={selected.name} onChange={(event) => patchObject({ name: event.target.value.slice(0, 100) || selected.name })} />
+                <button type="button" aria-label={t("director.deleteObject")} className="rounded p-1.5 text-red-300 hover:bg-red-500/10" onClick={() => onChange(removeDirectorObject(scene, selected.id))}><Trash2 size={15} /></button>
               </div>
-              <label className="mb-4 flex items-center gap-2"><input type="checkbox" checked={selected.visible} onChange={(event) => patchObject({ visible: event.target.checked })} />可见</label>
-              <label className="mb-4 flex items-center gap-2"><input type="checkbox" checked={selected.locked} onChange={(event) => onChange(setDirectorObjectLocked(scene, selected.id, event.target.checked))} />锁定变换</label>
+              <label className="mb-4 flex items-center gap-2"><input type="checkbox" checked={selected.visible} onChange={(event) => patchObject({ visible: event.target.checked })} />{t("director.visible")}</label>
+              <label className="mb-4 flex items-center gap-2"><input type="checkbox" checked={selected.locked} onChange={(event) => onChange(setDirectorObjectLocked(scene, selected.id, event.target.checked))} />{t("director.locked")}</label>
               {selected.kind === "character" && selected.character ? (
                 <div className="mb-4 space-y-3 rounded border border-white/10 bg-white/5 p-2">
-                  <label className="block">身份<select aria-label="人物身份" className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={selected.character.role} onChange={(event) => onChange(updateDirectorCharacter(scene, selected.id, { role: event.target.value as "actor" | "extra" }))}><option value="actor">角色</option><option value="extra">群演</option></select></label>
+                  <label className="block">{t("director.role")}<select aria-label={t("director.role")} className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={selected.character.role} onChange={(event) => onChange(updateDirectorCharacter(scene, selected.id, { role: event.target.value as "actor" | "extra" }))}><option value="actor">{t("director.roleActor")}</option><option value="extra">{t("director.roleExtra")}</option></select></label>
                   <DirectorFigurePicker
                     kind="character"
                     preset={selected.character.preset}
@@ -609,85 +611,85 @@ export function DirectorDialog({
                     onPresetChange={(preset) => onChange(updateDirectorCharacter(scene, selected.id, { preset }))}
                     onPoseChange={(pose) => onChange(updateDirectorCharacter(scene, selected.id, { pose }))}
                   />
-                  <select aria-label="人物预设" className="sr-only" value={selected.character.preset} onChange={(event) => onChange(updateDirectorCharacter(scene, selected.id, { preset: event.target.value as NonNullable<DirectorObject["character"]>["preset"] }))}>{DIRECTOR_CHARACTER_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
-                  <select aria-label="人物姿势" className="sr-only" value={selected.character.pose} onChange={(event) => onChange(updateDirectorCharacter(scene, selected.id, { pose: event.target.value as NonNullable<DirectorObject["character"]>["pose"] }))}>{DIRECTOR_POSE_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
+                  <select aria-label={t("director.characterPreset")} className="sr-only" value={selected.character.preset} onChange={(event) => onChange(updateDirectorCharacter(scene, selected.id, { preset: event.target.value as NonNullable<DirectorObject["character"]>["preset"] }))}>{DIRECTOR_CHARACTER_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
+                  <select aria-label={t("director.characterPose")} className="sr-only" value={selected.character.pose} onChange={(event) => onChange(updateDirectorCharacter(scene, selected.id, { pose: event.target.value as NonNullable<DirectorObject["character"]>["pose"] }))}>{DIRECTOR_POSE_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
                 </div>
               ) : null}
               {selected.kind === "crowd" && selected.crowd ? (
                 <div className="mb-4 space-y-3 rounded border border-white/10 bg-white/5 p-2">
-                  <div className="mb-2 font-medium">群众阵列 · {selected.crowd.rows * selected.crowd.columns} 人</div>
+                  <div className="mb-2 font-medium">{t("director.crowdArray", { count: selected.crowd.rows * selected.crowd.columns })}</div>
                   <DirectorFigurePicker kind="character" preset={selected.crowd.preset} pose={selected.crowd.pose} onPresetChange={(preset) => patchCrowd({ preset })} onPoseChange={(pose) => patchCrowd({ pose })} />
                   <DirectorFigurePicker kind="pose" preset={selected.crowd.preset} pose={selected.crowd.pose} onPresetChange={(preset) => patchCrowd({ preset })} onPoseChange={(pose) => patchCrowd({ pose })} />
-                  <select aria-label="群众人物预设" className="sr-only" value={selected.crowd.preset} onChange={(event) => patchCrowd({ preset: event.target.value as NonNullable<DirectorObject["crowd"]>["preset"] })}>{DIRECTOR_CHARACTER_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
-                  <select aria-label="群众人物姿势" className="sr-only" value={selected.crowd.pose} onChange={(event) => patchCrowd({ pose: event.target.value as NonNullable<DirectorObject["crowd"]>["pose"] })}>{DIRECTOR_POSE_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
-                  <NumberEditor label="行数" ariaLabel="群众行数" value={selected.crowd.rows} min={1} max={64} onChange={(rows) => patchCrowd({ rows })} />
-                  <NumberEditor label="列数" ariaLabel="群众列数" value={selected.crowd.columns} min={1} max={64} onChange={(columns) => patchCrowd({ columns })} />
-                  <NumberEditor label="横向间距" ariaLabel="群众横向间距" value={selected.crowd.spacingX} min={0.1} max={100} step={0.1} onChange={(spacingX) => patchCrowd({ spacingX })} />
-                  <NumberEditor label="纵向间距" ariaLabel="群众纵向间距" value={selected.crowd.spacingZ} min={0.1} max={100} step={0.1} onChange={(spacingZ) => patchCrowd({ spacingZ })} />
-                  <label className="mt-3 flex items-center gap-2"><input aria-label="群众变化" type="checkbox" checked={selected.crowd.variation} onChange={(event) => patchCrowd({ variation: event.target.checked })} />人物与姿势变化</label>
-                  <NumberEditor label="随机种子" ariaLabel="群众随机种子" value={selected.crowd.seed} min={0} max={2147483647} onChange={(seed) => patchCrowd({ seed })} />
+                  <select aria-label={t("director.crowdPreset")} className="sr-only" value={selected.crowd.preset} onChange={(event) => patchCrowd({ preset: event.target.value as NonNullable<DirectorObject["crowd"]>["preset"] })}>{DIRECTOR_CHARACTER_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
+                  <select aria-label={t("director.crowdPose")} className="sr-only" value={selected.crowd.pose} onChange={(event) => patchCrowd({ pose: event.target.value as NonNullable<DirectorObject["crowd"]>["pose"] })}>{DIRECTOR_POSE_PRESETS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
+                  <NumberEditor label={t("director.rows")} ariaLabel={t("director.crowdRows")} value={selected.crowd.rows} min={1} max={64} onChange={(rows) => patchCrowd({ rows })} />
+                  <NumberEditor label={t("director.columns")} ariaLabel={t("director.crowdColumns")} value={selected.crowd.columns} min={1} max={64} onChange={(columns) => patchCrowd({ columns })} />
+                  <NumberEditor label={t("director.spacingX")} ariaLabel={t("director.crowdSpacingX")} value={selected.crowd.spacingX} min={0.1} max={100} step={0.1} onChange={(spacingX) => patchCrowd({ spacingX })} />
+                  <NumberEditor label={t("director.spacingZ")} ariaLabel={t("director.crowdSpacingZ")} value={selected.crowd.spacingZ} min={0.1} max={100} step={0.1} onChange={(spacingZ) => patchCrowd({ spacingZ })} />
+                  <label className="mt-3 flex items-center gap-2"><input aria-label={t("director.crowdVariationLabel")} type="checkbox" checked={selected.crowd.variation} onChange={(event) => patchCrowd({ variation: event.target.checked })} />{t("director.crowdVariation")}</label>
+                  <NumberEditor label={t("director.seed")} ariaLabel={t("director.crowdSeed")} value={selected.crowd.seed} min={0} max={2147483647} onChange={(seed) => patchCrowd({ seed })} />
                 </div>
               ) : null}
               {selected.kind === "prop" && selected.primitive ? (
-                <label className="mb-4 block">基础几何体<select aria-label="基础几何体" className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={selected.primitive} onChange={(event) => onChange(updateDirectorPrimitive(scene, selected.id, event.target.value as NonNullable<DirectorObject["primitive"]>))}>{DIRECTOR_PRIMITIVES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+                <label className="mb-4 block">{t("director.primitive")}<select aria-label={t("director.primitive")} className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={selected.primitive} onChange={(event) => onChange(updateDirectorPrimitive(scene, selected.id, event.target.value as NonNullable<DirectorObject["primitive"]>))}>{DIRECTOR_PRIMITIVES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
               ) : null}
               {selected.kind === "model" ? (
                 <div className="mb-4 rounded border border-white/10 bg-white/5 p-2">
-                  <div className="mb-2 flex items-center justify-between gap-2"><span className="truncate">{selected.modelAsset?.fileName}</span><span className={modelStatuses[selected.id] === "loaded" ? "text-emerald-300" : "text-amber-300"}>{modelStatuses[selected.id] === "loaded" ? "已关联" : "资源缺失"}</span></div>
+                  <div className="mb-2 flex items-center justify-between gap-2"><span className="truncate">{selected.modelAsset?.fileName}</span><span className={modelStatuses[selected.id] === "loaded" ? "text-emerald-300" : "text-amber-300"}>{modelStatuses[selected.id] === "loaded" ? t("director.status.loaded") : t("director.modelMissing")}</span></div>
                   <button type="button" className="w-full rounded bg-white/10 px-2 py-1.5 hover:bg-white/15 disabled:opacity-40" disabled={modelBusy} onClick={() => {
                     setRelinkObjectId(selected.id);
                     modelInputRef.current?.click();
-                  }}>重新关联 GLB</button>
+                  }}>{t("director.relinkGlb")}</button>
                 </div>
               ) : null}
-              <VectorEditor label="位置" value={selected.transform.position} onChange={(position) => onChange(updateDirectorObjectTransform(scene, selected.id, { position }))} />
-              <VectorEditor label="旋转（度）" value={selected.transform.rotation} min={-360} max={360} onChange={(rotation) => onChange(updateDirectorObjectTransform(scene, selected.id, { rotation }))} />
-              <VectorEditor label="缩放" value={selected.transform.scale} min={0.01} max={1000} onChange={(scale) => onChange(updateDirectorObjectTransform(scene, selected.id, { scale }))} />
-              <label className="mt-4 block">颜色<input aria-label="对象颜色" type="color" className="mt-1 h-8 w-full rounded bg-transparent" value={selected.color} onChange={(event) => patchObject({ color: event.target.value })} /></label>
-              {selected.kind === "light" ? <NumberEditor label="灯光强度" value={selected.intensity} min={0} max={1000} onChange={(intensity) => patchObject({ intensity })} /> : null}
+              <VectorEditor label={t("director.position")} value={selected.transform.position} onChange={(position) => onChange(updateDirectorObjectTransform(scene, selected.id, { position }))} />
+              <VectorEditor label={t("director.rotation")} value={selected.transform.rotation} min={-360} max={360} onChange={(rotation) => onChange(updateDirectorObjectTransform(scene, selected.id, { rotation }))} />
+              <VectorEditor label={t("director.scale")} value={selected.transform.scale} min={0.01} max={1000} onChange={(scale) => onChange(updateDirectorObjectTransform(scene, selected.id, { scale }))} />
+              <label className="mt-4 block">{t("director.color")}<input aria-label={t("director.objectColor")} type="color" className="mt-1 h-8 w-full rounded bg-transparent" value={selected.color} onChange={(event) => patchObject({ color: event.target.value })} /></label>
+              {selected.kind === "light" ? <NumberEditor label={t("director.lightIntensity")} value={selected.intensity} min={0} max={1000} onChange={(intensity) => patchObject({ intensity })} /> : null}
             </>
-          ) : <p className="text-slate-500">从左侧场景层级选择一个对象。</p>}
+          ) : <p className="text-slate-500">{t("director.noObject")}</p>}
 
           <section className="mt-6 border-t border-white/10 pt-4">
-            <h3 className="mb-3 text-sm font-semibold">场景环境</h3>
-            <label className="block">环境来源
-              <select aria-label="导演台全景环境" className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={activePanoramaId ?? ""} onChange={(event) => onPanoramaChange(event.target.value || null)}>
-                <option value="">纯色环境</option>
+            <h3 className="mb-3 text-sm font-semibold">{t("director.environment")}</h3>
+            <label className="block">{t("director.environmentSource")}
+              <select aria-label={t("director.panoramaEnvironment")} className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={activePanoramaId ?? ""} onChange={(event) => onPanoramaChange(event.target.value || null)}>
+                <option value="">{t("director.solidEnvironment")}</option>
                 {panoramaOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
             </label>
-            <NumberEditor label="环境旋转（度）" ariaLabel="环境旋转" value={scene.environment.rotationY} min={-360} max={360} onChange={(rotationY) => onChange({ ...scene, environment: { ...scene.environment, rotationY } })} />
-            <NumberEditor label="环境强度" value={scene.environment.intensity} min={0} max={2} step={0.1} onChange={(intensity) => onChange({ ...scene, environment: { ...scene.environment, intensity } })} />
+            <NumberEditor label={t("director.environmentRotation")} ariaLabel={t("director.environmentRotationLabel")} value={scene.environment.rotationY} min={-360} max={360} onChange={(rotationY) => onChange({ ...scene, environment: { ...scene.environment, rotationY } })} />
+            <NumberEditor label={t("director.environmentIntensity")} value={scene.environment.intensity} min={0} max={2} step={0.1} onChange={(intensity) => onChange({ ...scene, environment: { ...scene.environment, intensity } })} />
           </section>
 
           <section className="mt-6 border-t border-white/10 pt-4">
             <div className="mb-3 flex items-center gap-2">
-              <h3 className="text-sm font-semibold">活动机位</h3>
-              <button type="button" aria-label="删除活动机位" className="ml-auto rounded p-1.5 text-red-300 hover:bg-red-500/10 disabled:opacity-35" disabled={scene.cameras.length <= 1} onClick={() => onChange(removeDirectorCamera(scene, activeCamera.id))}><Trash2 size={14} /></button>
+              <h3 className="text-sm font-semibold">{t("director.activeCamera")}</h3>
+              <button type="button" aria-label={t("director.deleteActiveCamera")} className="ml-auto rounded p-1.5 text-red-300 hover:bg-red-500/10 disabled:opacity-35" disabled={scene.cameras.length <= 1} onClick={() => onChange(removeDirectorCamera(scene, activeCamera.id))}><Trash2 size={14} /></button>
             </div>
             <button
               type="button"
               className="mb-3 w-full rounded-lg bg-[#f0f269] px-3 py-2 text-xs font-semibold text-black disabled:opacity-50"
               disabled={capturing}
-              aria-label="生成当前机位截图"
+              aria-label={t("director.captureCamera")}
               onClick={captureCurrent}
             >
-              {capturing ? "拍摄中…" : "生成当前机位截图"}
+              {capturing ? t("director.capturing") : t("director.captureCamera")}
             </button>
-            <label className="mb-3 block">机位名称<input aria-label="机位名称" className="mt-1 w-full rounded border border-white/10 bg-white/5 px-2 py-1.5" value={activeCamera.name} onChange={(event) => onChange(renameDirectorCamera(scene, activeCamera.id, event.target.value || activeCamera.name))} /></label>
-            <VectorEditor label="摄像机位置" value={activeCamera.position} onChange={(position) => onChange(updateDirectorCamera(scene, { position }))} />
-            <VectorEditor label="观察目标" value={activeCamera.target} onChange={(target) => onChange(updateDirectorCamera(scene, { target }))} />
-            <NumberEditor label="焦距（mm）" ariaLabel="焦距" value={activeCamera.focalLength} min={1} max={300} onChange={(focalLength) => onChange(updateDirectorCamera(scene, { focalLength }))} />
-            <NumberEditor label="光圈（f/）" ariaLabel="光圈" value={activeCamera.aperture} min={0.7} max={64} step={0.1} onChange={(aperture) => onChange(updateDirectorCamera(scene, { aperture }))} />
-            <label className="mt-3 block">画幅
-              <select aria-label="画幅" className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={activeCamera.aspect} onChange={(event) => onChange(updateDirectorCamera(scene, { aspect: event.target.value as DirectorCamera["aspect"] }))}>
+            <label className="mb-3 block">{t("director.cameraName")}<input aria-label={t("director.cameraName")} className="mt-1 w-full rounded border border-white/10 bg-white/5 px-2 py-1.5" value={activeCamera.name} onChange={(event) => onChange(renameDirectorCamera(scene, activeCamera.id, event.target.value || activeCamera.name))} /></label>
+            <VectorEditor label={t("director.cameraPosition")} value={activeCamera.position} onChange={(position) => onChange(updateDirectorCamera(scene, { position }))} />
+            <VectorEditor label={t("director.lookAt")} value={activeCamera.target} onChange={(target) => onChange(updateDirectorCamera(scene, { target }))} />
+            <NumberEditor label={t("director.focalLength")} ariaLabel={t("director.focalLengthLabel")} value={activeCamera.focalLength} min={1} max={300} onChange={(focalLength) => onChange(updateDirectorCamera(scene, { focalLength }))} />
+            <NumberEditor label={t("director.aperture")} ariaLabel={t("director.apertureLabel")} value={activeCamera.aperture} min={0.7} max={64} step={0.1} onChange={(aperture) => onChange(updateDirectorCamera(scene, { aperture }))} />
+            <label className="mt-3 block">{t("director.aspect")}
+              <select aria-label={t("director.aspect")} className="mt-1 w-full rounded border border-white/10 bg-[#222] px-2 py-1.5" value={activeCamera.aspect} onChange={(event) => onChange(updateDirectorCamera(scene, { aspect: event.target.value as DirectorCamera["aspect"] }))}>
                 {(["16:9", "4:3", "1:1", "3:4", "9:16"] as const).map((aspect) => <option key={aspect}>{aspect}</option>)}
               </select>
             </label>
-            <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showGroundGrid} onChange={(event) => onChange({ ...scene, showGroundGrid: event.target.checked })} />显示地面网格</label>
-            <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showRuleOfThirds} onChange={(event) => onChange({ ...scene, showRuleOfThirds: event.target.checked })} />显示九宫格</label>
-            <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showSafeFrame} onChange={(event) => onChange({ ...scene, showSafeFrame: event.target.checked })} />显示比例框</label>
-            <label className="mt-3 block">环境颜色<input aria-label="环境颜色" type="color" className="mt-1 h-8 w-full rounded bg-transparent" value={scene.background} onChange={(event) => onChange({ ...scene, background: event.target.value })} /></label>
+            <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showGroundGrid} onChange={(event) => onChange({ ...scene, showGroundGrid: event.target.checked })} />{t("director.showGrid")}</label>
+            <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showRuleOfThirds} onChange={(event) => onChange({ ...scene, showRuleOfThirds: event.target.checked })} />{t("director.showThirds")}</label>
+            <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showSafeFrame} onChange={(event) => onChange({ ...scene, showSafeFrame: event.target.checked })} />{t("director.showSafeFrame")}</label>
+            <label className="mt-3 block">{t("director.environmentColor")}<input aria-label={t("director.environmentColor")} type="color" className="mt-1 h-8 w-full rounded bg-transparent" value={scene.background} onChange={(event) => onChange({ ...scene, background: event.target.value })} /></label>
           </section>
         </div>
       </aside>

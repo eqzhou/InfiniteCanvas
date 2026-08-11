@@ -4,12 +4,16 @@ import { filmEnUS, filmZhCN } from "./messages/film";
 import { agentHelpEnUS, agentHelpZhCN } from "./messages/agent-help";
 import { contentEditorsEnUS, contentEditorsZhCN } from "./messages/content-editors";
 import { canvasUiEnUS, canvasUiZhCN } from "./messages/canvas-ui";
+import { directorWorkflowsEnUS, directorWorkflowsZhCN } from "./messages/director-workflows";
 import { promptsEnUS, promptsZhCN } from "./messages/prompts";
+import { canvasNodesEnUS, canvasNodesZhCN } from "./messages/canvas-nodes";
 
 export const SUPPORTED_LOCALES = ["zh-CN", "en-US"] as const;
 export type AppLocale = typeof SUPPORTED_LOCALES[number];
 
 const zhCN = {
+  ...canvasNodesZhCN,
+  ...directorWorkflowsZhCN,
   ...promptsZhCN,
   ...canvasUiZhCN,
   ...contentEditorsZhCN,
@@ -366,6 +370,8 @@ export type MessageKey = keyof typeof zhCN;
 type MessageParams = Readonly<Record<string, string | number>>;
 
 const enUS: Partial<Record<MessageKey, string>> = {
+  ...canvasNodesEnUS,
+  ...directorWorkflowsEnUS,
   ...promptsEnUS,
   ...canvasUiEnUS,
   ...contentEditorsEnUS,

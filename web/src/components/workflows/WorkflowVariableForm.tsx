@@ -1,4 +1,5 @@
 import type { WorkflowTemplate, WorkflowValues } from "@/types/workflow";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function WorkflowVariableForm({
   template,
@@ -15,12 +16,13 @@ export function WorkflowVariableForm({
   onValuesChange: (values: Record<string, unknown>) => void;
   onImageFilesChange: (variableId: string, files: File[]) => void;
 }) {
+  const { t } = useI18n();
   const setValue = (id: string, value: WorkflowValues[string]) =>
     onValuesChange({ ...values, [id]: value });
 
   return (
     <fieldset disabled={disabled} className="space-y-3">
-      <legend className="mb-2 text-sm font-semibold text-[var(--ob-ink)]">运行变量</legend>
+      <legend className="mb-2 text-sm font-semibold text-[var(--ob-ink)]">{t("workflow.runVariables")}</legend>
       {template.variables.map((variable) => {
         const value = values[variable.id] ?? ("default" in variable ? variable.default : undefined);
         if (variable.kind === "textarea") {
@@ -47,7 +49,7 @@ export function WorkflowVariableForm({
               <span className="ob-label">{variable.label}{variable.required ? " *" : ""}</span>
               <select className="ob-field" value={typeof value === "string" ? value : ""}
                 onChange={(event) => setValue(variable.id, event.target.value)}>
-                {!variable.required ? <option value="">不选择</option> : null}
+                {!variable.required ? <option value="">{t("workflow.none")}</option> : null}
                 {variable.options.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </label>
@@ -78,7 +80,7 @@ export function WorkflowVariableForm({
             <input type="file" multiple accept="image/png,image/jpeg" className="mt-1 block w-full text-xs"
               onChange={(event) => onImageFilesChange(variable.id, Array.from(event.target.files ?? []).slice(0, 16))} />
             <span className="mt-1 block text-xs text-[var(--ob-muted)]">
-              已选择 {imageFiles[variable.id]?.length ?? 0} 张，最多 16 张 PNG/JPEG
+              {t("workflow.imagesSelected", { count: imageFiles[variable.id]?.length ?? 0 })}
             </span>
           </label>
         );
