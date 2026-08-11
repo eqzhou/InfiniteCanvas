@@ -372,6 +372,7 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 		s.completeComfyUIJob(tenantID, job, "failed", result, "ComfyUI 地址不可用")
 		return
 	}
+	executor.exclusive = parameters.Exclusive
 	if s.comfyUIPollInterval > 0 {
 		executor.pollInterval = s.comfyUIPollInterval
 	}

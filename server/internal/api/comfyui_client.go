@@ -63,6 +63,7 @@ type comfyUIExecutor struct {
 	endpoint     *url.URL
 	client       *http.Client
 	pollInterval time.Duration
+	exclusive    bool
 }
 
 type comfyUIOutputReference struct {
@@ -256,10 +257,17 @@ func (e *comfyUIExecutor) Run(ctx context.Context, request comfyUIExecutionReque
 		}
 		if done {
 			items := make([]comfyUIExecutionItem, 0, len(references))
+			totalBytes := 0
 			for _, reference := range references {
-				item, err := e.download(runCtx, reference)
+				kind := comfyUIKindFromFilename(reference.Filename)
+				remaining := comfyUITotalOutputLimit(kind) - totalBytes
+				item, err := e.download(runCtx, reference, remaining)
 				if err != nil {
 					return comfyUIExecutionOutput{}, err
+				}
+				totalBytes += len(item.Data)
+				if totalBytes > comfyUITotalOutputLimit(item.Kind) {
+					return comfyUIExecutionOutput{}, errors.New("ComfyUI total output exceeds limit")
 				}
 				items = append(items, item)
 			}
@@ -271,6 +279,17 @@ func (e *comfyUIExecutor) Run(ctx context.Context, request comfyUIExecutionReque
 		if err := waitContext(runCtx, e.pollInterval); err != nil {
 			return comfyUIExecutionOutput{}, err
 		}
+	}
+}
+
+func comfyUITotalOutputLimit(kind string) int {
+	switch kind {
+	case "video":
+		return maxGeneratedVideoBytes
+	case "audio":
+		return maxGeneratedAudioBytes
+	default:
+		return maxGeneratedTotalBytes
 	}
 }
 
@@ -369,10 +388,13 @@ func validComfyUIOutputReference(value comfyUIOutputReference) bool {
 	return clean == value.Subfolder && clean != "." && clean != ".." && !strings.HasPrefix(clean, "../") && !strings.HasPrefix(clean, "/") && !strings.ContainsAny(clean, "\\\r\n\x00")
 }
 
-func (e *comfyUIExecutor) download(ctx context.Context, reference comfyUIOutputReference) (comfyUIExecutionItem, error) {
+func (e *comfyUIExecutor) download(ctx context.Context, reference comfyUIOutputReference, aggregateRemaining int) (comfyUIExecutionItem, error) {
 	kind := comfyUIKindFromFilename(reference.Filename)
 	if kind == "" {
 		return comfyUIExecutionItem{}, errors.New("ComfyUI output extension is unsupported")
+	}
+	if aggregateRemaining < 1 {
+		return comfyUIExecutionItem{}, errors.New("ComfyUI total output exceeds limit")
 	}
 	query := url.Values{"filename": {reference.Filename}, "subfolder": {reference.Subfolder}, "type": {reference.Type}}
 	request, err := e.request(ctx, http.MethodGet, "/view?"+query.Encode(), nil)
@@ -393,8 +415,15 @@ func (e *comfyUIExecutor) download(ctx context.Context, reference comfyUIOutputR
 	} else if kind == "audio" {
 		limit = maxGeneratedAudioBytes
 	}
+	aggregateLimited := int64(aggregateRemaining) < limit
+	if aggregateLimited {
+		limit = int64(aggregateRemaining)
+	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil || int64(len(data)) > limit {
+		if aggregateLimited {
+			return comfyUIExecutionItem{}, errors.New("ComfyUI total output exceeds limit")
+		}
 		return comfyUIExecutionItem{}, errors.New("ComfyUI output exceeds limit")
 	}
 	mimeType := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
@@ -468,6 +497,9 @@ func (e *comfyUIExecutor) Cancel(ctx context.Context, checkpoint comfyUIExternal
 	queueBody, _ := json.Marshal(map[string]any{"delete": []string{checkpoint.PromptID}})
 	if err := e.doJSON(ctx, http.MethodPost, "/queue", queueBody, nil); err != nil {
 		return err
+	}
+	if !e.exclusive {
+		return nil
 	}
 	return e.doJSON(ctx, http.MethodPost, "/interrupt", []byte(`{}`), nil)
 }

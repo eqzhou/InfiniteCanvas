@@ -335,13 +335,13 @@ func TestComfyUIWorkerRecoversPersistedPromptAfterRestartWithoutResubmit(t *test
 	t.Fatal("restarted worker did not recover expired ComfyUI job")
 }
 
-func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testing.T) {
+func TestCreateComfyUIJobAPIIsIdempotentAndRejectsUnknownExecutor(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	fixture := newComfyFixture(t)
 	backend := newMemoryStore()
 	manifest := comfyImageManifest(t, fixture.server.URL)
 	configured, err := json.Marshal(map[string]any{"executors": []map[string]any{{
-		"id": manifest.ID, "billingModel": "comfyui-image-standard", "exclusive": false, "manifest": manifest,
+		"id": manifest.ID, "billingModel": "comfyui-image-standard", "exclusive": true, "manifest": manifest,
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +386,7 @@ func TestCreateComfyUIJobUsesOnlyServerApprovedExecutorAndBillingModel(t *testin
 	fixture := newComfyFixture(t)
 	manifest := comfyImageManifest(t, fixture.server.URL)
 	configured, err := json.Marshal(map[string]any{"executors": []map[string]any{{
-		"id": manifest.ID, "billingModel": "comfyui-image-standard", "exclusive": false, "manifest": manifest,
+		"id": manifest.ID, "billingModel": "comfyui-image-standard", "exclusive": true, "manifest": manifest,
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -428,6 +428,10 @@ func TestCreateComfyUIJobUsesOnlyServerApprovedExecutorAndBillingModel(t *testin
 	}
 	if job.ProviderID != manifest.ID || job.Model != "comfyui-image-standard" {
 		t.Fatalf("billing identity provider=%q model=%q", job.ProviderID, job.Model)
+	}
+	parameters, _, err := decodeComfyUIJob(job)
+	if err != nil || !parameters.Exclusive {
+		t.Fatalf("trusted executor policy was not frozen: params=%#v err=%v", parameters, err)
 	}
 
 	unknown, _ := json.Marshal(map[string]any{

@@ -181,14 +181,26 @@ func (s *webDAVBlobObjectStore) request(ctx context.Context, method, tenantID, n
 }
 
 func (s *webDAVBlobObjectStore) ensureParentCollections(ctx context.Context, objectEndpoint *url.URL) error {
-	basePath := strings.TrimRight(s.endpoint.Path, "/")
+	basePath := path.Clean("/" + strings.Trim(s.endpoint.Path, "/"))
 	parentPath := path.Dir(objectEndpoint.Path)
-	relative := strings.TrimPrefix(parentPath, basePath)
-	if relative == parentPath || strings.Trim(relative, "/") == "" {
+	if parentPath == basePath {
+		return nil
+	}
+	var relative string
+	if basePath == "/" {
+		relative = strings.TrimPrefix(parentPath, "/")
+	} else {
+		basePrefix := basePath + "/"
+		if !strings.HasPrefix(parentPath, basePrefix) {
+			return errors.New("WebDAV object path escaped endpoint")
+		}
+		relative = strings.TrimPrefix(parentPath, basePrefix)
+	}
+	if relative == "" {
 		return nil
 	}
 	currentPath := basePath
-	for _, segment := range strings.Split(strings.Trim(relative, "/"), "/") {
+	for _, segment := range strings.Split(relative, "/") {
 		currentPath = path.Join(currentPath, segment)
 		collectionEndpoint := *s.endpoint
 		collectionEndpoint.Path = currentPath
