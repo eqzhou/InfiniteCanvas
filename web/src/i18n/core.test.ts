@@ -18,6 +18,8 @@ describe("i18n core", () => {
 
   test("detects a supported browser locale and otherwise falls back to Chinese", () => {
     expect(detectSupportedLocale(["fr-FR", "en-US"])).toBe("en-US");
+    expect(detectSupportedLocale(["en-GB"])).toBe("en-US");
+    expect(detectSupportedLocale(["en"])).toBe("en-US");
     expect(detectSupportedLocale(["zh-Hans-CN"])).toBe("zh-CN");
     expect(detectSupportedLocale(["fr-FR"])).toBe("zh-CN");
   });

@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { blankStorageProvider, storageCapacityLabel, storageCredentialKind, storageProbeLabel } from "./AdminStoragePoolPanel";
+import {
+  blankStorageProvider,
+  newStorageProviderDraft,
+  persistedStorageProviderDrafts,
+  storageCapacityLabel,
+  storageCredentialKind,
+  storageDeleteTarget,
+  storageDraftStatus,
+  storageProbeLabel,
+} from "./AdminStoragePoolPanel";
 import type { AdminStoragePoolProviderStatus } from "@/services/admin";
 
 const status = (patch: Partial<AdminStoragePoolProviderStatus> = {}): AdminStoragePoolProviderStatus => ({
@@ -15,6 +24,17 @@ describe("admin storage pool provider forms", () => {
   test("selects credentials from the provider kind", () => {
     expect(storageCredentialKind("s3")).toBe("access-key");
     expect(storageCredentialKind("webdav")).toBe("username-password");
+  });
+
+  test("does not let an unsaved draft impersonate or delete a persisted provider", () => {
+    const persisted = status({ id: "existing", endpoint: "https://storage.example.com" });
+    const [existingDraft] = persistedStorageProviderDrafts([persisted]);
+    const newDraft = newStorageProviderDraft("draft-1", { ...blankStorageProvider(), id: "existing" });
+
+    expect(storageDraftStatus(existingDraft!, [persisted])).toEqual(persisted);
+    expect(storageDeleteTarget(existingDraft!)).toBe("existing");
+    expect(storageDraftStatus(newDraft, [persisted])).toBeUndefined();
+    expect(storageDeleteTarget(newDraft)).toBeUndefined();
   });
 });
 
