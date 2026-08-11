@@ -7,13 +7,7 @@ import {
   type LibraryAsset,
   type LibraryAssetKind,
 } from "@/services/library-assets";
-
-const KIND_LABELS: Record<LibraryAssetKind, string> = {
-  text: "文本",
-  image: "图片",
-  video: "视频",
-  audio: "音频",
-};
+import { useI18n } from "@/i18n/I18nProvider";
 
 const EMPTY_DRAFT = { id: "", kind: "text" as LibraryAssetKind, title: "", tags: "", content: "", source: "", notes: "" };
 
@@ -23,6 +17,10 @@ const EMPTY_DRAFT = { id: "", kind: "text" as LibraryAssetKind, title: "", tags:
  * this panel only decides what to show.
  */
 export function AdminLibraryPanel() {
+  const { t } = useI18n();
+  const kindLabels: Record<LibraryAssetKind, string> = {
+    text: t("common.text"), image: t("common.image"), video: t("common.video"), audio: t("common.audio"),
+  };
   const [items, setItems] = useState<LibraryAsset[]>([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
@@ -98,50 +96,50 @@ export function AdminLibraryPanel() {
       {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
 
       <div className="grid gap-2 md:grid-cols-3">
-        <input className="ob-field" aria-label="搜索素材" placeholder="按标题或来源搜索" value={q} disabled={saving} onChange={(event) => setQ(event.target.value)} />
-        <select className="ob-field" aria-label="按类型筛选素材" value={kind} disabled={saving} onChange={(event) => setKind(event.target.value as "all" | LibraryAssetKind)}>
-          <option value="all">全部类型</option>
-          {(Object.keys(KIND_LABELS) as LibraryAssetKind[]).map((value) => (
-            <option key={value} value={value}>{KIND_LABELS[value]}</option>
+        <input className="ob-field" aria-label={t("admin.library.search")} placeholder={t("admin.library.searchPlaceholder")} value={q} disabled={saving} onChange={(event) => setQ(event.target.value)} />
+        <select className="ob-field" aria-label={t("admin.library.kindFilter")} value={kind} disabled={saving} onChange={(event) => setKind(event.target.value as "all" | LibraryAssetKind)}>
+          <option value="all">{t("common.allTypes")}</option>
+          {(Object.keys(kindLabels) as LibraryAssetKind[]).map((value) => (
+            <option key={value} value={value}>{kindLabels[value]}</option>
           ))}
         </select>
-        <input className="ob-field" aria-label="按标签筛选素材" placeholder="标签筛选" value={tag} disabled={saving} onChange={(event) => setTag(event.target.value)} />
+        <input className="ob-field" aria-label={t("admin.library.tagFilter")} placeholder={t("admin.library.tagPlaceholder")} value={tag} disabled={saving} onChange={(event) => setTag(event.target.value)} />
       </div>
 
       <section className="space-y-2 rounded-xl border border-[var(--ob-line)] p-3">
-        <h2 className="font-semibold">{editing ? "编辑素材" : "新增素材"}</h2>
+        <h2 className="font-semibold">{editing ? t("admin.library.edit") : t("admin.library.new")}</h2>
         <fieldset className="contents" disabled={saving}>
         <div className="grid gap-2 md:grid-cols-2">
-          <select className="ob-field" aria-label="素材类型" value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as LibraryAssetKind })}>
-            {(Object.keys(KIND_LABELS) as LibraryAssetKind[]).map((value) => (
-              <option key={value} value={value}>{KIND_LABELS[value]}</option>
+          <select className="ob-field" aria-label={t("admin.library.kind")} value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as LibraryAssetKind })}>
+            {(Object.keys(kindLabels) as LibraryAssetKind[]).map((value) => (
+              <option key={value} value={value}>{kindLabels[value]}</option>
             ))}
           </select>
-          <input className="ob-field" aria-label="素材标题" placeholder="标题" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
-          <input className="ob-field" aria-label="素材标签" placeholder="标签，逗号分隔" value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} />
-          <input className="ob-field" aria-label="素材来源" placeholder="来源" value={draft.source} onChange={(event) => setDraft({ ...draft, source: event.target.value })} />
-          <textarea className="ob-field min-h-20 md:col-span-2" aria-label="素材内容" placeholder="文本内容或媒体 URL" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} />
-          <textarea className="ob-field min-h-16 md:col-span-2" aria-label="素材备注" placeholder="备注" value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
+          <input className="ob-field" aria-label={t("admin.library.title")} placeholder={t("admin.library.titlePlaceholder")} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+          <input className="ob-field" aria-label={t("admin.library.tags")} placeholder={t("admin.library.tagsPlaceholder")} value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} />
+          <input className="ob-field" aria-label={t("admin.library.source")} placeholder={t("admin.library.sourcePlaceholder")} value={draft.source} onChange={(event) => setDraft({ ...draft, source: event.target.value })} />
+          <textarea className="ob-field min-h-20 md:col-span-2" aria-label={t("admin.library.content")} placeholder={t("admin.library.contentPlaceholder")} value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} />
+          <textarea className="ob-field min-h-16 md:col-span-2" aria-label={t("admin.library.notes")} placeholder={t("admin.library.notesPlaceholder")} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
         </div>
         <div className="flex gap-2">
           <button type="button" className="ob-btn ob-btn-primary" disabled={saving || !draft.title.trim()} onClick={save}>
-            {saving ? "保存中…" : editing ? "保存素材" : "新增素材"}
+            {saving ? t("admin.library.saving") : editing ? t("admin.library.save") : t("admin.library.new")}
           </button>
           {editing ? (
-            <button type="button" className="ob-btn" disabled={saving} onClick={() => { setDraft(EMPTY_DRAFT); setEditing(false); }}>取消编辑</button>
+            <button type="button" className="ob-btn" disabled={saving} onClick={() => { setDraft(EMPTY_DRAFT); setEditing(false); }}>{t("admin.library.cancelEdit")}</button>
           ) : null}
         </div>
         </fieldset>
       </section>
 
-      <p className="text-xs text-[var(--ob-muted)]">共 {total} 条，当前显示 {items.length} 条。</p>
+      <p className="text-xs text-[var(--ob-muted)]">{t("admin.library.summary", { total, visible: items.length })}</p>
       <div className="space-y-1">
         {items.map((item) => (
           <div key={item.id} className="flex items-start gap-2 rounded-lg border border-[var(--ob-line)] p-2">
             <span className="min-w-0 flex-1">
               <b>{item.title}</b>
               <span className="block text-xs text-[var(--ob-muted)]">
-                {KIND_LABELS[item.kind]}{item.tags.length ? ` · ${item.tags.join("、")}` : ""}{item.source ? ` · ${item.source}` : ""}
+                {kindLabels[item.kind]}{item.tags.length ? ` · ${item.tags.join(", ")}` : ""}{item.source ? ` · ${item.source}` : ""}
               </span>
             </span>
             <button type="button" className="ob-btn" disabled={saving} onClick={() => {
@@ -150,16 +148,16 @@ export function AdminLibraryPanel() {
                 content: item.content ?? "", source: item.source ?? "", notes: item.notes ?? "",
               });
               setEditing(true);
-            }}>编辑</button>
-            <button type="button" className="ob-btn text-[var(--ob-danger)]" disabled={saving} aria-label={`删除素材 ${item.title}`} onClick={() => {
-              if (!window.confirm(`确认删除素材「${item.title}」？`)) return;
+            }}>{t("common.edit")}</button>
+            <button type="button" className="ob-btn text-[var(--ob-danger)]" disabled={saving} aria-label={t("admin.library.deleteLabel", { title: item.title })} onClick={() => {
+              if (!window.confirm(t("admin.library.confirmDelete", { title: item.title }))) return;
               void perform(() => deleteLibraryAsset(item.id));
-            }}>删除</button>
+            }}>{t("common.delete")}</button>
           </div>
         ))}
         {loading
-          ? <p className="text-sm text-[var(--ob-muted)]">加载中…</p>
-          : items.length ? null : <p className="text-sm text-[var(--ob-muted)]">没有匹配的素材。</p>}
+          ? <p className="text-sm text-[var(--ob-muted)]">{t("admin.library.loading")}</p>
+          : items.length ? null : <p className="text-sm text-[var(--ob-muted)]">{t("admin.library.empty")}</p>}
       </div>
     </div>
   );

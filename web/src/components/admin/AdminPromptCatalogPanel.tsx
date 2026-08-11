@@ -17,6 +17,7 @@ import {
   type AdminPromptSource,
 } from "@/services/admin";
 import { COMMUNITY_PROMPT_SOURCE_PRESETS } from "@/services/prompt-source-presets";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const EMPTY: AdminPromptCatalog = { version: 1, revision: 0, categories: [], prompts: [], sources: [], syncRuns: [] };
 
@@ -82,6 +83,7 @@ export function retainVisibleSelection(
 }
 
 export function AdminPromptCatalogPanel() {
+  const { t } = useI18n();
   const [catalog, setCatalog] = useState(EMPTY);
   const [error, setError] = useState("");
   const [category, setCategory] = useState({ id: "", name: "", order: 0 });
@@ -105,46 +107,46 @@ export function AdminPromptCatalogPanel() {
   return <div className="space-y-5">
     {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
     <section className="space-y-2">
-      <h2 className="font-semibold">分类与条目</h2>
+      <h2 className="font-semibold">{t("admin.prompts.categories")}</h2>
       <div className="flex flex-wrap gap-2">
-        <input className="ob-field max-w-48" placeholder="分类 ID" value={category.id} onChange={(event) => setCategory({ ...category, id: event.target.value })} />
-        <input className="ob-field max-w-48" placeholder="分类名称" value={category.name} onChange={(event) => setCategory({ ...category, name: event.target.value })} />
-        <input className="ob-field w-24" aria-label="分类排序" type="number" value={category.order} onChange={(event) => setCategory({ ...category, order: Number(event.target.value) })} />
-        <button className="ob-btn" type="button" onClick={() => void perform(async () => { await (categoryEditing ? updateAdminPromptCategory(category) : createAdminPromptCategory(category)); setCategory({ id: "", name: "", order: 0 }); setCategoryEditing(false); })}>{categoryEditing ? "保存分类" : "新增分类"}</button>
+        <input className="ob-field max-w-48" placeholder={t("admin.prompts.categoryId")} value={category.id} onChange={(event) => setCategory({ ...category, id: event.target.value })} />
+        <input className="ob-field max-w-48" placeholder={t("admin.prompts.categoryName")} value={category.name} onChange={(event) => setCategory({ ...category, name: event.target.value })} />
+        <input className="ob-field w-24" aria-label={t("admin.prompts.categoryOrder")} type="number" value={category.order} onChange={(event) => setCategory({ ...category, order: Number(event.target.value) })} />
+        <button className="ob-btn" type="button" onClick={() => void perform(async () => { await (categoryEditing ? updateAdminPromptCategory(category) : createAdminPromptCategory(category)); setCategory({ id: "", name: "", order: 0 }); setCategoryEditing(false); })}>{categoryEditing ? t("admin.prompts.saveCategory") : t("admin.prompts.newCategory")}</button>
       </div>
-      <div className="flex flex-wrap gap-2">{catalog.categories.map((item) => <span className="ob-chip" key={item.id}>{item.name}<button className="ml-2" type="button" onClick={() => { setCategory(item); setCategoryEditing(true); }}>编辑</button><button className="ml-2" type="button" aria-label={`删除分类 ${item.name}`} onClick={() => void perform(() => deleteAdminPromptCategory(item.id))}>×</button></span>)}</div>
+      <div className="flex flex-wrap gap-2">{catalog.categories.map((item) => <span className="ob-chip" key={item.id}>{item.name}<button className="ml-2" type="button" onClick={() => { setCategory(item); setCategoryEditing(true); }}>{t("admin.prompts.edit")}</button><button className="ml-2" type="button" aria-label={`${t("admin.prompts.deleteCategory")} ${item.name}`} onClick={() => void perform(() => deleteAdminPromptCategory(item.id))}>×</button></span>)}</div>
       <div className="grid gap-2 md:grid-cols-2">
-        <input className="ob-field" placeholder="提示词 ID" value={prompt.id} onChange={(event) => setPrompt({ ...prompt, id: event.target.value })} />
-        <input className="ob-field" placeholder="标题" value={prompt.title} onChange={(event) => setPrompt({ ...prompt, title: event.target.value })} />
-        <select className="ob-field" aria-label="提示词分类" value={prompt.categoryId} onChange={(event) => setPrompt({ ...prompt, categoryId: event.target.value })}><option value="">未分类</option>{catalog.categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-        <textarea className="ob-field min-h-24" placeholder="提示词正文" value={prompt.body} onChange={(event) => setPrompt({ ...prompt, body: event.target.value })} />
-        <input className="ob-field" placeholder="标签，逗号分隔" value={prompt.tags} onChange={(event) => setPrompt({ ...prompt, tags: event.target.value })} />
+        <input className="ob-field" placeholder={t("admin.prompts.promptId")} value={prompt.id} onChange={(event) => setPrompt({ ...prompt, id: event.target.value })} />
+        <input className="ob-field" placeholder={t("admin.prompts.title")} value={prompt.title} onChange={(event) => setPrompt({ ...prompt, title: event.target.value })} />
+        <select className="ob-field" aria-label={t("admin.prompts.category")} value={prompt.categoryId} onChange={(event) => setPrompt({ ...prompt, categoryId: event.target.value })}><option value="">{t("admin.prompts.uncategorized")}</option>{catalog.categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+        <textarea className="ob-field min-h-24" placeholder={t("admin.prompts.body")} value={prompt.body} onChange={(event) => setPrompt({ ...prompt, body: event.target.value })} />
+        <input className="ob-field" placeholder={t("admin.prompts.tags")} value={prompt.tags} onChange={(event) => setPrompt({ ...prompt, tags: event.target.value })} />
       </div>
-      <button className="ob-btn" type="button" onClick={() => void perform(async () => { const input = { ...prompt, tags: prompt.tags.split(",").map((tag) => tag.trim()).filter(Boolean) }; await (promptEditing ? updateAdminPrompt(input) : createAdminPrompt(input)); setPrompt({ id: "", title: "", body: "", categoryId: "", tags: "" }); setPromptEditing(false); })}>{promptEditing ? "保存提示词" : "新增提示词"}</button>
+      <button className="ob-btn" type="button" onClick={() => void perform(async () => { const input = { ...prompt, tags: prompt.tags.split(",").map((tag) => tag.trim()).filter(Boolean) }; await (promptEditing ? updateAdminPrompt(input) : createAdminPrompt(input)); setPrompt({ id: "", title: "", body: "", categoryId: "", tags: "" }); setPromptEditing(false); })}>{promptEditing ? t("admin.prompts.savePrompt") : t("admin.prompts.newPrompt")}</button>
       <div className="grid gap-2 md:grid-cols-3">
-        <input className="ob-field" aria-label="搜索提示词" placeholder="按标题、正文或标签搜索" value={filter.query} onChange={(event) => setFilter({ ...filter, query: event.target.value })} />
-        <select className="ob-field" aria-label="按分类筛选" value={filter.categoryId} onChange={(event) => setFilter({ ...filter, categoryId: event.target.value })}>
-          <option value="">全部分类</option>
-          <option value={UNCATEGORIZED_FILTER}>未分类</option>
+        <input className="ob-field" aria-label={t("admin.prompts.search")} placeholder={t("admin.prompts.searchPlaceholder")} value={filter.query} onChange={(event) => setFilter({ ...filter, query: event.target.value })} />
+        <select className="ob-field" aria-label={t("admin.prompts.categoryFilter")} value={filter.categoryId} onChange={(event) => setFilter({ ...filter, categoryId: event.target.value })}>
+          <option value="">{t("admin.prompts.allCategories")}</option>
+          <option value={UNCATEGORIZED_FILTER}>{t("admin.prompts.uncategorized")}</option>
           {catalog.categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
-        <select className="ob-field" aria-label="按标签筛选" value={filter.tag} onChange={(event) => setFilter({ ...filter, tag: event.target.value })}>
-          <option value="">全部标签</option>
+        <select className="ob-field" aria-label={t("admin.prompts.tagFilter")} value={filter.tag} onChange={(event) => setFilter({ ...filter, tag: event.target.value })}>
+          <option value="">{t("admin.prompts.allTags")}</option>
           {[...new Set(catalog.prompts.flatMap((item) => item.tags))].sort().map((tag) => <option key={tag} value={tag}>{tag}</option>)}
         </select>
       </div>
-      <p className="text-xs text-[var(--ob-muted)]">共 {catalog.prompts.length} 条，当前显示 {visiblePrompts.length} 条。</p>
-      <div className="space-y-1">{visiblePrompts.map((item) => <div className="flex items-start gap-2 rounded-lg border border-[var(--ob-line)] p-2" key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><span className="min-w-0 flex-1"><b>{item.title}</b><span className="block text-xs text-[var(--ob-muted)]">{item.body}</span></span>{!item.sourceId ? <button className="ob-btn" type="button" onClick={() => { setPrompt({ id: item.id, title: item.title, body: item.body, categoryId: item.categoryId ?? "", tags: item.tags.join(", ") }); setPromptEditing(true); }}>编辑</button> : null}</div>)}</div>
-      <button className="ob-btn" type="button" disabled={!selected.length} onClick={() => void perform(async () => { await bulkDeleteAdminPrompts(selected); setSelected([]); })}>批量删除</button>
+      <p className="text-xs text-[var(--ob-muted)]">{t("admin.prompts.summary", { total: catalog.prompts.length, visible: visiblePrompts.length })}</p>
+      <div className="space-y-1">{visiblePrompts.map((item) => <div className="flex items-start gap-2 rounded-lg border border-[var(--ob-line)] p-2" key={item.id}><input aria-label={t("admin.prompts.selectPrompt", { title: item.title })} type="checkbox" checked={selected.includes(item.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><span className="min-w-0 flex-1"><b>{item.title}</b><span className="block text-xs text-[var(--ob-muted)]">{item.body}</span></span>{!item.sourceId ? <button className="ob-btn" type="button" onClick={() => { setPrompt({ id: item.id, title: item.title, body: item.body, categoryId: item.categoryId ?? "", tags: item.tags.join(", ") }); setPromptEditing(true); }}>{t("admin.prompts.edit")}</button> : null}</div>)}</div>
+      <button className="ob-btn" type="button" disabled={!selected.length} onClick={() => void perform(async () => { await bulkDeleteAdminPrompts(selected); setSelected([]); })}>{t("admin.prompts.deleteBatch")}</button>
     </section>
 
     <section className="space-y-2">
-      <h2 className="font-semibold">提示词来源与调度</h2>
-      <p className="text-xs text-[var(--ob-muted)]">服务端调度采用持久化 nextRunAt；支持统一 JSON 与结构化 Markdown 提示词源。当前由管理员点击“运行到期任务”触发，适合外部定时器调用同一受保护接口。</p>
-      <div className="grid gap-2 md:grid-cols-4"><input className="ob-field" placeholder="来源 ID" value={source.id} onChange={(event) => setSource({ ...source, id: event.target.value })} /><input className="ob-field" placeholder="来源名称" value={source.name} onChange={(event) => setSource({ ...source, name: event.target.value })} /><input className="ob-field" placeholder="https://…/prompts.json 或 README.md" value={source.url} onChange={(event) => setSource({ ...source, url: event.target.value })} /><select className="ob-field" aria-label="提示词来源格式" value={source.format} onChange={(event) => setSource({ ...source, format: event.target.value === "markdown" ? "markdown" : "json" })}><option value="json">JSON</option><option value="markdown">结构化 Markdown</option></select></div>
-      <button className="ob-btn" type="button" onClick={() => void perform(async () => { await createAdminPromptSource({ ...source, enabled: true, scheduleEnabled: false, intervalMinutes: 0 }); setSource({ id: "", name: "", url: "", format: "json" }); })}>新增来源</button>
+      <h2 className="font-semibold">{t("admin.prompts.sources")}</h2>
+      <p className="text-xs text-[var(--ob-muted)]">{t("admin.prompts.sourcesHint")}</p>
+      <div className="grid gap-2 md:grid-cols-4"><input className="ob-field" placeholder={t("admin.prompts.sourceId")} value={source.id} onChange={(event) => setSource({ ...source, id: event.target.value })} /><input className="ob-field" placeholder={t("admin.prompts.sourceName")} value={source.name} onChange={(event) => setSource({ ...source, name: event.target.value })} /><input className="ob-field" placeholder={t("admin.prompts.sourceUrl")} value={source.url} onChange={(event) => setSource({ ...source, url: event.target.value })} /><select className="ob-field" aria-label={t("admin.prompts.format")} value={source.format} onChange={(event) => setSource({ ...source, format: event.target.value === "markdown" ? "markdown" : "json" })}><option value="json">JSON</option><option value="markdown">{t("admin.prompts.markdown")}</option></select></div>
+      <button className="ob-btn" type="button" onClick={() => void perform(async () => { await createAdminPromptSource({ ...source, enabled: true, scheduleEnabled: false, intervalMinutes: 0 }); setSource({ id: "", name: "", url: "", format: "json" }); })}>{t("admin.prompts.addSource")}</button>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-[var(--ob-muted)]">内置来源：</span>
+        <span className="text-xs text-[var(--ob-muted)]">{t("admin.prompts.builtin")}</span>
         {COMMUNITY_PROMPT_SOURCE_PRESETS.map((preset) => (
           <button
             key={preset.id}
@@ -157,20 +159,21 @@ export function AdminPromptCatalogPanel() {
               format: preset.source.format === "markdown" ? "markdown" : "json", enabled: true, scheduleEnabled: false, intervalMinutes: 0,
             }))}
           >
-            添加 {preset.name}
+            {t("admin.prompts.add")} {preset.name}
           </button>
         ))}
       </div>
-      <div className="flex flex-wrap gap-2"><button className="ob-btn" type="button" onClick={() => void perform(syncAllAdminPromptSources)}>同步全部</button><button className="ob-btn" type="button" onClick={() => void perform(runDueAdminPromptSources)}>运行到期任务</button></div>
+      <div className="flex flex-wrap gap-2"><button className="ob-btn" type="button" onClick={() => void perform(syncAllAdminPromptSources)}>{t("admin.prompts.syncAll")}</button><button className="ob-btn" type="button" onClick={() => void perform(runDueAdminPromptSources)}>{t("admin.prompts.runDue")}</button></div>
       <div className="space-y-2">{catalog.sources.map((item) => <PromptSourceRow key={item.id} source={item} perform={perform} />)}</div>
-      <div className="space-y-1 text-xs text-[var(--ob-muted)]"><div>最近运行</div>{catalog.syncRuns.slice(-8).reverse().map((run) => <div key={run.id}>{syncRunSummary(run)}</div>)}{catalog.syncRuns.length ? null : <div>暂无</div>}</div>
+      <div className="space-y-1 text-xs text-[var(--ob-muted)]"><div>{t("admin.prompts.lastRun")}</div>{catalog.syncRuns.slice(-8).reverse().map((run) => <div key={run.id}>{syncRunSummary(run)}</div>)}{catalog.syncRuns.length ? null : <div>{t("admin.prompts.none")}</div>}</div>
     </section>
   </div>;
 }
 
 function PromptSourceRow({ source, perform }: { source: AdminPromptSource; perform: (action: () => Promise<unknown>) => Promise<void> }) {
+  const { locale, t } = useI18n();
   const [interval, setIntervalValue] = useState(source.intervalMinutes || 30);
-  return <div className="grid gap-2 rounded-xl border border-[var(--ob-line)] p-3 md:grid-cols-[1fr_auto_auto_auto] md:items-center"><div><b>{source.name}</b><div className="text-xs text-[var(--ob-muted)]">{source.url} · {source.format.toUpperCase()} · {source.scheduleStatus || "disabled"}{source.nextRunAt ? ` · ${new Date(source.nextRunAt).toLocaleString()}` : ""}</div></div><label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={Boolean(source.scheduleEnabled)} onChange={(event) => void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: event.target.checked, intervalMinutes: event.target.checked ? interval : 0 }))} />定时</label><input className="ob-field w-24" aria-label={`${source.name} 同步间隔`} type="number" min={5} max={10080} value={interval} onChange={(event) => setIntervalValue(Number(event.target.value))} onBlur={() => { if (source.scheduleEnabled) void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: true, intervalMinutes: interval })); }} /><div className="flex gap-1"><button className="ob-btn" type="button" onClick={() => void perform(() => syncAdminPromptSource(source.id))}>同步</button><button className="ob-btn" type="button" onClick={() => void perform(() => deleteAdminPromptSource(source.id))}>删除</button></div></div>;
+  return <div className="grid gap-2 rounded-xl border border-[var(--ob-line)] p-3 md:grid-cols-[1fr_auto_auto_auto] md:items-center"><div><b>{source.name}</b><div className="text-xs text-[var(--ob-muted)]">{source.url} · {source.format.toUpperCase()} · {source.scheduleStatus || "disabled"}{source.nextRunAt ? ` · ${new Date(source.nextRunAt).toLocaleString(locale)}` : ""}</div></div><label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={Boolean(source.scheduleEnabled)} onChange={(event) => void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: event.target.checked, intervalMinutes: event.target.checked ? interval : 0 }))} />{t("admin.prompts.schedule")}</label><input className="ob-field w-24" aria-label={`${source.name} ${t("admin.prompts.interval")}`} type="number" min={5} max={10080} value={interval} onChange={(event) => setIntervalValue(Number(event.target.value))} onBlur={() => { if (source.scheduleEnabled) void perform(() => updateAdminPromptSource({ ...source, scheduleEnabled: true, intervalMinutes: interval })); }} /><div className="flex gap-1"><button className="ob-btn" type="button" onClick={() => void perform(() => syncAdminPromptSource(source.id))}>{t("admin.prompts.sync")}</button><button className="ob-btn" type="button" onClick={() => void perform(() => deleteAdminPromptSource(source.id))}>{t("admin.prompts.delete")}</button></div></div>;
 }
 
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

@@ -5,6 +5,7 @@ const VISIBLE_ATTRIBUTES = new Set([
   "alt",
   "aria-label",
   "aria-description",
+  "label",
   "placeholder",
   "title",
 ]);
