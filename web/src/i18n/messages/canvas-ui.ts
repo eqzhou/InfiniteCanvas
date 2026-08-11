@@ -12,6 +12,12 @@ export const canvasUiZhCN = {
   "canvas.cropTitle": "裁剪图片", "canvas.closeCrop": "关闭裁剪", "canvas.width": "宽", "canvas.height": "高", "canvas.createCrop": "生成裁剪节点",
   "canvas.closeInput": "关闭输入框", "canvas.longPromptEditor": "长提示词编辑器", "canvas.characters": "字符",
   "canvas.imagePreview": "图片预览", "canvas.zoomOutImage": "缩小图片", "canvas.zoomInImage": "放大图片", "canvas.resetZoom": "重置缩放", "canvas.closePreview": "关闭预览", "canvas.previewHint": "滚轮缩放 · 拖拽平移 · 双击切换 100%/200%",
+  "canvas.uploadImage": "上传图片", "canvas.uploadVideo": "上传视频", "canvas.sidebarImageUpload": "上传侧栏图片素材", "canvas.sidebarVideoUpload": "上传侧栏视频素材",
+  "canvas.noAssets": "暂无素材", "canvas.assetsHint": "可上传图片/视频，或从素材页添加后拖到画布 / 点击插入。", "canvas.sidebarAssets": "侧栏素材", "canvas.dragOrInsert": "拖到画布或点击插入",
+  "canvas.textAsset": "文本素材", "canvas.insertAsset": "插入素材 {title}", "canvas.insertCanvas": "插入画布", "canvas.deleteAsset": "删除素材 {title}", "canvas.deleteAssetTitle": "删除素材", "canvas.confirmDeleteAsset": "删除素材“{title}”？",
+  "canvas.myPrompts": "我的", "canvas.ungrouped": "未分组", "canvas.searchPrompts": "搜索画布提示词库", "canvas.searchPromptsPlaceholder": "跨来源搜索标题/内容/标签…", "canvas.noPrompts": "暂无提示词", "canvas.promptsHint": "在「提示词」页接入社区目录或新建本地提示词。",
+  "canvas.noMatchedPrompts": "没有匹配的提示词", "canvas.noMatchedPromptsHint": "试试其它关键词，或清空搜索。", "canvas.sidebarPrompts": "侧栏提示词库", "canvas.insertPrompt": "插入提示词 {title}", "canvas.copyPrompt": "复制提示词 {title}",
+  "canvas.assetPickerTitle": "从素材插入", "canvas.search": "搜索…", "canvas.searchAssets": "搜索素材", "canvas.assetType": "素材类型", "canvas.all": "全部", "canvas.closeAssetPicker": "关闭素材选择", "canvas.noAssetsHint": "换个关键词，或先到素材页添加可插入的原料。",
 } as const;
 
 export const canvasUiEnUS: Record<keyof typeof canvasUiZhCN, string> = {
@@ -28,4 +34,10 @@ export const canvasUiEnUS: Record<keyof typeof canvasUiZhCN, string> = {
   "canvas.cropTitle": "Crop image", "canvas.closeCrop": "Close crop dialog", "canvas.width": "Width", "canvas.height": "Height", "canvas.createCrop": "Create cropped node",
   "canvas.closeInput": "Close input dialog", "canvas.longPromptEditor": "Long prompt editor", "canvas.characters": "characters",
   "canvas.imagePreview": "Image preview", "canvas.zoomOutImage": "Zoom image out", "canvas.zoomInImage": "Zoom image in", "canvas.resetZoom": "Reset zoom", "canvas.closePreview": "Close preview", "canvas.previewHint": "Scroll to zoom · Drag to pan · Double-click to switch between 100% and 200%",
+  "canvas.uploadImage": "Upload image", "canvas.uploadVideo": "Upload video", "canvas.sidebarImageUpload": "Upload sidebar image asset", "canvas.sidebarVideoUpload": "Upload sidebar video asset",
+  "canvas.noAssets": "No assets", "canvas.assetsHint": "Upload images or videos, or add assets from the Assets page and drag or insert them here.", "canvas.sidebarAssets": "Sidebar assets", "canvas.dragOrInsert": "Drag to canvas or click to insert",
+  "canvas.textAsset": "Text asset", "canvas.insertAsset": "Insert asset {title}", "canvas.insertCanvas": "Insert into canvas", "canvas.deleteAsset": "Delete asset {title}", "canvas.deleteAssetTitle": "Delete asset", "canvas.confirmDeleteAsset": "Delete asset “{title}”?",
+  "canvas.myPrompts": "Mine", "canvas.ungrouped": "Ungrouped", "canvas.searchPrompts": "Search canvas prompts", "canvas.searchPromptsPlaceholder": "Search titles, content, tags, or sources…", "canvas.noPrompts": "No prompts", "canvas.promptsHint": "Connect a community catalog or create a local prompt from the Prompts page.",
+  "canvas.noMatchedPrompts": "No matching prompts", "canvas.noMatchedPromptsHint": "Try another keyword or clear the search.", "canvas.sidebarPrompts": "Sidebar prompts", "canvas.insertPrompt": "Insert prompt {title}", "canvas.copyPrompt": "Copy prompt {title}",
+  "canvas.assetPickerTitle": "Insert from assets", "canvas.search": "Search…", "canvas.searchAssets": "Search assets", "canvas.assetType": "Asset type", "canvas.all": "All", "canvas.closeAssetPicker": "Close asset picker", "canvas.noAssetsHint": "Try a different keyword, or add an asset from the Assets page first.",
 };

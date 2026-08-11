@@ -6,6 +6,7 @@ import { useBoardStore } from "@/stores/use-board-store";
 import { uploadMedia } from "@/services/storage";
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 import { writeOpenBoardAssetDrag } from "@/lib/asset-drag";
+import { useI18n } from "@/i18n/I18nProvider";
 import {
   chooseLocalTwoToOneImageImportMode,
   isStrictTwoToOnePanoramaCandidate,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/panorama";
 
 export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
+  const { t } = useI18n();
   const assets = useBoardStore((state) => state.assets);
   const commitAssetUpdate = useBoardStore((state) => state.commitAssetUpdate);
   const insertAsset = useBoardStore((state) => state.insertAsset);
@@ -90,7 +92,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
           disabled={busy}
           onClick={() => imageInputRef.current?.click()}
         >
-          <Upload size={13} /> 上传图片
+          <Upload size={13} /> {t("canvas.uploadImage")}
         </button>
         <button
           type="button"
@@ -98,14 +100,14 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
           disabled={busy}
           onClick={() => videoInputRef.current?.click()}
         >
-          <Upload size={13} /> 上传视频
+          <Upload size={13} /> {t("canvas.uploadVideo")}
         </button>
         <input
           ref={imageInputRef}
           type="file"
           accept="image/*"
           className="hidden"
-          aria-label="上传侧栏图片素材"
+          aria-label={t("canvas.sidebarImageUpload")}
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";
@@ -117,7 +119,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
           type="file"
           accept="video/*"
           className="hidden"
-          aria-label="上传侧栏视频素材"
+          aria-label={t("canvas.sidebarVideoUpload")}
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";
@@ -131,11 +133,11 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
           <span className="ob-empty-icon" aria-hidden>
             <Boxes size={16} />
           </span>
-          <p className="ob-empty-title">暂无素材</p>
-          <p className="ob-empty-desc">可上传图片/视频，或从素材页添加后拖到画布 / 点击插入。</p>
+          <p className="ob-empty-title">{t("canvas.noAssets")}</p>
+          <p className="ob-empty-desc">{t("canvas.assetsHint")}</p>
         </div>
       ) : (
-        <ul role="list" aria-label="侧栏素材" className="grid grid-cols-2 gap-2">
+        <ul role="list" aria-label={t("canvas.sidebarAssets")} className="grid grid-cols-2 gap-2">
           {assets.map((asset) => (
             <li
               key={asset.id}
@@ -143,7 +145,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
               data-asset-id={asset.id}
               data-testid="sidebar-asset-item"
               aria-grabbed="false"
-              title="拖到画布或点击插入"
+              title={t("canvas.dragOrInsert")}
               className="group relative min-h-24 cursor-grab overflow-hidden rounded-xl border border-[var(--ob-line)] bg-[var(--ob-canvas)] shadow-[var(--ob-elev-1)] active:cursor-grabbing"
               onDragStart={(event) => {
                 if (!event.dataTransfer) return;
@@ -159,17 +161,17 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
               ) : asset.kind === "video" && asset.coverUrl ? (
                 <video src={asset.coverUrl} aria-label={asset.title} muted preload="metadata" draggable={false} className="pointer-events-none h-24 w-full bg-black object-contain" />
               ) : asset.kind === "audio" && asset.coverUrl ? (
-                <div className="grid h-24 place-items-center px-2 text-xs text-[var(--ob-muted)]">音频</div>
+                <div className="grid h-24 place-items-center px-2 text-xs text-[var(--ob-muted)]">{t("canvas.audio")}</div>
               ) : (
                 <div className="flex h-24 flex-col p-2">
                   <div data-asset-title className="truncate text-[11px] font-medium text-[var(--ob-ink)]" title={asset.title}>{asset.title}</div>
-                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-[var(--ob-muted)]">{asset.content || "文本素材"}</p>
+                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-[var(--ob-muted)]">{asset.content || t("canvas.textAsset")}</p>
                 </div>
               )}
               <button
                 type="button"
-                aria-label={`插入素材 ${asset.title}`}
-                title="插入画布"
+                aria-label={t("canvas.insertAsset", { title: asset.title })}
+                title={t("canvas.insertCanvas")}
                 className="absolute inset-0 grid place-items-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
                 onClick={() => {
                   const active = useBoardStore.getState().getActive();
@@ -185,11 +187,11 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
               </button>
               <button
                 type="button"
-                aria-label={`删除素材 ${asset.title}`}
-                title="删除素材"
+                aria-label={t("canvas.deleteAsset", { title: asset.title })}
+                title={t("canvas.deleteAssetTitle")}
                 className="absolute right-1 top-1 z-10 grid h-7 w-7 place-items-center rounded-md bg-[var(--ob-panel)] text-[var(--ob-danger)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus:opacity-100"
                 onClick={() => {
-                  if (!confirm(`删除素材“${asset.title}”？`)) return;
+                  if (!confirm(t("canvas.confirmDeleteAsset", { title: asset.title }))) return;
                   void deleteSidebarAsset(asset.id).catch((cause) =>
                     setError(cause instanceof Error ? cause.message : String(cause)));
                 }}
