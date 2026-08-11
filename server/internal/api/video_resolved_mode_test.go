@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResolveVideoGenerationMode(t *testing.T) {
 	tests := []struct {
@@ -81,5 +84,27 @@ func TestResolveFilmVideoConfigPreservesFrameIntent(t *testing.T) {
 	)
 	if err != nil || mode != "reference_to_video" || references.FrameMode != "references" || len(references.ReferenceStorageKeys) != 2 {
 		t.Fatalf("reference config = %#v mode=%q err=%v", references, mode, err)
+	}
+}
+
+func TestFilmTaskValidationRejectsResolvedModeDrift(t *testing.T) {
+	now := "2026-08-11T00:00:00Z"
+	task := filmTask{
+		ID: "task-video", Revision: 1, Stage: "video", ShotID: "shot-1", Title: "Video",
+		Status: filmStatusRunning, CreatedAt: now, UpdatedAt: now,
+		GenerationJobID: "job-video", IdempotencyKey: "video-mode", RequestHash: strings.Repeat("a", 64),
+		Snapshot: &filmGenerationSnapshot{
+			ShotRevision: 1, Prompt: "Prompt", ProviderID: "provider", Model: "model",
+			Config:           filmGenerationConfig{FrameMode: "first-last", ReferenceStorageKeys: []string{"image:first"}},
+			IdentityVersions: []filmAsset{}, ReferenceStorageKeys: []string{"image:first"},
+			EstimatedGenerations: 1, CreatedAt: now, ResolvedMode: "first_frame_to_video",
+		},
+	}
+	if err := validateFilmTasks([]filmTask{task}); err != nil {
+		t.Fatalf("matching mode rejected: %v", err)
+	}
+	task.Snapshot.ResolvedMode = "text_to_video"
+	if err := validateFilmTasks([]filmTask{task}); err == nil {
+		t.Fatal("film snapshot mode drift must be rejected")
 	}
 }
