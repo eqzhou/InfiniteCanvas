@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Minus, Plus, RotateCcw, X, ZoomIn } from "lucide-react";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 5;
@@ -22,6 +23,7 @@ export function ImagePreviewDialog({
   alt: string;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -77,7 +79,7 @@ export function ImagePreviewDialog({
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
-      aria-label="图片预览"
+      aria-label={t("canvas.imagePreview")}
       tabIndex={-1}
       className="ob-overlay z-[140] bg-black/85 p-3 sm:p-6"
       onPointerDown={(event) => {
@@ -89,8 +91,8 @@ export function ImagePreviewDialog({
         <button
           type="button"
           className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10 disabled:opacity-40"
-          title="缩小"
-          aria-label="缩小图片"
+          title={t("canvas.zoomOut")}
+          aria-label={t("canvas.zoomOutImage")}
           disabled={zoom <= MIN_ZOOM}
           onClick={() => zoomBy(-ZOOM_STEP)}
         >
@@ -102,8 +104,8 @@ export function ImagePreviewDialog({
         <button
           type="button"
           className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10 disabled:opacity-40"
-          title="放大"
-          aria-label="放大图片"
+          title={t("canvas.zoomIn")}
+          aria-label={t("canvas.zoomInImage")}
           disabled={zoom >= MAX_ZOOM}
           onClick={() => zoomBy(ZOOM_STEP)}
         >
@@ -112,8 +114,8 @@ export function ImagePreviewDialog({
         <button
           type="button"
           className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10"
-          title="重置缩放"
-          aria-label="重置缩放"
+          title={t("canvas.resetZoom")}
+          aria-label={t("canvas.resetZoom")}
           onClick={resetView}
         >
           <RotateCcw size={15} />
@@ -122,8 +124,8 @@ export function ImagePreviewDialog({
 
       <button
         type="button"
-        title="关闭预览"
-        aria-label="关闭预览"
+        title={t("canvas.closePreview")}
+        aria-label={t("canvas.closePreview")}
         className="absolute right-3 top-3 z-10 grid h-10 w-10 place-items-center rounded-xl bg-black/55 text-white shadow-lg backdrop-blur-sm hover:bg-black/75 sm:right-5 sm:top-5"
         onClick={onClose}
       >
@@ -186,7 +188,7 @@ export function ImagePreviewDialog({
 
       <p className="pointer-events-none absolute bottom-3 left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/80 sm:flex">
         <ZoomIn size={12} />
-        滚轮缩放 · 拖拽平移 · 双击切换 100%/200%
+        {t("canvas.previewHint")}
       </p>
     </div>,
     document.body,

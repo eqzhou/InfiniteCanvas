@@ -8,6 +8,10 @@ export const canvasUiZhCN = {
   "canvas.assets": "素材", "canvas.fit": "适应", "canvas.exporting": "导出中", "canvas.export": "导出画布",
   "canvas.zoomControls": "缩放控制", "canvas.zoomOut": "缩小", "canvas.zoomLevel": "缩放比例",
   "canvas.zoomIn": "放大", "canvas.resetView": "重置视图", "canvas.minimapLabel": "画布小地图",
+  "canvas.angleTitle": "多角度变换", "canvas.closeAngle": "关闭角度对话框", "canvas.close": "关闭", "canvas.degrees": "角度（度）", "canvas.cancel": "取消", "canvas.createTransform": "生成变换节点",
+  "canvas.cropTitle": "裁剪图片", "canvas.closeCrop": "关闭裁剪", "canvas.width": "宽", "canvas.height": "高", "canvas.createCrop": "生成裁剪节点",
+  "canvas.closeInput": "关闭输入框", "canvas.longPromptEditor": "长提示词编辑器", "canvas.characters": "字符",
+  "canvas.imagePreview": "图片预览", "canvas.zoomOutImage": "缩小图片", "canvas.zoomInImage": "放大图片", "canvas.resetZoom": "重置缩放", "canvas.closePreview": "关闭预览", "canvas.previewHint": "滚轮缩放 · 拖拽平移 · 双击切换 100%/200%",
 } as const;
 
 export const canvasUiEnUS: Record<keyof typeof canvasUiZhCN, string> = {
@@ -20,4 +24,8 @@ export const canvasUiEnUS: Record<keyof typeof canvasUiZhCN, string> = {
   "canvas.assets": "Assets", "canvas.fit": "Fit view", "canvas.exporting": "Exporting…", "canvas.export": "Export canvas",
   "canvas.zoomControls": "Zoom controls", "canvas.zoomOut": "Zoom out", "canvas.zoomLevel": "Zoom level",
   "canvas.zoomIn": "Zoom in", "canvas.resetView": "Reset view", "canvas.minimapLabel": "Canvas minimap",
+  "canvas.angleTitle": "Multi-angle transform", "canvas.closeAngle": "Close angle dialog", "canvas.close": "Close", "canvas.degrees": "Angle (degrees)", "canvas.cancel": "Cancel", "canvas.createTransform": "Create transformed node",
+  "canvas.cropTitle": "Crop image", "canvas.closeCrop": "Close crop dialog", "canvas.width": "Width", "canvas.height": "Height", "canvas.createCrop": "Create cropped node",
+  "canvas.closeInput": "Close input dialog", "canvas.longPromptEditor": "Long prompt editor", "canvas.characters": "characters",
+  "canvas.imagePreview": "Image preview", "canvas.zoomOutImage": "Zoom image out", "canvas.zoomInImage": "Zoom image in", "canvas.resetZoom": "Reset zoom", "canvas.closePreview": "Close preview", "canvas.previewHint": "Scroll to zoom · Drag to pan · Double-click to switch between 100% and 200%",
 };

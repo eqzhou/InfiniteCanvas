@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { BoardNode } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const PRESETS = [0, 15, 30, 45, 90, 180, 270, -15, -30, -45];
 
@@ -17,6 +18,7 @@ export function AngleDialog({
   onClose: () => void;
   onConfirm: (degrees: number) => void;
 }) {
+  const { t } = useI18n();
   const [deg, setDeg] = useState(15);
   useEscapeDismiss(open, onClose);
   if (!open) return null;
@@ -32,14 +34,14 @@ export function AngleDialog({
           <div className="min-w-0">
             <p className="ob-page-kicker">Transform</p>
             <h2 id="angle-dialog-title" className="text-base font-semibold tracking-tight">
-              多角度变换
+              {t("canvas.angleTitle")}
             </h2>
           </div>
           <button
             type="button"
             className="ob-icon-btn ml-auto"
-            aria-label="关闭角度对话框"
-            title="关闭"
+            aria-label={t("canvas.closeAngle")}
+            title={t("canvas.close")}
             onClick={onClose}
           >
             <X size={16} />
@@ -57,7 +59,7 @@ export function AngleDialog({
             </div>
           ) : null}
           <label className="block text-sm">
-            <span className="ob-label">角度（度）</span>
+            <span className="ob-label">{t("canvas.degrees")}</span>
             <input
               type="number"
               className="ob-field"
@@ -81,10 +83,10 @@ export function AngleDialog({
         </div>
         <div className="ob-dialog-footer">
           <button type="button" className="ob-btn" onClick={onClose}>
-            取消
+            {t("canvas.cancel")}
           </button>
           <button type="button" className="ob-btn-primary" onClick={() => onConfirm(deg)}>
-            生成变换节点
+            {t("canvas.createTransform")}
           </button>
         </div>
       </div>

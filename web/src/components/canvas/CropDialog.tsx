@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { BoardNode } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type Props = {
   node: BoardNode;
@@ -12,6 +13,7 @@ type Props = {
 };
 
 export function CropDialog({ node, open, onClose, onConfirm }: Props) {
+  const { t } = useI18n();
   useEscapeDismiss(open, onClose);
   const [natural, setNatural] = useState({ w: 0, h: 0 });
   const [x, setX] = useState(0);
@@ -61,9 +63,9 @@ export function CropDialog({ node, open, onClose, onConfirm }: Props) {
         <header className="ob-dialog-header px-4 py-3">
           <div className="min-w-0">
             <p className="ob-page-kicker">Edit</p>
-            <h2 id="crop-dialog-title" className="text-base font-semibold tracking-tight">裁剪图片</h2>
+            <h2 id="crop-dialog-title" className="text-base font-semibold tracking-tight">{t("canvas.cropTitle")}</h2>
           </div>
-          <button type="button" className="ob-icon-btn ml-auto" aria-label="关闭裁剪" title="关闭" onClick={onClose}>
+          <button type="button" className="ob-icon-btn ml-auto" aria-label={t("canvas.closeCrop")} title={t("canvas.close")} onClick={onClose}>
             <X size={16} />
           </button>
         </header>
@@ -84,13 +86,13 @@ export function CropDialog({ node, open, onClose, onConfirm }: Props) {
           <div className="grid grid-cols-2 gap-2 text-sm">
             <Num label="X" value={x} max={natural.w} onChange={setX} />
             <Num label="Y" value={y} max={natural.h} onChange={setY} />
-            <Num label="宽" value={w} max={natural.w} onChange={setW} />
-            <Num label="高" value={h} max={natural.h} onChange={setH} />
+            <Num label={t("canvas.width")} value={w} max={natural.w} onChange={setW} />
+            <Num label={t("canvas.height")} value={h} max={natural.h} onChange={setH} />
           </div>
         </div>
         <div className="ob-dialog-footer">
           <button type="button" className="ob-btn" onClick={onClose}>
-            取消
+            {t("canvas.cancel")}
           </button>
           <button
             type="button"
@@ -104,7 +106,7 @@ export function CropDialog({ node, open, onClose, onConfirm }: Props) {
               })
             }
           >
-            生成裁剪节点
+            {t("canvas.createCrop")}
           </button>
         </div>
       </div>

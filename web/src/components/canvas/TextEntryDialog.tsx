@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export type TextEntryDialogProps = {
   open: boolean;
@@ -47,6 +48,7 @@ export function TextEntryDialogContent({
   value: string;
   onValueChange: (value: string) => void;
 }) {
+  const { t } = useI18n();
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const next = value.trim();
@@ -72,8 +74,8 @@ export function TextEntryDialogContent({
           <button
             type="button"
             className="ob-icon-btn ml-auto"
-            aria-label="关闭输入框"
-            title="关闭"
+            aria-label={t("canvas.closeInput")}
+            title={t("canvas.close")}
             onClick={onClose}
           >
             <X size={16} />
@@ -85,7 +87,7 @@ export function TextEntryDialogContent({
             {multiline ? (
               <textarea
                 autoFocus
-                aria-label="长提示词编辑器"
+                aria-label={t("canvas.longPromptEditor")}
                 className="ob-field min-h-[min(55vh,32rem)] resize-y font-mono leading-relaxed"
                 value={value}
                 placeholder={placeholder}
@@ -101,11 +103,11 @@ export function TextEntryDialogContent({
               />
             )}
           </label>
-          {multiline ? <p className="mt-2 text-right text-xs text-[var(--ob-muted)]">{value.length} 字符</p> : null}
+          {multiline ? <p className="mt-2 text-right text-xs text-[var(--ob-muted)]">{value.length} {t("canvas.characters")}</p> : null}
         </div>
         <footer className="ob-dialog-footer">
           <button type="button" className="ob-btn" onClick={onClose}>
-            取消
+            {t("canvas.cancel")}
           </button>
           <button type="submit" className="ob-btn-primary" disabled={!value.trim()}>
             {submitLabel}
