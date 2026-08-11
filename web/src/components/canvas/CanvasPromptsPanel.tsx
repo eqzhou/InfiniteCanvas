@@ -3,23 +3,24 @@ import { ChevronDown, ChevronRight, Copy, SendToBack } from "lucide-react";
 import type { PromptItem } from "@/types/board";
 import { writeTextWithFallback } from "@/lib/clipboard";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useI18n } from "@/i18n/I18nProvider";
 
-function sourceLabel(prompt: PromptItem): string {
+function sourceLabel(prompt: PromptItem, mine = "我的", ungrouped = "未分组"): string {
   const source = prompt.source?.trim();
   // Prefer readable Chinese labels for built-in local/personal sources.
-  if (source === "local" || source === "personal") return "我的";
+  if (source === "local" || source === "personal") return mine;
   if (source) return source;
   const sourceId = prompt.sourceId?.trim();
-  if (sourceId === "local" || sourceId === "personal") return "我的";
+  if (sourceId === "local" || sourceId === "personal") return mine;
   if (sourceId) return sourceId;
-  return "未分组";
+  return ungrouped;
 }
 
-function groupPromptsBySource(prompts: readonly PromptItem[]): Array<{ source: string; items: PromptItem[] }> {
+function groupPromptsBySource(prompts: readonly PromptItem[], mine?: string, ungrouped?: string): Array<{ source: string; items: PromptItem[] }> {
   const order: string[] = [];
   const buckets = new Map<string, PromptItem[]>();
   for (const prompt of prompts) {
-    const key = sourceLabel(prompt);
+    const key = sourceLabel(prompt, mine, ungrouped);
     if (!buckets.has(key)) {
       buckets.set(key, []);
       order.push(key);
@@ -60,11 +61,12 @@ export function selectCanvasPrompts(
 }
 
 export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
+  const { t } = useI18n();
   const prompts = useBoardStore(selectCanvasPrompts);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterCanvasPrompts(prompts, query), [prompts, query]);
-  const groups = useMemo(() => groupPromptsBySource(filtered), [filtered]);
+  const groups = useMemo(() => groupPromptsBySource(filtered, t("canvas.myPrompts"), t("canvas.ungrouped")), [filtered, t]);
 
   const insertPrompt = (prompt: PromptItem) => {
     const state = useBoardStore.getState();
@@ -86,22 +88,22 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
     <div className="space-y-2">
       <div className="px-1">
         <input
-          aria-label="搜索画布提示词库"
+          aria-label={t("canvas.searchPrompts")}
           className="ob-field"
-          placeholder="跨来源搜索标题/内容/标签…"
+          placeholder={t("canvas.searchPromptsPlaceholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
       </div>
       {!prompts.length ? (
         <div className="ob-empty m-1">
-          <p className="ob-empty-title">暂无提示词</p>
-          <p className="ob-empty-desc">在「提示词」页接入社区目录或新建本地提示词。</p>
+          <p className="ob-empty-title">{t("canvas.noPrompts")}</p>
+          <p className="ob-empty-desc">{t("canvas.promptsHint")}</p>
         </div>
       ) : !groups.length ? (
-        <div className="ob-empty m-1 py-8"><p className="ob-empty-title">没有匹配的提示词</p><p className="ob-empty-desc">试试其它关键词，或清空搜索。</p></div>
+        <div className="ob-empty m-1 py-8"><p className="ob-empty-title">{t("canvas.noMatchedPrompts")}</p><p className="ob-empty-desc">{t("canvas.noMatchedPromptsHint")}</p></div>
       ) : (
-        <div role="list" aria-label="侧栏提示词库" className="space-y-2">
+        <div role="list" aria-label={t("canvas.sidebarPrompts")} className="space-y-2">
           {groups.map((group) => {
             const isCollapsed = collapsed[group.source] === true;
             return (
@@ -132,8 +134,8 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
                             <div className="flex items-center gap-1 shrink-0">
                               <button
                                 type="button"
-                                title="插入画布"
-                                aria-label={`插入提示词 ${prompt.title}`}
+                                title={t("canvas.insertCanvas")}
+                                aria-label={t("canvas.insertPrompt", { title: prompt.title })}
                                 className="grid h-7 w-7 place-items-center rounded-md text-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)] transition-colors"
                                 onClick={() => insertPrompt(prompt)}
                               >
@@ -141,8 +143,8 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
                               </button>
                               <button
                                 type="button"
-                                title="复制提示词"
-                                aria-label={`复制提示词 ${prompt.title}`}
+                                title={t("canvas.copyPrompt", { title: prompt.title })}
+                                aria-label={t("canvas.copyPrompt", { title: prompt.title })}
                                 className="grid h-7 w-7 place-items-center rounded-md hover:bg-[var(--ob-accent-soft)] transition-colors"
                                 onClick={() => void writeTextWithFallback(prompt.body).catch(() => undefined)}
                               >

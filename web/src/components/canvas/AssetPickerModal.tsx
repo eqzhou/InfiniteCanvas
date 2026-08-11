@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { Point } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export function AssetPickerModal({
   open,
@@ -13,6 +14,7 @@ export function AssetPickerModal({
   at: Point | null;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const assets = useBoardStore((s) => s.assets);
   const insertAsset = useBoardStore((s) => s.insertAsset);
   const [q, setQ] = useState("");
@@ -48,27 +50,27 @@ export function AssetPickerModal({
         <header className="ob-dialog-header flex-wrap gap-2 px-4 py-3">
           <div className="min-w-0">
             <p className="ob-page-kicker">Assets</p>
-            <h2 id="asset-picker-title" className="text-base font-semibold tracking-tight">从素材插入</h2>
+            <h2 id="asset-picker-title" className="text-base font-semibold tracking-tight">{t("canvas.assetPickerTitle")}</h2>
           </div>
           <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
             <input
               className="ob-field max-w-full px-2.5 py-1.5 text-sm sm:max-w-48"
-              placeholder="搜索…"
-              aria-label="搜索素材"
+              placeholder={t("canvas.search")}
+              aria-label={t("canvas.searchAssets")}
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
             <select
               className="ob-field w-auto cursor-pointer px-2.5 py-1.5 text-sm"
               value={kind}
-              aria-label="素材类型"
+              aria-label={t("canvas.assetType")}
               onChange={(e) => setKind(e.target.value as typeof kind)}
             >
-              <option value="all">全部</option>
-              <option value="text">文本</option>
-              <option value="image">图片</option>
+              <option value="all">{t("canvas.all")}</option>
+              <option value="text">{t("canvas.text")}</option>
+              <option value="image">{t("canvas.image")}</option>
             </select>
-            <button type="button" className="ob-icon-btn" aria-label="关闭素材选择" title="关闭" onClick={onClose}>
+            <button type="button" className="ob-icon-btn" aria-label={t("canvas.closeAssetPicker")} title={t("canvas.close")} onClick={onClose}>
               <X size={16} />
             </button>
           </div>
@@ -101,8 +103,8 @@ export function AssetPickerModal({
           </div>
           {!filtered.length ? (
             <div className="ob-empty border-0 bg-transparent py-10">
-              <p className="ob-empty-title">暂无素材</p>
-              <p className="ob-empty-desc">换个关键词，或先到素材页添加可插入的原料。</p>
+              <p className="ob-empty-title">{t("canvas.noAssets")}</p>
+              <p className="ob-empty-desc">{t("canvas.noAssetsHint")}</p>
             </div>
           ) : null}
         </div>
