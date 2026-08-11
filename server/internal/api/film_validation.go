@@ -314,6 +314,16 @@ func validateFilmTasks(tasks []filmTask) error {
 			if (snapshot.CapabilityVersion == "") != (snapshot.GenerationMode == "") || (snapshot.CapabilityVersion != "" && (!validFilmRequestHash(snapshot.CapabilityVersion) || !validFilmGenerationMode(snapshot.GenerationMode))) {
 				return fmt.Errorf("film task %s media capability snapshot is invalid", task.ID)
 			}
+			if task.Stage == "video" && snapshot.ResolvedMode != "" {
+				if !slices.Equal(snapshot.Config.ReferenceStorageKeys, snapshot.ReferenceStorageKeys) {
+					return fmt.Errorf("film task %s resolved video references are invalid", task.ID)
+				}
+				if _, err := validateFrozenVideoMode(snapshot.ResolvedMode, snapshot.Config.FrameMode, len(snapshot.ReferenceStorageKeys), 0); err != nil {
+					return fmt.Errorf("film task %s resolved video mode is invalid", task.ID)
+				}
+			} else if task.Stage != "video" && snapshot.ResolvedMode != "" {
+				return fmt.Errorf("film task %s resolved video mode is invalid", task.ID)
+			}
 			if snapshot.StoryboardDirectorSource != nil && !validFilmDirectorSource(snapshot.StoryboardDirectorSource, snapshot.StoryboardDirectorSource.StorageKey) {
 				return fmt.Errorf("film task %s storyboard Director snapshot is invalid", task.ID)
 			}
