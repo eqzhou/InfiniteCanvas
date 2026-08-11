@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -340,6 +341,89 @@ func TestCreateComfyUIJobAPIIsIdempotentAndRejectsManifestKindMismatch(t *testin
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("kind mismatch status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestCreateComfyUIJobUsesOnlyServerApprovedExecutorAndBillingModel(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	fixture := newComfyFixture(t)
+	manifest := comfyImageManifest(t, fixture.server.URL)
+	configured, err := json.Marshal(map[string]any{"executors": []map[string]any{{
+		"id": manifest.ID, "billingModel": "comfyui-image-standard", "exclusive": false, "manifest": manifest,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_COMFYUI_EXECUTORS", string(configured))
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	server.SetProcessToken("test-token")
+	defer server.Close()
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	requestJob := func(body []byte) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/generation-jobs/comfyui", bytes.NewReader(body))
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+
+	untrusted, _ := json.Marshal(map[string]any{
+		"id": "untrusted-endpoint", "manifest": manifest,
+		"values": map[string]any{"prompt": "hello", "width": 512, "height": 512},
+	})
+	if response := requestJob(untrusted); response.Code != http.StatusBadRequest {
+		t.Fatalf("client-supplied manifest status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	approved, _ := json.Marshal(map[string]any{
+		"id": "approved-executor", "manifestId": manifest.ID,
+		"values": map[string]any{"prompt": "hello", "width": 512, "height": 512},
+	})
+	if response := requestJob(approved); response.Code != http.StatusAccepted {
+		t.Fatalf("approved executor status=%d body=%s", response.Code, response.Body.String())
+	}
+	job, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, "approved-executor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ProviderID != manifest.ID || job.Model != "comfyui-image-standard" {
+		t.Fatalf("billing identity provider=%q model=%q", job.ProviderID, job.Model)
+	}
+
+	unknown, _ := json.Marshal(map[string]any{
+		"id": "unknown-executor", "manifestId": "not-approved",
+		"values": map[string]any{"prompt": "hello"},
+	})
+	if response := requestJob(unknown); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown executor status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestComfyUIWorkerLogDoesNotExposeApprovedPrivateEndpoint(t *testing.T) {
+	fixture := newComfyFixture(t)
+	manifest := comfyImageManifest(t, fixture.server.URL)
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	defer server.Close()
+	job := comfyUIJobFixture(t, "redacted-log", manifest, nil)
+	if err := backend.CreateServerGenerationJob(t.Context(), store.DefaultTenantID, "", job, 1, json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := backend.ClaimServerGenerationJob(t.Context(), store.GenerationClaim{Kind: "image", Executor: comfyUIExecutorMarker}, "test-owner", time.Now(), time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.server.Close()
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	server.executeClaimedComfyUIJob(claimed)
+	if strings.Contains(logs.String(), fixture.server.URL) || strings.Contains(logs.String(), "127.0.0.1") {
+		t.Fatalf("private endpoint leaked in log: %s", logs.String())
 	}
 }
 
