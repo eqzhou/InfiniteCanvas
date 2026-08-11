@@ -30,6 +30,16 @@ import {
   updateFilmAsset,
   createFilmStageWaiver,
   revokeFilmStageWaiver,
+  addFilmVoiceSample,
+  adoptFilmStyleCandidate,
+  createFilmComfyUIJob,
+  createFilmVoiceClone,
+  createFilmVoiceConsent,
+  createFilmVoiceIdentity,
+  listFilmVoiceIdentities,
+  listFilmVoiceVersions,
+  requestFilmStyleExtraction,
+  syncFilmVoiceVersion,
 } from "./film-client";
 import { createFilmDocument } from "@/lib/film-document";
 
@@ -37,6 +47,126 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe("film client", () => {
+  test("sends bounded style extraction and explicit adoption requests", async () => {
+    const film = createFilmDocument("film-advanced", "2026-08-11T00:00:00.000Z");
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return new Response(JSON.stringify({ data: film, meta: { recordRevision: 2 } }), { status: 200 });
+    }) as typeof fetch;
+
+    await requestFilmStyleExtraction("film-advanced", {
+      revision: 4,
+      sourceAssetId: "asset-image",
+      providerId: "shared-text",
+      model: "vision-model",
+      idempotencyKey: "style-run-001",
+      parameters: { detailLevel: "high", focus: "lighting and palette" },
+    });
+    await adoptFilmStyleCandidate("film-advanced", "candidate-1", {
+      revision: 5,
+      candidateRevision: 1,
+      title: "Night style",
+    });
+
+    expect(requests).toEqual([
+      {
+        url: "/api/film/projects/film-advanced/style-extractions",
+        method: "POST",
+        body: {
+          revision: 4,
+          sourceAssetId: "asset-image",
+          providerId: "shared-text",
+          model: "vision-model",
+          idempotencyKey: "style-run-001",
+          parameters: { detailLevel: "high", focus: "lighting and palette" },
+        },
+      },
+      {
+        url: "/api/film/projects/film-advanced/style-candidates/candidate-1/adopt",
+        method: "POST",
+        body: { revision: 5, candidateRevision: 1, title: "Night style" },
+      },
+    ]);
+  });
+
+  test("uses audited voice identity routes without collecting provider secrets", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      const path = String(url);
+      if (path.endsWith("/voice-identities") && (init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      if (path.endsWith("/versions") || path.endsWith("/sync")) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: { id: "voice-record", status: "queued" } }), { status: 201 });
+    }) as typeof fetch;
+
+    await listFilmVoiceIdentities("film-advanced");
+    await createFilmVoiceIdentity("film-advanced", { title: "Narrator", description: "Warm voice" });
+    await addFilmVoiceSample("film-advanced", "voice-1", { storageKey: "upload:sample-audio", label: "Clean take" });
+    await createFilmVoiceConsent("film-advanced", "voice-1", {
+      accepted: true,
+      rightsBasis: "authorized",
+      subjectDisplayName: "Voice actor",
+      termsVersion: "voice-consent-v1",
+      evidenceStorageKey: "upload:consent-evidence",
+    });
+    await createFilmVoiceClone("film-advanced", "voice-1", {
+      providerId: "shared-audio",
+      model: "voice-clone-model",
+      sampleIds: ["sample-1"],
+      consentId: "consent-1",
+      idempotencyKey: "voice-clone-001",
+    });
+    await listFilmVoiceVersions("film-advanced", "voice-1");
+    await syncFilmVoiceVersion("film-advanced", "voice-1", "version-1");
+
+    expect(JSON.stringify(requests)).not.toContain("apiKey");
+    expect(JSON.stringify(requests)).not.toContain("endpoint");
+    expect(requests.map((request) => request.url)).toEqual([
+      "/api/film/projects/film-advanced/voice-identities",
+      "/api/film/projects/film-advanced/voice-identities",
+      "/api/film/projects/film-advanced/voice-identities/voice-1/samples",
+      "/api/film/projects/film-advanced/voice-identities/voice-1/consents",
+      "/api/film/projects/film-advanced/voice-identities/voice-1/clone",
+      "/api/film/projects/film-advanced/voice-identities/voice-1/versions",
+      "/api/film/projects/film-advanced/voice-identities/voice-1/versions/version-1/sync",
+    ]);
+  });
+
+  test("submits only an approved ComfyUI manifest id and workflow values", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({
+        id: "comfy-job-1", projectId: "film-advanced", kind: "image", status: "queued", prompt: "Rainy station",
+        providerId: "approved-image", model: "comfyui-image-standard", parameters: {}, result: {},
+        createdAt: "2026-08-11T00:00:00.000Z", updatedAt: "2026-08-11T00:00:00.000Z",
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    await createFilmComfyUIJob({
+      id: "comfy-job-1",
+      projectId: "film-advanced",
+      manifestId: "approved-image",
+      values: { prompt: "Rainy station", seed: 7, width: 1024, height: 576, references: ["upload:reference"] },
+    });
+
+    expect(requests).toEqual([{
+      url: "/api/generation-jobs/comfyui",
+      body: {
+        id: "comfy-job-1",
+        projectId: "film-advanced",
+        manifestId: "approved-image",
+        values: { prompt: "Rainy station", seed: 7, width: 1024, height: 576, references: ["upload:reference"] },
+      },
+    }]);
+    expect(JSON.stringify(requests)).not.toContain("allowPrivate");
+    expect(JSON.stringify(requests)).not.toContain("endpoint");
+  });
   test("sends explicit risk and revision facts for stage waiver lifecycle", async () => {
     const film = createFilmDocument("film-1", "2026-08-08T00:00:00.000Z");
     const requests: Array<{ url: string; method: string; body: unknown }> = [];
