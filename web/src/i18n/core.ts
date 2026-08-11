@@ -21,7 +21,35 @@ const zhCN = {
   "locale.zhCN": "简体中文",
   "locale.enUS": "English",
   "usage.generations": "团队本月生成 {current}/{limit}",
-  "test.zhOnly": "仅中文回退",
+  "usage.credits": "个人算力 {credits}",
+  "common.close": "关闭",
+  "common.loading": "正在加载…",
+  "app.connectionParamsInvalid": "连接参数无效：{message}",
+  "app.promptSourceRefreshFailed": "提示词来源自动刷新失败：{message}",
+  "app.configConflictUnsaved": "{message}，当前修改尚未保存。",
+  "app.reloadLatestConfig": "刷新并载入最新配置",
+  "nav.mobile": "移动端导航",
+  "nav.closeMenu": "关闭导航菜单",
+  "nav.openMenu": "打开导航菜单",
+  "nav.page": "{label}页面",
+  "nav.tools": "工具",
+  "nav.exportCanvas": "导出当前画布",
+  "nav.exportCanvasBundle": "导出当前画布包",
+  "nav.canvasAgent": "画布 Agent",
+  "nav.shortcuts": "快捷键",
+  "nav.help": "使用帮助",
+  "nav.openHelp": "打开使用帮助",
+  "nav.theme": "主题",
+  "nav.toggleTheme": "切换主题",
+  "nav.globalTools": "全局工具",
+  "nav.more": "更多",
+  "nav.moreActions": "更多操作",
+  "nav.closeMoreActions": "关闭更多操作",
+  "nav.accountSettings": "账号与设置",
+  "nav.signOut": "退出登录",
+  "nav.signIn": "登录",
+  "nav.settings": "设置",
+  "nav.openSettings": "打开设置",
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
@@ -47,7 +75,54 @@ const enUS: Partial<Record<MessageKey, string>> = {
   "locale.zhCN": "简体中文",
   "locale.enUS": "English",
   "usage.generations": "Team generations {current}/{limit}",
+  "usage.credits": "Personal credits {credits}",
+  "common.close": "Close",
+  "common.loading": "Loading…",
+  "app.connectionParamsInvalid": "Invalid connection parameters: {message}",
+  "app.promptSourceRefreshFailed": "Prompt source refresh failed: {message}",
+  "app.configConflictUnsaved": "{message}. Your current changes have not been saved.",
+  "app.reloadLatestConfig": "Reload latest configuration",
+  "nav.mobile": "Mobile navigation",
+  "nav.closeMenu": "Close navigation menu",
+  "nav.openMenu": "Open navigation menu",
+  "nav.page": "{label} page",
+  "nav.tools": "Tools",
+  "nav.exportCanvas": "Export current canvas",
+  "nav.exportCanvasBundle": "Export current canvas bundle",
+  "nav.canvasAgent": "Canvas Agent",
+  "nav.shortcuts": "Keyboard shortcuts",
+  "nav.help": "Help",
+  "nav.openHelp": "Open help",
+  "nav.theme": "Theme",
+  "nav.toggleTheme": "Toggle theme",
+  "nav.globalTools": "Global tools",
+  "nav.more": "More",
+  "nav.moreActions": "More actions",
+  "nav.closeMoreActions": "Close more actions",
+  "nav.accountSettings": "Account and settings",
+  "nav.signOut": "Sign out",
+  "nav.signIn": "Sign in",
+  "nav.settings": "Settings",
+  "nav.openSettings": "Open settings",
 };
+
+function placeholders(template: string): string[] {
+  return [...template.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)]
+    .map((match) => match[1]!)
+    .sort();
+}
+
+export function catalogDiagnostics(): {
+  missingEnglish: MessageKey[];
+  placeholderMismatches: MessageKey[];
+} {
+  const keys = Object.keys(zhCN) as MessageKey[];
+  return {
+    missingEnglish: keys.filter((key) => !enUS[key]),
+    placeholderMismatches: keys.filter((key) =>
+      placeholders(zhCN[key]).join("\0") !== placeholders(enUS[key] ?? "").join("\0")),
+  };
+}
 
 export function normalizeLocale(value: unknown): AppLocale | undefined {
   return value === "zh-CN" || value === "en-US" ? value : undefined;

@@ -15,10 +15,15 @@ describe("frontend localization guard", () => {
   });
 
   test("keeps the application shell and navigation free of hardcoded visible Chinese", async () => {
-    const violations = await findHardcodedUserFacingChinese(sourceRoot, [
+    const files = [
       "App.tsx",
       "components/layout/TopNav.tsx",
-    ]);
+    ];
+    const sources = Object.fromEntries(await Promise.all(files.map(async (file) => [
+      file,
+      await Bun.file(path.join(sourceRoot, file)).text(),
+    ])));
+    const violations = findHardcodedUserFacingChinese(sources);
 
     expect(violations).toEqual([]);
   });

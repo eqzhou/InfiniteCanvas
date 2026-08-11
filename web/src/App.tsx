@@ -21,6 +21,7 @@ import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-cre
 import { initAnalytics } from "@/lib/analytics";
 import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
 import { AuthGate } from "@/components/auth/AuthGate";
+import { useI18n } from "@/i18n/I18nProvider";
 
 // Landing route (HomePage) stays eager so the most common entry avoids a
 // Suspense flash. Every other route is code-split out of the initial bundle.
@@ -51,6 +52,7 @@ const FilmWorkbenchPage = lazyNamed(() => import("@/pages/FilmWorkbenchPage"), "
 const TaskCenterPage = lazyNamed(() => import("@/pages/TaskCenterPage"), "TaskCenterPage");
 
 export function App() {
+  const { t } = useI18n();
   const hydrate = useBoardStore((s) => s.hydrate);
   const prepareWorkspaceScopeChange = useBoardStore((s) => s.prepareWorkspaceScopeChange);
   const resetWorkspaceScopeRuntime = useBoardStore((s) => s.resetWorkspaceScopeRuntime);
@@ -158,29 +160,29 @@ export function App() {
         <TopNav onOpenSettings={() => setSettingsOpen(true)} />
         {urlCredentialError ? (
           <div role="alert" className="ob-banner" data-tone="danger">
-            <span className="min-w-0 flex-1 truncate">连接参数无效：{urlCredentialError}</span>
+            <span className="min-w-0 flex-1 truncate">{t("app.connectionParamsInvalid", { message: urlCredentialError })}</span>
             <button type="button" className="ob-banner-close" onClick={() => setUrlCredentialError(null)}>
-              关闭
+              {t("common.close")}
             </button>
           </div>
         ) : null}
         {promptSourceError ? (
           <div role="alert" className="ob-banner" data-tone="warning">
-            <span className="min-w-0 flex-1 truncate">提示词来源自动刷新失败：{promptSourceError}</span>
-            <button type="button" className="ob-banner-close" onClick={() => setPromptSourceError(null)}>关闭</button>
+            <span className="min-w-0 flex-1 truncate">{t("app.promptSourceRefreshFailed", { message: promptSourceError })}</span>
+            <button type="button" className="ob-banner-close" onClick={() => setPromptSourceError(null)}>{t("common.close")}</button>
           </div>
         ) : null}
         {configConflict ? (
           <div role="alert" className="ob-banner" data-tone="warning">
-            <span className="min-w-0 flex-1 truncate">{configConflict}，当前修改尚未保存。</span>
+            <span className="min-w-0 flex-1 truncate">{t("app.configConflictUnsaved", { message: configConflict })}</span>
             <button type="button" className="ob-banner-close" onClick={() => window.location.reload()}>
-              刷新并载入最新配置
+              {t("app.reloadLatestConfig")}
             </button>
           </div>
         ) : null}
         <div className="flex min-h-0 flex-1">
           <main className="min-h-0 min-w-0 flex-1">
-            <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">正在加载…</div>}>
+            <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">{t("common.loading")}</div>}>
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/assets" element={<AssetsPage />} />

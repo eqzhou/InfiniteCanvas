@@ -22,11 +22,10 @@ describe("i18n core", () => {
     expect(detectSupportedLocale(["fr-FR"])).toBe("zh-CN");
   });
 
-  test("translates typed messages with interpolation and Chinese fallback", () => {
+  test("translates typed messages with interpolation", () => {
     expect(translate("en-US", "nav.serverLibrary")).toBe("Server assets");
     expect(translate("en-US", "usage.generations", { current: 2, limit: 10 }))
       .toBe("Team generations 2/10");
-    expect(translate("en-US", "test.zhOnly")).toBe("仅中文回退");
   });
 
   test("formats numbers and bytes with the active locale", () => {

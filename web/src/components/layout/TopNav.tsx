@@ -38,8 +38,13 @@ import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { canManageAdmin } from "@/services/admin";
 import type { UsageSnapshot } from "@/services/auth-session";
 import { useI18n } from "@/i18n/I18nProvider";
+import type { MessageKey } from "@/i18n/core";
 
-function UsageSummary({ snapshot, label }: { snapshot: UsageSnapshot | null; label: string }) {
+function UsageSummary({ snapshot, label, t }: {
+  snapshot: UsageSnapshot | null;
+  label: string;
+  t: (key: MessageKey, params?: Readonly<Record<string, string | number>>) => string;
+}) {
   if (!snapshot) {
     return <span className="ob-chip max-w-[15rem] whitespace-normal break-words leading-tight" title={label}>{label}</span>;
   }
@@ -51,11 +56,11 @@ function UsageSummary({ snapshot, label }: { snapshot: UsageSnapshot | null; lab
     >
       <span className="whitespace-nowrap">{snapshot.plan || "free"}</span>
       <span aria-hidden="true">·</span>
-      <span className="whitespace-nowrap">团队本月生成 {snapshot.generationThisMonth}/{snapshot.generationQuotaMonthly}</span>
+      <span className="whitespace-nowrap">{t("usage.generations", { current: snapshot.generationThisMonth, limit: snapshot.generationQuotaMonthly })}</span>
       {typeof snapshot.credits === "number" ? (
         <>
           <span aria-hidden="true">·</span>
-          <span className="whitespace-nowrap">个人算力 {snapshot.credits}</span>
+          <span className="whitespace-nowrap">{t("usage.credits", { credits: snapshot.credits })}</span>
         </>
       ) : null}
     </span>
@@ -187,7 +192,7 @@ export function TopNav({
         ref={mobileNavRef}
         className="ob-mobile-nav-panel"
         data-open={mobileNavOpen}
-        aria-label="移动端导航"
+        aria-label={t("nav.mobile")}
         aria-hidden={!mobileNavOpen}
         inert={!mobileNavOpen}
         role="navigation"
@@ -202,7 +207,7 @@ export function TopNav({
             ref={mobileCloseButtonRef}
             type="button"
             className="ob-icon-btn"
-            aria-label="关闭导航菜单"
+            aria-label={t("nav.closeMenu")}
             onClick={() => setMobileNavOpen(false)}
           >
             <X size={18} />
@@ -219,7 +224,7 @@ export function TopNav({
                 to={l.to}
                 className="ob-mobile-nav-link"
                 data-active={active}
-                aria-label={"ariaLabel" in l ? l.ariaLabel : `${l.label}页面`}
+                aria-label={"ariaLabel" in l ? l.ariaLabel : t("nav.page", { label: l.label })}
                 aria-current={active ? "page" : undefined}
               >
                 <Icon size={18} />
@@ -231,7 +236,7 @@ export function TopNav({
 
         {/* Tools section in mobile nav */}
         <div className="ob-mobile-nav-section">
-          <div className="ob-mobile-nav-section-label">工具</div>
+          <div className="ob-mobile-nav-section-label">{t("nav.tools")}</div>
           {location.pathname === "/" ? (
             <button
               type="button"
@@ -244,7 +249,7 @@ export function TopNav({
               }}
             >
               <Archive size={18} />
-              导出当前画布
+              {t("nav.exportCanvas")}
             </button>
           ) : null}
           <button
@@ -257,7 +262,7 @@ export function TopNav({
             }}
           >
             <Bot size={18} />
-            画布 Agent
+            {t("nav.canvasAgent")}
           </button>
           <button
             type="button"
@@ -268,7 +273,7 @@ export function TopNav({
             }}
           >
             <HelpCircle size={18} />
-            快捷键
+            {t("nav.shortcuts")}
           </button>
           <Link
             to="/help"
@@ -277,7 +282,7 @@ export function TopNav({
             onClick={() => setMobileNavOpen(false)}
           >
             <BookOpen size={18} />
-            使用帮助
+            {t("nav.help")}
           </Link>
           <button
             type="button"
@@ -288,7 +293,7 @@ export function TopNav({
             }}
           >
             {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-            切换主题
+            {t("nav.toggleTheme")}
           </button>
         </div>
 
@@ -312,7 +317,7 @@ export function TopNav({
               }}
             >
               <LogOut size={18} />
-              退出登录
+              {t("nav.signOut")}
             </button>
           </div>
         ) : auth?.canLogin ? (
@@ -326,7 +331,7 @@ export function TopNav({
               }}
             >
               <LogIn size={18} />
-              登录
+              {t("nav.signIn")}
             </button>
           </div>
         ) : null}
@@ -351,7 +356,7 @@ export function TopNav({
             ref={mobileMenuButtonRef}
             type="button"
             className="ob-hamburger"
-            aria-label="打开导航菜单"
+            aria-label={t("nav.openMenu")}
             aria-expanded={mobileNavOpen}
             onClick={() => setMobileNavOpen(true)}
           >
@@ -374,7 +379,7 @@ export function TopNav({
               <Link
                 key={l.to}
                 to={l.to}
-                aria-label={"ariaLabel" in l ? l.ariaLabel : `${l.label}页面`}
+                aria-label={"ariaLabel" in l ? l.ariaLabel : t("nav.page", { label: l.label })}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors duration-150 xl:px-3",
@@ -393,13 +398,13 @@ export function TopNav({
         {/* Right: Tools + User */}
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
           {/* Full tools appear only when the complete desktop header fits. */}
-          <div className="ob-global-tools hidden items-center gap-1 border-r border-[var(--ob-line)] pr-1.5" role="group" aria-label="全局工具">
+          <div className="ob-global-tools hidden items-center gap-1 border-r border-[var(--ob-line)] pr-1.5" role="group" aria-label={t("nav.globalTools")}>
             {location.pathname === "/" ? (
               <button
                 type="button"
                 className="ob-icon-btn disabled:opacity-40"
-                title="导出当前画布包"
-                aria-label="导出当前画布包"
+                title={t("nav.exportCanvasBundle")}
+                aria-label={t("nav.exportCanvasBundle")}
                 disabled={!activeProject}
                 onClick={downloadActiveProject}
               >
@@ -409,8 +414,8 @@ export function TopNav({
             <button
               type="button"
               className={cn("ob-icon-btn", showLocalAgent && "is-active")}
-              title="画布 Agent"
-              aria-label="画布 Agent"
+              title={t("nav.canvasAgent")}
+              aria-label={t("nav.canvasAgent")}
               aria-controls="canvas-agent"
               aria-expanded={showLocalAgent}
               onClick={() => setShowLocalAgent(!showLocalAgent)}
@@ -420,8 +425,8 @@ export function TopNav({
             <button
               type="button"
               className="ob-icon-btn"
-              title="快捷键"
-              aria-label="快捷键"
+              title={t("nav.shortcuts")}
+              aria-label={t("nav.shortcuts")}
               onClick={() => setShowShortcuts(true)}
             >
               <HelpCircle size={18} />
@@ -429,16 +434,16 @@ export function TopNav({
             <Link
               to="/help"
               className={cn("ob-icon-btn", location.pathname === "/help" && "is-active")}
-              title="使用帮助"
-              aria-label="打开使用帮助"
+              title={t("nav.help")}
+              aria-label={t("nav.openHelp")}
             >
               <BookOpen size={18} />
             </Link>
             <button
               type="button"
               className="ob-icon-btn"
-              title="主题"
-              aria-label="切换主题"
+              title={t("nav.theme")}
+              aria-label={t("nav.toggleTheme")}
               onClick={toggleTheme}
             >
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
@@ -450,8 +455,8 @@ export function TopNav({
           <button
             type="button"
             className={cn("ob-icon-btn ob-agent-shortcut", showLocalAgent && "is-active")}
-            title="画布 Agent"
-            aria-label="画布 Agent"
+            title={t("nav.canvasAgent")}
+            aria-label={t("nav.canvasAgent")}
             aria-controls="canvas-agent"
             aria-expanded={showLocalAgent}
             onClick={() => setShowLocalAgent(!showLocalAgent)}
@@ -464,7 +469,7 @@ export function TopNav({
             <button
               type="button"
               className="ob-icon-btn"
-              title="更多"
+              title={t("nav.more")}
               aria-haspopup="menu"
               aria-expanded={compactMenuOpen}
               onClick={() => setCompactMenuOpen((open) => !open)}
@@ -475,13 +480,13 @@ export function TopNav({
               <>
                 <button
                   type="button"
-                  aria-label="关闭更多操作"
+                  aria-label={t("nav.closeMoreActions")}
                   className="fixed inset-0 z-[80] cursor-default bg-transparent"
                   onClick={() => setCompactMenuOpen(false)}
                 />
                 <div
                   role="menu"
-                  aria-label="更多操作"
+                  aria-label={t("nav.moreActions")}
                   className="ob-surface-glass absolute right-0 top-full z-[90] mt-1 w-48 p-1.5"
                 >
                   {location.pathname === "/" ? (
@@ -496,7 +501,7 @@ export function TopNav({
                       }}
                     >
                       <Archive size={16} />
-                      导出当前画布
+                      {t("nav.exportCanvas")}
                     </button>
                   ) : null}
                   <button
@@ -509,7 +514,7 @@ export function TopNav({
                     }}
                   >
                     <HelpCircle size={16} />
-                    快捷键
+                    {t("nav.shortcuts")}
                   </button>
                   <Link
                     to="/help"
@@ -518,7 +523,7 @@ export function TopNav({
                     onClick={() => setCompactMenuOpen(false)}
                   >
                     <BookOpen size={16} />
-                    使用帮助
+                    {t("nav.help")}
                   </Link>
                   <button
                     type="button"
@@ -530,7 +535,7 @@ export function TopNav({
                     }}
                   >
                     {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-                    切换主题
+                    {t("nav.toggleTheme")}
                   </button>
                   <div className="mt-1 border-t border-[var(--ob-line)] pt-1">
                     <VersionReleaseModal menuItem onClose={() => setCompactMenuOpen(false)} />
@@ -555,7 +560,7 @@ export function TopNav({
                         }}
                       >
                         <LogOut size={16} />
-                        退出登录
+                        {t("nav.signOut")}
                       </button>
                     </div>
                   ) : auth?.canLogin ? (
@@ -570,7 +575,7 @@ export function TopNav({
                         }}
                       >
                         <LogIn size={16} />
-                        登录
+                        {t("nav.signIn")}
                       </button>
                     </div>
                   ) : null}
@@ -580,7 +585,7 @@ export function TopNav({
           </div>
 
           {/* User info + Settings */}
-          <div className="flex items-center gap-1 sm:gap-1.5" role="group" aria-label="账号与设置">
+          <div className="flex items-center gap-1 sm:gap-1.5" role="group" aria-label={t("nav.accountSettings")}>
             {signedInUser ? (
               <div className="hidden items-center gap-1.5 xl:flex">
                 <span className="ob-chip max-w-[10rem] truncate" title={signedInUser.email}>
@@ -588,13 +593,13 @@ export function TopNav({
                   {signedInUser.displayName || signedInUser.email}
                 </span>
                 {auth?.usageLabel ? (
-                  <UsageSummary snapshot={auth.usageSnapshot} label={auth.usageLabel} />
+                  <UsageSummary snapshot={auth.usageSnapshot} label={auth.usageLabel} t={t} />
                 ) : null}
                 <button
                   type="button"
                   className="ob-icon-btn"
-                  title="退出登录"
-                  aria-label="退出登录"
+                  title={t("nav.signOut")}
+                  aria-label={t("nav.signOut")}
                   onClick={() => void auth?.logout()}
                 >
                   <LogOut size={16} />
@@ -604,19 +609,19 @@ export function TopNav({
               <button
                 type="button"
                 className="ob-btn"
-                title="登录"
-                aria-label="登录"
+                title={t("nav.signIn")}
+                aria-label={t("nav.signIn")}
                 onClick={auth.requestLogin}
               >
                 <LogIn size={16} className="mr-1 inline" />
-                登录
+                {t("nav.signIn")}
               </button>
             ) : null}
             <button
               type="button"
               className="ob-icon-btn"
-              title="设置"
-              aria-label="打开设置"
+              title={t("nav.settings")}
+              aria-label={t("nav.openSettings")}
               onClick={onOpenSettings}
             >
               <Settings size={18} />
