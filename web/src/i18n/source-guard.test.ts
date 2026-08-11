@@ -27,6 +27,7 @@ describe("frontend localization guard", () => {
       "components/workbench/CreativeWorkbench.tsx",
       "components/workflows/WorkflowWorkbench.tsx",
       "components/film/FilmStyleTemplateLibrary.tsx",
+      "components/film/ManuscriptAssetsPanels.tsx",
       "pages/AssetsPage.tsx",
       "pages/AICallLogsPage.tsx",
       "pages/AdminPage.tsx",
