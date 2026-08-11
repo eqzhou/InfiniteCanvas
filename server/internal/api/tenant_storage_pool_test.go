@@ -245,6 +245,32 @@ func TestTenantWebDAVStoragePoolFailsClosedWhenFeatureDisabled(t *testing.T) {
 	}
 }
 
+func TestAdminStoragePoolReportsWebDAVFeatureAvailability(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "off")
+	t.Setenv("OPENBOARD_TOKEN", "test-token")
+	server := NewServerWithStore(t.TempDir(), newMemoryStore())
+	server.SetProcessToken("test-token")
+	router := chi.NewRouter()
+	MountServer(router, server)
+
+	for _, fixture := range []struct {
+		enabled bool
+		want    string
+	}{
+		{enabled: false, want: "false"},
+		{enabled: true, want: "true"},
+	} {
+		t.Setenv(webDAVMediaFeatureEnv, fixture.want)
+		response := request(t, router, http.MethodGet, "/api/admin/storage-pool", nil)
+		if response.Code != http.StatusOK {
+			t.Fatalf("enabled=%v status=%d body=%s", fixture.enabled, response.Code, response.Body.String())
+		}
+		if got := response.Header().Get("X-OpenBoard-WebDAV-Media-Enabled"); got != fixture.want {
+			t.Fatalf("enabled=%v feature header=%q, want %q", fixture.enabled, got, fixture.want)
+		}
+	}
+}
+
 func TestDisabledWebDAVCanBePreservedWhileEditingOtherStorage(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	t.Setenv("OPENBOARD_TOKEN", "test-token")
