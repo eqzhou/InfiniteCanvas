@@ -443,6 +443,22 @@ func TestCreateComfyUIJobUsesOnlyServerApprovedExecutorAndBillingModel(t *testin
 	}
 }
 
+func TestComfyUIBillingUsesApprovedModelCreditCost(t *testing.T) {
+	backend := newMemoryStore()
+	if err := backend.PutModelCreditConfig(t.Context(), store.DefaultTenantID, store.ModelCreditConfig{
+		DefaultCredits: 2,
+		ModelCosts:     []store.ModelCreditCost{{Model: "comfyui-image-standard", Credits: 7}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithStore(t.TempDir(), backend)
+	defer server.Close()
+	credits, err := server.comfyUIBillingCredits(t.Context(), store.DefaultTenantID, "comfyui-image-standard")
+	if err != nil || credits != 7 {
+		t.Fatalf("credits=%d err=%v", credits, err)
+	}
+}
+
 func TestComfyUIWorkerLogDoesNotExposeApprovedPrivateEndpoint(t *testing.T) {
 	fixture := newComfyFixture(t)
 	manifest := comfyImageManifest(t, fixture.server.URL)
