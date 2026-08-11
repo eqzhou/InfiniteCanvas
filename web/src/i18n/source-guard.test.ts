@@ -14,30 +14,13 @@ describe("frontend localization guard", () => {
     });
   });
 
-  test("keeps the application shell and navigation free of hardcoded visible Chinese", async () => {
-    const files = [
-      "App.tsx",
-      "components/layout/TopNav.tsx",
-      "components/layout/SettingsModal.tsx",
-      "components/layout/ShortcutsModal.tsx",
-      "components/admin/AdminChannelsPanel.tsx",
-      "components/admin/AdminLibraryPanel.tsx",
-      "components/admin/AdminPromptCatalogPanel.tsx",
-      "components/admin/AdminStoragePoolPanel.tsx",
-      "components/workbench/CreativeWorkbench.tsx",
-      "components/workflows/WorkflowWorkbench.tsx",
-      "components/film/FilmStyleTemplateLibrary.tsx",
-      "components/film/ManuscriptAssetsPanels.tsx",
-      "pages/AssetsPage.tsx",
-      "pages/AICallLogsPage.tsx",
-      "pages/AdminPage.tsx",
-      "pages/HomePage.tsx",
-      "pages/FilmWorkbenchPage.tsx",
-      "pages/PluginsPage.tsx",
-      "pages/ServerLibraryPage.tsx",
-      "pages/TaskCenterPage.tsx",
-      "pages/WorkflowWorkbenchPage.tsx",
-    ];
+  test("keeps every rendered application surface free of hardcoded visible Chinese", async () => {
+    const files: string[] = [];
+    const glob = new Bun.Glob("**/*.tsx");
+    for await (const file of glob.scan({ cwd: sourceRoot })) {
+      if (!file.includes(".test.") && !file.includes("__tests__")) files.push(file);
+    }
+    files.sort();
     const sources = Object.fromEntries(await Promise.all(files.map(async (file) => [
       file,
       await Bun.file(path.join(sourceRoot, file)).text(),
@@ -45,5 +28,12 @@ describe("frontend localization guard", () => {
     const violations = findHardcodedUserFacingChinese(sources);
 
     expect(violations).toEqual([]);
+  });
+
+  test("detects Chinese hidden in conditional UI expressions and error setters", () => {
+    const violations = findHardcodedUserFacingChinese({
+      "Example.tsx": `function Example({ ok }) { const [error, setError] = useState(""); setError("保存失败"); return <button>{ok ? "保存" : "重试"}</button>; }`,
+    });
+    expect(violations.map((item) => item.text)).toEqual(["保存失败", "保存", "重试"]);
   });
 });
