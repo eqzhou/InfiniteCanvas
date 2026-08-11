@@ -160,6 +160,7 @@ test("the PM2 allowlist carries every incremental feature gate", () => {
     "OPENBOARD_WEBDAV_MEDIA",
     "OPENBOARD_ADVANCED_VOICE",
     "OPENBOARD_LOCAL_WORKFLOWS",
+    "OPENBOARD_COMFYUI_EXECUTORS",
     "OPENBOARD_STYLE_EXTRACTION",
     "OPENBOARD_FILM_STAGE_WAIVER",
   ]) {

@@ -89,6 +89,7 @@ test("incremental feature gates are documented and forwarded to the container", 
     "OPENBOARD_WEBDAV_MEDIA",
     "OPENBOARD_ADVANCED_VOICE",
     "OPENBOARD_LOCAL_WORKFLOWS",
+    "OPENBOARD_COMFYUI_EXECUTORS",
     "OPENBOARD_STYLE_EXTRACTION",
     "OPENBOARD_FILM_STAGE_WAIVER",
   ]) {
