@@ -35,7 +35,7 @@ import { exportCompleteProjectBundle } from "@/services/film-bundle";
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
 import { isGuestIdentity, useOptionalAuth } from "@/components/auth/AuthGate";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
-import { canManageAdmin } from "@/services/admin";
+import { canAccessAdminPage } from "@/services/admin";
 import type { UsageSnapshot } from "@/services/auth-session";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
@@ -163,7 +163,7 @@ export function TopNav({
       .catch((error) => alert(error instanceof Error ? error.message : String(error)));
   }, [activeProject]);
 
-  const canManage = canManageAdmin(auth);
+  const canManage = canAccessAdminPage(auth);
   const links = [
     { to: "/", label: t("nav.canvas"), icon: LayoutDashboard },
     { to: "/assets", label: t("nav.assets"), icon: Bookmark },

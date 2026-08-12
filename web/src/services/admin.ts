@@ -11,6 +11,29 @@ export type AdminUser = {
   credits: number;
 };
 
+export type PlatformTenant = {
+  id: string;
+  name: string;
+  plan: string;
+  storageQuotaBytes: number;
+  generationQuotaMonthly: number;
+  createdAt: string;
+  userCount?: number;
+};
+
+export type TenantInvitation = {
+  id: string;
+  tenantId: string;
+  email: string;
+  role: "admin" | "member";
+  expiresAt: string;
+  acceptedAt?: string;
+  acceptedUserId?: string;
+  revokedAt?: string;
+  createdBy: string;
+  createdAt: string;
+};
+
 export type Page<T> = { items: T[]; page: number; pageSize: number; total: number };
 export type AdminCreditLog = {
   id: number;
@@ -289,10 +312,52 @@ export type AdminPromptSource = {
 export type AdminPromptSyncRun = { id: string; sourceId: string; sourceUrl: string; status: "running" | "succeeded" | "failed"; startedAt: string; completedAt?: string; itemCount: number; error?: string };
 export type AdminPromptCatalog = { version: 1; revision: number; categories: AdminPromptCategory[]; prompts: AdminPromptEntry[]; sources: AdminPromptSource[]; syncRuns: AdminPromptSyncRun[] };
 
-export function canManageAdmin(auth: { status?: string; localAdmin?: boolean; user?: { role?: string } | null } | null | undefined): boolean {
+export function canManageAdmin(auth: { status?: string; localAdmin?: boolean; user?: { role?: string; platformAdmin?: boolean } | null } | null | undefined): boolean {
   if (auth?.localAdmin === true) return true;
   const role = auth?.user?.role?.toLowerCase() ?? "";
   return role === "owner" || role === "admin";
+}
+
+export function canAccessAdminPage(auth: { status?: string; localAdmin?: boolean; user?: { role?: string; platformAdmin?: boolean } | null } | null | undefined): boolean {
+  return canManageAdmin(auth) || auth?.user?.platformAdmin === true;
+}
+
+export async function listPlatformTenants(query: { q?: string; page?: number; pageSize?: number } = {}): Promise<Page<PlatformTenant>> {
+  const params = new URLSearchParams({ q: query.q?.trim() ?? "", page: String(pageValue(query.page)), pageSize: String(pageSizeValue(query.pageSize)) });
+  return json(await authFetch(`platform/tenants?${params}`));
+}
+
+export async function listPlatformUsers(query: { q?: string; tenantId?: string; page?: number; pageSize?: number } = {}): Promise<Page<AdminUser>> {
+  const params = new URLSearchParams({ q: query.q?.trim() ?? "", tenantId: query.tenantId?.trim() ?? "", page: String(pageValue(query.page)), pageSize: String(pageSizeValue(query.pageSize)) });
+  return json(await authFetch(`platform/users?${params}`));
+}
+
+export async function putPlatformTenantQuota(tenantId: string, quota: number): Promise<PlatformTenant> {
+  if (!tenantId.trim() || !Number.isSafeInteger(quota) || quota < 0 || quota > maxAdminQuotaValue) throw new Error("租户额度无效");
+  return json(await authFetch(`platform/tenants/${encodeURIComponent(tenantId)}/quota`, { method: "PUT", body: JSON.stringify({ generationQuotaMonthly: quota }) }));
+}
+
+export async function patchPlatformUser(userId: string, patch: Partial<Pick<AdminUser, "displayName" | "role" | "status">>): Promise<AdminUser> {
+  return json(await authFetch(`platform/users/${encodeURIComponent(userId)}`, { method: "PATCH", body: JSON.stringify(patch) }));
+}
+
+export async function adjustPlatformCredits(userId: string, input: { delta: number; reason: string; idempotencyKey: string }): Promise<{ user: AdminUser; log: AdminCreditLog; replayed: boolean }> {
+  if (!Number.isSafeInteger(input.delta) || input.delta === 0 || Math.abs(input.delta) > maxAdminQuotaValue || !input.reason.trim() || !input.idempotencyKey.trim()) throw new Error("算力调整参数无效");
+  return json(await authFetch(`platform/users/${encodeURIComponent(userId)}/credit-adjustments`, { method: "POST", body: JSON.stringify(input) }));
+}
+
+export async function listTenantInvitations(): Promise<TenantInvitation[]> {
+  return json(await authFetch("tenant/invitations"));
+}
+
+export async function createTenantInvitation(input: { email: string; role: "member" | "admin"; expiresInHours?: number }): Promise<TenantInvitation & { token: string }> {
+  if (!input.email.trim() || !input.email.includes("@")) throw new Error("请输入有效邮箱");
+  return json(await authFetch("tenant/invitations", { method: "POST", body: JSON.stringify(input) }));
+}
+
+export async function revokeTenantInvitation(id: string): Promise<void> {
+  const response = await authFetch(`tenant/invitations/${encodeURIComponent(id)}/revoke`, { method: "POST" });
+  if (!response.ok) throw new AuthHttpError(response.status, await response.text().catch(() => "撤销邀请失败"));
 }
 
 async function json<T>(response: Response): Promise<T> {

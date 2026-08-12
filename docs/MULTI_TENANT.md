@@ -25,6 +25,25 @@ and paid generation require a session after the first user (or always in
 ## First user
 The first registered user becomes **owner of tenant `local`**, claiming existing formal-local data. Later registrations create a new empty personal tenant.
 
+## Platform administration and invitations
+Set `OPENBOARD_PLATFORM_ADMIN_EMAILS` to a comma-separated list of exact,
+normalized account emails. Those accounts receive a separate platform-admin
+capability and can inspect all tenants, change a tenant's monthly generation
+quota, adjust credits, and suspend or restore users through the `/admin`
+platform panel. This capability is deployment-controlled; it is not a tenant
+role and cannot be granted by an HTTP request. Auth-off deployments continue
+to use the process token for platform routes.
+
+Tenant owners and admins can create one-time invitations from the same admin
+panel. The raw token is returned only when the invitation is created and is
+stored as a hash. A new registration can follow the invite URL; the
+registration transaction verifies the email, expiry, role, and consumes the
+token before joining the existing tenant. Accounts remain single-tenant for
+now, so an already registered account cannot join a second tenant without a
+future membership/active-tenant migration.
+Invite links use a URL fragment so the one-time token is not sent as an HTTP
+Referer; the registration page removes it after a successful sign-in.
+
 ## Billing (local foundation)
 - Plan + storage/generation quotas on the tenant
 - Usage events for generation counts and storage checks

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   canManageAdmin,
+  canAccessAdminPage,
   isCreditAdjustmentReady,
   parseTenantQuotaDraft,
   adjustAdminCredits,
@@ -47,6 +48,8 @@ describe("admin client", () => {
     expect(canManageAdmin({ status: "authenticated", user: { role: "owner" } })).toBe(true);
     expect(canManageAdmin({ status: "authenticated", user: { role: "admin" } })).toBe(true);
     expect(canManageAdmin({ status: "authenticated", user: { role: "member" } })).toBe(false);
+    expect(canManageAdmin({ status: "authenticated", user: { role: "member", platformAdmin: true } })).toBe(false);
+    expect(canAccessAdminPage({ status: "authenticated", user: { role: "member", platformAdmin: true } })).toBe(true);
     expect(canManageAdmin({ status: "login_required", user: null })).toBe(false);
     expect(isAuthDisabledError(new AuthHttpError(404, "auth disabled"))).toBe(true);
     expect(isAuthDisabledError(new AuthHttpError(401, "anonymous"))).toBe(false);

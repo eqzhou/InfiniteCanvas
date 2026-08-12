@@ -23,6 +23,12 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [policy, setPolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const [policyLoaded, setPolicyLoaded] = useState(false);
+  const inviteToken = typeof window !== "undefined" ? (() => {
+    const queryToken = new URLSearchParams(window.location.search).get("invite")?.trim() ?? "";
+    if (queryToken) return queryToken;
+    return new URLSearchParams(window.location.hash.replace(/^#/, "")).get("invite")?.trim() ?? "";
+  })() : "";
+  const canRegister = policy.allowRegister || Boolean(inviteToken);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,7 +36,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
       .then((next) => {
         if (cancelled) return;
         setPolicy(next);
-        if (!next.allowRegister) setTab("login");
+        if (!next.allowRegister && !inviteToken) setTab("login");
       })
       .finally(() => {
         if (!cancelled) setPolicyLoaded(true);
@@ -40,10 +46,14 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (inviteToken && canRegister) setTab("register");
+  }, [inviteToken, canRegister]);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
-    if (tab === "register" && !policy.allowRegister) {
+    if (tab === "register" && !canRegister) {
       setError(t("auth.registerClosed"));
       return;
     }
@@ -54,7 +64,15 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
       const result =
         tab === "login"
           ? await login(email, password)
-          : await register(email, password, displayName || undefined);
+          : await register(email, password, displayName || undefined, inviteToken || undefined);
+      if (inviteToken && typeof window !== "undefined" && typeof window.history?.replaceState === "function") {
+        const clean = new URL(window.location.href);
+        clean.searchParams.delete("invite");
+        const hash = new URLSearchParams(clean.hash.replace(/^#/, ""));
+        hash.delete("invite");
+        clean.hash = hash.toString();
+        window.history.replaceState(window.history.state, "", `${clean.pathname}${clean.search}${clean.hash}`);
+      }
       onSuccess(result.user);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -63,7 +81,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
     }
   };
 
-  const tabs: Array<{ id: AuthTab; label: string }> = policy.allowRegister
+  const tabs: Array<{ id: AuthTab; label: string }> = canRegister
     ? [
         { id: "login", label: t("auth.login") },
         { id: "register", label: t("auth.register") },

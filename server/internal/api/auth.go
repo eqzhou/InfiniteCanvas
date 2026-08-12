@@ -282,6 +282,7 @@ type authCredentials struct {
 	Email       string `json:"email"`
 	Password    string `json:"password"`
 	DisplayName string `json:"displayName"`
+	InviteToken string `json:"inviteToken,omitempty"`
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
@@ -293,31 +294,42 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "auth disabled", http.StatusNotFound)
 		return
 	}
-	allowed, err := s.registrationAllowed(r.Context(), sitePolicyTenantForRegister(r))
-	if err != nil {
-		http.Error(w, "failed to load site policy", http.StatusInternalServerError)
-		return
-	}
-	if !allowed {
-		http.Error(w, registrationDisabledMessage, http.StatusForbidden)
-		return
-	}
 	var body authCredentials
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	inviteToken := strings.TrimSpace(body.InviteToken)
+	allowed, err := s.registrationAllowed(r.Context(), sitePolicyTenantForRegister(r))
+	if err != nil {
+		http.Error(w, "failed to load site policy", http.StatusInternalServerError)
+		return
+	}
+	// A valid invitation is intentionally allowed to bootstrap a team member
+	// even when the public, tenant-wide registration switch is off. The
+	// transaction still verifies the token, expiry, and email before creating
+	// the account.
+	if !allowed && inviteToken == "" {
+		http.Error(w, registrationDisabledMessage, http.StatusForbidden)
+		return
+	}
 	user, token, err := s.store.RegisterUser(r.Context(), store.RegisterInput{
-		Email: body.Email, Password: body.Password, DisplayName: body.DisplayName,
+		Email: body.Email, Password: body.Password, DisplayName: body.DisplayName, InviteToken: inviteToken,
 	})
 	if errors.Is(err, store.ErrConflict) {
 		http.Error(w, "email already registered", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, store.ErrInvitationInvalid) {
+		http.Error(w, "invitation is invalid, expired, revoked, or does not match this email", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	writeJSON(w, map[string]any{"user": user, "sessionToken": token})
 }
 
@@ -348,6 +360,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login failed", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	writeJSON(w, map[string]any{"user": user, "sessionToken": token})
 }
 

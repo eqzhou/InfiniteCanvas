@@ -9,6 +9,7 @@ export type AuthUser = {
   /** Remaining compute credits. Present once the session is authenticated. */
   credits?: number;
   status?: string;
+  platformAdmin?: boolean;
 };
 
 export type UsageSnapshot = {
@@ -119,11 +120,12 @@ export async function register(
   email: string,
   password: string,
   displayName?: string,
+  inviteToken?: string,
 ): Promise<{ user: AuthUser; sessionToken: string }> {
   const result = await parseJSON<{ user: AuthUser; sessionToken: string }>(
     await authFetch("auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, password, displayName }),
+      body: JSON.stringify({ email, password, displayName, ...(inviteToken?.trim() ? { inviteToken: inviteToken.trim() } : {}) }),
     }),
   );
   setSessionToken(result.sessionToken);

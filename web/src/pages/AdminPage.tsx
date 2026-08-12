@@ -4,6 +4,8 @@ import { AdminPromptCatalogPanel } from "@/components/admin/AdminPromptCatalogPa
 import { AdminChannelsPanel } from "@/components/admin/AdminChannelsPanel";
 import { AdminStoragePoolPanel } from "@/components/admin/AdminStoragePoolPanel";
 import { AdminLibraryPanel } from "@/components/admin/AdminLibraryPanel";
+import { PlatformAdminPanel } from "@/components/admin/PlatformAdminPanel";
+import { TenantInvitationsPanel } from "@/components/admin/TenantInvitationsPanel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
 import {
@@ -16,6 +18,7 @@ import {
   putAdminModelCosts,
   putAdminTenantQuota,
   canManageAdmin,
+  canAccessAdminPage,
   isCreditAdjustmentReady,
   parseTenantQuotaDraft,
   type AdminCreditLog,
@@ -23,24 +26,28 @@ import {
   type AdminUser,
 } from "@/services/admin";
 
-type Tab = "quota" | "users" | "credits" | "models" | "channels" | "prompts" | "library" | "storage";
+type Tab = "quota" | "users" | "credits" | "models" | "channels" | "prompts" | "library" | "storage" | "platform";
 const adminTabs: readonly Tab[] = ["quota", "users", "credits", "models", "channels", "prompts", "library", "storage"];
-const adminTabLabels: Record<Tab, MessageKey> = { quota: "admin.tab.quota", users: "admin.tab.users", credits: "admin.tab.credits", models: "admin.tab.models", channels: "admin.tab.channels", prompts: "admin.tab.prompts", library: "admin.tab.library", storage: "admin.tab.storage" };
+const adminTabLabels: Record<Tab, MessageKey> = { quota: "admin.tab.quota", users: "admin.tab.users", credits: "admin.tab.credits", models: "admin.tab.models", channels: "admin.tab.channels", prompts: "admin.tab.prompts", library: "admin.tab.library", storage: "admin.tab.storage", platform: "admin.tab.platform" };
 
 export function AdminPage() {
   const { t } = useI18n();
   const auth = useOptionalAuth();
   const [tab, setTab] = useState<Tab>("quota");
   const role = auth?.localAdmin ? "owner" : auth?.user?.role.toLowerCase() ?? "member";
-  if (!canManageAdmin(auth)) {
+  const tenantAdmin = canManageAdmin(auth);
+  const platformAdmin = auth?.localAdmin === true || auth?.user?.platformAdmin === true;
+  const visibleTabs: readonly Tab[] = tenantAdmin ? (platformAdmin ? [...adminTabs, "platform"] : adminTabs) : ["platform"];
+  const activeTab = visibleTabs.includes(tab) ? tab : visibleTabs[0];
+  if (!canAccessAdminPage(auth)) {
     return <div className="p-8 text-sm text-[var(--ob-danger)]">{t("admin.permissionRequired")}</div>;
   }
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: Tab) => {
-    const currentIndex = adminTabs.indexOf(current);
-    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? adminTabs.length - 1 : event.key === "ArrowRight" ? (currentIndex + 1) % adminTabs.length : event.key === "ArrowLeft" ? (currentIndex - 1 + adminTabs.length) % adminTabs.length : -1;
+    const currentIndex = visibleTabs.indexOf(current);
+    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? visibleTabs.length - 1 : event.key === "ArrowRight" ? (currentIndex + 1) % visibleTabs.length : event.key === "ArrowLeft" ? (currentIndex - 1 + visibleTabs.length) % visibleTabs.length : -1;
     if (nextIndex < 0) return;
     event.preventDefault();
-    const next = adminTabs[nextIndex];
+    const next = visibleTabs[nextIndex];
     setTab(next);
     requestAnimationFrame(() => document.getElementById(`admin-tab-${next}`)?.focus());
   };
@@ -50,15 +57,15 @@ export function AdminPage() {
         <div><h1 className="text-2xl font-semibold">{t("admin.title")}</h1><p className="text-sm text-[var(--ob-muted)]">{t("admin.description")}</p></div>
         <div className="w-full overflow-x-auto pb-1 sm:w-auto">
           <div className="ob-segment min-w-max" role="tablist" aria-label={t("admin.sections")}>
-            {adminTabs.map((item) => (
-              <button key={item} id={`admin-tab-${item}`} type="button" role="tab" aria-controls="admin-tabpanel" aria-selected={tab === item} tabIndex={tab === item ? 0 : -1} className="ob-segment-item" data-active={tab === item} onKeyDown={(event) => handleTabKeyDown(event, item)} onClick={() => setTab(item)}>
+            {visibleTabs.map((item) => (
+              <button key={item} id={`admin-tab-${item}`} type="button" role="tab" aria-controls="admin-tabpanel" aria-selected={activeTab === item} tabIndex={activeTab === item ? 0 : -1} className="ob-segment-item" data-active={activeTab === item} onKeyDown={(event) => handleTabKeyDown(event, item)} onClick={() => setTab(item)}>
                 {t(adminTabLabels[item])}
               </button>
             ))}
           </div>
         </div>
       </div>
-      <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${tab}`} className="min-h-0 flex-1 overflow-auto">{tab === "quota" ? <TenantQuotaAdmin /> : tab === "users" ? <UsersAdmin actorRole={role} /> : tab === "credits" ? <CreditsAdmin /> : tab === "models" ? <ModelsAdmin /> : tab === "channels" ? <AdminChannelsPanel /> : tab === "prompts" ? <AdminPromptCatalogPanel /> : tab === "library" ? <AdminLibraryPanel /> : <AdminStoragePoolPanel />}</div>
+      <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${activeTab}`} className="min-h-0 flex-1 overflow-auto">{activeTab === "quota" ? <TenantQuotaAdmin /> : activeTab === "users" ? <UsersAdmin actorRole={role} /> : activeTab === "credits" ? <CreditsAdmin /> : activeTab === "models" ? <ModelsAdmin /> : activeTab === "channels" ? <AdminChannelsPanel /> : activeTab === "prompts" ? <AdminPromptCatalogPanel /> : activeTab === "library" ? <AdminLibraryPanel /> : activeTab === "platform" ? <PlatformAdminPanel /> : <AdminStoragePoolPanel />}</div>
     </div>
   );
 }
@@ -109,7 +116,7 @@ function UsersAdmin({ actorRole }: { actorRole: string }) {
       setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
-  return <div className="space-y-3">
+  return <div className="space-y-4"><TenantInvitationsPanel actorRole={actorRole} />
     <div className="flex gap-2"><input className="ob-field max-w-sm" placeholder={t("admin.searchUsers")} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void load(); }} /><button type="button" className="ob-btn" onClick={() => void load()}>{t("admin.search")}</button></div>
     {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
     <div className="overflow-x-auto rounded-xl border border-[var(--ob-line)]"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-[var(--ob-canvas)] text-[var(--ob-muted)]"><tr><th className="p-3">{t("admin.user")}</th><th>{t("admin.role")}</th><th>{t("admin.status")}</th><th>{t("admin.creditBalance")}</th><th className="pr-3">{t("admin.actions")}</th></tr></thead><tbody>

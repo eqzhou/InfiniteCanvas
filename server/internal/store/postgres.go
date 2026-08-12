@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 24
+const currentSchemaVersion = 26
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -273,6 +273,16 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 25 {
+		if err := migrateV25(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
+	if version < 26 {
+		if err := migrateV26(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -286,6 +296,47 @@ ALTER TABLE openboard_film_voice_consents
 CREATE INDEX IF NOT EXISTS openboard_film_voice_consents_evidence_idx
   ON openboard_film_voice_consents (tenant_id,project_id,evidence_sha256)
   WHERE evidence_sha256 <> '';
+`)
+}
+
+func migrateV25(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 25, `
+CREATE TABLE IF NOT EXISTS openboard_tenant_invitations (
+  id text PRIMARY KEY,
+  tenant_id text NOT NULL REFERENCES openboard_tenants(id) ON DELETE CASCADE,
+  email text NOT NULL CHECK (char_length(email) BETWEEN 3 AND 320),
+  role text NOT NULL CHECK (role IN ('admin', 'member')),
+  token_hash text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  accepted_at timestamptz,
+  accepted_user_id text REFERENCES openboard_users(id) ON DELETE SET NULL,
+  revoked_at timestamptz,
+  created_by text NOT NULL REFERENCES openboard_users(id) ON DELETE RESTRICT,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS openboard_tenant_invitations_tenant_created_idx
+  ON openboard_tenant_invitations (tenant_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS openboard_tenant_invitations_active_email_idx
+	ON openboard_tenant_invitations (tenant_id, lower(email))
+	WHERE accepted_at IS NULL AND revoked_at IS NULL;
+`)
+}
+
+func migrateV26(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 26, `
+WITH duplicates AS (
+  SELECT id, row_number() OVER (PARTITION BY tenant_id, lower(email) ORDER BY created_at DESC, id DESC) AS row_number
+  FROM openboard_tenant_invitations
+  WHERE accepted_at IS NULL AND revoked_at IS NULL
+)
+UPDATE openboard_tenant_invitations AS invitations
+SET revoked_at=now()
+FROM duplicates
+WHERE invitations.id=duplicates.id AND duplicates.row_number > 1;
+DROP INDEX IF EXISTS openboard_tenant_invitations_active_email_idx;
+CREATE UNIQUE INDEX openboard_tenant_invitations_active_email_idx
+  ON openboard_tenant_invitations (tenant_id, lower(email))
+  WHERE accepted_at IS NULL AND revoked_at IS NULL;
 `)
 }
 
@@ -3925,9 +3976,13 @@ func newID() (string, error) {
 }
 
 func (s *PostgresStore) RegisterUser(ctx context.Context, input RegisterInput) (AuthUser, string, error) {
-	email := strings.ToLower(strings.TrimSpace(input.Email))
-	if email == "" || !strings.Contains(email, "@") || len(email) > 320 {
+	email, validEmail := NormalizeEmail(input.Email)
+	if !validEmail {
 		return AuthUser{}, "", fmt.Errorf("invalid email")
+	}
+	inviteToken := strings.TrimSpace(input.InviteToken)
+	if len(inviteToken) > 256 {
+		return AuthUser{}, "", ErrInvalidInput
 	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" {
@@ -3945,11 +4000,6 @@ func (s *PostgresStore) RegisterUser(ctx context.Context, input RegisterInput) (
 	}
 	defer tx.Rollback(ctx)
 
-	var userCount int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_users`).Scan(&userCount); err != nil {
-		return AuthUser{}, "", err
-	}
-
 	userID, err := newID()
 	if err != nil {
 		return AuthUser{}, "", err
@@ -3957,25 +4007,48 @@ func (s *PostgresStore) RegisterUser(ctx context.Context, input RegisterInput) (
 
 	var tenantID string
 	role := "owner"
-	if userCount == 0 {
-		// First user claims the local tenant (existing data).
-		tenantID = DefaultTenantID
-		if _, err := tx.Exec(ctx, `
+	var invitationID string
+	if inviteToken != "" {
+		var invitationEmail string
+		if err := tx.QueryRow(ctx, `
+SELECT id, tenant_id, email, role
+FROM openboard_tenant_invitations
+WHERE token_hash=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+FOR UPDATE`, HashSessionToken(inviteToken)).Scan(&invitationID, &tenantID, &invitationEmail, &role); errors.Is(err, pgx.ErrNoRows) {
+			return AuthUser{}, "", ErrInvitationInvalid
+		} else if err != nil {
+			return AuthUser{}, "", err
+		} else if !strings.EqualFold(strings.TrimSpace(invitationEmail), email) {
+			return AuthUser{}, "", ErrInvitationInvalid
+		}
+		if role != "admin" && role != "member" {
+			return AuthUser{}, "", ErrInvitationInvalid
+		}
+	} else {
+		var userCount int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_users`).Scan(&userCount); err != nil {
+			return AuthUser{}, "", err
+		}
+		if userCount == 0 {
+			// First user claims the local tenant (existing data).
+			tenantID = DefaultTenantID
+			if _, err := tx.Exec(ctx, `
 INSERT INTO openboard_tenants (id, name, plan, storage_quota_bytes, generation_quota_monthly)
 VALUES ($1, 'Local', 'free', $2, $3)
 ON CONFLICT (id) DO NOTHING`, DefaultTenantID, defaultStorageQuotaBytes, defaultGenerationQuotaMonthly); err != nil {
-			return AuthUser{}, "", err
-		}
-	} else {
-		tenantID, err = newID()
-		if err != nil {
-			return AuthUser{}, "", err
-		}
-		name := displayName + "'s workspace"
-		if _, err := tx.Exec(ctx, `
+				return AuthUser{}, "", err
+			}
+		} else {
+			tenantID, err = newID()
+			if err != nil {
+				return AuthUser{}, "", err
+			}
+			name := displayName + "'s workspace"
+			if _, err := tx.Exec(ctx, `
 INSERT INTO openboard_tenants (id, name, plan, storage_quota_bytes, generation_quota_monthly)
 VALUES ($1, $2, 'free', $3, $4)`, tenantID, name, defaultStorageQuotaBytes, defaultGenerationQuotaMonthly); err != nil {
-			return AuthUser{}, "", err
+				return AuthUser{}, "", err
+			}
 		}
 	}
 
@@ -4002,6 +4075,18 @@ INSERT INTO openboard_sessions (id, user_id, token_hash, expires_at)
 VALUES ($1, $2, $3, $4)`, sessionID, userID, tokenHash, expires); err != nil {
 		return AuthUser{}, "", err
 	}
+	if invitationID != "" {
+		result, err := tx.Exec(ctx, `
+UPDATE openboard_tenant_invitations
+SET accepted_at=now(), accepted_user_id=$2
+WHERE id=$1 AND accepted_at IS NULL AND revoked_at IS NULL`, invitationID, userID)
+		if err != nil {
+			return AuthUser{}, "", err
+		}
+		if result.RowsAffected() != 1 {
+			return AuthUser{}, "", ErrInvitationInvalid
+		}
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return AuthUser{}, "", err
@@ -4009,6 +4094,7 @@ VALUES ($1, $2, $3, $4)`, sessionID, userID, tokenHash, expires); err != nil {
 	user := AuthUser{
 		ID: userID, TenantID: tenantID, Email: email, DisplayName: displayName, Role: role, Status: "active", Credits: 0,
 	}
+	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
 	return user, token, nil
 }
 
@@ -4032,6 +4118,7 @@ FROM openboard_users WHERE email=$1`, email).Scan(
 	if strings.EqualFold(user.Status, "ban") {
 		return AuthUser{}, "", ErrBanned
 	}
+	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
 	token, tokenHash, err := NewSessionToken()
 	if err != nil {
 		return AuthUser{}, "", err
@@ -4084,6 +4171,7 @@ WHERE s.token_hash=$1`, hash).Scan(
 	if strings.EqualFold(user.Status, "ban") {
 		return AuthUser{}, ErrBanned
 	}
+	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
 	return user, nil
 }
 
@@ -4118,6 +4206,218 @@ func (s *PostgresStore) UpdateTenantGenerationQuota(ctx context.Context, tenantI
 		return Tenant{}, ErrNotFound
 	}
 	return s.GetTenant(ctx, tenantID)
+}
+
+func normalizePage(page, pageSize int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	return page, pageSize
+}
+
+func (s *PostgresStore) ListTenants(ctx context.Context, query TenantQuery) (TenantPage, error) {
+	page, pageSize := normalizePage(query.Page, query.PageSize)
+	q := strings.TrimSpace(query.Q)
+	like := "%" + strings.ToLower(q) + "%"
+	var total int
+	var err error
+	if q == "" {
+		err = s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_tenants`).Scan(&total)
+	} else {
+		err = s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_tenants WHERE lower(id) LIKE $1 OR lower(name) LIKE $1`, like).Scan(&total)
+	}
+	if err != nil {
+		return TenantPage{}, err
+	}
+	offset := (page - 1) * pageSize
+	rows, err := s.pool.Query(ctx, `
+SELECT t.id, t.name, t.plan, t.storage_quota_bytes, t.generation_quota_monthly, t.created_at, count(u.id)
+FROM openboard_tenants t
+LEFT JOIN openboard_users u ON u.tenant_id=t.id
+WHERE ($1 = '' OR lower(t.id) LIKE $2 OR lower(t.name) LIKE $2)
+GROUP BY t.id, t.name, t.plan, t.storage_quota_bytes, t.generation_quota_monthly, t.created_at
+ORDER BY t.created_at DESC, t.id DESC LIMIT $3 OFFSET $4`, q, like, pageSize, offset)
+	if err != nil {
+		return TenantPage{}, err
+	}
+	defer rows.Close()
+	items := make([]Tenant, 0, pageSize)
+	for rows.Next() {
+		var item Tenant
+		var created time.Time
+		if err := rows.Scan(&item.ID, &item.Name, &item.Plan, &item.StorageQuotaBytes, &item.GenerationQuotaMonthly, &created, &item.UserCount); err != nil {
+			return TenantPage{}, err
+		}
+		item.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return TenantPage{}, err
+	}
+	return TenantPage{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+func (s *PostgresStore) ListPlatformUsers(ctx context.Context, query PlatformUserQuery) (UserPage, error) {
+	page, pageSize := normalizePage(query.Page, query.PageSize)
+	tenantID := strings.TrimSpace(query.TenantID)
+	q := strings.TrimSpace(query.Q)
+	like := "%" + strings.ToLower(q) + "%"
+	var total int
+	where := `($1 = '' OR tenant_id=$1) AND ($2 = '' OR lower(email) LIKE $3 OR lower(display_name) LIKE $3)`
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_users WHERE `+where, tenantID, q, like).Scan(&total); err != nil {
+		return UserPage{}, err
+	}
+	offset := (page - 1) * pageSize
+	rows, err := s.pool.Query(ctx, `
+SELECT id, tenant_id, email, display_name, role, COALESCE(credits,0), COALESCE(status,'active'), COALESCE(linux_do_id,'')
+FROM openboard_users
+WHERE `+where+`
+ORDER BY created_at DESC, id DESC LIMIT $4 OFFSET $5`, tenantID, q, like, pageSize, offset)
+	if err != nil {
+		return UserPage{}, err
+	}
+	defer rows.Close()
+	items := make([]AuthUser, 0, pageSize)
+	for rows.Next() {
+		user, err := scanAuthUser(rows)
+		if err != nil {
+			return UserPage{}, err
+		}
+		items = append(items, user)
+	}
+	if err := rows.Err(); err != nil {
+		return UserPage{}, err
+	}
+	return UserPage{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+func (s *PostgresStore) GetUserAnyTenant(ctx context.Context, userID string) (AuthUser, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || len(userID) > 128 {
+		return AuthUser{}, ErrInvalidInput
+	}
+	user, err := scanAuthUser(s.pool.QueryRow(ctx, `
+SELECT id, tenant_id, email, display_name, role, COALESCE(credits,0), COALESCE(status,'active'), COALESCE(linux_do_id,'')
+FROM openboard_users WHERE id=$1`, userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AuthUser{}, ErrNotFound
+	}
+	return user, err
+}
+
+func (s *PostgresStore) CreateTenantInvitation(ctx context.Context, input TenantInvitationInput) (CreatedTenantInvitation, error) {
+	tenantID := normalizeTenantID(input.TenantID)
+	createdBy := strings.TrimSpace(input.CreatedBy)
+	email, validEmail := NormalizeEmail(input.Email)
+	role := strings.ToLower(strings.TrimSpace(input.Role))
+	if createdBy == "" || !validEmail ||
+		(role != "member" && role != "admin") || input.ExpiresAt.Before(time.Now().UTC()) ||
+		input.ExpiresAt.After(time.Now().UTC().Add(30*24*time.Hour)) {
+		return CreatedTenantInvitation{}, ErrInvalidInput
+	}
+	var accountExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM openboard_users WHERE lower(email)=lower($1))`, email).Scan(&accountExists); err != nil {
+		return CreatedTenantInvitation{}, err
+	}
+	if accountExists {
+		return CreatedTenantInvitation{}, ErrConflict
+	}
+	var tenantExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM openboard_tenants WHERE id=$1)`, tenantID).Scan(&tenantExists); err != nil {
+		return CreatedTenantInvitation{}, err
+	}
+	if !tenantExists {
+		return CreatedTenantInvitation{}, ErrNotFound
+	}
+	// Expired invitations must not make an address permanently unavailable.
+	// The partial unique index intentionally covers all unaccepted invitations,
+	// so old rows are explicitly revoked before inserting a replacement.
+	if _, err := s.pool.Exec(ctx, `
+UPDATE openboard_tenant_invitations
+SET revoked_at=now()
+WHERE tenant_id=$1 AND lower(email)=lower($2) AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= now()`, tenantID, email); err != nil {
+		return CreatedTenantInvitation{}, err
+	}
+	token, tokenHash, err := NewSessionToken()
+	if err != nil {
+		return CreatedTenantInvitation{}, err
+	}
+	id, err := newID()
+	if err != nil {
+		return CreatedTenantInvitation{}, err
+	}
+	var invitation TenantInvitation
+	var created, expires time.Time
+	err = s.pool.QueryRow(ctx, `
+INSERT INTO openboard_tenant_invitations (id, tenant_id, email, role, token_hash, expires_at, created_by)
+SELECT $1, $2, $3, $4, $5, $6, $7
+WHERE EXISTS (SELECT 1 FROM openboard_users WHERE id=$7 AND tenant_id=$2 AND role IN ('owner','admin') AND status='active')
+RETURNING id, tenant_id, email, role, expires_at, created_at`, id, tenantID, email, role, tokenHash, input.ExpiresAt.UTC(), createdBy).
+		Scan(&invitation.ID, &invitation.TenantID, &invitation.Email, &invitation.Role, &expires, &created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CreatedTenantInvitation{}, ErrUnauthorized
+	}
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+			return CreatedTenantInvitation{}, ErrConflict
+		}
+		return CreatedTenantInvitation{}, err
+	}
+	invitation.ExpiresAt = expires.UTC()
+	invitation.CreatedAt = created.UTC()
+	invitation.CreatedBy = createdBy
+	return CreatedTenantInvitation{TenantInvitation: invitation, Token: token}, nil
+}
+
+func (s *PostgresStore) ListTenantInvitations(ctx context.Context, tenantID string) ([]TenantInvitation, error) {
+	tenantID = normalizeTenantID(tenantID)
+	rows, err := s.pool.Query(ctx, `
+SELECT id, tenant_id, email, role, expires_at, accepted_at, accepted_user_id, revoked_at, created_by, created_at
+FROM openboard_tenant_invitations WHERE tenant_id=$1 ORDER BY created_at DESC, id DESC LIMIT 200`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]TenantInvitation, 0)
+	for rows.Next() {
+		var item TenantInvitation
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.Email, &item.Role, &item.ExpiresAt, &item.AcceptedAt, &item.AcceptedUserID, &item.RevokedAt, &item.CreatedBy, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.ExpiresAt = item.ExpiresAt.UTC()
+		item.CreatedAt = item.CreatedAt.UTC()
+		if item.AcceptedAt != nil {
+			value := item.AcceptedAt.UTC()
+			item.AcceptedAt = &value
+		}
+		if item.RevokedAt != nil {
+			value := item.RevokedAt.UTC()
+			item.RevokedAt = &value
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) RevokeTenantInvitation(ctx context.Context, tenantID, invitationID string) error {
+	tenantID = normalizeTenantID(tenantID)
+	invitationID = strings.TrimSpace(invitationID)
+	if invitationID == "" || len(invitationID) > 128 {
+		return ErrInvalidInput
+	}
+	result, err := s.pool.Exec(ctx, `
+UPDATE openboard_tenant_invitations SET revoked_at=now()
+WHERE tenant_id=$1 AND id=$2 AND accepted_at IS NULL AND revoked_at IS NULL`, tenantID, invitationID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *PostgresStore) RecordUsage(ctx context.Context, tenantID, userID, kind string, units int, meta json.RawMessage) error {
@@ -4324,6 +4624,7 @@ func scanAuthUser(row pgx.Row) (AuthUser, error) {
 	if user.Status == "" {
 		user.Status = "active"
 	}
+	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
 	return user, nil
 }
 
@@ -4967,6 +5268,7 @@ VALUES ($1,$2,$3,'',$4,$5,0,'active',$6)`, userID, tenantID, email, displayName,
 	} else {
 		return AuthUser{}, "", err
 	}
+	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
 	token, tokenHash, err := NewSessionToken()
 	if err != nil {
 		return AuthUser{}, "", err

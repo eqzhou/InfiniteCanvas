@@ -60,19 +60,39 @@ export function initAnalytics() {
 }
 
 export function trackPageview(path: string) {
-  try {
-    if (active.ga4 && window.gtag) {
-      window.gtag("event", "page_view", {
-        page_path: path,
-        page_location: window.location.href,
-      });
-    }
-    if (active.baidu && window._hmt) {
-      window._hmt.push(["_trackPageview", path]);
+	try {
+		const safePath = stripInviteFromUrl(path);
+		const safeLocation = typeof window !== "undefined" ? stripInviteFromUrl(window.location.href) : path;
+		if (active.ga4 && window.gtag) {
+			window.gtag("event", "page_view", {
+				page_path: safePath,
+				page_location: safeLocation,
+			});
+		}
+		if (active.baidu && window._hmt) {
+			window._hmt.push(["_trackPageview", safePath]);
     }
   } catch {
     // ignore analytics failures
   }
+}
+
+export function stripInviteFromUrl(raw: string, baseHref = typeof window !== "undefined" ? window.location.href : "http://localhost/"): string {
+	try {
+		const url = new URL(raw, baseHref);
+		url.searchParams.delete("invite");
+		if (url.hash) {
+			const hashParams = new URLSearchParams(url.hash.slice(1));
+			if (hashParams.has("invite")) {
+				hashParams.delete("invite");
+				url.hash = hashParams.toString() ? `#${hashParams.toString()}` : "";
+			}
+		}
+		if (/^[a-z][a-z\d+.-]*:/i.test(raw)) return url.toString();
+		return `${url.pathname}${url.search}${url.hash}`;
+	} catch {
+		return raw;
+	}
 }
 
 /** Test helpers */

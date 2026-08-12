@@ -21,6 +21,7 @@ var (
 	ErrBanned              = errors.New("user banned")
 	ErrLastOwner           = errors.New("last active owner must be preserved")
 	ErrInvalidInput        = errors.New("invalid input")
+	ErrInvitationInvalid   = errors.New("invalid invitation")
 )
 
 const DefaultTenantID = "local"
@@ -74,14 +75,15 @@ type GenerationClaim struct {
 }
 
 type AuthUser struct {
-	ID          string `json:"id"`
-	TenantID    string `json:"tenantId"`
-	Email       string `json:"email"`
-	DisplayName string `json:"displayName"`
-	Role        string `json:"role"`
-	Credits     int64  `json:"credits"`
-	Status      string `json:"status,omitempty"`
-	LinuxDoID   string `json:"linuxDoId,omitempty"`
+	ID            string `json:"id"`
+	TenantID      string `json:"tenantId"`
+	Email         string `json:"email"`
+	DisplayName   string `json:"displayName"`
+	Role          string `json:"role"`
+	Credits       int64  `json:"credits"`
+	Status        string `json:"status,omitempty"`
+	LinuxDoID     string `json:"linuxDoId,omitempty"`
+	PlatformAdmin bool   `json:"platformAdmin,omitempty"`
 }
 
 type Tenant struct {
@@ -91,6 +93,7 @@ type Tenant struct {
 	StorageQuotaBytes      int64  `json:"storageQuotaBytes"`
 	GenerationQuotaMonthly int64  `json:"generationQuotaMonthly"`
 	CreatedAt              string `json:"createdAt"`
+	UserCount              int    `json:"userCount,omitempty"`
 }
 
 type UsageSummary struct {
@@ -106,6 +109,7 @@ type RegisterInput struct {
 	Email       string
 	Password    string
 	DisplayName string
+	InviteToken string
 }
 
 func PaginateGenerationJobs(items []GenerationJob, page, pageSize int) GenerationJobPage {
@@ -210,6 +214,52 @@ type UserPage struct {
 	Page     int        `json:"page"`
 	PageSize int        `json:"pageSize"`
 	Total    int        `json:"total"`
+}
+
+type TenantQuery struct {
+	Q        string
+	Page     int
+	PageSize int
+}
+
+type TenantPage struct {
+	Items    []Tenant `json:"items"`
+	Page     int      `json:"page"`
+	PageSize int      `json:"pageSize"`
+	Total    int      `json:"total"`
+}
+
+type PlatformUserQuery struct {
+	TenantID string
+	Q        string
+	Page     int
+	PageSize int
+}
+
+type TenantInvitation struct {
+	ID             string     `json:"id"`
+	TenantID       string     `json:"tenantId"`
+	Email          string     `json:"email"`
+	Role           string     `json:"role"`
+	ExpiresAt      time.Time  `json:"expiresAt"`
+	AcceptedAt     *time.Time `json:"acceptedAt,omitempty"`
+	AcceptedUserID string     `json:"acceptedUserId,omitempty"`
+	RevokedAt      *time.Time `json:"revokedAt,omitempty"`
+	CreatedBy      string     `json:"createdBy"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}
+
+type TenantInvitationInput struct {
+	TenantID  string
+	CreatedBy string
+	Email     string
+	Role      string
+	ExpiresAt time.Time
+}
+
+type CreatedTenantInvitation struct {
+	TenantInvitation
+	Token string `json:"token"`
 }
 
 type UserPatch struct {
@@ -610,6 +660,24 @@ type Store interface {
 	GetMediaReference(ctx context.Context, token string) (MediaReference, error)
 	DeleteExpiredMediaReferences(ctx context.Context, now time.Time) (int64, error)
 	PurgeExpiredTombstones(ctx context.Context, now time.Time) (int64, error)
+}
+
+// PlatformAdminStore is an optional capability implemented by persistent
+// stores that can serve server-level administration without weakening the
+// tenant-scoped Store contract.
+type PlatformAdminStore interface {
+	ListTenants(ctx context.Context, query TenantQuery) (TenantPage, error)
+	ListPlatformUsers(ctx context.Context, query PlatformUserQuery) (UserPage, error)
+	GetUserAnyTenant(ctx context.Context, userID string) (AuthUser, error)
+}
+
+// InvitationStore contains the tenant invitation operations used by the
+// registration flow. Invitation tokens are returned only at creation time;
+// persistent stores must retain only a hash.
+type InvitationStore interface {
+	CreateTenantInvitation(ctx context.Context, input TenantInvitationInput) (CreatedTenantInvitation, error)
+	ListTenantInvitations(ctx context.Context, tenantID string) ([]TenantInvitation, error)
+	RevokeTenantInvitation(ctx context.Context, tenantID, invitationID string) error
 }
 
 func GenerationJobsVersion(jobs []GenerationJob) string {
