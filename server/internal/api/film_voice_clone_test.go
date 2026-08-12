@@ -321,10 +321,11 @@ func createVoiceIdentityAndSample(t *testing.T, handler http.Handler) (store.Voi
 }
 
 func TestVoiceIdentityListsPersistedSamplesAndConsents(t *testing.T) {
-	_, _, handler := voiceCloneAPIHandler(t)
-	identity, sample, consent := createVoiceIdentityAndSample(t, handler)
+	server, _, ownerHandler := voiceCloneAPIHandler(t)
+	identity, sample, consent := createVoiceIdentityAndSample(t, ownerHandler)
+	memberHandler := withActor(serverHandler(server), store.AuthUser{ID: "voice-member", TenantID: store.DefaultTenantID, Role: "member", Status: "active"})
 
-	samplesResponse := request(t, handler, http.MethodGet, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/samples", nil)
+	samplesResponse := request(t, memberHandler, http.MethodGet, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/samples", nil)
 	if samplesResponse.Code != http.StatusOK {
 		t.Fatalf("list samples: %d %s", samplesResponse.Code, samplesResponse.Body.String())
 	}
@@ -336,7 +337,7 @@ func TestVoiceIdentityListsPersistedSamplesAndConsents(t *testing.T) {
 		t.Fatalf("sample list leaked frozen media identity: %s", samplesResponse.Body.String())
 	}
 
-	consentsResponse := request(t, handler, http.MethodGet, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", nil)
+	consentsResponse := request(t, memberHandler, http.MethodGet, "/api/film/projects/voice-film/voice-identities/"+identity.ID+"/consents", nil)
 	if consentsResponse.Code != http.StatusOK {
 		t.Fatalf("list consents: %d %s", consentsResponse.Code, consentsResponse.Body.String())
 	}
@@ -621,7 +622,7 @@ func TestPublicGenerationJobsRedactVoiceAndComfyUIExecutionSnapshots(t *testing.
 	}
 	comfyResult, _ := json.Marshal(comfyUIJobResult{
 		ExternalPromptID: "private-prompt",
-		Items: []comfyUIResultItem{{StorageKey: "private-output.png", MIMEType: "image/png", Bytes: 10, Width: 2, Height: 2, SHA256: strings.Repeat("f", 64), ObjectVersion: "output-version"}},
+		Items:            []comfyUIResultItem{{StorageKey: "private-output.png", MIMEType: "image/png", Bytes: 10, Width: 2, Height: 2, SHA256: strings.Repeat("f", 64), ObjectVersion: "output-version"}},
 	})
 	comfyPublic = publicGenerationJob(store.GenerationJob{Parameters: comfyParameters, Result: comfyResult})
 	for _, secret := range []string{"private-prompt", "private-output.png", strings.Repeat("f", 64), "output-version"} {

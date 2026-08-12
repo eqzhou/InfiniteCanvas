@@ -155,8 +155,42 @@ func stripGenerationChannelSecret(parameters json.RawMessage) json.RawMessage {
 }
 
 func publicGenerationJob(job store.GenerationJob) store.GenerationJob {
-	job.Parameters = stripPublicGenerationParameters(stripGenerationChannelSecret(job.Parameters))
+	rawParameters := append(json.RawMessage(nil), job.Parameters...)
+	job.Parameters = stripPublicGenerationParameters(stripGenerationChannelSecret(rawParameters))
+	job.Result = stripPublicGenerationResult(rawParameters, job.Result)
 	return job
+}
+
+func stripPublicGenerationResult(parameters, result json.RawMessage) json.RawMessage {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(parameters, &root) != nil {
+		return append(json.RawMessage(nil), result...)
+	}
+	var executor string
+	if rawExecutor, ok := root["executor"]; !ok || json.Unmarshal(rawExecutor, &executor) != nil || executor != comfyUIExecutorMarker {
+		return append(json.RawMessage(nil), result...)
+	}
+	var private comfyUIJobResult
+	if json.Unmarshal(result, &private) != nil {
+		return json.RawMessage(`{}`)
+	}
+	type publicItem struct {
+		MIMEType string `json:"mimeType"`
+		Bytes    int    `json:"bytes"`
+		Width    int    `json:"width,omitempty"`
+		Height   int    `json:"height,omitempty"`
+	}
+	items := make([]publicItem, 0, len(private.Items))
+	for _, item := range private.Items {
+		items = append(items, publicItem{MIMEType: item.MIMEType, Bytes: item.Bytes, Width: item.Width, Height: item.Height})
+	}
+	clean, err := json.Marshal(struct {
+		Items []publicItem `json:"items,omitempty"`
+	}{Items: items})
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return clean
 }
 
 func stripPublicGenerationParameters(parameters json.RawMessage) json.RawMessage {

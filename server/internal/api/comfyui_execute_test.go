@@ -310,6 +310,22 @@ func TestComfyUIWorkerCheckpointsPersistsAndImportsOutputIdempotently(t *testing
 	}
 }
 
+func TestCleanupComfyUIOutputRemovesPersistedMedia(t *testing.T) {
+	server := NewServerWithStore(t.TempDir(), newMemoryStore())
+	t.Cleanup(server.Close)
+	key := "media:generated:image:orphan-job:output"
+	if err := server.storeTenantBlob(t.Context(), store.DefaultTenantID, "billing-user", key, "image/png", apimartPNG(t)); err != nil {
+		t.Fatal(err)
+	}
+	err := server.cleanupComfyUIOutput(t.Context(), store.DefaultTenantID, "billing-user", comfyUIJobResult{Items: []comfyUIResultItem{{StorageKey: key}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.readTenantBlob(t.Context(), store.DefaultTenantID, key, maxGeneratedImageBytes); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("orphan media still readable: %v", err)
+	}
+}
+
 func TestComfyUIWorkerRecoversPersistedPromptAfterRestartWithoutResubmit(t *testing.T) {
 	fixture := newComfyFixture(t)
 	backend := newMemoryStore()

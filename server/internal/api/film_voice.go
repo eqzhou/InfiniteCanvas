@@ -91,9 +91,9 @@ type voiceConsentSummary struct {
 	ProjectID          string `json:"projectId"`
 	VoiceIdentityID    string `json:"voiceIdentityId"`
 	Accepted           bool   `json:"accepted"`
-	RightsBasis        string `json:"rightsBasis"`
-	SubjectDisplayName string `json:"subjectDisplayName"`
-	TermsVersion       string `json:"termsVersion"`
+	RightsBasis        string `json:"rightsBasis,omitempty"`
+	SubjectDisplayName string `json:"subjectDisplayName,omitempty"`
+	TermsVersion       string `json:"termsVersion,omitempty"`
 	AcceptedAt         string `json:"acceptedAt"`
 }
 
@@ -356,8 +356,14 @@ func (s *Server) listVoiceConsents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summaries := make([]voiceConsentSummary, 0, len(values))
+	actor, _ := authUserFrom(r.Context())
+	showAuditDetails := isTenantAdmin(actor)
 	for _, value := range values {
-		summaries = append(summaries, voiceConsentSummary{ID: value.ID, ProjectID: value.ProjectID, VoiceIdentityID: value.VoiceIdentityID, Accepted: value.Accepted, RightsBasis: value.RightsBasis, SubjectDisplayName: value.SubjectDisplayName, TermsVersion: value.TermsVersion, AcceptedAt: value.AcceptedAt})
+		summary := voiceConsentSummary{ID: value.ID, ProjectID: value.ProjectID, VoiceIdentityID: value.VoiceIdentityID, Accepted: value.Accepted, AcceptedAt: value.AcceptedAt}
+		if showAuditDetails {
+			summary.RightsBasis, summary.SubjectDisplayName, summary.TermsVersion = value.RightsBasis, value.SubjectDisplayName, value.TermsVersion
+		}
+		summaries = append(summaries, summary)
 	}
 	writeVoiceData(w, http.StatusOK, summaries)
 }

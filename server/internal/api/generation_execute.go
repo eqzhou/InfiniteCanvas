@@ -881,14 +881,14 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 				http.Error(w, "film stage child job binding is invalid", http.StatusConflict)
 				return
 			}
-			if _, childErr := s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC()); childErr != nil {
+			if _, childErr := s.cancelServerGenerationJobWithSideEffectLock(r.Context(), tenantID, childID, time.Now().UTC()); childErr != nil {
 				http.Error(w, "failed to cancel film stage child job", http.StatusInternalServerError)
 				return
 			}
 			s.cancelLocalGeneration(tenantID, childID)
 		}
 	}
-	job, err := s.store.CancelServerGenerationJob(r.Context(), tenantID, id, time.Now().UTC())
+	job, err := s.cancelServerGenerationJobWithSideEffectLock(r.Context(), tenantID, id, time.Now().UTC())
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -901,11 +901,9 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
-	s.cancelLocalGeneration(tenantID, id)
 	if job.Kind == "workflow" {
 		for _, childID := range workflowChildJobIDs(job.Result) {
-			_, _ = s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC())
-			s.cancelLocalGeneration(tenantID, childID)
+			_, _ = s.cancelServerGenerationJobWithSideEffectLock(r.Context(), tenantID, childID, time.Now().UTC())
 		}
 	}
 	if job.Kind == "export" && job.Status == "cancelled" {

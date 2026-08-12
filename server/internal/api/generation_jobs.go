@@ -379,15 +379,13 @@ func (s *Server) deleteGenerationJobsForProject(w http.ResponseWriter, r *http.R
 		}
 		for _, job := range result.Items {
 			if isServerGenerationJob(job) && (job.Status == "queued" || job.Status == "running") {
-				if _, err := s.store.CancelServerGenerationJob(r.Context(), tenantID, job.ID, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrConflict) {
+				if _, err := s.cancelServerGenerationJobWithSideEffectLock(r.Context(), tenantID, job.ID, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrConflict) {
 					http.Error(w, "failed to cancel active generation job", http.StatusInternalServerError)
 					return
 				}
-				s.cancelLocalGeneration(tenantID, job.ID)
 				if job.Kind == "workflow" {
 					for _, childID := range workflowChildJobIDs(job.Result) {
-						_, _ = s.store.CancelServerGenerationJob(r.Context(), tenantID, childID, time.Now().UTC())
-						s.cancelLocalGeneration(tenantID, childID)
+						_, _ = s.cancelServerGenerationJobWithSideEffectLock(r.Context(), tenantID, childID, time.Now().UTC())
 					}
 				}
 			}

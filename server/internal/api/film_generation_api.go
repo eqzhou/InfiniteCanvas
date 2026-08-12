@@ -538,7 +538,7 @@ func (s *Server) cancelFilmGenerationJob(w http.ResponseWriter, r *http.Request)
 	now := time.Now().UTC()
 	cancelCtx, cancel := detachedFilmContext(r.Context())
 	defer cancel()
-	job, err := s.store.CancelServerGenerationJob(cancelCtx, tenantIDFrom(r), task.GenerationJobID, now)
+	job, err := s.cancelServerGenerationJobWithSideEffectLock(cancelCtx, tenantIDFrom(r), task.GenerationJobID, now)
 	if err != nil {
 		writeFilmOperationError(w, err)
 		return

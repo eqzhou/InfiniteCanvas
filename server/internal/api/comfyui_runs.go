@@ -485,7 +485,7 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 
 	values, err := s.prepareComfyUIInputs(ctx, tenantID, executor, parameters.Values, parameters.InputSnapshots)
 	if err != nil {
-		s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_INPUT_INVALID")
+		_ = s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_INPUT_INVALID")
 		return
 	}
 	var checkpoint *comfyUIExternalCheckpoint
@@ -513,7 +513,7 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 			message = "COMFYUI_EXECUTION_TIMEOUT"
 		}
 		log.Printf("ComfyUI job %s/%s failed (%s)", tenantID, job.ID, comfyUIFailureClass(runErr))
-		s.completeComfyUIJob(tenantID, job, "failed", result, message)
+		_ = s.completeComfyUIJob(tenantID, job, "failed", result, message)
 		return
 	}
 	if len(output.Items) == 0 {
@@ -522,10 +522,17 @@ func (s *Server) executeClaimedComfyUIJob(claimed store.TenantGenerationJob) {
 	result.Items, err = s.persistComfyUIOutput(ctx, tenantID, parameters.BillingUserID, job, result.ExternalPromptID, output.Items)
 	if err != nil {
 		log.Printf("ComfyUI job %s/%s output persistence failed: %v", tenantID, job.ID, err)
-		s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_OUTPUT_INVALID")
+		if cleanupErr := s.cleanupComfyUIOutput(context.Background(), tenantID, parameters.BillingUserID, result); cleanupErr != nil {
+			log.Printf("ComfyUI job %s/%s output cleanup failed: %v", tenantID, job.ID, cleanupErr)
+		}
+		_ = s.completeComfyUIJob(tenantID, job, "failed", result, "COMFYUI_OUTPUT_INVALID")
 		return
 	}
-	s.completeComfyUIJob(tenantID, job, "succeeded", result, "")
+	if err := s.completeComfyUIJob(tenantID, job, "succeeded", result, ""); errors.Is(err, store.ErrConflict) {
+		if cleanupErr := s.cleanupComfyUIOutput(context.Background(), tenantID, parameters.BillingUserID, result); cleanupErr != nil {
+			log.Printf("ComfyUI job %s/%s output cleanup failed: %v", tenantID, job.ID, cleanupErr)
+		}
+	}
 }
 
 func comfyUIFailureClass(err error) string {
@@ -602,9 +609,13 @@ func (s *Server) persistComfyUIOutput(ctx context.Context, tenantID, userID stri
 		for index, output := range outputs {
 			images[index] = generatedImage{Data: output.Data, MIMEType: normalizeMediaMIME(output.MIMEType)}
 		}
-		items, _, err := s.persistGeneratedImages(ctx, tenantID, userID, job.ID, attemptID, images)
+		items, keys, err := s.persistGeneratedImages(ctx, tenantID, userID, job.ID, attemptID, images)
 		if err != nil {
-			return nil, err
+			partial := make([]comfyUIResultItem, 0, len(keys))
+			for _, key := range keys {
+				partial = append(partial, comfyUIResultItem{StorageKey: key})
+			}
+			return partial, err
 		}
 		result := make([]comfyUIResultItem, len(items))
 		for index, item := range items {
@@ -614,20 +625,41 @@ func (s *Server) persistComfyUIOutput(ctx context.Context, tenantID, userID stri
 	}
 	result := make([]comfyUIResultItem, 0, len(outputs))
 	for _, output := range outputs {
-		item, _, err := s.persistGeneratedMedia(ctx, tenantID, userID, job.ID, attemptID, job.Kind, generatedMedia{Data: output.Data, MIMEType: normalizeMediaMIME(output.MIMEType)})
+		item, key, err := s.persistGeneratedMedia(ctx, tenantID, userID, job.ID, attemptID, job.Kind, generatedMedia{Data: output.Data, MIMEType: normalizeMediaMIME(output.MIMEType)})
 		if err != nil {
-			return nil, err
+			if key != "" {
+				result = append(result, comfyUIResultItem{StorageKey: key})
+			}
+			return result, err
 		}
 		result = append(result, comfyUIResultItem{StorageKey: item.StorageKey, MIMEType: item.MIMEType, Bytes: item.Bytes, SHA256: item.SHA256, ObjectVersion: item.ObjectVersion})
 	}
 	return result, nil
 }
 
-func (s *Server) completeComfyUIJob(tenantID string, job store.GenerationJob, status string, result comfyUIJobResult, message string) {
+func (s *Server) completeComfyUIJob(tenantID string, job store.GenerationJob, status string, result comfyUIJobResult, message string) error {
 	encoded, _ := json.Marshal(result)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := s.store.CompleteServerGenerationJob(ctx, tenantID, job.ID, job.LeaseOwner, status, encoded, message, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrConflict) {
+	if _, err := s.store.CompleteServerGenerationJob(ctx, tenantID, job.ID, job.LeaseOwner, status, encoded, message, time.Now().UTC()); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return err
+		}
 		log.Printf("complete ComfyUI job %s/%s: %v", tenantID, job.ID, err)
+		return err
 	}
+	return nil
+}
+
+func (s *Server) cleanupComfyUIOutput(ctx context.Context, tenantID, userID string, result comfyUIJobResult) error {
+	var firstErr error
+	for _, item := range result.Items {
+		if strings.TrimSpace(item.StorageKey) == "" {
+			continue
+		}
+		if err := s.deleteTenantBlob(ctx, tenantID, userID, item.StorageKey); err != nil && !errors.Is(err, store.ErrNotFound) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

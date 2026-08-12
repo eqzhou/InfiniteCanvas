@@ -56,7 +56,7 @@ func (s *Server) compensateUnreferencedFilmJobs(parent context.Context, tenantID
 		if filmDocumentReferencesJob(document, jobID) {
 			continue
 		}
-		if _, err := s.store.CancelServerGenerationJob(ctx, tenantID, jobID, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.cancelServerGenerationJobWithSideEffectLock(ctx, tenantID, jobID, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrNotFound) {
 			log.Printf("film generation compensation cancellation failed: %v", err)
 		}
 	}
@@ -88,7 +88,7 @@ func (s *Server) cancelPostCASFilmTasks(parent context.Context, tenantID, projec
 		if _, ok := wanted[task.GenerationJobID]; !ok || task.Status != filmStatusCanceled {
 			continue
 		}
-		if _, err := s.store.CancelServerGenerationJob(ctx, tenantID, task.GenerationJobID, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.cancelServerGenerationJobWithSideEffectLock(ctx, tenantID, task.GenerationJobID, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrNotFound) {
 			log.Printf("film post-CAS cancellation failed: %v", err)
 		}
 	}

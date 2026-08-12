@@ -70,6 +70,8 @@ type Server struct {
 	promptSchedulerInterval time.Duration
 	generationMu            sync.Mutex
 	generationCancels       map[string]context.CancelFunc
+	externalJobMu           sync.Mutex
+	externalJobLocks        map[string]*generationExternalSideEffectLock
 	generationWG            sync.WaitGroup
 	generationWorkerWG      sync.WaitGroup
 	generationWorkersOnce   sync.Once
@@ -306,6 +308,7 @@ func NewServer(dataDir string) *Server {
 		filmQualityStarts:   make(map[string][]time.Time),
 		agentConfirmations:  make(map[string]agentConfirmationRecord),
 		generationCancels:   make(map[string]context.CancelFunc),
+		externalJobLocks:    make(map[string]*generationExternalSideEffectLock),
 		generationRoot:      generationRoot,
 		stopGeneration:      stopGeneration,
 		generationWake:      make(chan struct{}, 1),

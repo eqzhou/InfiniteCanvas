@@ -153,8 +153,15 @@ func (s *Server) executeClaimedVoiceCloneJob(claimed store.TenantGenerationJob) 
 		defer providerCancel()
 	}
 	providerVoiceID := ""
-	if err == nil && ctx.Err() == nil {
+	if err == nil {
+		releaseExternal := s.acquireGenerationExternalSideEffectLock(tenantID, job.ID)
+		current, currentErr := s.store.GetGenerationJob(context.Background(), tenantID, job.ID)
+		if currentErr != nil || current.Status != "running" || current.LeaseOwner != job.LeaseOwner || ctx.Err() != nil {
+			releaseExternal()
+			return
+		}
 		providerVoiceID, err = s.voiceCloneExecutor.Clone(ctx, request)
+		releaseExternal()
 	}
 	status, versionStatus, message := "succeeded", "ready", ""
 	result := json.RawMessage(`{}`)

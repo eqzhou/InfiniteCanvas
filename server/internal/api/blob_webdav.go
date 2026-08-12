@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -365,15 +366,56 @@ func (s *webDAVBlobObjectStore) headVersion(ctx context.Context, tenantID, name 
 	if err != nil {
 		return "", err
 	}
+	statusCode := response.StatusCode
+	version := response.Header.Get("ETag")
+	_ = response.Body.Close()
+	if statusCode >= 200 && statusCode < 300 && version != "" {
+		return version, nil
+	}
+	return s.propfindVersion(ctx, tenantID, name, statusCode)
+}
+
+func (s *webDAVBlobObjectStore) propfindVersion(ctx context.Context, tenantID, name string, headStatus int) (string, error) {
+	body := []byte(`<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>`)
+	request, err := s.request(ctx, "PROPFIND", tenantID, name, body)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Depth", "0")
+	request.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	response, err := s.client.Do(request)
+	if err != nil {
+		return "", err
+	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", fmt.Errorf("WebDAV head failed with status %d", response.StatusCode)
+		if headStatus >= 200 && headStatus < 300 {
+			return "", fmt.Errorf("WebDAV blob version is missing")
+		}
+		return "", fmt.Errorf("WebDAV head failed with status %d and PROPFIND failed with status %d", headStatus, response.StatusCode)
 	}
-	version := response.Header.Get("ETag")
-	if version == "" {
-		return "", errors.New("WebDAV blob version is missing")
+	decoder := xml.NewDecoder(io.LimitReader(response.Body, 64<<10))
+	for {
+		token, tokenErr := decoder.Token()
+		if errors.Is(tokenErr, io.EOF) {
+			break
+		}
+		if tokenErr != nil {
+			return "", errors.New("WebDAV version response is invalid")
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || !strings.EqualFold(start.Name.Local, "getetag") {
+			continue
+		}
+		var value string
+		if err := decoder.DecodeElement(&value, &start); err != nil {
+			return "", errors.New("WebDAV version response is invalid")
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			return value, nil
+		}
 	}
-	return version, nil
+	return "", errors.New("WebDAV blob version is missing")
 }
 
 func (s *webDAVBlobObjectStore) Delete(ctx context.Context, tenantID, name, expectedVersion string) error {

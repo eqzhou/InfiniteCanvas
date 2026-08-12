@@ -65,3 +65,51 @@ func (s *Server) syncFilmTextJobCandidate(ctx context.Context, tenantID string, 
 	}
 	return store.ErrConflict
 }
+
+func (s *Server) reconcileFilmTextCandidates(ctx context.Context, tenantID string, document filmDocument) (bool, error) {
+	changed := false
+	for _, task := range document.Tasks {
+		if task.GenerationJobID == "" {
+			continue
+		}
+		job, err := s.store.GetGenerationJob(ctx, tenantID, task.GenerationJobID)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return changed, err
+		}
+		if job.Kind != "text" || job.Status != "succeeded" {
+			continue
+		}
+		var parameters persistedTextJobParameters
+		if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Film == nil || parameters.Film.ProjectID != document.ProjectID {
+			continue
+		}
+		if filmTextCandidateStored(document, job.ID, parameters.Operation) {
+			continue
+		}
+		if err := s.syncFilmTextJobCandidate(ctx, tenantID, job); err != nil {
+			return changed, err
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
+func filmTextCandidateStored(document filmDocument, jobID, operation string) bool {
+	if operation == "film_style_extraction" {
+		for _, candidate := range document.StyleCandidates {
+			if candidate.GenerationJobID == jobID {
+				return true
+			}
+		}
+		return false
+	}
+	for _, candidate := range document.AICandidates {
+		if candidate.GenerationJobID == jobID {
+			return true
+		}
+	}
+	return false
+}

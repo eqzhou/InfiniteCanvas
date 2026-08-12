@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -317,6 +319,28 @@ func (s *Server) loadFilmProduction(w http.ResponseWriter, r *http.Request, crea
 	return backend, record, document, true
 }
 
+func (s *Server) reconcileLoadedFilmTextCandidates(ctx context.Context, backend store.FilmStore, record store.FilmRecord, document filmDocument, tenantID string) (store.FilmRecord, filmDocument) {
+	changed, err := s.reconcileFilmTextCandidates(ctx, tenantID, document)
+	if err != nil {
+		log.Printf("film text candidate reconciliation failed for %s/%s: %v", tenantID, document.ProjectID, err)
+		return record, document
+	}
+	if !changed {
+		return record, document
+	}
+	reloaded, err := backend.GetFilmProject(ctx, tenantID, document.ProjectID)
+	if err != nil {
+		log.Printf("film text candidate reconciliation reload failed for %s/%s: %v", tenantID, document.ProjectID, err)
+		return record, document
+	}
+	reloadedDocument, err := decodeFilmDocument(reloaded.Document)
+	if err != nil {
+		log.Printf("film text candidate reconciliation produced invalid document for %s/%s: %v", tenantID, document.ProjectID, err)
+		return record, document
+	}
+	return reloaded, reloadedDocument
+}
+
 func (s *Server) mutateFilmProduction(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -376,8 +400,9 @@ func writeFilmOperationError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) getFilmProduction(w http.ResponseWriter, r *http.Request) {
-	_, record, document, ok := s.loadFilmProduction(w, r, false)
+	backend, record, document, ok := s.loadFilmProduction(w, r, false)
 	if ok {
+		record, document = s.reconcileLoadedFilmTextCandidates(r.Context(), backend, record, document, tenantIDFrom(r))
 		s.writeFilmDocument(w, r, http.StatusOK, record, document)
 	}
 }
@@ -399,6 +424,7 @@ func (s *Server) getFilmStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	record, document = s.reconcileLoadedFilmTextCandidates(r.Context(), backend, record, document, tenantIDFrom(r))
 	if s.reconcileMissingFilmExportJobs(r.Context(), tenantIDFrom(r), document) {
 		var err error
 		record, err = backend.GetFilmProject(r.Context(), tenantIDFrom(r), document.ProjectID)
