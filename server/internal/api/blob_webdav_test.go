@@ -147,6 +147,42 @@ func TestWebDAVPutLoadsVersionWithHeadWhenResponseOmitsETag(t *testing.T) {
 	}
 }
 
+func TestWebDAVPutLoadsVersionWithPropfindWhenHeadIsUnavailable(t *testing.T) {
+	var stored []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodPut:
+			stored, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodHead:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		case "PROPFIND":
+			if len(stored) == 0 {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusMultiStatus)
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:propstat><D:prop><D:getetag>"prop-v1"</D:getetag></D:prop></D:propstat></D:response></D:multistatus>`))
+		default:
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer upstream.Close()
+	objectStore, err := newWebDAVBlobObjectStore(WebDAVBlobStorageConfig{
+		Endpoint: upstream.URL + "/dav", Username: "dav-user", Password: "dav-pass", Prefix: "openboard", AllowInsecureLoopback: true, HTTPClient: upstream.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := objectStore.Put(t.Context(), "tenant-a", "image:test", blobObject{Data: []byte("pixels"), Metadata: blobMetadata{ContentType: "image/png"}}, blobVersionAbsent)
+	if err != nil || version != `"prop-v1"` {
+		t.Fatalf("version=%q err=%v", version, err)
+	}
+}
+
 func TestWebDAVBlobObjectStoreCreatesParentCollectionsBeforePut(t *testing.T) {
 	type entry struct {
 		body    []byte

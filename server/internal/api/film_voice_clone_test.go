@@ -347,6 +347,11 @@ func TestVoiceIdentityListsPersistedSamplesAndConsents(t *testing.T) {
 	if strings.Contains(consentsResponse.Body.String(), "evidenceStorageKey") || strings.Contains(consentsResponse.Body.String(), "evidenceSHA256") || strings.Contains(consentsResponse.Body.String(), "actorId") {
 		t.Fatalf("consent list leaked evidence identity: %s", consentsResponse.Body.String())
 	}
+	for _, privateField := range []string{"subjectDisplayName", "termsVersion", "rightsBasis"} {
+		if strings.Contains(consentsResponse.Body.String(), privateField) {
+			t.Fatalf("consent list leaked private audit field %q: %s", privateField, consentsResponse.Body.String())
+		}
+	}
 }
 
 func TestVoiceCloneRequiresExplicitAuditedConsentAndTenantAudio(t *testing.T) {
@@ -612,6 +617,16 @@ func TestPublicGenerationJobsRedactVoiceAndComfyUIExecutionSnapshots(t *testing.
 	for _, secret := range []string{"billing-user", "internal.example", "private.png", "private-version", strings.Repeat("e", 64), "allowPrivate"} {
 		if strings.Contains(string(comfyPublic.Parameters), secret) {
 			t.Fatalf("public ComfyUI job leaked %q: %s", secret, comfyPublic.Parameters)
+		}
+	}
+	comfyResult, _ := json.Marshal(comfyUIJobResult{
+		ExternalPromptID: "private-prompt",
+		Items: []comfyUIResultItem{{StorageKey: "private-output.png", MIMEType: "image/png", Bytes: 10, Width: 2, Height: 2, SHA256: strings.Repeat("f", 64), ObjectVersion: "output-version"}},
+	})
+	comfyPublic = publicGenerationJob(store.GenerationJob{Parameters: comfyParameters, Result: comfyResult})
+	for _, secret := range []string{"private-prompt", "private-output.png", strings.Repeat("f", 64), "output-version"} {
+		if strings.Contains(string(comfyPublic.Result), secret) {
+			t.Fatalf("public ComfyUI job leaked result secret %q: %s", secret, comfyPublic.Result)
 		}
 	}
 }

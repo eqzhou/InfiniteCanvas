@@ -188,6 +188,35 @@ func TestSyncFilmTextJobCandidatePersistsReviewState(t *testing.T) {
 	}
 }
 
+func TestReconcileFilmTextCandidatesRepairsMissedCompletionSync(t *testing.T) {
+	document, job := filmTextCandidateFixture(t)
+	backend := newFilmMemoryStore()
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.CreateFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutGenerationJob(t.Context(), store.DefaultTenantID, job); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	changed, err := server.reconcileFilmTextCandidates(t.Context(), store.DefaultTenantID, document)
+	if err != nil || !changed {
+		t.Fatalf("reconcile changed=%v err=%v", changed, err)
+	}
+	record, err := backend.GetFilmProject(t.Context(), store.DefaultTenantID, document.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := decodeFilmDocument(record.Document)
+	if err != nil || len(stored.AICandidates) != 1 || stored.AICandidates[0].GenerationJobID != job.ID {
+		t.Fatalf("reconciled document=%#v err=%v", stored, err)
+	}
+}
+
 func TestApplyFilmAICandidateVersionsOldStructureAndGeneratesServerIDs(t *testing.T) {
 	document, job := filmTextCandidateFixture(t)
 	ready, err := integrateFilmTextJobResult(document, job, time.Now().UTC().Format(time.RFC3339Nano))
