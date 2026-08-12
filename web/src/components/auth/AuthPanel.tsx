@@ -24,8 +24,6 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
   const [policy, setPolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
   const [policyLoaded, setPolicyLoaded] = useState(false);
   const inviteToken = typeof window !== "undefined" ? (() => {
-    const queryToken = new URLSearchParams(window.location.search).get("invite")?.trim() ?? "";
-    if (queryToken) return queryToken;
     return new URLSearchParams(window.location.hash.replace(/^#/, "")).get("invite")?.trim() ?? "";
   })() : "";
   const canRegister = policy.allowRegister || Boolean(inviteToken);
