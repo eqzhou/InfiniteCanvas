@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM nginx:1.30-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1 AS runtime
 # The digest-pinned base is Alpine 3.23. Install its signed repository package
 # at an exact revision; do not fetch standalone media binaries.
-RUN apk add --no-cache dumb-init gettext ffmpeg=8.0.1-r1 poppler-utils=25.12.0-r1 bubblewrap=0.11.0-r2 \
+RUN apk add --no-cache dumb-init gettext ffmpeg=8.0.1-r1 poppler-utils=25.12.0-r0 bubblewrap=0.11.0-r2 \
     && mkdir -p /data/film-render /tmp/openboard /tmp/nginx/client_temp \
     && chown -R nginx:nginx /data /tmp/openboard /tmp/nginx
 

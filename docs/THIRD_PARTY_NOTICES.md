@@ -42,7 +42,7 @@ shipping a build that includes the native binding.
 | Package | Version | Package source and declared license |
 |---|---:|---|
 | FFmpeg | 8.0.1-r1 | Alpine Linux v3.23 `community` signed package metadata; `GPL-2.0-or-later AND LGPL-2.1-or-later` |
-| Poppler utilities | 25.12.0-r1 | Alpine Linux v3.23 `main` signed package metadata; `GPL-2.0-or-later` |
+| Poppler utilities | 25.12.0-r0 | Alpine Linux v3.23 `main` signed package metadata; `GPL-2.0-or-later` |
 | Bubblewrap | 0.11.0-r2 | Alpine Linux v3.23 `main` signed package metadata; `LGPL-2.0-or-later` |
 
 The digest-pinned Alpine 3.23 runtime installs this exact repository package,

@@ -238,7 +238,7 @@ jobs:
             test "$OPENBOARD_PDFTOTEXT_PATH" = /usr/bin/pdftotext
             test "$OPENBOARD_PDF_SANDBOX_PATH" = /usr/local/bin/openboard-pdf-sandbox
             apk list --installed ffmpeg 2>/dev/null | grep -q '^ffmpeg-8\.0\.1-r1 '
-            apk list --installed poppler-utils 2>/dev/null | grep -q '^poppler-utils-25\.12\.0-r1 '
+            apk list --installed poppler-utils 2>/dev/null | grep -q '^poppler-utils-25\.12\.0-r0 '
             apk list --installed bubblewrap 2>/dev/null | grep -q '^bubblewrap-0\.11\.0-r2 '
             "$OPENBOARD_FFMPEG_PATH" -hide_banner -version >/dev/null
             "$OPENBOARD_FFPROBE_PATH" -hide_banner -version >/dev/null

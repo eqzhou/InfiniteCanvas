@@ -9,7 +9,7 @@ const read = (path) => readFileSync(join(root, path), "utf8");
 test("container pins distro media and PDF tools and exposes exact executable paths", () => {
   const dockerfile = read("Dockerfile");
   assert.match(dockerfile, /ffmpeg=8\.0\.1-r1/);
-  assert.match(dockerfile, /poppler-utils=25\.12\.0-r1/);
+  assert.match(dockerfile, /poppler-utils=25\.12\.0-r0/);
   assert.match(dockerfile, /bubblewrap=0\.11\.0-r2/);
   assert.match(dockerfile, /OPENBOARD_FFMPEG_PATH=\/usr\/bin\/ffmpeg/);
   assert.match(dockerfile, /OPENBOARD_FFPROBE_PATH=\/usr\/bin\/ffprobe/);
@@ -19,7 +19,7 @@ test("container pins distro media and PDF tools and exposes exact executable pat
   const notices = read("docs/THIRD_PARTY_NOTICES.md");
   assert.match(notices, /FFmpeg \| 8\.0\.1-r1/);
   assert.match(notices, /GPL-2\.0-or-later AND LGPL-2\.1-or-later/);
-  assert.match(notices, /Poppler utilities \| 25\.12\.0-r1/);
+  assert.match(notices, /Poppler utilities \| 25\.12\.0-r0/);
   assert.match(notices, /Bubblewrap \| 0\.11\.0-r2/);
   const sandbox = read("docker/pdf-sandbox.sh");
   assert.match(sandbox, /--unshare-all/);
