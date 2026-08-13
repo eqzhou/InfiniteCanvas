@@ -12,7 +12,10 @@
   --ob-accent-soft: #ccfbf1;
   --ob-danger: #b91c1c;
   --ob-warning: #a16207;
+  --ob-success: #15803d;
+  --ob-info: #1d4ed8;
   --ob-node: #ffffff;
+  --ob-surface-2: color-mix(in srgb, var(--ob-canvas) 55%, var(--ob-panel));
   --ob-shadow: 0 10px 30px rgba(28, 25, 23, 0.08);
   --ob-shadow-lg: 0 18px 40px rgba(28, 25, 23, 0.12);
   --ob-canvas: #ebe4d6;
@@ -44,7 +47,10 @@ html.dark {
   --ob-accent-soft: color-mix(in srgb, #134e4a 88%, #2dd4bf 12%);
   --ob-danger: #f87171;
   --ob-warning: #fbbf24;
+  --ob-success: #4ade80;
+  --ob-info: #7dd3fc;
   --ob-node: #292524;
+  --ob-surface-2: color-mix(in srgb, var(--ob-canvas) 65%, var(--ob-panel));
   --ob-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
   --ob-shadow-lg: 0 22px 48px rgba(0, 0, 0, 0.55);
   --ob-canvas: #141210;
@@ -63,7 +69,8 @@ html.dark .ob-btn-primary {
   font-weight: 600;
 }
 
-html.dark .ob-field {
+html.dark .ob-field,
+html.dark .ob-input {
   background: color-mix(in srgb, var(--ob-canvas) 70%, #000 30%);
 }
 
@@ -209,7 +216,8 @@ select:focus-visible,
   transform: translateY(-1px);
 }
 
-.ob-field {
+.ob-field,
+.ob-input {
   width: 100%;
   border: 1px solid var(--ob-line);
   border-radius: 0.625rem;
@@ -221,13 +229,22 @@ select:focus-visible,
     box-shadow var(--ob-duration) var(--ob-ease);
 }
 
-.ob-field:focus {
+/* Compact variant for dense inline grids (film panels, storage credentials) */
+.ob-input {
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8125rem;
+}
+
+.ob-field:focus,
+.ob-input:focus {
   border-color: var(--ob-accent);
   box-shadow: var(--ob-ring);
   outline: none;
 }
 
-.ob-field:disabled {
+.ob-field:disabled,
+.ob-input:disabled {
   opacity: 0.5;
 }
 
@@ -625,16 +642,64 @@ html.dark .ob-mobile-nav-overlay {
 }
 
 .ob-status-dot[data-status="succeeded"] {
-  background: #16a34a;
+  background: var(--ob-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ob-success) 18%, transparent);
 }
 
 .ob-status-dot[data-status="running"] {
-  background: #2563eb;
+  background: var(--ob-info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ob-info) 18%, transparent);
   animation: ob-pulse 1.4s ease-in-out infinite;
 }
 
 .ob-status-dot[data-status="failed"] {
   background: var(--ob-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ob-danger) 18%, transparent);
+}
+
+.ob-status-dot[data-status="pending"] {
+  background: var(--ob-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ob-warning) 18%, transparent);
+}
+
+/* Tonal status pill — dot + label, used across admin tables and lists */
+.ob-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 85%, transparent);
+  background: color-mix(in srgb, var(--ob-canvas) 70%, transparent);
+  padding: 0.15rem 0.5rem 0.15rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 550;
+  line-height: 1.5;
+  color: var(--ob-muted);
+  white-space: nowrap;
+}
+
+.ob-status-chip[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--ob-success) 32%, transparent);
+  background: color-mix(in srgb, var(--ob-success) 10%, transparent);
+  color: color-mix(in srgb, var(--ob-success) 82%, var(--ob-ink));
+}
+
+.ob-status-chip[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--ob-danger) 32%, transparent);
+  background: color-mix(in srgb, var(--ob-danger) 10%, transparent);
+  color: color-mix(in srgb, var(--ob-danger) 85%, var(--ob-ink));
+}
+
+.ob-status-chip[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--ob-warning) 34%, transparent);
+  background: color-mix(in srgb, var(--ob-warning) 12%, transparent);
+  color: color-mix(in srgb, var(--ob-warning) 82%, var(--ob-ink));
+}
+
+.ob-status-chip[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--ob-accent) 32%, transparent);
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
 }
 
 /* Dialog / Modal overlay */
@@ -885,6 +950,55 @@ html.dark .ob-overlay-canvas {
   border-bottom-color: color-mix(in srgb, var(--ob-warning) 45%, var(--ob-line));
   background: color-mix(in srgb, var(--ob-warning) 10%, var(--ob-panel));
   color: var(--ob-warning);
+}
+
+.ob-banner[data-tone="success"] {
+  border-bottom-color: color-mix(in srgb, var(--ob-success) 45%, var(--ob-line));
+  background: color-mix(in srgb, var(--ob-success) 9%, var(--ob-panel));
+  color: color-mix(in srgb, var(--ob-success) 88%, var(--ob-ink));
+}
+
+/* Standalone (non-edge-to-edge) inline notice — rounded, sits inside cards */
+.ob-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border: 1px solid var(--ob-line);
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--ob-canvas) 60%, transparent);
+  padding: 0.5rem 0.7rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ob-muted);
+}
+
+.ob-notice > svg {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.ob-notice[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--ob-success) 30%, transparent);
+  background: color-mix(in srgb, var(--ob-success) 9%, transparent);
+  color: color-mix(in srgb, var(--ob-success) 85%, var(--ob-ink));
+}
+
+.ob-notice[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--ob-danger) 30%, transparent);
+  background: color-mix(in srgb, var(--ob-danger) 8%, transparent);
+  color: var(--ob-danger);
+}
+
+.ob-notice[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--ob-warning) 32%, transparent);
+  background: color-mix(in srgb, var(--ob-warning) 10%, transparent);
+  color: color-mix(in srgb, var(--ob-warning) 85%, var(--ob-ink));
+}
+
+.ob-notice[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--ob-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--ob-accent) 7%, transparent);
+  color: var(--ob-accent);
 }
 
 .ob-banner-close {
@@ -1445,6 +1559,534 @@ html.dark .ob-overlay-canvas {
   font-size: 0.75rem;
   color: var(--ob-muted);
   margin-top: 0.1rem;
+}
+
+.ob-settings-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Admin console primitives
+   Editorial treatment on warm paper: hairline rules, an accent rail on every
+   section head, uppercase micro-labels, and figures set in tabular numerals.
+   --------------------------------------------------------------------------- */
+
+.ob-admin-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.ob-admin-section {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 88%, transparent);
+  border-radius: var(--ob-radius-lg);
+  background:
+    radial-gradient(ellipse 60% 40% at 0% 0%, var(--ob-glow), transparent 68%),
+    color-mix(in srgb, var(--ob-panel) 94%, transparent);
+  padding: 1.15rem 1.25rem 1.25rem;
+  box-shadow: var(--ob-elev-1);
+}
+
+.ob-admin-section::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--ob-accent), transparent 78%);
+  opacity: 0.55;
+}
+
+.ob-admin-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+
+.ob-admin-section-icon {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  flex-shrink: 0;
+  border-radius: 0.6rem;
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ob-accent) 18%, transparent);
+}
+
+.ob-admin-section-icon[data-tone="danger"] {
+  background: color-mix(in srgb, var(--ob-danger) 10%, transparent);
+  color: var(--ob-danger);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ob-danger) 22%, transparent);
+}
+
+.ob-admin-section-heading {
+  min-width: 0;
+}
+
+.ob-admin-section-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ob-ink);
+}
+
+.ob-admin-section-desc {
+  margin: 0.2rem 0 0;
+  max-width: 46rem;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--ob-muted);
+}
+
+.ob-admin-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+/* Uppercase micro-label above a control cluster or figure */
+.ob-micro-label {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ob-muted);
+}
+
+/* Metric figures — the data layer of the admin design system */
+.ob-metric-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+}
+
+.ob-metric {
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 75%, transparent);
+  border-radius: var(--ob-radius);
+  background: color-mix(in srgb, var(--ob-canvas) 60%, transparent);
+  padding: 0.7rem 0.85rem 0.75rem;
+}
+
+.ob-metric-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ob-muted);
+}
+
+.ob-metric-value {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+  font-size: 1.5rem;
+  font-weight: 620;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ob-ink);
+}
+
+.ob-metric-unit {
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ob-muted);
+}
+
+.ob-metric-hint {
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--ob-muted);
+}
+
+.ob-metric[data-tone="accent"] {
+  border-color: color-mix(in srgb, var(--ob-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--ob-accent) 7%, transparent);
+}
+
+.ob-metric[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--ob-warning) 32%, transparent);
+  background: color-mix(in srgb, var(--ob-warning) 9%, transparent);
+}
+
+/* Meter bar for quota-style ratios */
+.ob-meter {
+  height: 0.3rem;
+  margin-top: 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ob-ink) 8%, transparent);
+  overflow: hidden;
+}
+
+.ob-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--ob-accent), color-mix(in srgb, var(--ob-accent) 55%, var(--ob-select)));
+  transition: width var(--ob-duration) var(--ob-ease);
+}
+
+.ob-meter-fill[data-tone="warning"] {
+  background: linear-gradient(to right, var(--ob-warning), color-mix(in srgb, var(--ob-warning) 70%, var(--ob-danger)));
+}
+
+.ob-meter-fill[data-tone="danger"] {
+  background: linear-gradient(to right, var(--ob-danger), color-mix(in srgb, var(--ob-danger) 70%, #000));
+}
+
+/* Data tables */
+.ob-table-shell {
+  overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 80%, transparent);
+  border-radius: var(--ob-radius);
+  background: color-mix(in srgb, var(--ob-panel) 88%, transparent);
+}
+
+.ob-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.8125rem;
+}
+
+.ob-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.55rem 0.75rem;
+  background: color-mix(in srgb, var(--ob-canvas) 78%, var(--ob-panel));
+  border-bottom: 1px solid var(--ob-line);
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ob-muted);
+  white-space: nowrap;
+}
+
+.ob-table tbody td {
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid color-mix(in srgb, var(--ob-line) 55%, transparent);
+  vertical-align: middle;
+}
+
+.ob-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+.ob-table tbody tr {
+  transition: background-color var(--ob-duration) var(--ob-ease);
+}
+
+.ob-table tbody tr:hover {
+  background: color-mix(in srgb, var(--ob-accent) 5%, transparent);
+}
+
+.ob-table [data-numeric="true"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Signed numeric delta */
+.ob-delta {
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+}
+
+.ob-delta[data-sign="up"] {
+  color: color-mix(in srgb, var(--ob-success) 88%, var(--ob-ink));
+}
+
+.ob-delta[data-sign="down"] {
+  color: var(--ob-danger);
+}
+
+/* Inline rounded notice — distinct from the full-width .ob-banner strip */
+.ob-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 85%, transparent);
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--ob-canvas) 60%, transparent);
+  padding: 0.5rem 0.7rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ob-muted);
+}
+
+.ob-notice-icon {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.ob-notice[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--ob-success) 34%, transparent);
+  background: color-mix(in srgb, var(--ob-success) 9%, transparent);
+  color: color-mix(in srgb, var(--ob-success) 85%, var(--ob-ink));
+}
+
+.ob-notice[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--ob-danger) 34%, transparent);
+  background: color-mix(in srgb, var(--ob-danger) 8%, transparent);
+  color: var(--ob-danger);
+}
+
+.ob-notice[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--ob-warning) 36%, transparent);
+  background: color-mix(in srgb, var(--ob-warning) 10%, transparent);
+  color: color-mix(in srgb, var(--ob-warning) 88%, var(--ob-ink));
+}
+
+.ob-notice[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--ob-accent) 30%, transparent);
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+}
+
+/* Repeatable editable record (channel, provider, prompt source) */
+.ob-record {
+  border: 1px solid color-mix(in srgb, var(--ob-line) 80%, transparent);
+  border-radius: var(--ob-radius);
+  background: color-mix(in srgb, var(--ob-panel) 90%, transparent);
+  padding: 0.9rem;
+  transition:
+    border-color var(--ob-duration) var(--ob-ease),
+    box-shadow var(--ob-duration) var(--ob-ease);
+}
+
+.ob-record:focus-within {
+  border-color: color-mix(in srgb, var(--ob-accent) 45%, var(--ob-line));
+  box-shadow: var(--ob-elev-1);
+}
+
+.ob-record-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+}
+
+.ob-record-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ob-ink);
+}
+
+/* Action row that separates destructive actions from the rest */
+.ob-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid color-mix(in srgb, var(--ob-line) 55%, transparent);
+}
+
+.ob-record-actions-end {
+  margin-left: auto;
+}
+
+/* Labelled cluster of related fields inside a record — hairline separates it from the cluster above */
+.ob-field-group {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid color-mix(in srgb, var(--ob-line) 45%, transparent);
+}
+
+.ob-field-group:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+/* Switch + caption row that reads as one control */
+.ob-toggle-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.35rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 75%, transparent);
+  border-radius: var(--ob-radius);
+  background: color-mix(in srgb, var(--ob-canvas) 70%, transparent);
+  font-size: 0.8125rem;
+  color: var(--ob-ink);
+  cursor: pointer;
+  transition:
+    border-color var(--ob-duration) var(--ob-ease),
+    background var(--ob-duration) var(--ob-ease);
+}
+
+.ob-toggle-field:hover {
+  border-color: color-mix(in srgb, var(--ob-accent) 35%, var(--ob-line));
+}
+
+.ob-toggle-field:has(.ob-switch[data-checked="true"]) {
+  border-color: color-mix(in srgb, var(--ob-accent) 45%, var(--ob-line));
+  background: var(--ob-accent-soft);
+}
+
+/* Nested surface one level inside a record (capability editor, diff review) */
+.ob-subpanel {
+  border: 1px dashed color-mix(in srgb, var(--ob-line) 90%, transparent);
+  border-radius: var(--ob-radius);
+  background: color-mix(in srgb, var(--ob-surface-2) 60%, transparent);
+  padding: 0.85rem;
+}
+
+.ob-subpanel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+}
+
+.ob-subpanel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ob-ink);
+}
+
+.ob-subpanel-hint {
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--ob-muted);
+}
+
+/* One media capability: solid card so it reads apart from the dashed shell */
+.ob-capability {
+  display: grid;
+  gap: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 70%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--ob-accent) 40%, transparent);
+  border-radius: var(--ob-radius);
+  background: var(--ob-panel);
+  padding: 0.7rem 0.8rem;
+}
+
+/* Checkbox cluster rendered as selectable chips */
+.ob-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ob-check-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 75%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ob-canvas) 70%, transparent);
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--ob-muted);
+  cursor: pointer;
+  transition:
+    border-color var(--ob-duration) var(--ob-ease),
+    background var(--ob-duration) var(--ob-ease),
+    color var(--ob-duration) var(--ob-ease);
+}
+
+.ob-check-chip:hover {
+  color: var(--ob-ink);
+  border-color: color-mix(in srgb, var(--ob-accent) 35%, var(--ob-line));
+}
+
+.ob-check-chip:has(input:checked) {
+  border-color: color-mix(in srgb, var(--ob-accent) 50%, var(--ob-line));
+  background: var(--ob-accent-soft);
+  color: var(--ob-accent);
+  font-weight: 500;
+}
+
+.ob-check-chip:has(input:focus-visible) {
+  box-shadow: var(--ob-ring);
+}
+
+/* Pending-decision surface: accent wash signals "awaiting your confirmation" */
+.ob-review {
+  border: 1px solid color-mix(in srgb, var(--ob-accent) 35%, var(--ob-line));
+  border-radius: var(--ob-radius);
+  background:
+    radial-gradient(ellipse 70% 50% at 100% 0%, var(--ob-glow), transparent 70%),
+    color-mix(in srgb, var(--ob-panel) 92%, transparent);
+  padding: 0.85rem;
+  box-shadow: var(--ob-elev-1);
+}
+
+/* Collapsible help body under a section header */
+.ob-help-body {
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--ob-muted);
+  max-width: 46rem;
+}
+
+@media (max-width: 640px) {
+  .ob-settings-section {
+    padding: 0.9rem;
+    border-radius: 0.85rem;
+  }
+
+  .ob-settings-section-header {
+    align-items: flex-start;
+    margin-bottom: 0.85rem;
+  }
+
+  .ob-settings-section-icon {
+    width: 1.8rem;
+    height: 1.8rem;
+  }
+
+  .ob-settings-tabbar-item {
+    min-height: 2.2rem;
+  }
+
+  .ob-admin-section {
+    padding: 1rem;
+  }
+
+  .ob-admin-section-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .ob-record {
+    padding: 0.8rem;
+  }
+
+  .ob-metric-value {
+    font-size: 1.3rem;
+  }
+
+  .ob-record-actions-end {
+    margin-left: 0;
+  }
 }
 
 /* Agent panel entrance animation */

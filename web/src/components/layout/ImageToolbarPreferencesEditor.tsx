@@ -75,7 +75,7 @@ export function ImageToolbarPreferencesEditor({
             <span className="min-w-0 flex-1 truncate text-sm">{t(labelKeys[action])}</span>
             <button
               type="button"
-              className="ob-icon-btn h-7 w-7"
+              className="ob-icon-btn h-7 w-7 transition-colors duration-200"
               aria-label={t("toolbar.moveUp", { label: t(labelKeys[action]) })}
               disabled={index === 0}
               onClick={() => onChange(move(preferences, action, -1))}

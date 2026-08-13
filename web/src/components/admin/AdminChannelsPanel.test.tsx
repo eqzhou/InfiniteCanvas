@@ -99,4 +99,23 @@ describe("AdminChannelModelDiffReview", () => {
     expect(html).toContain("添加能力");
     expect(html).not.toContain("apiKey");
   });
+
+  test("keeps a saved capability model selectable after the model list changes", () => {
+    const html = renderToStaticMarkup(
+      <AdminMediaCapabilityEditor
+        models={["current-model"]}
+        capabilities={[{
+          model: "retired-model",
+          kind: "image",
+          modes: ["text_to_image"],
+          sizes: [],
+          durations: [],
+          maxReferences: 0,
+        }]}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain(">retired-model</option>");
+  });
 });

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { filterAdminPrompts, retainVisibleSelection, syncRunSummary } from "./AdminPromptCatalogPanel";
+import { filterAdminPrompts, normalizePromptSourceInterval, retainVisibleSelection, syncRunSummary } from "./AdminPromptCatalogPanel";
 
 describe("AdminPromptCatalogPanel", () => {
+  test("clamps invalid source intervals to the server-supported range", () => {
+    expect(normalizePromptSourceInterval(Number.NaN)).toBe(30);
+    expect(normalizePromptSourceInterval(1)).toBe(5);
+    expect(normalizePromptSourceInterval(15.6)).toBe(16);
+    expect(normalizePromptSourceInterval(20000)).toBe(10080);
+  });
+
   test("shows persisted sync status and bounded safe error text", () => {
     expect(syncRunSummary({ sourceId: "source-1", status: "failed", itemCount: 0, error: "prompt source request failed" }))
       .toBe("source-1 · failed · 0 · prompt source request failed");

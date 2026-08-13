@@ -32,6 +32,7 @@ import type { MessageKey } from "@/i18n/core";
 import { listAllGenerationJobs } from "@/services/generation-jobs";
 import { loadPersonalWorkflowTemplates } from "@/services/workflow-templates";
 import { ImageToolbarPreferencesEditor } from "@/components/layout/ImageToolbarPreferencesEditor";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import {
   imageQualityOptionsFor,
   normalizeImageQualityForProvider,
@@ -112,6 +113,11 @@ const SITE_POLICY_SECTION: SettingsSectionDefinition = Object.freeze({
   icon: ShieldCheck,
 });
 
+type SettingsFeedback = {
+  tone: "success" | "danger";
+  message: string;
+};
+
 export function settingsSectionsFor(canManageSitePolicy: boolean): readonly SettingsSectionDefinition[] {
   if (!canManageSitePolicy) return [...MEMBER_SETTINGS_SECTIONS];
   return [
@@ -139,12 +145,52 @@ export function UsageOverview({ snapshot, onRefresh }: { snapshot: UsageSnapshot
   if (!snapshot) {
     return <div className="rounded-xl border border-[var(--ob-line)] p-4"><p className="text-sm text-[var(--ob-muted)]">{t("settings.usageUnavailable")}</p><button type="button" className="ob-btn mt-3" onClick={onRefresh}><RefreshCw size={14} /> {t("settings.retry")}</button></div>;
   }
+  const quotaRatio = snapshot.generationQuotaMonthly > 0
+    ? Math.min(1, snapshot.generationThisMonth / snapshot.generationQuotaMonthly)
+    : snapshot.generationThisMonth > 0 ? 1 : 0;
+  const storageRatio = snapshot.storageQuotaBytes > 0
+    ? Math.min(1, snapshot.storageBytes / snapshot.storageQuotaBytes)
+    : null;
   const cards = [
-    { label: t("settings.teamQuota"), value: `${snapshot.generationThisMonth} / ${snapshot.generationQuotaMonthly}`, note: t("settings.teamQuotaNote") },
-    { label: t("settings.personalCredits"), value: String(snapshot.credits ?? 0), note: t("settings.personalCreditsNote") },
-    { label: t("settings.serverStorage"), value: `${formatUsageBytes(snapshot.storageBytes)} / ${formatUsageBytes(snapshot.storageQuotaBytes)}`, note: t("settings.serverStorageNote") },
-  ];
-  return <div><div className="grid gap-3 md:grid-cols-3">{cards.map((card) => <div key={card.label} className="rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-3"><p className="text-xs text-[var(--ob-muted)]">{card.label}</p><p className="mt-1 text-lg font-semibold tabular-nums">{card.value}</p><p className="mt-1 text-xs text-[var(--ob-muted)]">{card.note}</p></div>)}</div><div className="mt-3 flex flex-wrap items-center gap-2"><span className="ob-chip">{t("settings.plan", { plan: snapshot.plan || "free" })}</span><button type="button" className="ob-btn" onClick={onRefresh}><RefreshCw size={14} /> {t("settings.refreshUsage")}</button></div><p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.usageExplanation")}</p></div>;
+    {
+      label: t("settings.teamQuota"),
+      value: `${snapshot.generationThisMonth} / ${snapshot.generationQuotaMonthly}`,
+      note: t("settings.teamQuotaNote"),
+      ratio: quotaRatio,
+      tone: quotaRatio >= 1 ? "warning" : "accent",
+    },
+    { label: t("settings.personalCredits"), value: String(snapshot.credits ?? 0), note: t("settings.personalCreditsNote"), ratio: null, tone: undefined },
+    {
+      label: t("settings.serverStorage"),
+      value: `${formatUsageBytes(snapshot.storageBytes)} / ${formatUsageBytes(snapshot.storageQuotaBytes)}`,
+      note: t("settings.serverStorageNote"),
+      ratio: storageRatio,
+      tone: storageRatio !== null && storageRatio >= 0.9 ? "warning" : "accent",
+    },
+  ] as const;
+  return (
+    <div>
+      <div className="ob-metric-grid">
+        {cards.map((card) => (
+          <div key={card.label} className="ob-metric" data-tone={card.tone}>
+            <span className="ob-metric-label">{card.label}</span>
+            <span className="ob-metric-value">{card.value}</span>
+            <p className="ob-metric-hint">{card.note}</p>
+            {card.ratio !== null ? (
+              <div className="ob-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(card.ratio * 100)} aria-label={card.label}>
+                <div className="ob-meter-fill" data-tone={card.ratio >= 1 ? "warning" : undefined} style={{ width: `${Math.max(card.ratio * 100, card.ratio > 0 ? 2 : 0)}%` }} />
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="ob-chip">{t("settings.plan", { plan: snapshot.plan || "free" })}</span>
+        <button type="button" className="ob-btn" onClick={onRefresh}><RefreshCw size={14} /> {t("settings.refreshUsage")}</button>
+      </div>
+      <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.usageExplanation")}</p>
+    </div>
+  );
 }
 
 export function settingsScrollTarget(
@@ -176,6 +222,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [busyKind, setBusyKind] = useState<AiProviderKind | null>(null);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<SettingsFeedback | null>(null);
   const auth = useOptionalAuth();
   const canManageSitePolicy = canManageAdmin(auth);
   const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
@@ -187,6 +234,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     [canManageSitePolicy],
   );
   const [activeSection, setActiveSection] = useState("interface");
+  const [restoreWorkspacePending, setRestoreWorkspacePending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const mobileNavigationRef = useRef<HTMLElement>(null);
 
@@ -308,6 +356,21 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         setError(cause instanceof Error ? cause.message : t("settings.configSaveFailed"));
       });
   }, [closing, flushConfig, onClose, t]);
+
+  const restoreWorkspace = () => {
+    setRestoreWorkspacePending(false);
+    setFeedback(null);
+    void (async () => {
+      try {
+        const state = useBoardStore.getState();
+        const blob = await webdavGetBlob(state.config, "openboard-workspace.obundle");
+        await importCompleteWorkspaceBundle(blob, state.config);
+        setFeedback({ tone: "success", message: t("settings.restoreWorkspaceSuccess") });
+      } catch (cause) {
+        setFeedback({ tone: "danger", message: cause instanceof Error ? cause.message : String(cause) });
+      }
+    })();
+  };
   useEscapeDismiss(open, requestClose);
 
   const scrollToSection = (id: string) => {
@@ -433,7 +496,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="ob-dialog ob-surface-glass flex w-full max-w-5xl flex-col overflow-hidden shadow-[var(--ob-elev-2)]"
+        className="ob-dialog ob-surface-glass flex w-full max-w-5xl flex-col overflow-hidden shadow-[var(--ob-elev-2)] transition-all duration-300 ease-out"
       >
         <header className="flex min-h-16 items-center gap-4 border-b border-[var(--ob-line)] px-4 sm:px-6">
           <div>
@@ -441,11 +504,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <h2 id="settings-title" className="text-lg font-semibold tracking-tight">{t("settings.title")}</h2>
             <p className="text-xs text-[var(--ob-muted)]">{t("settings.subtitle")}</p>
           </div>
+          <span className="ob-status-chip hidden sm:inline-flex" data-tone="info">{t("settings.autoSave")}</span>
           <button
             type="button"
             aria-label={t("settings.close")}
             title={t("settings.close")}
-            className="ob-icon-btn ml-auto"
+            className="ob-icon-btn ml-auto transition-colors duration-200"
             disabled={closing}
             onClick={requestClose}
           >
@@ -461,7 +525,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               <button
                 key={s.id}
                 type="button"
-                className="ob-settings-tabbar-item"
+                className="ob-settings-tabbar-item hover:bg-[var(--ob-panel)] active:bg-[var(--ob-surface-2)] transition-colors duration-200"
                 data-active={activeSection === s.id}
                 data-section-nav-id={s.id}
                 aria-current={activeSection === s.id ? "location" : undefined}
@@ -588,7 +652,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 type="button"
                 aria-label={t("settings.addChannel")}
                 title={personalChannelEditable ? t("settings.addChannel") : t("settings.customChannelsDisabled")}
-                className="ob-icon-btn mt-5"
+                className="ob-icon-btn mt-5 transition-colors duration-200"
                 disabled={!personalChannelEditable}
                 onClick={() => {
                   if (!personalChannelEditable) {
@@ -638,7 +702,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               ) : null}
               <div className="overflow-hidden rounded-xl border border-[var(--ob-line)] shadow-[var(--ob-elev-1)]">
               <div className="hidden grid-cols-[110px_140px_minmax(180px,1.3fr)_minmax(140px,0.9fr)_minmax(150px,1fr)_44px] gap-2 border-b border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_80%,var(--ob-panel))] px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-[var(--ob-muted)] md:grid">
-                <span>{t("settings.capability")}</span><span>{t("settings.protocol")}</span><span>{t("settings.serviceUrl")}</span><span>API Key</span><span>{t("settings.model")}</span><span />
+                <span>{t("settings.capability")}</span><span>{t("settings.protocol")}</span><span>{t("settings.serviceUrl")}</span><span>{t("settings.apiKey")}</span><span>{t("settings.model")}</span><span />
               </div>
               {PROVIDER_KINDS.map((kind) => (
                 <ProviderRow
@@ -766,7 +830,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 <p className="text-xs text-[var(--ob-muted)]">{t("settings.loadingPolicy")}</p>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-3">
-                  <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+                  <div
+                    className="ob-toggle-field"
+                    onClick={(event) => {
+                      if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
+                      void toggleSitePolicy("allowRegister");
+                    }}
+                  >
                     <button
                       type="button"
                       role="switch"
@@ -778,8 +848,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       onClick={() => void toggleSitePolicy("allowRegister")}
                     />
                     <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowRegistration")}</span>
-                  </label>
-                  <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+                  </div>
+                  <div
+                    className="ob-toggle-field"
+                    onClick={(event) => {
+                      if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
+                      void toggleSitePolicy("allowCustomChannel");
+                    }}
+                  >
                     <button
                       type="button"
                       role="switch"
@@ -791,8 +867,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       onClick={() => void toggleSitePolicy("allowCustomChannel")}
                     />
                     <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowCustomChannels")}</span>
-                  </label>
-                  <label className="flex items-center gap-2 rounded-xl border border-[var(--ob-line)] px-3 py-2">
+                  </div>
+                  <div
+                    className="ob-toggle-field"
+                    onClick={(event) => {
+                      if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
+                      void toggleSitePolicy("allowCloudChannel");
+                    }}
+                  >
                     <button
                       type="button"
                       role="switch"
@@ -804,7 +886,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       onClick={() => void toggleSitePolicy("allowCloudChannel")}
                     />
                     <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowCloudGeneration")}</span>
-                  </label>
+                  </div>
                 </div>
               )}
               {!sitePolicy.allowCustomChannel ? (
@@ -851,11 +933,19 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <p className="mb-3 text-xs text-[var(--ob-muted)]">
               {t("settings.objectStorageHint")}
             </p>
-            <div className="mb-3 flex items-center gap-2">
+            <div
+              className="ob-toggle-field mb-3"
+              onClick={(event) => {
+                if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
+                const current = normalizeObjectStorage(config.objectStorage);
+                setConfig({ ...config, objectStorage: { ...current, enabled: !current.enabled } });
+              }}
+            >
               <button
                 type="button"
                 role="switch"
                 aria-checked={Boolean(config.objectStorage?.enabled)}
+                aria-label={t("settings.enableObjectStorage")}
                 className="ob-switch"
                 data-checked={config.objectStorage?.enabled ? "true" : "false"}
                 onClick={() => {
@@ -863,10 +953,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   setConfig({ ...config, objectStorage: { ...current, enabled: !current.enabled } });
                 }}
               />
-              <span className="text-sm text-[var(--ob-muted)]">{t("settings.enableObjectStorage")}</span>
+              <span>{t("settings.enableObjectStorage")}</span>
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
-              <Field label="Endpoint">
+              <Field label={t("settings.endpoint")}>
                 <input
                   className="ob-field"
                   value={config.objectStorage?.endpoint ?? ""}
@@ -877,7 +967,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   })}
                 />
               </Field>
-              <Field label="Bucket">
+              <Field label={t("settings.bucket")}>
                 <input
                   className="ob-field"
                   value={config.objectStorage?.bucket ?? ""}
@@ -887,7 +977,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   })}
                 />
               </Field>
-              <Field label="Region">
+              <Field label={t("settings.region")}>
                 <input
                   className="ob-field"
                   value={config.objectStorage?.region ?? "auto"}
@@ -897,7 +987,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   })}
                 />
               </Field>
-              <Field label="Prefix">
+              <Field label={t("settings.prefix")}>
                 <input
                   className="ob-field"
                   value={config.objectStorage?.prefix ?? "openboard"}
@@ -907,7 +997,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   })}
                 />
               </Field>
-              <Field label="Access Key ID">
+              <Field label={t("settings.accessKeyId")}>
                 <input
                   className="ob-field"
                   name="openboard-object-storage-access-key-id"
@@ -919,7 +1009,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   })}
                 />
               </Field>
-              <Field label="Secret Access Key">
+              <Field label={t("settings.secretAccessKey")}>
                 <input
                   className="ob-field"
                   type="password"
@@ -1005,6 +1095,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     const file = event.target.files?.[0];
                     event.currentTarget.value = "";
                     if (!file) return;
+                    setFeedback(null);
                     void file.text().then(async (raw) => {
                       const state = useBoardStore.getState();
                       const previous = structuredClone(state.config);
@@ -1024,9 +1115,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         }
                         throw cause;
                       }
-                      alert(t("settings.importSuccess"));
+                      setFeedback({ tone: "success", message: t("settings.importSuccess") });
                     }).catch((cause) => {
-                      alert(cause instanceof Error ? cause.message : String(cause));
+                      setFeedback({ tone: "danger", message: cause instanceof Error ? cause.message : String(cause) });
                     });
                   }}
                 />
@@ -1042,7 +1133,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             </div>
             <div className="grid gap-3 lg:grid-cols-[1.4fr_0.7fr_0.7fr]">
-              <Field label="WebDAV URL">
+              <Field label={t("settings.webdavUrl")}>
                 <input className="ob-field" value={config.webdavUrl ?? ""} onChange={(e) => setConfig({ ...config, webdavUrl: e.target.value })} placeholder="https://example.com/dav/openboard" />
               </Field>
               <Field label={t("settings.username")}>
@@ -1057,6 +1148,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   type="button"
                   className="ob-btn"
                   onClick={() => {
+                    setFeedback(null);
                     void (async () => {
                       try {
                         const state = useBoardStore.getState();
@@ -1064,9 +1156,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                         if (!project) throw new Error(t("settings.canvasBackupMissing"));
                         const bundle = await exportCompleteProjectBundle(project);
                         await webdavPutBlob(state.config, "openboard-current.openboard", bundle);
-                        alert(t("settings.uploadCanvasSuccess"));
+                        setFeedback({ tone: "success", message: t("settings.uploadCanvasSuccess") });
                       } catch (e) {
-                        alert(e instanceof Error ? e.message : String(e));
+                        setFeedback({ tone: "danger", message: e instanceof Error ? e.message : String(e) });
                       }
                     })();
                   }}
@@ -1077,6 +1169,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   type="button"
                   className="ob-btn"
                   onClick={() => {
+                    setFeedback(null);
                     void (async () => {
                       try {
                         const state = useBoardStore.getState();
@@ -1089,9 +1182,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                           workflowTemplates: await loadPersonalWorkflowTemplates(),
                         });
                         await webdavPutBlob(state.config, "openboard-workspace.obundle", bundle);
-                        alert(t("settings.uploadWorkspaceSuccess"));
+                        setFeedback({ tone: "success", message: t("settings.uploadWorkspaceSuccess") });
                       } catch (e) {
-                        alert(e instanceof Error ? e.message : String(e));
+                        setFeedback({ tone: "danger", message: e instanceof Error ? e.message : String(e) });
                       }
                     })();
                   }}
@@ -1102,6 +1195,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   type="button"
                   className="ob-btn"
                   onClick={() => {
+                    setFeedback(null);
                     void (async () => {
                       try {
                         const state = useBoardStore.getState();
@@ -1110,9 +1204,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                           "openboard-current.openboard",
                         );
                         await importCompleteProjectBundle(blob);
-                        alert(t("settings.importCanvasSuccess"));
+                        setFeedback({ tone: "success", message: t("settings.importCanvasSuccess") });
                       } catch (e) {
-                        alert(e instanceof Error ? e.message : String(e));
+                        setFeedback({ tone: "danger", message: e instanceof Error ? e.message : String(e) });
                       }
                     })();
                   }}
@@ -1123,17 +1217,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   type="button"
                   className="ob-btn"
                   onClick={() => {
-                    void (async () => {
-                      try {
-                        if (!confirm(t("settings.confirmRestoreWorkspace"))) return;
-                        const state = useBoardStore.getState();
-                        const blob = await webdavGetBlob(state.config, "openboard-workspace.obundle");
-                        await importCompleteWorkspaceBundle(blob, state.config);
-                        alert(t("settings.restoreWorkspaceSuccess"));
-                      } catch (e) {
-                        alert(e instanceof Error ? e.message : String(e));
-                      }
-                    })();
+                    setRestoreWorkspacePending(true);
                   }}
                 >
                   <RotateCcw size={15} /> {t("settings.restoreWorkspace")}
@@ -1142,10 +1226,29 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </section>
 
           {error ? <p role="alert" className="mt-4 rounded-md bg-[color-mix(in_srgb,var(--ob-danger)_12%,transparent)] px-3 py-2 text-[var(--ob-danger)]">{error}</p> : null}
+          {feedback ? (
+            <p
+              role={feedback.tone === "danger" ? "alert" : "status"}
+              className={feedback.tone === "danger"
+                ? "mt-4 rounded-md bg-[color-mix(in_srgb,var(--ob-danger)_12%,transparent)] px-3 py-2 text-[var(--ob-danger)]"
+                : "mt-4 rounded-md bg-[color-mix(in_srgb,var(--ob-accent)_12%,transparent)] px-3 py-2 text-[var(--ob-ink)]"}
+            >
+              {feedback.message}
+            </p>
+          ) : null}
           <div className="mt-5 flex items-start gap-2 border-t border-[var(--ob-line)] pt-4 text-xs text-[var(--ob-muted)]">
             <ShieldCheck className="mt-0.5 shrink-0" size={15} />
             <p>{t("settings.securityHint")}</p>
           </div>
+          {restoreWorkspacePending ? (
+            <ConfirmDialog
+              title={t("settings.restoreWorkspace")}
+              message={t("settings.confirmRestoreWorkspace")}
+              confirmLabel={t("settings.restoreWorkspace")}
+              onCancel={() => setRestoreWorkspacePending(false)}
+              onConfirm={restoreWorkspace}
+            />
+          ) : null}
           </div>
         </div>
       </div>
@@ -1215,23 +1318,23 @@ function ProviderRow({
         <CompactField label={t("settings.serviceUrl")}>
           <input className="ob-field" aria-label={`${label} URL`} value={provider.baseUrl} disabled={disabled} onChange={(e) => onChange({ baseUrl: e.target.value })} placeholder={t("settings.serviceUrl")} />
         </CompactField>
-        <CompactField label="API Key">
+        <CompactField label={t("settings.apiKey")}>
           <input
             className="ob-field"
-            aria-label={`${label} API Key`}
+            aria-label={`${label} ${t("settings.apiKey")}`}
             name={`openboard-${kind}-api-key`}
             type="password"
             autoComplete="new-password"
             value={provider.apiKey}
             disabled={disabled || !requiresKey}
             onChange={(e) => onChange({ apiKey: e.target.value })}
-            placeholder={requiresKey ? "API Key" : t("settings.noApiKey")}
+            placeholder={requiresKey ? t("settings.apiKey") : t("settings.noApiKey")}
           />
         </CompactField>
         <CompactField label={t("settings.model")}>
           <input className="ob-field" aria-label={`${label} ${t("settings.model")}`} value={provider.model} disabled={disabled} onChange={(e) => onChange({ model: e.target.value })} placeholder={t("settings.modelName")} />
         </CompactField>
-        <button type="button" className="ob-icon-btn disabled:opacity-50" aria-label={t("settings.pullModels", { label })} title={canPullModels ? t("settings.pullModels", { label }) : t("settings.noModelList")} disabled={disabled || !canPullModels} onClick={onPull}>
+        <button type="button" className="ob-icon-btn disabled:opacity-50 transition-colors duration-200" aria-label={t("settings.pullModels", { label })} title={canPullModels ? t("settings.pullModels", { label }) : t("settings.noModelList")} disabled={disabled || !canPullModels} onClick={onPull}>
           <RefreshCw size={16} className={busy ? "animate-spin" : ""} />
         </button>
       </div>

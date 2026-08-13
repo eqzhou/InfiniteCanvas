@@ -10,6 +10,8 @@ import {
   storagePoolErrorMessage,
   storageDraftStatus,
   storageProbeLabel,
+  storageProbeTone,
+  storageCapacityTone,
 } from "./AdminStoragePoolPanel";
 import type { AdminStoragePoolProviderStatus } from "@/services/admin";
 import { AdminStoragePoolError } from "@/services/admin";
@@ -46,6 +48,14 @@ describe("admin storage pool provider forms", () => {
 });
 
 describe("admin storage pool status labels", () => {
+  test("keeps unknown and failed states visually distinct from healthy", () => {
+    expect(storageProbeTone(status())).toBe("info");
+    expect(storageProbeTone(status({ probeKnown: true, probeHealthy: true }))).toBe("success");
+    expect(storageProbeTone(status({ probeKnown: true, probeHealthy: false }))).toBe("danger");
+    expect(storageCapacityTone(status())).toBe("info");
+    expect(storageCapacityTone(status({ capacityKnown: true, totalBytes: 1024, availableBytes: 512 }))).toBe("success");
+  });
+
   test("does not present unknown probes or capacity as healthy/empty", () => {
     expect(storageProbeLabel(status())).toBe("未知（权限中立）");
     expect(storageCapacityLabel(status())).toBe("未知（提供商未暴露）");

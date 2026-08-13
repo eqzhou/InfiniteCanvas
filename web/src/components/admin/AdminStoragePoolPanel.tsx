@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { HardDrive, KeyRound, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
 import {
   deleteAdminStoragePoolProvider, getAdminStoragePoolStatus, putAdminStoragePool, putAdminStoragePoolSecret,
   AdminStoragePoolError, type AdminStoragePoolErrorCode, type AdminStoragePoolProviderInput, type AdminStoragePoolProviderStatus,
 } from "@/services/admin";
 import { useI18n } from "@/i18n/I18nProvider";
 import { translate, type AppLocale } from "@/i18n/core";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { EmptyState, Notice, SectionHeader } from "@/components/admin/AdminSection";
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -23,6 +25,15 @@ export function storageProbeLabel(status: AdminStoragePoolProviderStatus, locale
 export function storageCapacityLabel(status: AdminStoragePoolProviderStatus, locale: AppLocale = "zh-CN"): string {
   if (!status.capacityKnown || status.totalBytes === undefined || status.availableBytes === undefined) return translate(locale, "admin.storage.capacityUnknown");
   return translate(locale, "admin.storage.capacity", { available: formatBytes(status.availableBytes), total: formatBytes(status.totalBytes) });
+}
+
+export function storageProbeTone(status: AdminStoragePoolProviderStatus): "success" | "danger" | "info" {
+  if (!status.probeKnown) return "info";
+  return status.probeHealthy ? "success" : "danger";
+}
+
+export function storageCapacityTone(status: AdminStoragePoolProviderStatus): "success" | "info" {
+  return status.capacityKnown ? "success" : "info";
 }
 
 const storagePoolErrorKeys: Record<AdminStoragePoolErrorCode, keyof typeof import("@/i18n/messages/admin").adminZhCN> = {
@@ -103,6 +114,7 @@ export function AdminStoragePoolPanel() {
   const [sessionToken, setSessionToken] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<StorageProviderDraft | null>(null);
   const resetCredentials = () => {
     const blank = blankStorageCredentials();
     setAccessKeyId(blank.accessKeyId); setSecretAccessKey(blank.secretAccessKey); setSessionToken(blank.sessionToken);
@@ -128,10 +140,21 @@ export function AdminStoragePoolPanel() {
   const remove = async (draft: StorageProviderDraft) => {
     const id = storageDeleteTarget(draft);
     if (!id) { setDrafts((current) => current.filter((item) => item.clientKey !== draft.clientKey)); return; }
-    if (!window.confirm(t("admin.storage.confirmDelete", { id }))) return;
+    setPendingDelete(null);
     setLoading(true);
-    try { setRevision(await deleteAdminStoragePoolProvider(id, revision)); await load(); }
+    try {
+      if (secretFor === id) closeCredentialEditor();
+      setRevision(await deleteAdminStoragePoolProvider(id, revision));
+      await load();
+    }
     catch (cause) { setError(storagePoolErrorMessage(cause, locale)); setLoading(false); }
+  };
+  const requestRemove = (draft: StorageProviderDraft) => {
+    if (!storageDeleteTarget(draft)) {
+      setDrafts((current) => current.filter((item) => item.clientKey !== draft.clientKey));
+      return;
+    }
+    setPendingDelete(draft);
   };
   const saveSecret = async () => {
     setLoading(true);
@@ -144,30 +167,189 @@ export function AdminStoragePoolPanel() {
     catch (cause) { setError(storagePoolErrorMessage(cause, locale)); setLoading(false); }
   };
 
-  return <section className="space-y-4" aria-labelledby="storage-pool-title">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h2 id="storage-pool-title" className="text-lg font-semibold">{t("admin.storage.title")}</h2><p className="text-sm text-[var(--ob-muted)]">{t("admin.storage.description")}</p></div>
-      <div className="flex flex-wrap gap-2"><button type="button" className="ob-btn" disabled={loading || !loaded} onClick={() => setDrafts((current) => [...current, newStorageProviderDraft(crypto.randomUUID())])}><Plus size={15} />{t("admin.storage.new")}</button><button type="button" className="ob-btn ob-btn-primary" disabled={loading || !loaded} onClick={() => void save()}><Save size={15} />{t("admin.storage.save")}</button><button type="button" className="ob-btn" disabled={loading} onClick={() => void load()}><RefreshCw size={15} className={loading ? "animate-spin" : ""} />{loaded ? t("common.refresh") : t("admin.channels.reload")}</button></div>
-    </div>
-    {error ? <p role="alert" className="text-sm text-[var(--ob-danger)]">{error}</p> : null}
-    {!loading && loaded && !webdavEnabled ? <p className="text-sm text-[var(--ob-muted)]">{t("admin.storage.webdavDisabled")}</p> : null}
-    {!loading && loaded && drafts.length === 0 ? <div className="ob-surface p-5 text-sm text-[var(--ob-muted)]">{t("admin.storage.empty")}</div> : null}
-    {items.some((item) => item.endpoint === undefined) ? <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{items.filter((item) => item.endpoint === undefined).map((item) => <article key={item.id} className="ob-surface space-y-2 p-4"><div className="flex justify-between gap-3"><div><h3 className="font-medium">{item.id}</h3><p className="text-xs text-[var(--ob-muted)]">{t("admin.storage.fallback", { kind: item.kind })}</p></div><span className="text-xs">{t("admin.storage.weight")} {item.weight}</span></div><p className="text-sm">{storageProbeLabel(item, locale)} · {storageCapacityLabel(item, locale)}</p></article>)}</div> : null}
-    <div className="space-y-3">
-      {drafts.map((draft) => { const item = draft.value; const status = storageDraftStatus(draft, items); return <article key={draft.clientKey} className="ob-surface space-y-3 p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <label className="text-sm">{t("admin.storage.stableId")}<input className="ob-input mt-1 w-full" value={item.id} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { id: event.target.value })} /></label>
-          <label className="text-sm">{t("admin.storage.kind")}<select className="ob-input mt-1 w-full" value={item.kind ?? "s3"} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { kind: event.target.value === "webdav" ? "webdav" : "s3", bucket: "", region: event.target.value === "webdav" ? "" : "auto", allowPrivate: false })}><option value="s3">S3 / R2</option><option value="webdav" disabled={!webdavEnabled}>{t("admin.storage.webdav")}</option></select></label>
-          <label className="text-sm xl:col-span-2">{item.kind === "webdav" ? t("admin.storage.webdavEndpoint") : t("admin.storage.s3Endpoint")}<input className="ob-input mt-1 w-full" value={item.endpoint} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { endpoint: event.target.value })} /></label>
-          {item.kind !== "webdav" ? <><label className="text-sm">{t("admin.storage.bucket")}<input className="ob-input mt-1 w-full" value={item.bucket} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { bucket: event.target.value })} /></label>
-          <label className="text-sm">{t("admin.storage.region")}<input className="ob-input mt-1 w-full" value={item.region} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { region: event.target.value })} /></label></> : null}
-          <label className="text-sm">{t("admin.storage.prefix")}<input className="ob-input mt-1 w-full" value={item.prefix} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { prefix: event.target.value })} /></label>
-          <label className="text-sm">{t("admin.storage.weight")}<input className="ob-input mt-1 w-full" type="number" min={0} max={10000} value={item.weight} onChange={(event) => update(draft.clientKey, { weight: Number(event.target.value) })} /></label>
-          <div className="flex flex-wrap items-end gap-4 pb-2 text-sm"><label className="flex min-h-6 items-center gap-2"><input type="checkbox" checked={item.healthy} onChange={(event) => update(draft.clientKey, { healthy: event.target.checked })} />{t("admin.storage.newWrites")}</label><label className="flex min-h-6 items-center gap-2"><input type="checkbox" checked={item.allowInsecureLoopback} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { allowInsecureLoopback: event.target.checked })} />{t("admin.storage.loopback")}</label>{item.kind === "webdav" ? <label className="flex min-h-6 items-center gap-2"><input type="checkbox" checked={item.allowPrivate ?? false} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { allowPrivate: event.target.checked })} />{t("admin.storage.privateHttps")}</label> : null}</div>
+  const credentialDraft = drafts.find((draft) => draft.persistedId === secretFor);
+  const credentialKind = storageCredentialKind(credentialDraft?.value.kind ?? "s3");
+  const credentialReady = credentialKind === "username-password"
+    ? Boolean(username.trim() && password)
+    : Boolean(accessKeyId.trim() && secretAccessKey);
+  const fallbackItems = items.filter((item) => item.endpoint === undefined);
+
+  return (
+    <div className="ob-admin-stack" aria-busy={loading}>
+      <section className="ob-admin-section">
+        <SectionHeader
+          icon={<HardDrive size={16} />}
+          title={t("admin.storage.title")}
+          desc={t("admin.storage.description")}
+          actions={(
+            <>
+              <span className="ob-micro-label">{t("admin.storage.count", { count: drafts.length })}</span>
+              <button type="button" className="ob-btn ob-btn-ghost ob-btn-sm" disabled={loading || !loaded} onClick={() => void load()}>
+                <RefreshCw size={14} className={loading ? "animate-spin" : ""} aria-hidden />
+                {t("common.refresh")}
+              </button>
+            </>
+          )}
+        />
+
+        <div className="space-y-3">
+          {error ? <Notice tone="danger">{error}</Notice> : null}
+          {!loading && loaded && !webdavEnabled ? <Notice tone="warning">{t("admin.storage.webdavDisabled")}</Notice> : null}
+          {fallbackItems.length ? (
+            <div className="ob-subpanel">
+              <div className="ob-subpanel-header">
+                <HardDrive size={14} aria-hidden />
+                <strong className="ob-subpanel-title">{t("admin.storage.fallbackTitle")}</strong>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {fallbackItems.map((item) => (
+                  <article key={item.id} className="ob-record">
+                    <div className="ob-record-header">
+                      <span className="ob-record-title truncate">{item.id}</span>
+                      <span className="ob-chip">{t("admin.storage.fallback", { kind: item.kind })}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 text-xs">
+                      <span className="ob-status-chip" data-tone={storageProbeTone(item)}>
+                        <span className="ob-status-dot" data-status={item.probeKnown ? (item.probeHealthy ? "succeeded" : "failed") : "pending"} aria-hidden />
+                        {storageProbeLabel(item, locale)}
+                      </span>
+                      <span className="ob-status-chip" data-tone={storageCapacityTone(item)}>
+                        {storageCapacityLabel(item, locale)}
+                      </span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {!loading && loaded && drafts.length === 0 ? (
+            <EmptyState icon={<HardDrive size={20} />} title={t("admin.storage.empty")} />
+          ) : null}
+
+          <fieldset className="contents" disabled={loading || Boolean(pendingDelete)}>
+            <div className="space-y-3">
+              {drafts.map((draft) => {
+                const item = draft.value;
+                const status = storageDraftStatus(draft, items);
+                return (
+                  <article key={draft.clientKey} className="ob-record space-y-3">
+                    <div className="ob-record-header">
+                      <span className="ob-record-title truncate">{item.id || t("admin.storage.newProvider")}</span>
+                      <span className="ob-chip">{item.kind === "webdav" ? t("admin.storage.webdav") : "S3 / R2"}</span>
+                      {status ? (
+                        <span className="ob-status-chip" data-tone={storageProbeTone(status)}>
+                          <span className="ob-status-dot" data-status={status.probeKnown ? (status.probeHealthy ? "succeeded" : "failed") : "pending"} aria-hidden />
+                          {storageProbeLabel(status, locale)}
+                        </span>
+                      ) : <span className="ob-status-chip" data-tone="warning">{t("admin.storage.unsaved")}</span>}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <label className="block">
+                        <span className="ob-micro-label mb-1">{t("admin.storage.stableId")}</span>
+                        <input className="ob-field" value={item.id} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { id: event.target.value })} />
+                      </label>
+                      <label className="block">
+                        <span className="ob-micro-label mb-1">{t("admin.storage.kind")}</span>
+                        <select className="ob-field" value={item.kind ?? "s3"} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { kind: event.target.value === "webdav" ? "webdav" : "s3", bucket: "", region: event.target.value === "webdav" ? "" : "auto", allowPrivate: false })}>
+                          <option value="s3">S3 / R2</option>
+                          <option value="webdav" disabled={!webdavEnabled}>{t("admin.storage.webdav")}</option>
+                        </select>
+                      </label>
+                      <label className="block xl:col-span-2">
+                        <span className="ob-micro-label mb-1">{item.kind === "webdav" ? t("admin.storage.webdavEndpoint") : t("admin.storage.s3Endpoint")}</span>
+                        <input className="ob-field" value={item.endpoint} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { endpoint: event.target.value })} />
+                      </label>
+                      {item.kind !== "webdav" ? <>
+                        <label className="block">
+                          <span className="ob-micro-label mb-1">{t("admin.storage.bucket")}</span>
+                          <input className="ob-field" value={item.bucket} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { bucket: event.target.value })} />
+                        </label>
+                        <label className="block">
+                          <span className="ob-micro-label mb-1">{t("admin.storage.region")}</span>
+                          <input className="ob-field" value={item.region} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { region: event.target.value })} />
+                        </label>
+                      </> : null}
+                      <label className="block">
+                        <span className="ob-micro-label mb-1">{t("admin.storage.prefix")}</span>
+                        <input className="ob-field" value={item.prefix} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { prefix: event.target.value })} />
+                      </label>
+                      <label className="block">
+                        <span className="ob-micro-label mb-1">{t("admin.storage.weight")}</span>
+                        <input className="ob-field" type="number" min={0} max={10000} value={item.weight} onChange={(event) => update(draft.clientKey, { weight: Number(event.target.value) })} />
+                      </label>
+                    </div>
+                    <div className="ob-check-row">
+                      <label className="ob-check-chip"><input type="checkbox" checked={item.healthy} onChange={(event) => update(draft.clientKey, { healthy: event.target.checked })} />{t("admin.storage.newWrites")}</label>
+                      <label className="ob-check-chip"><input type="checkbox" checked={item.allowInsecureLoopback} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { allowInsecureLoopback: event.target.checked })} />{t("admin.storage.loopback")}</label>
+                      {item.kind === "webdav" ? <label className="ob-check-chip"><input type="checkbox" checked={item.allowPrivate ?? false} disabled={Boolean(status)} onChange={(event) => update(draft.clientKey, { allowPrivate: event.target.checked })} />{t("admin.storage.privateHttps")}</label> : null}
+                    </div>
+                    <div className="ob-record-actions">
+                      <div className="min-w-0 flex-1 flex-wrap items-center gap-1.5 text-xs text-[var(--ob-muted)] sm:flex">
+                        {status ? <>
+                          <span className="ob-status-chip" data-tone={storageCapacityTone(status)}>{storageCapacityLabel(status, locale)}</span>
+                          <span>{status.secretConfigured ? t("admin.storage.credentialConfigured") : t("admin.storage.credentialMissing")}</span>
+                        </> : <span>{t("admin.storage.saveBeforeCredential")}</span>}
+                      </div>
+                      {status ? <button type="button" className="ob-btn ob-btn-sm" onClick={() => openCredentialEditor(draft.persistedId!)}><KeyRound size={14} aria-hidden />{t("admin.storage.updateCredential")}</button> : null}
+                      <button type="button" className="ob-btn ob-btn-danger ob-btn-sm" onClick={() => requestRemove(draft)}><Trash2 size={14} aria-hidden />{t("common.delete")}</button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="ob-record-actions">
+              <button type="button" className="ob-btn" disabled={!loaded || loading} onClick={() => setDrafts((current) => [...current, newStorageProviderDraft(crypto.randomUUID())])}>
+                <Plus size={14} aria-hidden />{t("admin.storage.new")}
+              </button>
+              <span className="ob-record-actions-end" />
+              <button type="button" className="ob-btn ob-btn-primary" disabled={!loaded || loading} onClick={() => void save()}>
+                <Save size={14} aria-hidden />{t("admin.storage.save")}
+              </button>
+            </div>
+          </fieldset>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--ob-muted)]"><span>{status ? `${storageProbeLabel(status, locale)} · ${storageCapacityLabel(status, locale)} · ${status.secretConfigured ? t("admin.storage.credentialConfigured") : t("admin.storage.credentialMissing")}` : t("admin.storage.saveBeforeCredential")}</span><div className="flex flex-wrap gap-2">{status ? <button type="button" className="ob-btn" onClick={() => openCredentialEditor(draft.persistedId!)}><KeyRound size={14} />{t("admin.storage.updateCredential")}</button> : null}<button type="button" className="ob-btn text-[var(--ob-danger)]" onClick={() => void remove(draft)}><Trash2 size={14} />{t("common.delete")}</button></div></div>
-      </article>; })}
+      </section>
+
+      {secretFor ? (
+        <section className="ob-review" role="region" aria-labelledby="storage-credential-title">
+          <div className="ob-record-header">
+            <span className="ob-admin-section-icon" aria-hidden><KeyRound size={15} /></span>
+            <div className="min-w-0">
+              <h2 id="storage-credential-title" className="ob-record-title truncate">{t("admin.storage.update")} {secretFor} {t("admin.storage.credential")}</h2>
+              <p className="ob-admin-section-desc">{t("admin.storage.credentialHint")}</p>
+            </div>
+          </div>
+          {credentialKind === "username-password" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block"><span className="ob-micro-label mb-1">{t("admin.storage.username")}</span><input autoFocus className="ob-field" value={username} onChange={(event) => setUsername(event.target.value)} /></label>
+              <label className="block"><span className="ob-micro-label mb-1">{t("admin.storage.password")}</span><input className="ob-field" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="block"><span className="ob-micro-label mb-1">{t("admin.storage.accessKeyId")}</span><input autoFocus className="ob-field" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} /></label>
+              <label className="block"><span className="ob-micro-label mb-1">{t("admin.storage.secretAccessKey")}</span><input className="ob-field" type="password" autoComplete="new-password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} /></label>
+              <label className="block"><span className="ob-micro-label mb-1">{t("admin.storage.sessionToken")}</span><input className="ob-field" type="password" autoComplete="new-password" value={sessionToken} onChange={(event) => setSessionToken(event.target.value)} /></label>
+            </div>
+          )}
+          <div className="ob-record-actions">
+            <span className="ob-record-actions-end" />
+            <button type="button" className="ob-btn" onClick={closeCredentialEditor}><X size={14} aria-hidden />{t("common.cancel")}</button>
+            <button type="button" className="ob-btn ob-btn-primary" disabled={!credentialReady || loading} onClick={() => void saveSecret()}>{t("admin.storage.encryptSave")}</button>
+          </div>
+        </section>
+      ) : null}
+
+      {pendingDelete ? (
+        <ConfirmDialog
+          title={t("admin.storage.deleteTitle")}
+          message={t("admin.storage.confirmDelete", { id: pendingDelete.value.id })}
+          confirmLabel={t("common.delete")}
+          busy={loading}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void remove(pendingDelete)}
+        />
+      ) : null}
     </div>
-    {secretFor ? <div className="ob-surface space-y-3 p-4" role="region" aria-labelledby="storage-credential-title"><h3 id="storage-credential-title" className="font-medium">{t("admin.storage.update")} {secretFor} {t("admin.storage.credential")}</h3>{storageCredentialKind(drafts.find((draft) => draft.persistedId === secretFor)?.value.kind ?? "s3") === "username-password" ? <div className="grid gap-3 md:grid-cols-2"><label className="text-sm">{t("admin.storage.username")}<input autoFocus className="ob-input mt-1 w-full" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label className="text-sm">{t("admin.storage.password")}<input className="ob-input mt-1 w-full" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label></div> : <div className="grid gap-3 md:grid-cols-3"><label className="text-sm">{t("admin.storage.accessKeyId")}<input autoFocus className="ob-input mt-1 w-full" value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} /></label><label className="text-sm">{t("admin.storage.secretAccessKey")}<input className="ob-input mt-1 w-full" type="password" value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} /></label><label className="text-sm">{t("admin.storage.sessionToken")}<input className="ob-input mt-1 w-full" type="password" value={sessionToken} onChange={(event) => setSessionToken(event.target.value)} /></label></div>}<div className="flex flex-wrap gap-2"><button type="button" className="ob-btn ob-btn-primary" onClick={() => void saveSecret()}>{t("admin.storage.encryptSave")}</button><button type="button" className="ob-btn" onClick={closeCredentialEditor}>{t("common.cancel")}</button></div></div> : null}
-  </section>;
+  );
 }
