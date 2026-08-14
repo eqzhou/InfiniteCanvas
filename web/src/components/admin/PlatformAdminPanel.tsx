@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Building2, Globe2, RefreshCw, Search, Users } from "lucide-react";
+import { Building2, RefreshCw, Search, Users } from "lucide-react";
 import { EmptyState, Notice, SectionHeader } from "@/components/admin/AdminSection";
 import { useI18n } from "@/i18n/I18nProvider";
 import {
@@ -61,14 +61,6 @@ export function PlatformAdminPanel() {
 
   return (
     <div className="ob-admin-stack" aria-busy={loading || busy}>
-      <header className="ob-page-header !mb-1">
-        <div className="min-w-0">
-          <span className="ob-page-kicker"><Globe2 size={13} aria-hidden />{t("admin.tab.platform")}</span>
-          <h2 className="ob-page-title !text-[1.35rem]">{t("admin.platformTitle")}</h2>
-          <p className="ob-page-desc">{t("admin.platformHint")}</p>
-        </div>
-      </header>
-
       <div className="ob-toolbar-strip">
         <label className="min-w-0 flex-1">
           <span className="sr-only">{t("admin.platformSearch")}</span>

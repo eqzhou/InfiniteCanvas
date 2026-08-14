@@ -13,11 +13,25 @@ import {
 } from "@/services/library-assets";
 import { findOpenNodePosition } from "@/lib/node-placement";
 import { LibraryAssetDetailDialog } from "@/components/library/LibraryAssetDetailDialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { DEFAULT_NODE_SIZE } from "@/lib/defaults";
 import { nowIso, uid } from "@/lib/id";
 import { writeTextWithFallback } from "@/lib/clipboard";
 import type { AssetItem } from "@/types/board";
 import { useI18n } from "@/i18n/I18nProvider";
+import {
+  Copy,
+  Edit3,
+  Eye,
+  FolderPlus,
+  Library,
+  Plus,
+  RefreshCw,
+  Search,
+  Tag,
+  Trash2,
+  X,
+} from "lucide-react";
 
 function emptyDraft(kind: LibraryAssetKind = "image"): LibraryAssetInput {
   return {
@@ -53,6 +67,7 @@ export function ServerLibraryPage() {
   const [insertingId, setInsertingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<LibraryAsset | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<LibraryAsset | null>(null);
   const pageSize = 12;
   const canManage = canManageAdmin(auth);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -143,12 +158,12 @@ export function ServerLibraryPage() {
     }
   };
 
-  const removeAsset = async (asset: LibraryAsset) => {
-    if (!window.confirm(t("serverLibrary.confirmDelete", { title: asset.title }))) return;
+  const executeDelete = async (asset: LibraryAsset) => {
     setBusy(true);
     setError(null);
     try {
       await deleteLibraryAsset(asset.id);
+      setPendingDelete(null);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -157,19 +172,18 @@ export function ServerLibraryPage() {
     }
   };
 
-
   const copyAssetValue = async (asset: LibraryAsset) => {
     const value = asset.kind === "text"
       ? (asset.content ?? "")
       : (asset.coverUrl || asset.content || "");
     if (!value) {
-      window.alert(asset.kind === "text" ? t("serverLibrary.noText") : t("serverLibrary.noLink"));
+      setError(asset.kind === "text" ? t("serverLibrary.noText") : t("serverLibrary.noLink"));
       return;
     }
     try {
       await writeTextWithFallback(value);
     } catch (cause) {
-      window.alert(cause instanceof Error ? cause.message : t("serverLibrary.copyFailed"));
+      setError(cause instanceof Error ? cause.message : t("serverLibrary.copyFailed"));
     }
   };
 
@@ -202,7 +216,7 @@ export function ServerLibraryPage() {
   const insertToCanvas = async (asset: LibraryAsset) => {
     const project = getActive();
     if (!project) {
-      window.alert(t("assets.openCanvasFirst"));
+      setError(t("assets.openCanvasFirst"));
       return;
     }
     setInsertingId(asset.id);
@@ -232,7 +246,7 @@ export function ServerLibraryPage() {
       }
       await useBoardStore.getState().persistNow();
     } catch (cause) {
-      window.alert(cause instanceof Error ? cause.message : String(cause));
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setInsertingId(null);
     }
@@ -241,30 +255,41 @@ export function ServerLibraryPage() {
   const editorOpen = creating || Boolean(editing);
 
   return (
-    <div className="mx-auto flex h-full max-w-6xl flex-col gap-4 p-4 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-[var(--ob-ink)]">{t("serverLibrary.title")}</h1>
-          <p className="mt-1 text-sm text-[var(--ob-muted)]">
-            {t("serverLibrary.description")}
-          </p>
+    <div className="ob-page ob-view-fade-in pb-12">
+      <header className="ob-page-header">
+        <div className="min-w-0">
+          <span className="ob-page-kicker"><Library size={13} aria-hidden />{t("nav.serverLibrary")}</span>
+          <h1 className="ob-page-title">{t("serverLibrary.title")}</h1>
+          <p className="ob-page-desc">{t("serverLibrary.description")}</p>
         </div>
-        {canManage ? (
-          <button type="button" className="ob-btn-primary" onClick={openCreate}>
-            {t("serverLibrary.new")}
-          </button>
-        ) : null}
-      </div>
+        <div className="ml-auto flex items-center gap-2">
+          {canManage ? (
+            <button type="button" className="ob-btn-primary" onClick={openCreate}>
+              <Plus size={14} aria-hidden />
+              {t("serverLibrary.new")}
+            </button>
+          ) : null}
+        </div>
+      </header>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          className="ob-input min-w-[12rem] flex-1"
-          placeholder={t("serverLibrary.search")}
-          value={q}
-          onChange={(event) => setQ(event.target.value)}
-        />
+      {error ? (
+        <div role="alert" className="ob-banner mb-4 rounded-xl" data-tone="danger">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="ob-toolbar-strip mb-5 flex flex-wrap items-center gap-2.5">
+        <div className="relative min-w-[14rem] flex-1 sm:max-w-xs">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ob-muted)]" aria-hidden />
+          <input
+            className="ob-field pl-8"
+            placeholder={t("serverLibrary.search")}
+            value={q}
+            onChange={(event) => setQ(event.target.value)}
+          />
+        </div>
         <select
-          className="ob-input w-auto"
+          className="ob-field w-auto cursor-pointer"
           value={kind}
           onChange={(event) => setKind(event.target.value as "all" | LibraryAssetKind)}
         >
@@ -274,112 +299,122 @@ export function ServerLibraryPage() {
           <option value="audio">{t("common.audio")}</option>
           <option value="text">{t("common.text")}</option>
         </select>
-        <input
-          className="ob-input w-auto min-w-[8rem]"
-          aria-label={t("serverLibrary.tagFilter")}
-          placeholder={t("serverLibrary.tagPlaceholder")}
-          value={tag}
-          onChange={(event) => { setTag(event.target.value); setPage(1); }}
-        />
-        <button type="button" className="ob-btn" onClick={() => void load()}>
+        <div className="relative min-w-[10rem] flex-1 sm:max-w-xs">
+          <Tag size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ob-muted)]" aria-hidden />
+          <input
+            className="ob-field pl-8"
+            aria-label={t("serverLibrary.tagFilter")}
+            placeholder={t("serverLibrary.tagPlaceholder")}
+            value={tag}
+            onChange={(event) => { setTag(event.target.value); setPage(1); }}
+          />
+        </div>
+        <button type="button" className="ob-btn ml-auto" onClick={() => void load()}>
+          <RefreshCw size={14} className={loading ? "animate-spin" : ""} aria-hidden />
           {t("common.refresh")}
         </button>
       </div>
 
-      {error ? (
-        <div role="alert" className="ob-banner" data-tone="warning">
-          {error}
-        </div>
-      ) : null}
-
       {loading ? (
-        <div className="rounded-xl border border-[var(--ob-line)] p-8 text-sm text-[var(--ob-muted)]">
+        <div className="ob-card p-12 text-center text-sm text-[var(--ob-muted)]">
+          <RefreshCw size={18} className="mx-auto mb-2 animate-spin text-[var(--ob-accent)]" />
           {t("serverLibrary.loading")}
         </div>
       ) : items.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-[var(--ob-line)] p-8 text-sm text-[var(--ob-muted)]">
-          {t("serverLibrary.empty")}{canManage ? t("serverLibrary.emptyAdmin") : t("serverLibrary.emptyMember")}
+        <div className="ob-empty mt-8">
+          <span className="ob-empty-icon" aria-hidden><Library size={20} /></span>
+          <p className="ob-empty-title">{t("serverLibrary.empty")}</p>
+          <p className="ob-empty-desc">{canManage ? t("serverLibrary.emptyAdmin") : t("serverLibrary.emptyMember")}</p>
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((asset) => (
             <article
               key={asset.id}
-              className="flex flex-col rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-elev-1)]"
+              className="ob-card group flex flex-col overflow-hidden p-4 transition-all hover:shadow-[var(--ob-elev-2)]"
             >
               {asset.kind !== "text" && (asset.coverUrl || asset.content) ? (
-                <div className="mb-3 overflow-hidden rounded-lg bg-[var(--ob-canvas)]">
+                <div className="mb-3 overflow-hidden rounded-xl bg-[var(--ob-surface-2)]">
                   {asset.kind === "image" ? (
                     <img
                       src={asset.coverUrl || asset.content}
                       alt={asset.title}
-                      className="h-32 w-full object-cover"
+                      className="h-36 w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
                   ) : asset.kind === "video" ? (
                     <video
                       src={asset.coverUrl || asset.content}
-                      className="h-32 w-full object-cover"
+                      className="h-36 w-full object-cover bg-black"
                       controls
                       preload="metadata"
                     />
                   ) : (
-                    <div className="grid h-24 place-items-center px-3">
+                    <div className="grid h-28 place-items-center px-3">
                       <audio src={asset.coverUrl || asset.content} controls preload="none" className="w-full" />
                     </div>
                   )}
                 </div>
               ) : null}
               <div className="flex items-start gap-2">
-                <h2 className="min-w-0 flex-1 font-semibold text-[var(--ob-ink)]">{asset.title}</h2>
+                <h2 className="min-w-0 flex-1 font-semibold text-[var(--ob-ink)] truncate" title={asset.title}>{asset.title}</h2>
                 <span className="ob-chip shrink-0">{kindLabel[asset.kind]}</span>
               </div>
               {asset.source ? <p className="mt-1 truncate text-xs text-[var(--ob-muted)]">{asset.source}</p> : null}
-              <p className="mt-2 line-clamp-3 text-sm text-[var(--ob-muted)]">
+              <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-[var(--ob-muted)]">
                 {asset.kind === "text" ? asset.content : asset.notes || asset.coverUrl || asset.content}
               </p>
               {asset.tags.length ? (
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {asset.tags.map((tag) => (
-                    <span key={tag} className="ob-chip">
-                      {tag}
+                  {asset.tags.map((t) => (
+                    <span key={t} className="ob-chip text-[0.7rem]">
+                      {t}
                     </span>
                   ))}
                 </div>
               ) : null}
-              <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--ob-line)] pt-3">
+              <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-[var(--ob-line)] pt-3 text-sm">
                 <button
                   type="button"
-                  className="ob-btn"
+                  className="ob-btn ob-btn-sm"
                   disabled={insertingId === asset.id}
                   onClick={() => void insertToCanvas(asset)}
                 >
+                  <Plus size={13} aria-hidden />
                   {insertingId === asset.id ? t("assets.inserting") : t("assets.insertCanvas")}
                 </button>
                 <button
                   type="button"
-                  className="ob-btn"
+                  className="ob-btn ob-btn-sm"
                   onClick={() => void copyAssetValue(asset)}
                 >
+                  <Copy size={13} aria-hidden />
                   {asset.kind === "text" ? t("serverLibrary.copyText") : t("serverLibrary.copyLink")}
                 </button>
-                <button type="button" className="ob-btn" onClick={() => setDetail(asset)}>
+                <button type="button" className="ob-btn ob-btn-sm" onClick={() => setDetail(asset)}>
+                  <Eye size={13} aria-hidden />
                   {t("serverLibrary.viewDetails")}
                 </button>
                 <button
                   type="button"
-                  className="ob-btn"
+                  className="ob-btn ob-btn-sm"
                   disabled={savingId === asset.id}
                   onClick={() => void addToMyAssets(asset)}
                 >
+                  <FolderPlus size={13} aria-hidden />
                   {savingId === asset.id ? t("serverLibrary.adding") : t("serverLibrary.addMine")}
                 </button>
                 {canManage ? (
                   <>
-                    <button type="button" className="ob-btn" onClick={() => openEdit(asset)}>
-                      {t("common.edit")}
+                    <button type="button" className="ob-btn ob-btn-sm ml-auto" onClick={() => openEdit(asset)}>
+                      <Edit3 size={13} aria-hidden />
                     </button>
-                    <button type="button" className="ob-btn" onClick={() => void removeAsset(asset)}>
-                      {t("common.delete")}
+                    <button
+                      type="button"
+                      className="ob-btn ob-btn-danger ob-btn-sm"
+                      aria-label={t("common.delete")}
+                      onClick={() => setPendingDelete(asset)}
+                    >
+                      <Trash2 size={13} aria-hidden />
                     </button>
                   </>
                 ) : null}
@@ -390,12 +425,12 @@ export function ServerLibraryPage() {
       )}
 
       {totalPages > 1 ? (
-        <div className="flex items-center justify-center gap-2">
+        <div className="mt-8 flex items-center justify-center gap-4 text-sm">
           <button type="button" className="ob-btn" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
             {t("common.previousPage")}
           </button>
-          <span className="text-sm text-[var(--ob-muted)]">
-            {page} / {totalPages}
+          <span className="ob-chip px-4 py-1.5 text-xs text-[var(--ob-muted)]">
+            {t("common.pageTotal", { page, pages: totalPages, total })}
           </span>
           <button
             type="button"
@@ -409,21 +444,36 @@ export function ServerLibraryPage() {
       ) : null}
 
       {editorOpen ? (
-        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 p-4" onClick={closeEditor}>
+        <div className="ob-overlay z-[120] p-4" onClick={closeEditor}>
           <div
             role="dialog"
+            aria-modal="true"
             aria-label={editing ? t("serverLibrary.edit") : t("serverLibrary.new")}
-            className="w-full max-w-lg rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 shadow-[var(--ob-elev-2)]"
+            className="ob-surface ob-view-fade-in mx-auto mt-[8vh] max-w-lg p-5 shadow-[var(--ob-elev-2)]"
             onClick={(event) => event.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold text-[var(--ob-ink)]">
-              {editing ? t("serverLibrary.edit") : t("serverLibrary.new")}
-            </h2>
-            <div className="mt-3 grid gap-2">
-              <label className="text-sm text-[var(--ob-muted)]">
-                {t("serverLibrary.kind")}
+            <div className="ob-admin-section-header !mb-3">
+              <span className="ob-admin-section-icon" aria-hidden><Library size={16} /></span>
+              <div className="ob-admin-section-heading">
+                <h2 className="ob-admin-section-title">
+                  {editing ? t("serverLibrary.edit") : t("serverLibrary.new")}
+                </h2>
+                <p className="ob-admin-section-desc">{t("serverLibrary.description")}</p>
+              </div>
+              <button
+                type="button"
+                className="ob-icon-btn ob-icon-btn-sm ml-auto"
+                aria-label={t("common.close")}
+                onClick={closeEditor}
+              >
+                <X size={16} aria-hidden />
+              </button>
+            </div>
+            <div className="mt-3 grid gap-3">
+              <label className="block">
+                <span className="ob-micro-label mb-1">{t("serverLibrary.kind")}</span>
                 <select
-                  className="ob-input mt-1"
+                  className="ob-field"
                   value={draft.kind}
                   onChange={(event) =>
                     setDraft((current) => ({ ...current, kind: event.target.value as LibraryAssetKind }))
@@ -435,82 +485,97 @@ export function ServerLibraryPage() {
                   <option value="text">{t("common.text")}</option>
                 </select>
               </label>
-              <label className="text-sm text-[var(--ob-muted)]">
-                {t("serverLibrary.assetTitle")}
+              <label className="block">
+                <span className="ob-micro-label mb-1">{t("serverLibrary.assetTitle")}</span>
                 <input
-                  className="ob-input mt-1"
+                  className="ob-field"
                   value={draft.title}
                   onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
                 />
               </label>
-              <label className="text-sm text-[var(--ob-muted)]">
-                {t("serverLibrary.tags")}
+              <label className="block">
+                <span className="ob-micro-label mb-1">{t("serverLibrary.tags")}</span>
                 <input
-                  className="ob-input mt-1"
+                  className="ob-field"
                   value={(draft.tags ?? []).join(", ")}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
-                      tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean),
+                      tags: event.target.value.split(",").map((s) => s.trim()),
                     }))
                   }
+                  placeholder={t("serverLibrary.tagPlaceholder")}
                 />
               </label>
               {draft.kind === "text" ? (
-                <label className="text-sm text-[var(--ob-muted)]">
-                  {t("serverLibrary.textContent")}
+                <label className="block">
+                  <span className="ob-micro-label mb-1">{t("serverLibrary.textContent")}</span>
                   <textarea
-                    className="ob-input mt-1 min-h-28"
+                    rows={4}
+                    className="ob-field font-mono text-xs"
                     value={draft.content ?? ""}
                     onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
                   />
                 </label>
               ) : (
-                <label className="text-sm text-[var(--ob-muted)]">
-                  {t("serverLibrary.mediaUrl")}
+                <label className="block">
+                  <span className="ob-micro-label mb-1">{t("serverLibrary.cover")}</span>
                   <input
-                    className="ob-input mt-1"
-                    value={draft.coverUrl || draft.content || ""}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        coverUrl: event.target.value,
-                        content: event.target.value,
-                      }))
-                    }
+                    className="ob-field"
+                    value={draft.coverUrl ?? ""}
+                    onChange={(event) => setDraft((current) => ({ ...current, coverUrl: event.target.value }))}
                   />
                 </label>
               )}
-              <label className="text-sm text-[var(--ob-muted)]">
-                {t("serverLibrary.source")}
+              <label className="block">
+                <span className="ob-micro-label mb-1">{t("serverLibrary.source")}</span>
                 <input
-                  className="ob-input mt-1"
+                  className="ob-field"
                   value={draft.source ?? ""}
                   onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value }))}
                 />
               </label>
-              <label className="text-sm text-[var(--ob-muted)]">
-                {t("serverLibrary.notes")}
+              <label className="block">
+                <span className="ob-micro-label mb-1">{t("serverLibrary.notes")}</span>
                 <textarea
-                  className="ob-input mt-1 min-h-20"
+                  rows={2}
+                  className="ob-field text-xs"
                   value={draft.notes ?? ""}
                   onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
                 />
               </label>
             </div>
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="ob-record-actions mt-5 justify-end">
               <button type="button" className="ob-btn" disabled={busy} onClick={closeEditor}>
                 {t("common.cancel")}
               </button>
-              <button type="button" className="ob-btn-primary" disabled={busy} onClick={() => void saveDraft()}>
-                {busy ? t("serverLibrary.saving") : t("serverLibrary.save")}
+              <button
+                type="button"
+                className="ob-btn ob-btn-primary"
+                disabled={busy || !draft.title.trim()}
+                onClick={() => void saveDraft()}
+              >
+                {busy ? t("common.saving") : t("common.save")}
               </button>
             </div>
           </div>
         </div>
       ) : null}
 
-      <LibraryAssetDetailDialog asset={detail} onClose={() => setDetail(null)} />
+      {detail ? (
+        <LibraryAssetDetailDialog asset={detail} onClose={() => setDetail(null)} />
+      ) : null}
+
+      {pendingDelete ? (
+        <ConfirmDialog
+          title={t("serverLibrary.confirmDelete", { title: pendingDelete.title })}
+          confirmLabel={t("common.delete")}
+          tone="danger"
+          busy={busy}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void executeDelete(pendingDelete)}
+        />
+      ) : null}
     </div>
   );
 }

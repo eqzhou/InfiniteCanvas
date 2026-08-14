@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Cable, Check, GitCompare, KeyRound, Layers, PlugZap, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Cable, Check, Eye, EyeOff, GitCompare, KeyRound, Layers, PlugZap, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import {
   deleteAdminChannel,
   fetchAdminChannelModels,
@@ -460,6 +460,7 @@ function AccessGroup({
   handlers: ChannelHandlers;
 }) {
   const { t } = useI18n();
+  const [showSecret, setShowSecret] = useState(false);
   const state = channel.protocol === "edge"
     ? t("admin.channels.edgeNoSecret")
     : channel.secretConfigured
@@ -474,14 +475,27 @@ function AccessGroup({
       <div className="flex flex-wrap items-end gap-2">
         <label className="min-w-60 flex-1">
           <span className="ob-micro-label mb-1">{t("admin.channels.apiSecret", { state })}</span>
-          <input
-            className="ob-field"
-            type="password"
-            autoComplete="new-password"
-            disabled={channel.protocol === "edge"}
-            value={secret}
-            onChange={(event) => handlers.setSecret(event.target.value)}
-          />
+          <div className="relative flex items-center">
+            <input
+              className="ob-field pr-9"
+              type={showSecret ? "text" : "password"}
+              autoComplete="new-password"
+              disabled={channel.protocol === "edge"}
+              value={secret}
+              onChange={(event) => handlers.setSecret(event.target.value)}
+            />
+            {channel.protocol !== "edge" ? (
+              <button
+                type="button"
+                className="ob-icon-btn ob-icon-btn-sm absolute right-1 text-[var(--ob-muted)] hover:text-[var(--ob-ink)]"
+                aria-label={showSecret ? t("admin.channels.hideSecret") : t("admin.channels.showSecret")}
+                title={showSecret ? t("admin.channels.hideSecret") : t("admin.channels.showSecret")}
+                onClick={() => setShowSecret(!showSecret)}
+              >
+                {showSecret ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
+              </button>
+            ) : null}
+          </div>
         </label>
         <button
           type="button"

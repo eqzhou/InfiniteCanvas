@@ -29,6 +29,7 @@ import {
 import { useBoardStore } from "@/stores/use-board-store";
 import type { GenerationJob } from "@/types/board";
 import type { WorkflowTemplate } from "@/types/workflow";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 
 export const DEFAULT_WORKFLOW_AGENT_SYSTEM_PROMPT = [
@@ -83,6 +84,7 @@ export function WorkflowWorkbench() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [confirmDeleteDraft, setConfirmDeleteDraft] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const refreshTemplates = useCallback(async () => {
@@ -182,7 +184,7 @@ export function WorkflowWorkbench() {
   };
 
   const deleteDraft = async () => {
-    if (!draft || draft.scope !== "personal" || !window.confirm(t("workflow.confirmDelete", { title: draft.title }))) return;
+    if (!draft || draft.scope !== "personal") return;
     setBusy(true);
     try {
       await removePersonalWorkflowTemplate(draft.id);
@@ -192,6 +194,7 @@ export function WorkflowWorkbench() {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
+      setConfirmDeleteDraft(false);
     }
   };
 
@@ -347,7 +350,7 @@ export function WorkflowWorkbench() {
             <textarea className="ob-field min-h-20" aria-label={t("workflow.aiDescription")} placeholder={t("workflow.aiPlaceholder")} value={agentPrompt} onChange={(event) => setAgentPrompt(event.target.value)} />
             <button type="button" className="ob-btn-secondary mt-2 inline-flex items-center gap-1 px-3 py-2 text-xs" disabled={busy} onClick={() => void createWithAI()}><Sparkles size={13} />{t("workflow.generateDraft")}</button>
           </section>
-          {draft ? <WorkflowTemplateEditor draft={draft} busy={busy} onChange={setDraft} onSave={() => void saveDraft()} onDelete={() => void deleteDraft()} onDuplicate={() => void duplicateDraft()} /> : <p className="text-sm text-[var(--ob-muted)]">{t("workflow.selectTemplate")}</p>}
+          {draft ? <WorkflowTemplateEditor draft={draft} busy={busy} onChange={setDraft} onSave={() => void saveDraft()} onDelete={() => setConfirmDeleteDraft(true)} onDuplicate={() => void duplicateDraft()} /> : <p className="text-sm text-[var(--ob-muted)]">{t("workflow.selectTemplate")}</p>}
         </main>
 
         <aside className="border-t border-[var(--ob-line)] bg-[var(--ob-panel)] p-4 xl:border-l xl:border-t-0" aria-label={t("workflow.runPanel")}>
@@ -377,6 +380,15 @@ export function WorkflowWorkbench() {
           </div>
         </aside>
       </div>
+      {confirmDeleteDraft && draft ? (
+        <ConfirmDialog
+          title={t("workflow.confirmDelete", { title: draft.title })}
+          confirmLabel={t("common.delete")}
+          tone="danger"
+          onCancel={() => setConfirmDeleteDraft(false)}
+          onConfirm={() => void deleteDraft()}
+        />
+      ) : null}
     </div>
   );
 }

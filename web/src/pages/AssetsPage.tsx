@@ -6,8 +6,22 @@ import { writeTextWithFallback } from "@/lib/clipboard";
 import { downloadStorageKey, uploadMedia } from "@/services/storage";
 import { filenameForMimeType } from "@/lib/download-filename";
 import { AssetEditorDialog, type AssetEditorValues } from "@/components/assets/AssetEditorDialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 import { useI18n } from "@/i18n/I18nProvider";
+import {
+  Copy,
+  Download,
+  Edit3,
+  FileText,
+  Film,
+  FolderHeart,
+  Image as ImageIcon,
+  Music,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react";
 
 export function AssetsPage() {
   const { t } = useI18n();
@@ -21,6 +35,9 @@ export function AssetsPage() {
   const [editing, setEditing] = useState<AssetItem | null>(null);
   const [creating, setCreating] = useState(false);
   const [insertingId, setInsertingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AssetItem | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const pageSize = 12;
 
   const filtered = useMemo(() => {
@@ -60,23 +77,28 @@ export function AssetsPage() {
   };
 
   const addMedia = async (file: File, assetKind: "image" | "video" | "audio") => {
-    const uploaded = await uploadMedia(file, assetKind === "image" ? "image" : "media", {
-      validateLargeImage: assetKind === "image",
-    });
-    const t = nowIso();
-    const item: AssetItem = {
-      id: uid("asset"),
-      kind: assetKind,
-      title: file.name,
-      coverUrl: uploaded.url,
-      storageKey: uploaded.storageKey,
-      mimeType: uploaded.mimeType,
-      tags: [],
-      createdAt: t,
-      updatedAt: t,
-    };
-    setAssets([item, ...useBoardStore.getState().assets]);
-    await flushAssets();
+    try {
+      setError(null);
+      const uploaded = await uploadMedia(file, assetKind === "image" ? "image" : "media", {
+        validateLargeImage: assetKind === "image",
+      });
+      const t = nowIso();
+      const item: AssetItem = {
+        id: uid("asset"),
+        kind: assetKind,
+        title: file.name,
+        coverUrl: uploaded.url,
+        storageKey: uploaded.storageKey,
+        mimeType: uploaded.mimeType,
+        tags: [],
+        createdAt: t,
+        updatedAt: t,
+      };
+      setAssets([item, ...useBoardStore.getState().assets]);
+      await flushAssets();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
 
   const removeOrphanedBlob = async (storageKey: string | undefined, nextAssets: AssetItem[]) => {
@@ -89,68 +111,115 @@ export function AssetsPage() {
 
   const saveAsset = async (values: AssetEditorValues) => {
     if (!editing) return;
-    if (creating) {
-      const created: AssetItem = {
-        ...editing,
-        title: values.title,
-        tags: [...values.tags],
-        source: values.source || undefined,
-        notes: values.notes || undefined,
-        content: values.content,
-        updatedAt: nowIso(),
-      };
-      setAssets([created, ...useBoardStore.getState().assets.filter((asset) => asset.id !== created.id)]);
+    try {
+      setError(null);
+      if (creating) {
+        const created: AssetItem = {
+          ...editing,
+          title: values.title,
+          tags: [...values.tags],
+          source: values.source || undefined,
+          notes: values.notes || undefined,
+          content: values.content,
+          updatedAt: nowIso(),
+        };
+        setAssets([created, ...useBoardStore.getState().assets.filter((asset) => asset.id !== created.id)]);
+        await flushAssets();
+        setCreating(false);
+        setEditing(null);
+        return;
+      }
+      const replacement = values.replacement
+        ? await uploadMedia(values.replacement, editing.kind === "image" ? "image" : "media", {
+            validateLargeImage: editing.kind === "image",
+          })
+        : null;
+      const latestAssets = useBoardStore.getState().assets;
+      const nextAssets = latestAssets.map((asset) =>
+        asset.id === editing.id
+          ? {
+              ...asset,
+              title: values.title,
+              tags: [...values.tags],
+              source: values.source || undefined,
+              notes: values.notes || undefined,
+              content: asset.kind === "text" ? values.content : asset.content,
+              updatedAt: nowIso(),
+              ...(replacement
+                ? {
+                    coverUrl: replacement.url,
+                    storageKey: replacement.storageKey,
+                    mimeType: replacement.mimeType,
+                  }
+                : {}),
+            }
+          : asset,
+      );
+      setAssets(nextAssets);
       await flushAssets();
-      setCreating(false);
+      if (replacement) {
+        await removeOrphanedBlob(editing.storageKey, nextAssets);
+      }
       setEditing(null);
-      return;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
-    const replacement = values.replacement
-      ? await uploadMedia(values.replacement, editing.kind === "image" ? "image" : "media", {
-          validateLargeImage: editing.kind === "image",
-        })
-      : null;
-    const latestAssets = useBoardStore.getState().assets;
-    const nextAssets = latestAssets.map((asset) =>
-      asset.id === editing.id
-        ? {
-            ...asset,
-            title: values.title,
-            tags: [...values.tags],
-            source: values.source || undefined,
-            notes: values.notes || undefined,
-            content: asset.kind === "text" ? values.content : asset.content,
-            coverUrl: replacement?.url ?? asset.coverUrl,
-            storageKey: replacement?.storageKey ?? asset.storageKey,
-            mimeType: replacement?.mimeType ?? asset.mimeType,
-            updatedAt: nowIso(),
-          }
-        : asset,
-    );
-    setAssets(nextAssets);
-    await flushAssets();
-    if (replacement) await removeOrphanedBlob(editing.storageKey, nextAssets);
-    setEditing(null);
+  };
+
+  const executeDelete = async (a: AssetItem) => {
+    setDeletingId(a.id);
+    setError(null);
+    try {
+      const nextAssets = structuredClone(
+        useBoardStore.getState().assets.filter((item) => item.id !== a.id),
+      );
+      setAssets(nextAssets);
+      await flushAssets();
+      await removeOrphanedBlob(a.storageKey, nextAssets);
+      setPage((current) => {
+        const total = Math.max(1, Math.ceil(nextAssets.length / pageSize));
+        return Math.min(current, total);
+      });
+      setPendingDelete(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
-    <div className="ob-page">
+    <div className="ob-page ob-view-fade-in pb-12">
       <header className="ob-page-header">
         <div className="min-w-0">
-          <p className="ob-page-kicker">Library</p>
+          <span className="ob-page-kicker"><FolderHeart size={13} aria-hidden />{t("nav.assets")}</span>
           <h1 className="ob-page-title">{t("assets.title")}</h1>
           <p className="ob-page-desc">{t("assets.description")}</p>
         </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="ob-chip text-xs text-[var(--ob-muted)]">
+            {t("common.pageTotal", { page, pages: totalPages, total: assets.length })}
+          </span>
+        </div>
       </header>
 
-      <div className="ob-toolbar-strip">
-        <input
-          className="ob-field w-full sm:max-w-xs sm:flex-1"
-          aria-label={t("assets.search")}
-          placeholder={t("assets.searchPlaceholder")}
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+      {error ? (
+        <div role="alert" className="ob-banner mb-4 rounded-xl" data-tone="danger">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="ob-toolbar-strip mb-5 flex flex-wrap items-center gap-2.5">
+        <div className="relative min-w-[14rem] flex-1 sm:max-w-xs">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ob-muted)]" aria-hidden />
+          <input
+            className="ob-field pl-8"
+            aria-label={t("assets.search")}
+            placeholder={t("assets.searchPlaceholder")}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
         <select
           className="ob-field w-auto cursor-pointer"
           value={kind}
@@ -163,11 +232,13 @@ export function AssetsPage() {
           <option value="video">{t("common.video")}</option>
           <option value="audio">{t("common.audio")}</option>
         </select>
-        <div className="ob-page-actions !ml-0 sm:ml-auto">
+        <div className="ob-page-actions !ml-0 sm:ml-auto flex flex-wrap items-center gap-2">
           <button type="button" className="ob-btn" onClick={addText}>
+            <FileText size={14} aria-hidden />
             {t("assets.newText")}
           </button>
           <label className="ob-btn cursor-pointer">
+            <ImageIcon size={14} aria-hidden />
             {t("assets.uploadImage")}
             <input
               type="file"
@@ -181,6 +252,7 @@ export function AssetsPage() {
             />
           </label>
           <label className="ob-btn cursor-pointer">
+            <Film size={14} aria-hidden />
             {t("assets.uploadVideo")}
             <input
               type="file"
@@ -194,6 +266,7 @@ export function AssetsPage() {
             />
           </label>
           <label className="ob-btn cursor-pointer">
+            <Music size={14} aria-hidden />
             {t("assets.uploadAudio")}
             <input
               type="file"
@@ -211,13 +284,15 @@ export function AssetsPage() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {pageItems.map((a) => (
-          <article key={a.id} className="ob-card flex flex-col overflow-hidden p-4">
+          <article key={a.id} className="ob-card group flex flex-col overflow-hidden p-4 transition-all hover:shadow-[var(--ob-elev-2)]">
             {a.kind === "image" && a.coverUrl ? (
-              <img
-                src={a.coverUrl}
-                alt={a.title}
-                className="mb-3 h-40 w-full rounded-xl object-cover"
-              />
+              <div className="mb-3 overflow-hidden rounded-xl bg-[var(--ob-surface-2)]">
+                <img
+                  src={a.coverUrl}
+                  alt={a.title}
+                  className="h-40 w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                />
+              </div>
             ) : null}
             {a.kind === "video" && a.coverUrl ? (
               <video
@@ -229,13 +304,13 @@ export function AssetsPage() {
               />
             ) : null}
             {a.kind === "audio" && a.coverUrl ? (
-              <div className="mb-3 grid h-32 place-items-center rounded-xl bg-[var(--ob-canvas)] px-3">
+              <div className="mb-3 grid h-32 place-items-center rounded-xl bg-[var(--ob-surface-2)] px-3">
                 <audio src={a.coverUrl} aria-label={a.title} controls preload="none" className="w-full" />
               </div>
             ) : null}
             <div className="flex-1">
               <div className="flex items-start gap-2">
-                <h3 className="min-w-0 flex-1 font-semibold text-[var(--ob-ink)]">{a.title}</h3>
+                <h3 className="min-w-0 flex-1 font-semibold text-[var(--ob-ink)] truncate" title={a.title}>{a.title}</h3>
                 <span className="ob-chip shrink-0">
                   {a.kind === "text" ? t("common.text") : a.kind === "image" ? t("common.image") : a.kind === "video" ? t("common.video") : t("common.audio")}
                 </span>
@@ -245,43 +320,44 @@ export function AssetsPage() {
                 {a.kind === "text" ? a.content : a.mimeType}
               </p>
             </div>
-            <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--ob-line)] pt-3 text-sm">
+            <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-[var(--ob-line)] pt-3 text-sm">
               <button
                 type="button"
-                className="ob-btn"
+                className="ob-btn ob-btn-sm"
                 disabled={insertingId === a.id}
                 aria-busy={insertingId === a.id}
                 onClick={() => {
                   const project = useBoardStore.getState().getActive();
                   if (!project) {
-                    alert(t("assets.openCanvasFirst"));
+                    setError(t("assets.openCanvasFirst"));
                     return;
                   }
                   setInsertingId(a.id);
-                  // Stay on the library page; busy state ends only after persistNow.
                   void insertAsset(a.id, {
                     x: 80 + Math.random() * 120,
                     y: 80 + Math.random() * 120,
                   }).catch((cause) => {
-                    alert(cause instanceof Error ? cause.message : String(cause));
+                    setError(cause instanceof Error ? cause.message : String(cause));
                   }).finally(() => setInsertingId(null));
                 }}
               >
+                <Plus size={13} aria-hidden />
                 {insertingId === a.id ? t("assets.inserting") : t("assets.insertCanvas")}
               </button>
               {a.kind === "text" ? (
                 <button
                   type="button"
-                  className="ob-btn"
+                  className="ob-btn ob-btn-sm"
                   onClick={() => void writeTextWithFallback(a.content ?? "").catch(() => undefined)}
                 >
+                  <Copy size={13} aria-hidden />
                   {t("common.copy")}
                 </button>
               ) : null}
               {a.kind !== "text" && a.storageKey ? (
                 <button
                   type="button"
-                  className="ob-btn"
+                  className="ob-btn ob-btn-sm"
                   onClick={() =>
                     void downloadStorageKey(
                       a.storageKey!,
@@ -289,49 +365,38 @@ export function AssetsPage() {
                     )
                   }
                 >
+                  <Download size={13} aria-hidden />
                   {t("common.download")}
                 </button>
               ) : null}
               <button
                 type="button"
-                className="ob-btn"
+                className="ob-btn ob-btn-sm"
                 onClick={() => {
                   setCreating(false);
                   setEditing(a);
                 }}
               >
+                <Edit3 size={13} aria-hidden />
                 {t("common.edit")}
               </button>
               <button
                 type="button"
-                className="ob-btn-danger ml-auto rounded-lg px-2.5 py-1.5 text-sm font-medium"
-                onClick={() => {
-                  if (!window.confirm(t("assets.confirmDelete", { title: a.title }))) return;
-                  void (async () => {
-                    const nextAssets = structuredClone(
-                      useBoardStore.getState().assets.filter((item) => item.id !== a.id),
-                    );
-                    setAssets(nextAssets);
-                    await flushAssets();
-                    await removeOrphanedBlob(a.storageKey, nextAssets);
-                    // Keep pagination valid after the last item on a page is removed.
-                    setPage((current) => {
-                      const totalPages = Math.max(1, Math.ceil(nextAssets.length / pageSize));
-                      return Math.min(current, totalPages);
-                    });
-                  })();
-                }}
+                className="ob-btn ob-btn-danger ob-btn-sm ml-auto"
+                aria-label={t("common.delete")}
+                onClick={() => setPendingDelete(a)}
               >
-                {t("common.delete")}
+                <Trash2 size={13} aria-hidden />
               </button>
             </div>
           </article>
         ))}
       </div>
+
       {!filtered.length ? (
         <div className="ob-empty mt-8">
           <span className="ob-empty-icon" aria-hidden>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            <FolderHeart size={20} />
           </span>
           <p className="ob-empty-title">{t("assets.empty")}</p>
           <p className="ob-empty-desc">{t("assets.emptyDescription")}</p>
@@ -359,6 +424,7 @@ export function AssetsPage() {
           </button>
         </div>
       )}
+
       <AssetEditorDialog
         asset={editing}
         mode={creating ? "create" : "edit"}
@@ -368,6 +434,17 @@ export function AssetsPage() {
         }}
         onSave={saveAsset}
       />
+
+      {pendingDelete ? (
+        <ConfirmDialog
+          title={t("assets.confirmDelete", { title: pendingDelete.title })}
+          confirmLabel={t("common.delete")}
+          tone="danger"
+          busy={deletingId !== null}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void executeDelete(pendingDelete)}
+        />
+      ) : null}
     </div>
   );
 }

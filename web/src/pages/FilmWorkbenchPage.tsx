@@ -15,6 +15,7 @@ import { useSharedChannels } from "@/services/shared-channels";
 import { applyFilmStyleTemplate, copyFilmStyleTemplateAsProject } from "@/services/film-style-templates";
 import { listMediaCapabilities, mediaOptionsForKind, type MediaCapability, type MediaCapabilityCatalog, type MediaKind } from "@/services/media-capabilities";
 import { estimateCredits, type CreditEstimate } from "@/services/auth-session";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
@@ -167,6 +168,8 @@ export function FilmWorkbenchPage() {
   const [manuscript, setManuscript] = useState("");
   const [manuscriptDirty, setManuscriptDirty] = useState(false);
   const [timelineDirty, setTimelineDirty] = useState(false);
+  const [pendingLeaveHref, setPendingLeaveHref] = useState<string | null>(null);
+  const [confirmRefreshDrafts, setConfirmRefreshDrafts] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -212,9 +215,17 @@ export function FilmWorkbenchPage() {
     finally { setBusy(null); }
   };
 
-  const refresh = async () => {
-    if (shouldConfirmFilmLeave(manuscriptDirty, timelineDirty) && !confirm(t("film.confirm.refreshDrafts"))) return;
+  const executeRefresh = async () => {
+    setConfirmRefreshDrafts(false);
     await run(t("film.refresh"), () => loadFilmStatus(projectId), { notice: t("film.refreshedDrafts") });
+  };
+
+  const refresh = async () => {
+    if (shouldConfirmFilmLeave(manuscriptDirty, timelineDirty)) {
+      setConfirmRefreshDrafts(true);
+      return;
+    }
+    await executeRefresh();
   };
 
   useEffect(() => {
@@ -257,9 +268,20 @@ export function FilmWorkbenchPage() {
   useEffect(() => {
     if (!shouldConfirmFilmLeave(manuscriptDirty, timelineDirty)) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    const navigate = (event: MouseEvent) => { const target = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null; if (target && isFilmNavigationAway(location.href, target.href) && !confirm(t("film.confirm.leave"))) { event.preventDefault(); event.stopImmediatePropagation(); } };
-    window.addEventListener("beforeunload", warn); globalThis.document.addEventListener("click", navigate, true);
-    return () => { window.removeEventListener("beforeunload", warn); globalThis.document.removeEventListener("click", navigate, true); };
+    const navigate = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (target && isFilmNavigationAway(location.href, target.href)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setPendingLeaveHref(target.href);
+      }
+    };
+    window.addEventListener("beforeunload", warn);
+    globalThis.document.addEventListener("click", navigate, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      globalThis.document.removeEventListener("click", navigate, true);
+    };
   }, [manuscriptDirty, timelineDirty]);
 
   if (!project || project.projectKind !== "film") return <Navigate to="/" replace />;
@@ -396,5 +418,28 @@ export function FilmWorkbenchPage() {
         <AgentPanel status={status} onValidate={() => void run(t("film.action.agentValidate"), () => validateFilm(projectId))} />
       </>}
     </main>
+    {confirmRefreshDrafts ? (
+      <ConfirmDialog
+        title={t("film.confirm.refreshDrafts")}
+        confirmLabel={t("common.confirm")}
+        tone="danger"
+        onCancel={() => setConfirmRefreshDrafts(false)}
+        onConfirm={() => void executeRefresh()}
+      />
+    ) : null}
+    {pendingLeaveHref ? (
+      <ConfirmDialog
+        title={t("film.confirm.leave")}
+        message={t("film.confirm.refreshDrafts")}
+        confirmLabel={t("common.confirm")}
+        tone="danger"
+        onCancel={() => setPendingLeaveHref(null)}
+        onConfirm={() => {
+          const href = pendingLeaveHref;
+          setPendingLeaveHref(null);
+          window.location.href = href;
+        }}
+      />
+    ) : null}
   </div>;
 }

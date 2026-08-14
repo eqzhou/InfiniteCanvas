@@ -451,10 +451,10 @@ export function DirectorDialog({
       </aside>
 
       <main className="relative min-w-0 flex-1">
-        <div className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded border border-white/10 bg-black/55 p-1 text-xs backdrop-blur">
-          <button type="button" aria-pressed={scene.viewMode === "director"} className={`rounded px-2 py-1 ${scene.viewMode === "director" ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => onChange(setDirectorViewMode(scene, "director"))}>{t("director.directorView")}</button>
-          <button type="button" aria-pressed={scene.viewMode === "camera"} className={`rounded px-2 py-1 ${scene.viewMode === "camera" ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => onChange(setDirectorViewMode(scene, "camera"))}>{t("director.cameraView")}</button>
-          <span className="px-1 text-slate-400">{activeCamera.name} · {activeCamera.focalLength}mm</span>
+        <div className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] p-1 text-xs shadow-[var(--ob-elev-2)] backdrop-blur-md">
+          <button type="button" aria-pressed={scene.viewMode === "director"} className={`rounded-lg px-2.5 py-1 transition-colors ${scene.viewMode === "director" ? "bg-[var(--ob-accent)] text-[#042f2e] font-semibold" : "text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)]"}`} onClick={() => onChange(setDirectorViewMode(scene, "director"))}>{t("director.directorView")}</button>
+          <button type="button" aria-pressed={scene.viewMode === "camera"} className={`rounded-lg px-2.5 py-1 transition-colors ${scene.viewMode === "camera" ? "bg-[var(--ob-accent)] text-[#042f2e] font-semibold" : "text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)]"}`} onClick={() => onChange(setDirectorViewMode(scene, "camera"))}>{t("director.cameraView")}</button>
+          <span className="px-1.5 font-mono text-[11px] text-[var(--ob-muted)]">{activeCamera.name} · {activeCamera.focalLength}mm</span>
         </div>
         <DirectorViewport
           scene={scene}
@@ -469,33 +469,33 @@ export function DirectorDialog({
           onTransformCommit={(id, transform) => onTransformCommit(updateDirectorObjectTransform(scene, id, transform))}
           onModelStatus={(id, status) => setModelStatuses((current) => current[id] === status ? current : { ...current, [id]: status })}
         />
-        <div className="absolute bottom-44 left-1/2 z-10 flex max-w-[min(92%,48rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded border border-white/10 bg-black/65 p-1 text-xs backdrop-blur" aria-label={t("director.transformTools")}>
+        <div className="absolute bottom-44 left-1/2 z-10 flex max-w-[min(92%,48rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] p-1 text-xs shadow-[var(--ob-elev-2)] backdrop-blur-md" aria-label={t("director.transformTools")}>
           {(["translate", "rotate", "scale"] as const).map((mode) => (
-            <button key={mode} type="button" aria-pressed={transformMode === mode} className={`rounded px-3 py-1.5 ${transformMode === mode ? "bg-[#f0f269] text-black" : "hover:bg-white/10"}`} onClick={() => setTransformMode(mode)}>
+            <button key={mode} type="button" aria-pressed={transformMode === mode} className={`rounded-lg px-3 py-1.5 transition-colors ${transformMode === mode ? "bg-[var(--ob-accent)] text-[#042f2e] font-semibold" : "text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)]"}`} onClick={() => setTransformMode(mode)}>
               {t({ translate: "director.translate", rotate: "director.rotate", scale: "director.scale" }[mode] as Parameters<typeof t>[0])}
             </button>
           ))}
-          <span className="mx-1 h-5 border-l border-white/15" />
+          <span className="mx-1 h-5 border-l border-[var(--ob-line)]" />
           <button
             type="button"
-            className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
+            className="rounded-lg px-2.5 py-1.5 text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)] disabled:opacity-35 transition-colors"
             disabled={!selected || !selected.visible || selected.kind === "light"}
             onClick={() => applyDirectorFraming("focusSelected")}
           >{t("director.focusSelected")}</button>
           <button
             type="button"
-            className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
+            className="rounded-lg px-2.5 py-1.5 text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)] disabled:opacity-35 transition-colors"
             disabled={!scene.objects.some((object) => object.visible && object.kind !== "light")}
             onClick={() => applyDirectorFraming("fitScene")}
           >{t("director.fitScene")}</button>
           <button
             type="button"
-            className="rounded px-2 py-1.5 hover:bg-white/10"
+            className="rounded-lg px-2.5 py-1.5 text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)] transition-colors"
             onClick={() => onChange(resetDirectorView(scene))}
           >{t("director.resetView")}</button>
           <button
             type="button"
-            className="rounded px-2 py-1.5 hover:bg-white/10 disabled:opacity-35"
+            className="rounded-lg px-2.5 py-1.5 text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)] disabled:opacity-35 transition-colors"
             disabled={!selected || selected.locked}
             onClick={() => selected && onTransformCommit(resetDirectorObjectTransform(scene, selected.id))}
           >{t("director.resetObject")}</button>

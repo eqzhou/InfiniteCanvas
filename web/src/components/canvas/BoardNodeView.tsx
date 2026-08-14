@@ -18,6 +18,7 @@ import {
   type DirectorCapture,
 } from "@/services/director-capture-store";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { toast } from "@/components/common/toast";
 import { fitMediaDisplaySize } from "@/lib/geometry";
 import { defaultModelForMode } from "@/lib/generation-model";
 import { normalizeNodeTitle } from "@/lib/node-format";
@@ -236,7 +237,7 @@ export function BoardNodeView({
         height: display.height,
       });
     })().catch((error: unknown) => {
-      window.alert(error instanceof Error ? error.message : t("canvasNodes.imageImportFailed"));
+      toast.error(error instanceof Error ? error.message : t("canvasNodes.imageImportFailed"));
     });
   };
 
@@ -1268,22 +1269,21 @@ export function BoardNodeView({
           role="presentation"
           data-resize-corner={corner}
           className={cn(
-            "absolute h-3.5 w-3.5",
-            corner === "nw" ? "left-0 top-0 cursor-nw-resize" :
-            corner === "ne" ? "right-0 top-0 cursor-ne-resize" :
-            corner === "sw" ? "bottom-0 left-0 cursor-sw-resize" :
-            "bottom-0 right-0 cursor-se-resize",
-            // Only the south-east corner keeps the classic visual notch so the
-            // node chrome stays quiet until the pointer is over a corner.
-            corner === "se"
-              ? "bg-[linear-gradient(135deg,transparent_50%,var(--ob-muted)_50%)]"
-              : "opacity-0 group-hover/node:opacity-100",
+            "absolute z-20 flex items-center justify-center transition-opacity duration-150",
+            "h-4 w-4",
+            corner === "nw" ? "-left-1.5 -top-1.5 cursor-nw-resize" :
+            corner === "ne" ? "-right-1.5 -top-1.5 cursor-ne-resize" :
+            corner === "sw" ? "-bottom-1.5 -left-1.5 cursor-sw-resize" :
+            "-bottom-1.5 -right-1.5 cursor-se-resize",
+            selected ? "opacity-100" : "opacity-0 group-hover/node:opacity-60",
           )}
           onPointerDown={(e) => {
             e.stopPropagation();
             onResizeStart(e, Boolean(node.metadata.freeResize) || node.type !== "image", corner);
           }}
-        />
+        >
+          <span className="h-2 w-2 rounded-xs border border-[var(--ob-select)] bg-[var(--ob-panel)] shadow-xs transition-transform hover:scale-125" />
+        </div>
       ))}
     </div>
   );

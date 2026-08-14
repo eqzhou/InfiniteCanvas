@@ -93,15 +93,21 @@ export function HelpPage() {
   const sections = getHelpSections(t);
 
   return (
-    <div className="h-full overflow-y-auto bg-[var(--ob-bg)]" aria-labelledby="help-title">
-      <div className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-6 sm:px-6 sm:py-9 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10 lg:px-8">
+    <div className="h-full overflow-y-auto bg-[var(--ob-bg)] ob-view-fade-in" aria-labelledby="help-title">
+      <div className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-6 sm:px-6 sm:py-9 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-10 lg:px-8">
         <aside className="lg:sticky lg:top-6 lg:self-start">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ob-accent)]">{t("help.guide")}</p>
-          <h1 id="help-title" className="mt-2 text-2xl font-bold tracking-tight text-[var(--ob-ink)] sm:text-3xl">{t("help.title")}</h1>
-          <p className="mt-3 text-sm leading-6 text-[var(--ob-muted)]">{t("help.description")}</p>
-          <nav aria-label={t("help.topics")} className="ob-card mt-5 flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible">
+          <p className="ob-page-kicker">{t("help.guide")}</p>
+          <h1 id="help-title" className="mt-1.5 text-2xl font-bold tracking-tight text-[var(--ob-ink)]">{t("help.title")}</h1>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--ob-muted)]">{t("help.description")}</p>
+          <nav aria-label={t("help.topics")} className="ob-card mt-5 flex gap-1 overflow-x-auto p-1.5 lg:flex-col lg:overflow-visible">
             {sections.map(({ id, title }) => (
-              <a key={id} href={`#${id}`} className="shrink-0 rounded-lg px-3 py-2 text-sm text-[var(--ob-muted)] transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ob-accent)]">{title}</a>
+              <a
+                key={id}
+                href={`#${id}`}
+                className="shrink-0 rounded-lg px-3 py-2 text-xs font-medium text-[var(--ob-muted)] transition-colors hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)] active:bg-[var(--ob-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ob-accent)]"
+              >
+                {title}
+              </a>
             ))}
           </nav>
         </aside>

@@ -29,6 +29,8 @@ import { WorkbenchSection } from "./WorkbenchSection";
 import { localizeFilmDiagnostic, localizeFilmStatus } from "./film-display";
 import { executeFilmAgentRead, type FilmAgentReadTool } from "@/services/film-agent-client";
 import { EpisodeProductionViews } from "./EpisodeProductionViews";
+import { TextEntryDialog } from "@/components/canvas/TextEntryDialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 
 export function EpisodesPanel({ status, busy, onSaveEpisode, onSaveShot, onCreateDialogue, onSaveDialogue, onDeleteDialogue }: {
   status: FilmStatus; busy: boolean;
@@ -127,12 +129,17 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced, 
     latestTaskScopes.add(scope);
     latestGenerationJobIds.add(task.generationJobId);
   }
+  const [waiverTarget, setWaiverTarget] = useState<FilmStage | null>(null);
+  const [waiverReason, setWaiverReason] = useState<string | null>(null);
   const protectedStages = new Set<FilmStageKind>(["decompose", "compose", "delivery"]);
   const activeWaivers = new Map((status.document.stageWaivers ?? []).filter((waiver) => !waiver.revokedAt).map((waiver) => [waiver.stageId, waiver]));
   const requestWaiver = (item: FilmStage) => {
-    const reason = window.prompt(t("film.production.waiverPrompt"))?.trim();
-    if (!reason || !window.confirm(t("film.production.waiverConfirm"))) return;
-    onWaive(item, reason);
+    setWaiverTarget(item);
+    setWaiverReason(null);
+  };
+  const closeWaiver = () => {
+    setWaiverTarget(null);
+    setWaiverReason(null);
   };
   return <WorkbenchSection id="tasks" title={t("film.production.title")} wide>
     <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
@@ -141,8 +148,32 @@ export function ProductionPanel({ status, busy, onLegacyStage, onRun, onSynced, 
     </div>
     <div className="mt-5 flex items-center gap-2"><h3 className="mr-auto text-sm font-medium">{t("film.production.jobs")}</h3><button className="ob-btn" disabled={!capabilities.generationJobs && !status.document.tasks.some((task) => task.generationJobId)} onClick={() => void refreshJobs()}><RefreshCw size={14} /> {t("film.production.refreshJobs")}</button></div>
     {jobError ? <p role="alert" className="mt-2 text-sm text-[var(--ob-danger)]">{jobError}</p> : null}
-	    <ul className="mt-2 space-y-2">{jobs.map((job) => <li key={job.id} data-testid={`generation-job-${job.id}`} className={`rounded-lg border border-[var(--ob-line)] p-3 ${job.parentJobId ? "ml-5" : ""}`}><div className="flex flex-wrap items-center gap-2"><strong className="mr-auto text-sm">{job.title}</strong><span className="text-xs">{localizeFilmStatus(t, job.status)}</span>{latestGenerationJobIds.has(job.id) && (job.status === "failed" || job.status === "canceled") ? <button className="ob-btn" onClick={() => void retryOne(job.id).catch((cause) => setJobError(String(cause)))}>{t(job.shotId ? "film.production.retryShot" : "film.production.retryJob")}</button> : null}{(job.status === "queued" || job.status === "running") ? <button className="ob-btn" onClick={() => void cancelOne(job.id).catch((cause) => setJobError(String(cause)))}>{t("film.production.cancel")}</button> : null}</div>{job.error ? <p className="text-xs text-[var(--ob-danger)]">{localizeFilmDiagnostic(t, job.error)}</p> : null}</li>)}</ul>
+    <ul className="mt-2 space-y-2">{jobs.map((job) => <li key={job.id} data-testid={`generation-job-${job.id}`} className={`rounded-lg border border-[var(--ob-line)] p-3 ${job.parentJobId ? "ml-5" : ""}`}><div className="flex flex-wrap items-center gap-2"><strong className="mr-auto text-sm">{job.title}</strong><span className="text-xs">{localizeFilmStatus(t, job.status)}</span>{latestGenerationJobIds.has(job.id) && (job.status === "failed" || job.status === "canceled") ? <button className="ob-btn" onClick={() => void retryOne(job.id).catch((cause) => setJobError(String(cause)))}>{t(job.shotId ? "film.production.retryShot" : "film.production.retryJob")}</button> : null}{(job.status === "queued" || job.status === "running") ? <button className="ob-btn" onClick={() => void cancelOne(job.id).catch((cause) => setJobError(String(cause)))}>{t("film.production.cancel")}</button> : null}</div>{job.error ? <p className="text-xs text-[var(--ob-danger)]">{localizeFilmDiagnostic(t, job.error)}</p> : null}</li>)}</ul>
     {!jobs.length ? <p className="mt-2 text-sm text-[var(--ob-muted)]">{t(capabilities.generationJobs ? "film.production.noJobs" : "film.production.jobsUnavailable")}</p> : null}
+    <TextEntryDialog
+      open={Boolean(waiverTarget && waiverReason === null)}
+      title={t("film.production.auditWaiver")}
+      label={t("film.production.waiverPrompt")}
+      submitLabel={t("common.confirm")}
+      onClose={closeWaiver}
+      onSubmit={(reason) => setWaiverReason(reason.trim())}
+    />
+    {waiverTarget && waiverReason !== null ? (
+      <ConfirmDialog
+        title={t("film.production.waiverConfirm")}
+        message={waiverReason}
+        confirmLabel={t("common.confirm")}
+        tone="danger"
+        busy={busy}
+        onCancel={closeWaiver}
+        onConfirm={() => {
+          const target = waiverTarget;
+          const reason = waiverReason;
+          closeWaiver();
+          onWaive(target, reason);
+        }}
+      />
+    ) : null}
   </WorkbenchSection>;
 }
 

@@ -94,6 +94,7 @@ import {
   Type,
   Wand2,
 } from "lucide-react";
+import { toast } from "@/components/common/toast";
 import { useI18n } from "@/i18n/I18nProvider";
 
 type PromptDialogKind = "rewrite" | "image" | "video" | "audio";
@@ -307,13 +308,13 @@ export function NodeActions({
   const runConfigGenerate = async () => {
     if (configGenerating || node.metadata.status === "loading") return;
     if (node.metadata.generationChannelId && !channel) {
-      alert(t("canvasNodes.originalChannelUnavailable"));
+      toast.warn(t("canvasNodes.originalChannelUnavailable"));
       return;
     }
     const mode = node.metadata.generationMode ?? "image";
     const providerKind = mode === "text" ? "text" : mode === "video" ? "video" : "image";
     if (!isGenerationChannelReady(channel, providerKind)) {
-      alert(t("canvasNodes.modelApiKeyRequired"));
+      toast.warn(t("canvasNodes.modelApiKeyRequired"));
       return;
     }
     const inputs = upstream();
@@ -326,7 +327,7 @@ export function NodeActions({
       : inputs.imageKeys;
     const images = inputs.images;
     if (usesStoredDirectorReferences && imageKeys.length === 0) {
-      alert(t("canvasNodes.directorReferenceMissing"));
+      toast.warn(t("canvasNodes.directorReferenceMissing"));
       return;
     }
     const prompt = resolveConfigPrompt({
@@ -334,7 +335,7 @@ export function NodeActions({
       upstreamTexts: texts,
     });
     if (!prompt) {
-      alert(t("canvasNodes.promptRequired"));
+      toast.warn(t("canvasNodes.promptRequired"));
       return;
     }
     setConfigGenerating(true);
@@ -562,7 +563,7 @@ export function NodeActions({
 
   const rewriteText = async (instruction: string) => {
     if (!channel || !getProvider(channel, "text").apiKey) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading" } });
@@ -601,7 +602,7 @@ export function NodeActions({
 
   const continueFromImage = async (prompt: string) => {
     if (!isGenerationChannelReady(channel, "image")) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     try {
@@ -669,7 +670,7 @@ export function NodeActions({
       if (!node.metadata.content && !node.metadata.storageKey) {
         updateNode(node.id, { metadata: { status: "error", errorDetails: err instanceof Error ? err.message : String(err) } });
       } else {
-        alert(err instanceof Error ? err.message : String(err));
+        toast.error(err instanceof Error ? err.message : String(err));
       }
     } finally {
       await persistNow();
@@ -682,16 +683,16 @@ export function NodeActions({
       ? channelChoices.find((choice) => choice.id === savedChannelId)
       : channel;
     if (savedChannelId && !retryChannel) {
-      alert(t("canvasNodes.originalChannelRetryUnavailable"));
+      toast.warn(t("canvasNodes.originalChannelRetryUnavailable"));
       return;
     }
     if (!isGenerationChannelReady(retryChannel, "image")) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     const prompt = node.metadata.prompt?.trim();
     if (!prompt) {
-      alert(t("canvasNodes.retrySnapshotMissing"));
+      toast.warn(t("canvasNodes.retrySnapshotMissing"));
       return;
     }
     const referenceStorageKeys = [...(node.metadata.referenceStorageKeys ?? [])];
@@ -750,7 +751,7 @@ export function NodeActions({
 
   const reversePrompt = async () => {
     if (!channel || !getProvider(channel, "text").apiKey) {
-      alert(t("canvasNodes.visionApiKeyRequired"));
+      toast.warn(t("canvasNodes.visionApiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
@@ -787,7 +788,7 @@ export function NodeActions({
 
   const generateOnVideo = async (prompt: string) => {
     if (!channel || !getProvider(channel, "video").apiKey) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
@@ -945,7 +946,7 @@ export function NodeActions({
         a.click();
         return;
       }
-      alert(t("canvasNodes.downloadMissing"));
+      toast.warn(t("canvasNodes.downloadMissing"));
       return;
     }
     try {
@@ -958,7 +959,7 @@ export function NodeActions({
         ),
       );
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.error(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -969,9 +970,10 @@ export function NodeActions({
         .then((resolved) => resolved ?? node.metadata.content ?? null);
       await copyImageSourceToClipboard(source);
       setImageCopyState("copied");
+      toast.success(t("canvasNodes.imageCopied"));
     } catch (cause) {
       setImageCopyState("error");
-      alert(cause instanceof Error ? cause.message : t("canvasNodes.copyImageFailed"));
+      toast.error(cause instanceof Error ? cause.message : t("canvasNodes.copyImageFailed"));
     }
   };
 
@@ -980,7 +982,7 @@ export function NodeActions({
   const generateOnAudio = async (prompt: string) => {
     const provider = channel ? getProvider(channel, "audio") : undefined;
     if (!channel || !provider || (audioProtocolRequiresKey(provider.protocol) && !provider.apiKey)) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     updateNode(node.id, { metadata: { status: "loading", prompt, errorDetails: undefined } });
@@ -1073,7 +1075,7 @@ export function NodeActions({
 
   const openRewriteDialog = () => {
     if (!channel || !getProvider(channel, "text").apiKey) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setPromptDialog({
@@ -1087,7 +1089,7 @@ export function NodeActions({
 
   const openImageGenerationDialog = () => {
     if (!isGenerationChannelReady(channel, "image")) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     const continuing = Boolean(node.metadata.content || node.metadata.storageKey);
@@ -1103,7 +1105,7 @@ export function NodeActions({
 
   const openVideoGenerationDialog = () => {
     if (!channel || !getProvider(channel, "video").apiKey) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setPromptDialog({
@@ -1119,7 +1121,7 @@ export function NodeActions({
 
   const openAudioGenerationDialog = () => {
     if (!isGenerationChannelReady(channel, "audio")) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setPromptDialog({
@@ -1160,7 +1162,7 @@ export function NodeActions({
       case "rotate":
         return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.rotate"))} title={t("canvasNodes.rotate90")} onClick={() => void (async () => {
           try { placeRight([await makeRotatedNode(node, 90)]); }
-          catch (error) { alert(error instanceof Error ? error.message : String(error)); }
+          catch (error) { toast.error(error instanceof Error ? error.message : String(error)); }
         })()}><RotateCw size={14} /></IconBtn>;
       case "angle":
         return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.multiAngle"))} title={t("canvasNodes.multiAngle")} onClick={() => setAngleOpen(true)}><span className="text-[10px] font-semibold">{t("canvasNodes.angleShort")}</span></IconBtn>;
@@ -1367,7 +1369,7 @@ export function NodeActions({
                 placeRight([created]);
                 setCropOpen(false);
               } catch (err) {
-                alert(err instanceof Error ? err.message : String(err));
+                toast.error(err instanceof Error ? err.message : String(err));
               }
             })();
           }}
@@ -1385,7 +1387,7 @@ export function NodeActions({
                 placeRight([created]);
                 setAngleOpen(false);
               } catch (err) {
-                alert(err instanceof Error ? err.message : String(err));
+                toast.error(err instanceof Error ? err.message : String(err));
               }
             })();
           }}

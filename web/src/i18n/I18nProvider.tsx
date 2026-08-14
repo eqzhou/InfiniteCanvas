@@ -30,7 +30,8 @@ const I18nContext = createContext<I18nContextValue>(fallbackContext);
 
 function browserLocale(): AppLocale {
   if (typeof navigator === "undefined") return "zh-CN";
-  return detectSupportedLocale(navigator.languages?.length ? navigator.languages : [navigator.language]);
+  const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
+  return detectSupportedLocale(languages);
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {

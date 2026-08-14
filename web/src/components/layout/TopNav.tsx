@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   Library,
   Menu,
+  Monitor,
   MoreHorizontal,
   Moon,
   Puzzle,
@@ -30,6 +31,7 @@ import {
   ListTodo,
   X,
 } from "lucide-react";
+import { toast } from "@/components/common/toast";
 import { cn } from "@/lib/cn";
 import { exportCompleteProjectBundle } from "@/services/film-bundle";
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
@@ -39,6 +41,7 @@ import { canAccessAdminPage } from "@/services/admin";
 import type { UsageSnapshot } from "@/services/auth-session";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
+import { applyTheme } from "@/lib/theme";
 
 function UsageSummary({ snapshot, label, t }: {
   snapshot: UsageSnapshot | null;
@@ -144,9 +147,9 @@ export function TopNav({
   }, []);
 
   const toggleTheme = useCallback(() => {
-    const next = theme === "dark" ? "light" : "dark";
+    const next = theme === "light" ? "dark" : theme === "dark" ? "system" : "light";
+    applyTheme(next);
     setConfig({ ...config, theme: next });
-    document.documentElement.classList.toggle("dark", next === "dark");
   }, [theme, config, setConfig]);
 
   const downloadActiveProject = useCallback(() => {
@@ -159,9 +162,10 @@ export function TopNav({
         anchor.download = `${activeProject.title || "openboard"}.openboard`;
         anchor.click();
         URL.revokeObjectURL(url);
+        toast.success(t("common.download"));
       })
-      .catch((error) => alert(error instanceof Error ? error.message : String(error)));
-  }, [activeProject]);
+      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
+  }, [activeProject, t]);
 
   const canManage = canAccessAdminPage(auth);
   const links = [
@@ -292,7 +296,7 @@ export function TopNav({
               setMobileNavOpen(false);
             }}
           >
-            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            {theme === "dark" ? <Moon size={18} /> : theme === "light" ? <Sun size={18} /> : <Monitor size={18} />}
             {t("nav.toggleTheme")}
           </button>
         </div>
@@ -446,7 +450,7 @@ export function TopNav({
               aria-label={t("nav.toggleTheme")}
               onClick={toggleTheme}
             >
-              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+              {theme === "dark" ? <Moon size={18} /> : theme === "light" ? <Sun size={18} /> : <Monitor size={18} />}
             </button>
             <VersionReleaseModal />
           </div>
@@ -534,7 +538,7 @@ export function TopNav({
                       setCompactMenuOpen(false);
                     }}
                   >
-                    {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+                    {theme === "dark" ? <Moon size={16} /> : theme === "light" ? <Sun size={16} /> : <Monitor size={16} />}
                     {t("nav.toggleTheme")}
                   </button>
                   <div className="mt-1 border-t border-[var(--ob-line)] pt-1">

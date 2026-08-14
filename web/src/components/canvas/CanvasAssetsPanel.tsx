@@ -13,6 +13,8 @@ import {
   readPanoramaBlobDimensions,
 } from "@/lib/panorama";
 
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+
 export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
   const { t } = useI18n();
   const assets = useBoardStore((state) => state.assets);
@@ -22,6 +24,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
   const videoInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDeleteAsset, setPendingDeleteAsset] = useState<AssetItem | null>(null);
 
   const deleteSidebarAsset = async (assetId: string) => {
     const state = useBoardStore.getState();
@@ -190,11 +193,7 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
                 aria-label={t("canvas.deleteAsset", { title: asset.title })}
                 title={t("canvas.deleteAssetTitle")}
                 className="absolute right-1 top-1 z-10 grid h-7 w-7 place-items-center rounded-md bg-[var(--ob-panel)] text-[var(--ob-danger)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus:opacity-100"
-                onClick={() => {
-                  if (!confirm(t("canvas.confirmDeleteAsset", { title: asset.title }))) return;
-                  void deleteSidebarAsset(asset.id).catch((cause) =>
-                    setError(cause instanceof Error ? cause.message : String(cause)));
-                }}
+                onClick={() => setPendingDeleteAsset(asset)}
               >
                 <Trash2 size={14} />
               </button>
@@ -202,6 +201,20 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
           ))}
         </ul>
       )}
+      {pendingDeleteAsset ? (
+        <ConfirmDialog
+          title={t("canvas.confirmDeleteAsset", { title: pendingDeleteAsset.title })}
+          confirmLabel={t("common.delete")}
+          tone="danger"
+          onCancel={() => setPendingDeleteAsset(null)}
+          onConfirm={() => {
+            const targetId = pendingDeleteAsset.id;
+            setPendingDeleteAsset(null);
+            void deleteSidebarAsset(targetId).catch((cause) =>
+              setError(cause instanceof Error ? cause.message : String(cause)));
+          }}
+        />
+      ) : null}
     </div>
   );
 });

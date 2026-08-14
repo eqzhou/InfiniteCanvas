@@ -5,6 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>OpenBoard</title>
+    <script>
+      (function() {
+        try {
+          var stored = localStorage.getItem("openboard-theme");
+          if (!stored) {
+            var raw = localStorage.getItem("openboard_state_v1");
+            if (raw) {
+              var parsed = JSON.parse(raw);
+              if (parsed && parsed.config && parsed.config.theme) {
+                stored = parsed.config.theme;
+              }
+            }
+          }
+          var isDark = stored === "dark" || ((!stored || stored === "system") && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (isDark) {
+            document.documentElement.classList.add("dark");
+            document.documentElement.style.colorScheme = "dark";
+          } else {
+            document.documentElement.classList.remove("dark");
+            document.documentElement.style.colorScheme = "light";
+          }
+          if (stored) {
+            document.documentElement.setAttribute("data-theme", stored);
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

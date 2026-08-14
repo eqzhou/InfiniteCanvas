@@ -81,11 +81,19 @@ const zhCN = {
   "common.edit": "编辑",
   "common.delete": "删除",
   "common.cancel": "取消",
+  "common.confirm": "确认",
+  "common.save": "保存",
+  "common.saving": "正在保存…",
+  "common.accessDenied": "访问受限",
+  "common.permissionRequired": "需要管理员权限才能访问此页面。",
   "common.refresh": "刷新",
   "common.none": "无",
   "common.previousPage": "上一页",
   "common.nextPage": "下一页",
   "common.pageTotal": "{page} / {pages} · 共 {total}",
+  "nav.logs": "调用日志",
+  "tasks.confirmCancel": "确定要取消此任务吗？",
+  "serverLibrary.cover": "封面链接",
   "assets.title": "我的素材",
   "assets.description": "沉淀可复用的文本、图片、视频与音频原料，随时插入画布。",
   "assets.search": "搜索素材",
@@ -128,6 +136,8 @@ const zhCN = {
   "plugins.consentInstall": "同意并安装",
   "plugins.openCanvasFirst": "请先创建或打开一个画布项目",
   "plugins.confirmUninstall": "卸载 {name}？现有节点会保留数据，但无法渲染。",
+  "plugins.remoteBuiltinConflict": "远程插件不能覆盖内置插件。",
+  "plugins.registryMismatch": "插件清单与注册表中的标识或版本不一致。",
   "tasks.queued": "排队中",
   "tasks.running": "运行中",
   "tasks.succeeded": "已完成",
@@ -254,6 +264,7 @@ const zhCN = {
   "logs.model": "模型",
   "logs.channel": "渠道",
   "logs.duration": "耗时",
+  "logs.jobId": "任务 ID",
   "logs.details": "详情",
   "logs.select": "选择 {id}",
   "logs.view": "查看",
@@ -440,11 +451,19 @@ const enUS: Partial<Record<MessageKey, string>> = {
   "common.edit": "Edit",
   "common.delete": "Delete",
   "common.cancel": "Cancel",
+  "common.confirm": "Confirm",
+  "common.save": "Save",
+  "common.saving": "Saving…",
+  "common.accessDenied": "Access denied",
+  "common.permissionRequired": "Administrator permission is required to access this page.",
   "common.refresh": "Refresh",
   "common.none": "None",
   "common.previousPage": "Previous",
   "common.nextPage": "Next",
   "common.pageTotal": "{page} / {pages} · {total} total",
+  "nav.logs": "AI Logs",
+  "tasks.confirmCancel": "Are you sure you want to cancel this task?",
+  "serverLibrary.cover": "Cover URL",
   "assets.title": "My assets",
   "assets.description": "Keep reusable text, image, video, and audio materials ready for any canvas.",
   "assets.search": "Search assets",
@@ -487,6 +506,8 @@ const enUS: Partial<Record<MessageKey, string>> = {
   "plugins.consentInstall": "Agree and install",
   "plugins.openCanvasFirst": "Create or open a canvas project first",
   "plugins.confirmUninstall": "Uninstall {name}? Existing nodes keep their data but can no longer render.",
+  "plugins.remoteBuiltinConflict": "A remote plugin cannot override a built-in plugin.",
+  "plugins.registryMismatch": "The plugin manifest does not match the registry identifier or version.",
   "tasks.queued": "Queued",
   "tasks.running": "Running",
   "tasks.succeeded": "Completed",
@@ -613,6 +634,7 @@ const enUS: Partial<Record<MessageKey, string>> = {
   "logs.model": "Model",
   "logs.channel": "Channel",
   "logs.duration": "Duration",
+  "logs.jobId": "Job ID",
   "logs.details": "Details",
   "logs.select": "Select {id}",
   "logs.view": "View",
@@ -751,8 +773,9 @@ export function normalizeLocale(value: unknown): AppLocale | undefined {
   return value === "zh-CN" || value === "en-US" ? value : undefined;
 }
 
-export function detectSupportedLocale(languages: readonly string[]): AppLocale {
+export function detectSupportedLocale(languages: readonly (string | undefined | null)[]): AppLocale {
   for (const language of languages) {
+    if (!language || typeof language !== "string") continue;
     const normalized = language.trim().toLowerCase();
     if (normalized === "en" || normalized.startsWith("en-")) return "en-US";
     if (normalized === "zh-cn" || normalized.startsWith("zh-hans")) return "zh-CN";

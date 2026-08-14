@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HardDrive, KeyRound, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
 import {
   deleteAdminStoragePoolProvider, getAdminStoragePoolStatus, putAdminStoragePool, putAdminStoragePoolSecret,
@@ -115,13 +115,20 @@ export function AdminStoragePoolPanel() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pendingDelete, setPendingDelete] = useState<StorageProviderDraft | null>(null);
+  const credentialSectionRef = useRef<HTMLElement | null>(null);
   const resetCredentials = () => {
     const blank = blankStorageCredentials();
     setAccessKeyId(blank.accessKeyId); setSecretAccessKey(blank.secretAccessKey); setSessionToken(blank.sessionToken);
     setUsername(blank.username); setPassword(blank.password);
   };
   const closeCredentialEditor = () => { resetCredentials(); setSecretFor(""); };
-  const openCredentialEditor = (providerId: string) => { resetCredentials(); setSecretFor(providerId); };
+  const openCredentialEditor = (providerId: string) => {
+    resetCredentials();
+    setSecretFor(providerId);
+    requestAnimationFrame(() => {
+      credentialSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  };
   const load = async () => {
     setLoading(true);
     setLoaded(false);
@@ -312,7 +319,7 @@ export function AdminStoragePoolPanel() {
       </section>
 
       {secretFor ? (
-        <section className="ob-review" role="region" aria-labelledby="storage-credential-title">
+        <section ref={credentialSectionRef} className="ob-review" role="region" aria-labelledby="storage-credential-title">
           <div className="ob-record-header">
             <span className="ob-admin-section-icon" aria-hidden><KeyRound size={15} /></span>
             <div className="min-w-0">

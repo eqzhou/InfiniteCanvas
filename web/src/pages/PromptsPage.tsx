@@ -43,6 +43,7 @@ import {
   type PromptEditorValues,
 } from "@/components/prompts/PromptEditorDialog";
 import { PromptSourceManagerDialog } from "@/components/prompts/PromptSourceManagerDialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 
 const BUILTIN: PromptItem[] = [
@@ -103,6 +104,8 @@ export function PromptsPage() {
   const [sourceManagerOpen, setSourceManagerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"library" | "mine">("library");
   const [sourcesOpen, setSourcesOpen] = useState(true);
+  const [pendingDeletePrompt, setPendingDeletePrompt] = useState<PromptItem | null>(null);
+  const [pendingDeleteSource, setPendingDeleteSource] = useState<PromptSourceConfig | null>(null);
 
   // Keep a fresh deployment empty. Built-in examples are opt-in via the
   // explicit restore action below, so demo content never appears silently.
@@ -199,7 +202,7 @@ export function PromptsPage() {
 
   const pullRemote = async () => {
     if (!remoteUrl.trim()) {
-      alert(t("prompts.remoteUrlRequired"));
+      setErr(t("prompts.remoteUrlRequired"));
       return;
     }
     setBusy(true);
@@ -471,7 +474,7 @@ export function PromptsPage() {
         <div className="relative mx-auto flex max-w-7xl flex-col gap-5">
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0 flex-1">
-              <p className="ob-page-kicker">Library</p>
+              <p className="ob-page-kicker">{t("prompts.library")}</p>
               <h1
                 aria-label={t("prompts.library")}
                 className="text-2xl font-bold tracking-tight text-[var(--ob-ink)]"
@@ -756,14 +759,10 @@ export function PromptsPage() {
                             <button
                               type="button"
                               title={t("prompts.removeSource")}
+                              aria-label={t("prompts.removeSource")}
                               className="ob-btn-danger ob-btn-sm p-1.5"
                               disabled={busy}
-                              onClick={() => {
-                                if (window.confirm(t("prompts.confirmRemoveSource", { name: sourceConfig.name }))) {
-                                  void removeRemote(sourceConfig).catch((cause) =>
-                                    setErr(cause instanceof Error ? cause.message : String(cause)));
-                                }
-                              }}
+                              onClick={() => setPendingDeleteSource(sourceConfig)}
                             >
                               <Trash2 size={14} />
                             </button>
@@ -896,20 +895,7 @@ export function PromptsPage() {
                               className="ob-btn-danger ob-btn-sm p-1 ml-auto rounded-lg h-7 w-7 flex items-center justify-center"
                               title={t("prompts.delete")}
                               aria-label={t("prompts.delete")}
-                              onClick={() => {
-                                if (!window.confirm(t("prompts.confirmDelete", { title: p.title }))) return;
-                                void (async () => {
-                                  try {
-                                    const next = structuredClone(
-                                      useBoardStore.getState().prompts.filter((prompt) => prompt.id !== p.id),
-                                    );
-                                    setPrompts(next);
-                                    await flushPrompts();
-                                  } catch (cause) {
-                                    setErr(cause instanceof Error ? cause.message : String(cause));
-                                  }
-                                })();
-                              }}
+                              onClick={() => setPendingDeletePrompt(p)}
                             >
                               <Trash2 size={13} />
                             </button>
@@ -1021,11 +1007,40 @@ export function PromptsPage() {
         onPreview={fetchPromptSource}
         onRefresh={refreshRemote}
         onRemove={async (sourceConfig) => {
-          if (!window.confirm(t("prompts.confirmRemoveSource", { name: sourceConfig.name }))) return false;
-          await removeRemote(sourceConfig);
-          return true;
+          setPendingDeleteSource(sourceConfig);
+          return false;
         }}
       /> : null}
+      {pendingDeletePrompt ? (
+        <ConfirmDialog
+          title={t("prompts.confirmDelete", { title: pendingDeletePrompt.title })}
+          confirmLabel={t("common.delete")}
+          tone="danger"
+          onCancel={() => setPendingDeletePrompt(null)}
+          onConfirm={() => {
+            const next = structuredClone(
+              useBoardStore.getState().prompts.filter((prompt) => prompt.id !== pendingDeletePrompt.id),
+            );
+            setPrompts(next);
+            void flushPrompts().catch((cause) =>
+              setErr(cause instanceof Error ? cause.message : String(cause)));
+            setPendingDeletePrompt(null);
+          }}
+        />
+      ) : null}
+      {pendingDeleteSource ? (
+        <ConfirmDialog
+          title={t("prompts.confirmRemoveSource", { name: pendingDeleteSource.name })}
+          confirmLabel={t("common.delete")}
+          tone="danger"
+          onCancel={() => setPendingDeleteSource(null)}
+          onConfirm={() => {
+            void removeRemote(pendingDeleteSource).catch((cause) =>
+              setErr(cause instanceof Error ? cause.message : String(cause)));
+            setPendingDeleteSource(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

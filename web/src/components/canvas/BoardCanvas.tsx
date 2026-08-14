@@ -25,6 +25,7 @@ import { ZoomControls } from "@/components/canvas/ZoomControls";
 import { CanvasToolbar } from "@/components/canvas/CanvasToolbar";
 import { ContextMenu, type ContextMenuState } from "@/components/canvas/ContextMenu";
 import { AssetPickerModal } from "@/components/canvas/AssetPickerModal";
+import { toast } from "@/components/common/toast";
 import { expandGroupedSelection, reconcileGroupMembership } from "@/lib/grouping";
 import {
   createGestureState,
@@ -293,7 +294,7 @@ export function BoardCanvas() {
       const dataUrl = await renderCanvasSnapshot(surface);
       downloadCanvasSnapshot(dataUrl, canvasExportFilename(project.title));
     } catch (error) {
-      window.alert(error instanceof Error ? `${t("canvas.export")} ${t("tasks.failed")}：${error.message}` : `${t("canvas.export")} ${t("tasks.failed")}`);
+      toast.error(error instanceof Error ? `${t("canvas.export")} ${t("tasks.failed")}：${error.message}` : `${t("canvas.export")} ${t("tasks.failed")}`);
     } finally {
       setExportingSnapshot(false);
     }

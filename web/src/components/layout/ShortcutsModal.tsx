@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { Keyboard, X } from "lucide-react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -33,23 +33,27 @@ export function ShortcutsModal() {
   useEscapeDismiss(open, () => setShowShortcuts(false));
   if (!open) return null;
   return (
-    <div className="ob-overlay z-[120] p-4">
+    <div className="ob-overlay z-[120] p-4" onClick={() => setShowShortcuts(false)}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcuts-title"
-        className="ob-dialog ob-surface-glass w-full max-w-md p-0 shadow-[var(--ob-elev-2)]"
+        className="ob-dialog ob-surface ob-view-fade-in w-full max-w-md p-0 shadow-[var(--ob-elev-2)]"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-3 border-b border-[var(--ob-line)] px-5 py-4">
+        <div className="flex items-center gap-3 border-b border-[var(--ob-line)] px-5 py-3.5">
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
+            <Keyboard size={16} aria-hidden />
+          </span>
           <div className="min-w-0">
-            <p className="ob-page-kicker">Canvas</p>
-            <h2 id="shortcuts-title" className="text-lg font-semibold tracking-tight text-[var(--ob-ink)]">
+            <p className="ob-page-kicker">{t("nav.canvas")}</p>
+            <h2 id="shortcuts-title" className="text-base font-semibold tracking-tight text-[var(--ob-ink)]">
               {t("shortcuts.title")}
             </h2>
           </div>
           <button
             type="button"
-            className="ob-icon-btn ml-auto"
+            className="ob-icon-btn ob-icon-btn-sm ml-auto"
             aria-label={t("shortcuts.close")}
             title={t("shortcuts.close")}
             onClick={() => setShowShortcuts(false)}
@@ -58,16 +62,16 @@ export function ShortcutsModal() {
           </button>
         </div>
         <div className="max-h-[min(70vh,32rem)] overflow-y-auto px-5 py-2">
-          <table className="w-full text-sm">
+          <table className="w-full text-xs">
             <tbody>
               {rows.map(([k, v]) => (
                 <tr key={k} className="border-t border-[color-mix(in_srgb,var(--ob-line)_80%,transparent)] first:border-t-0">
                   <td className="py-2.5 pr-3">
-                    <kbd className="rounded-md border border-[var(--ob-line)] bg-[var(--ob-canvas)] px-1.5 py-0.5 text-[12px] font-medium text-[var(--ob-ink)] shadow-[var(--ob-elev-1)]">
+                    <kbd className="inline-block rounded border border-[var(--ob-line)] bg-[var(--ob-surface-2)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[var(--ob-ink)] shadow-xs">
                       {k}
                     </kbd>
                   </td>
-                  <td className="py-2.5 text-[var(--ob-muted)]">{t(v)}</td>
+                  <td className="py-2.5 text-right text-[var(--ob-muted)]">{t(v)}</td>
                 </tr>
               ))}
             </tbody>

@@ -32,6 +32,7 @@ import {
 } from "@/services/director-capture-store";
 import { directorModelStore } from "@/services/director-model-store";
 import { ProjectAudioRolesDialog } from "@/components/canvas/ProjectAudioRolesDialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
 
@@ -78,6 +79,8 @@ export function HomePage() {
   const [audioRolesOpen, setAudioRolesOpen] = useState(false);
   const [filmCapability, setFilmCapability] = useState<{ available: boolean; reason: string } | null>(null);
   const [panelWidth, setPanelWidth] = useState(config.canvasPanelWidth ?? 256);
+  const [confirmDeleteCount, setConfirmDeleteCount] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const panelCollapsed = config.canvasPanelCollapsed === true;
   const panelTab = config.canvasPanelTab ?? "projects";
   const panelActionClass = panelWidth < 300
@@ -341,7 +344,7 @@ export function HomePage() {
                       anchor.click();
                       URL.revokeObjectURL(url);
                     } catch (error) {
-                      alert(error instanceof Error ? error.message : String(error));
+                      setErrorMessage(error instanceof Error ? error.message : String(error));
                     }
                   })();
                 }}
@@ -352,13 +355,11 @@ export function HomePage() {
                 type="button"
                 className={`${panelActionClass} !text-[var(--ob-danger)]`}
                 title={t("workspace.deleteSelected")}
+                aria-label={t("workspace.deleteSelected")}
                 disabled={!checked.length}
                 onClick={() => {
                   if (!checked.length) return;
-                  if (confirm(t("workspace.confirmDeleteProjects", { count: checked.length }))) {
-                    deleteProjects(checked);
-                    setChecked([]);
-                  }
+                  setConfirmDeleteCount(checked.length);
                 }}
               >
                 <Trash2 size={16} />
@@ -388,7 +389,7 @@ export function HomePage() {
                 className="ob-icon-btn h-8 w-8 shrink-0"
                 disabled={!checkedNodes.length}
                 onClick={() => void exportCheckedNodes().catch((error) =>
-                  alert(error instanceof Error ? error.message : String(error)))}
+                  setErrorMessage(error instanceof Error ? error.message : String(error)))}
               >
                 <Archive size={16} />
               </button>
@@ -416,7 +417,7 @@ export function HomePage() {
                   await importCompleteProjectBundle(file);
                 }
               } catch (error) {
-                alert(t("workspace.importFailed", {
+                setErrorMessage(t("workspace.importFailed", {
                   message: error instanceof Error ? error.message : t("workspace.invalidFile"),
                 }));
               } finally {
@@ -617,31 +618,71 @@ export function HomePage() {
         ) : <BoardCanvas />}
       </div>
       {createOpen ? (
-        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/55 p-4" onMouseDown={() => setCreateOpen(false)}>
+        <div className="ob-overlay z-[100] p-4" onClick={() => setCreateOpen(false)}>
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby="create-project-title"
-            className="ob-card w-full max-w-lg p-5"
-            onMouseDown={(event) => event.stopPropagation()}
+            className="ob-surface ob-view-fade-in mx-auto mt-[12vh] w-full max-w-lg p-5 shadow-[var(--ob-elev-2)]"
+            onClick={(event) => event.stopPropagation()}
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 id="create-project-title" className="text-lg font-semibold">{t("workspace.createProject")}</h2>
-              <button type="button" className="ob-icon-btn" aria-label={t("common.close")} onClick={() => setCreateOpen(false)}><X size={16} /></button>
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-[var(--ob-line)] pb-3">
+              <div>
+                <p className="ob-page-kicker">{t("workspace.title")}</p>
+                <h2 id="create-project-title" className="text-base font-semibold tracking-tight text-[var(--ob-ink)]">{t("workspace.createProject")}</h2>
+              </div>
+              <button type="button" className="ob-icon-btn ob-icon-btn-sm" aria-label={t("common.close")} onClick={() => setCreateOpen(false)}><X size={16} /></button>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <button type="button" className="rounded-xl border border-[var(--ob-line)] p-5 text-left hover:border-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)]" onClick={() => void createNewProject("canvas")}>
-                <FolderPlus className="mb-3 text-[var(--ob-accent)]" aria-hidden />
-                <strong className="block">{t("workspace.canvasKind")}</strong>
-                <span className="mt-1 block text-sm text-[var(--ob-muted)]">{t("workspace.canvasKindDescription")}</span>
+              <button
+                type="button"
+                className="group rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface-2)] p-4 text-left transition-all hover:border-[var(--ob-accent)] hover:bg-[var(--ob-panel)] hover:shadow-[var(--ob-elev-1)]"
+                onClick={() => void createNewProject("canvas")}
+              >
+                <div className="mb-3 grid h-9 w-9 place-items-center rounded-lg bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
+                  <FolderPlus size={18} aria-hidden />
+                </div>
+                <strong className="block text-sm font-semibold text-[var(--ob-ink)] group-hover:text-[var(--ob-accent)] transition-colors">{t("workspace.canvasKind")}</strong>
+                <span className="mt-1 block text-xs leading-relaxed text-[var(--ob-muted)]">{t("workspace.canvasKindDescription")}</span>
               </button>
-              {filmCapability?.available ? <button type="button" className="rounded-xl border border-[var(--ob-line)] p-5 text-left hover:border-[var(--ob-accent)] hover:bg-[var(--ob-accent-soft)]" onClick={() => void createNewProject("film")}>
-                <Clapperboard className="mb-3 text-[var(--ob-accent)]" aria-hidden />
-                <strong className="block">{t("workspace.filmKind")}</strong>
-                <span className="mt-1 block text-sm text-[var(--ob-muted)]">{t("workspace.filmKindDescription")}</span>
-              </button> : null}
+              {filmCapability?.available ? (
+                <button
+                  type="button"
+                  className="group rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface-2)] p-4 text-left transition-all hover:border-[var(--ob-accent)] hover:bg-[var(--ob-panel)] hover:shadow-[var(--ob-elev-1)]"
+                  onClick={() => void createNewProject("film")}
+                >
+                  <div className="mb-3 grid h-9 w-9 place-items-center rounded-lg bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]">
+                    <Clapperboard size={18} aria-hidden />
+                  </div>
+                  <strong className="block text-sm font-semibold text-[var(--ob-ink)] group-hover:text-[var(--ob-accent)] transition-colors">{t("workspace.filmKind")}</strong>
+                  <span className="mt-1 block text-xs leading-relaxed text-[var(--ob-muted)]">{t("workspace.filmKindDescription")}</span>
+                </button>
+              ) : null}
             </div>
           </section>
+        </div>
+      ) : null}
+      {confirmDeleteCount !== null ? (
+        <ConfirmDialog
+          title={t("workspace.confirmDeleteProjects", { count: confirmDeleteCount })}
+          confirmLabel={t("common.delete")}
+          tone="danger"
+          onCancel={() => setConfirmDeleteCount(null)}
+          onConfirm={() => {
+            deleteProjects(checked);
+            setChecked([]);
+            setConfirmDeleteCount(null);
+          }}
+        />
+      ) : null}
+      {errorMessage ? (
+        <div className="fixed bottom-4 right-4 z-[200] max-w-md animate-bounce">
+          <div role="alert" className="ob-banner shadow-[var(--ob-elev-2)] rounded-xl" data-tone="danger">
+            <span className="flex-1 text-xs">{errorMessage}</span>
+            <button type="button" className="ob-icon-btn ob-icon-btn-sm" aria-label={t("common.close")} onClick={() => setErrorMessage(null)}>
+              <X size={14} />
+            </button>
+          </div>
         </div>
       ) : null}
       {audioRolesOpen ? (

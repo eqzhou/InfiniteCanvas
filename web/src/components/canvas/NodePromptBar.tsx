@@ -13,6 +13,7 @@ import { uploadMedia } from "@/services/storage";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import { Maximize2, Send } from "lucide-react";
+import { toast } from "@/components/common/toast";
 import { getProvider } from "@/lib/ai-config";
 import {
   canRegenerateImageFromPrompt,
@@ -168,14 +169,14 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       ? channelChoices.find((choice) => choice.id === node.metadata.generationChannelId)
       : undefined;
     if (regenerateImageInPlace && node.metadata.generationChannelId && !savedChannel) {
-      alert(t("canvasNodes.originalChannelPromptRetryUnavailable"));
+      toast.warn(t("canvasNodes.originalChannelPromptRetryUnavailable"));
       return;
     }
     const requestChannel = savedChannel ?? channel;
     const requestProvider = requestChannel ? getProvider(requestChannel, kind) : undefined;
     const requiresKey = kind !== "audio" || !requestProvider || audioProtocolRequiresKey(requestProvider.protocol);
     if (!requestChannel || (!isServerManagedChannel(requestChannel, kind) && requiresKey && !requestProvider?.apiKey)) {
-      alert(t("canvasNodes.apiKeyRequired"));
+      toast.warn(t("canvasNodes.apiKeyRequired"));
       return;
     }
     setBusy(true);
@@ -497,7 +498,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
       // Keep the last prompt so users can refine and resubmit.
     } catch (err) {
       if (node.type === "image" && hasImageContent) {
-        alert(err instanceof Error ? err.message : String(err));
+        toast.error(err instanceof Error ? err.message : String(err));
       } else {
         updateNode(node.id, {
           metadata: {

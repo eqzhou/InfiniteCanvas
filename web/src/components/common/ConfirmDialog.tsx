@@ -58,13 +58,13 @@ export function ConfirmDialog({
   };
 
   return (
-    <div className="ob-overlay z-[200]">
+    <div className="ob-overlay z-[200]" onClick={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
       <div
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="ob-confirm-title"
         aria-describedby={message ? "ob-confirm-desc" : undefined}
-        className="ob-surface w-full max-w-sm p-5"
+        className="ob-surface ob-view-fade-in w-full max-w-sm p-5"
         onKeyDown={handleKeyDown}
       >
         <div className="ob-admin-section-header !mb-3">

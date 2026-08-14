@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BookMarked, Check, Plus, RefreshCw, Rss, SlidersHorizontal, Tags, Trash2, X } from "lucide-react";
 import {
   bulkDeleteAdminPrompts,
@@ -147,6 +147,7 @@ function CategoriesSection({ categories, perform }: { categories: readonly Admin
   const [draft, setDraft] = useState({ id: "", name: "", order: 0 });
   const [editing, setEditing] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<AdminPromptCategory | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
 
   const reset = () => { setDraft({ id: "", name: "", order: 0 }); setEditing(false); };
   const submit = () => void perform(async () => {
@@ -155,7 +156,7 @@ function CategoriesSection({ categories, perform }: { categories: readonly Admin
   });
 
   return (
-    <section className="ob-admin-section">
+    <section ref={sectionRef} className="ob-admin-section">
       <SectionHeader
         icon={<Tags size={16} />}
         title={t("admin.prompts.categories")}
@@ -214,7 +215,13 @@ function CategoriesSection({ categories, perform }: { categories: readonly Admin
                   className="ob-icon-btn ob-icon-btn-sm"
                   type="button"
                   aria-label={`${t("admin.prompts.edit")} ${item.name}`}
-                  onClick={() => { setDraft(item); setEditing(true); }}
+                  onClick={() => {
+                    setDraft(item);
+                    setEditing(true);
+                    requestAnimationFrame(() => {
+                      sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                    });
+                  }}
                 >
                   <SlidersHorizontal size={12} aria-hidden />
                 </button>
@@ -258,6 +265,7 @@ function PromptsSection({ catalog, perform }: { catalog: AdminPromptCatalog; per
   const [selected, setSelected] = useState<string[]>([]);
   const [filter, setFilter] = useState({ query: "", categoryId: "", tag: "" });
   const [confirmingBatch, setConfirmingBatch] = useState(false);
+  const sectionRef = useRef<HTMLElement | null>(null);
 
   const visiblePrompts = filterAdminPrompts(catalog.prompts, filter);
   const tags = [...new Set(catalog.prompts.flatMap((item) => item.tags))].sort();
@@ -276,7 +284,7 @@ function PromptsSection({ catalog, perform }: { catalog: AdminPromptCatalog; per
   });
 
   return (
-    <section className="ob-admin-section">
+    <section ref={sectionRef} className="ob-admin-section">
       <SectionHeader
         icon={<BookMarked size={16} />}
         title={t("admin.prompts.entries")}
@@ -417,6 +425,9 @@ function PromptsSection({ catalog, perform }: { catalog: AdminPromptCatalog; per
                     categoryId: item.categoryId ?? "", tags: item.tags.join(", "),
                   });
                   setEditing(true);
+                  requestAnimationFrame(() => {
+                    sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  });
                 }}
               >
                 <SlidersHorizontal size={14} aria-hidden />

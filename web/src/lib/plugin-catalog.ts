@@ -1,5 +1,6 @@
 import { parsePluginManifest } from "@/lib/plugin-runtime";
 import type {
+  AppConfig,
   PluginManifest,
   PluginRegistry,
   PluginRegistryEntry,
@@ -196,6 +197,26 @@ export async function persistPluginUpgrade(
     return upgraded;
   } catch (error) {
     await persist([...installed]);
+    throw error;
+  }
+}
+
+export async function persistPluginConfigChange(
+  current: AppConfig,
+  next: AppConfig,
+  persist: (config: AppConfig) => Promise<void>,
+): Promise<void> {
+  try {
+    await persist(next);
+  } catch (error) {
+    try {
+      await persist(current);
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "plugin configuration persistence failed and rollback failed",
+      );
+    }
     throw error;
   }
 }

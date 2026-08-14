@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { PluginManifest, Point } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
+import { toast } from "@/components/common/toast";
 import {
   ClipboardPaste,
   Clapperboard,
@@ -182,7 +183,7 @@ export function ContextMenu({
           onClose();
           if (!files.length || !onUploadMedia) return;
           void Promise.resolve(onUploadMedia(files, state.world)).catch((error: unknown) => {
-            window.alert(error instanceof Error ? error.message : t("context.uploadFailed"));
+            toast.error(error instanceof Error ? error.message : t("context.uploadFailed"));
           });
         }}
       />

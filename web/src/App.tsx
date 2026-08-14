@@ -19,8 +19,10 @@ import { PromptSourceScheduler } from "@/components/prompts/PromptSourceSchedule
 import { HomePage } from "@/pages/HomePage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
 import { initAnalytics } from "@/lib/analytics";
+import { applyTheme, setupCrossTabThemeListener, setupSystemThemeListener } from "@/lib/theme";
 import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
 import { AuthGate } from "@/components/auth/AuthGate";
+import { ToastContainer } from "@/components/common/ToastContainer";
 import { useI18n } from "@/i18n/I18nProvider";
 
 // Landing route (HomePage) stays eager so the most common entry avoids a
@@ -56,6 +58,7 @@ export function App() {
   const hydrate = useBoardStore((s) => s.hydrate);
   const prepareWorkspaceScopeChange = useBoardStore((s) => s.prepareWorkspaceScopeChange);
   const resetWorkspaceScopeRuntime = useBoardStore((s) => s.resetWorkspaceScopeRuntime);
+  const ready = useBoardStore((s) => s.ready);
   const theme = useBoardStore((s) => s.config.theme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [urlCredentialError, setUrlCredentialError] = useState<string | null>(null);
@@ -143,12 +146,23 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const dark =
-      theme === "dark" ||
-      (theme === "system" &&
-        window.matchMedia("(prefers-color-scheme: dark)").matches);
-    document.documentElement.classList.toggle("dark", dark);
-  }, [theme]);
+    if (!ready) return;
+    applyTheme(theme);
+    const unsubs: (() => void)[] = [];
+    if (theme === "system") {
+      unsubs.push(setupSystemThemeListener(() => {
+        applyTheme("system");
+      }));
+    }
+    unsubs.push(setupCrossTabThemeListener((newTheme) => {
+      if (newTheme !== theme) {
+        const { config, setConfig } = useBoardStore.getState();
+        setConfig({ ...config, theme: newTheme });
+        applyTheme(newTheme);
+      }
+    }));
+    return () => unsubs.forEach((unsub) => unsub());
+  }, [ready, theme]);
 
   return (
     <AuthGate
@@ -208,6 +222,7 @@ export function App() {
         <BrowserRuntime />
         <PromptSourceScheduler />
         <AnalyticsTracker />
+        <ToastContainer />
       </div>
     </AuthGate>
   );

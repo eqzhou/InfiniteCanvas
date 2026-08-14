@@ -20,6 +20,7 @@ import {
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { toast } from "@/components/common/toast";
 import { useI18n } from "@/i18n/I18nProvider";
 
 export function CanvasToolbar({
@@ -97,7 +98,7 @@ export function CanvasToolbar({
           onChange={(e) => {
             const files = Array.from(e.target.files ?? []);
             void Promise.resolve(onImportImages(files)).catch((error: unknown) => {
-              window.alert(error instanceof Error ? error.message : t("canvas.importImageFailed"));
+              toast.error(error instanceof Error ? error.message : t("canvas.importImageFailed"));
             });
             e.currentTarget.value = "";
           }}
@@ -115,7 +116,7 @@ export function CanvasToolbar({
             onChange={(e) => {
               const files = Array.from(e.target.files ?? []);
               void Promise.resolve(onImportVideos(files)).catch((error: unknown) => {
-                window.alert(error instanceof Error ? error.message : t("canvas.importVideoFailed"));
+                toast.error(error instanceof Error ? error.message : t("canvas.importVideoFailed"));
               });
               e.currentTarget.value = "";
             }}
@@ -134,7 +135,7 @@ export function CanvasToolbar({
             onChange={(e) => {
               const files = Array.from(e.target.files ?? []);
               void Promise.resolve(onImportAudios(files)).catch((error: unknown) => {
-                window.alert(error instanceof Error ? error.message : t("canvas.importAudioFailed"));
+                toast.error(error instanceof Error ? error.message : t("canvas.importAudioFailed"));
               });
               e.currentTarget.value = "";
             }}

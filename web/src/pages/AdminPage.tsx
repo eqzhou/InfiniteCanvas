@@ -70,6 +70,18 @@ export function AdminPage() {
           <h1 className="ob-page-title">{t("admin.title")}</h1>
           <p className="ob-page-desc">{t("admin.description")}</p>
         </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {platformAdmin ? (
+            <span className="ob-chip border-[color-mix(in_srgb,var(--ob-accent)_35%,transparent)] bg-[var(--ob-accent-soft)] text-[var(--ob-accent)] font-medium text-xs">
+              <Database size={12} className="inline mr-1" />
+              {t("admin.platformAdmin")}
+            </span>
+          ) : null}
+          <span className="ob-chip text-xs text-[var(--ob-muted)]">
+            <Users size={12} className="inline mr-1" />
+            {t("admin.roleLabel")} <strong className="text-[var(--ob-ink)] font-semibold">{role}</strong>
+          </span>
+        </div>
       </header>
       <div className="-mx-1 mb-4 overflow-x-auto px-1 pb-1">
         <div className="ob-segment min-w-max" role="tablist" aria-label={t("admin.sections")}>
@@ -81,7 +93,7 @@ export function AdminPage() {
           ))}
         </div>
       </div>
-      <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${activeTab}`} className="min-h-0 flex-1 overflow-auto pb-6">
+      <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${activeTab}`} className="ob-view-fade-in min-h-0 flex-1 overflow-auto pb-6" key={activeTab}>
         {activeTab === "quota" ? <TenantQuotaAdmin /> : activeTab === "users" ? <UsersAdmin actorRole={role} /> : activeTab === "credits" ? <CreditsAdmin /> : activeTab === "models" ? <ModelsAdmin /> : activeTab === "channels" ? <AdminChannelsPanel /> : activeTab === "prompts" ? <AdminPromptCatalogPanel /> : activeTab === "library" ? <AdminLibraryPanel /> : activeTab === "platform" ? <PlatformAdminPanel /> : <AdminStoragePoolPanel />}
       </div>
     </div>
@@ -273,14 +285,17 @@ function CreditAdjustmentDialog({ user, onClose, onSaved }: { user: AdminUser; o
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
   return (
-    <div className="ob-overlay z-[150] p-4">
-      <div role="dialog" aria-modal="true" aria-labelledby="credit-adjustment-title" className="ob-surface mx-auto mt-[12vh] max-w-md p-5" onKeyDown={handleDialogKeyDown}>
+    <div className="ob-overlay z-[150] p-4" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="credit-adjustment-title" className="ob-surface ob-view-fade-in mx-auto mt-[12vh] max-w-md p-5 shadow-[var(--ob-elev-2)]" onKeyDown={handleDialogKeyDown}>
         <div className="ob-admin-section-header !mb-3">
           <span className="ob-admin-section-icon" aria-hidden><Coins size={16} /></span>
           <div className="ob-admin-section-heading">
             <h2 id="credit-adjustment-title" className="ob-admin-section-title">{t("admin.adjustUserCredits", { name: user.displayName || user.email })}</h2>
             <p className="ob-admin-section-desc">{user.email}</p>
           </div>
+          <button type="button" className="ob-icon-btn ob-icon-btn-sm ml-auto" aria-label={t("common.close")} title={t("common.close")} disabled={busy} onClick={onClose}>
+            <X size={16} aria-hidden />
+          </button>
         </div>
         <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
           <label className="block">

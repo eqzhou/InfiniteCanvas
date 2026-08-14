@@ -94,7 +94,7 @@ export function TenantInvitationsPanel({ actorRole }: { actorRole: string }) {
         </label>
         <label className="block">
           <span className="ob-micro-label mb-1">{t("admin.invitationExpiry")}</span>
-          <input className="ob-field w-24" type="number" min={1} max={720} value={expiry} disabled={busy} aria-invalid={expiry.length > 0 && expiryHours === null} onChange={(event) => setExpiry(event.target.value)} />
+          <input className="ob-field w-24" type="number" min={1} max={720} value={expiry} disabled={busy} aria-invalid={expiry.length > 0 && expiryHours === null} onChange={(event) => setExpiry(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && canCreate) void create(); }} />
         </label>
         <button type="button" className="ob-btn ob-btn-primary" disabled={busy || !canCreate} onClick={() => void create()}>
           <Send size={14} aria-hidden />{busy ? t("admin.saving") : t("admin.createInvitation")}
@@ -123,7 +123,13 @@ export function TenantInvitationsPanel({ actorRole }: { actorRole: string }) {
           <EmptyState icon={<MailPlus size={20} />} title={t("admin.invitations.empty")} />
         ) : (
           <ul className="divide-y divide-[color-mix(in_srgb,var(--ob-line)_55%,transparent)]">
-            {items.map((item) => {
+            {[...items].sort((a, b) => {
+              const stateA = invitationState(a);
+              const stateB = invitationState(b);
+              if (stateA === "pending" && stateB !== "pending") return -1;
+              if (stateA !== "pending" && stateB === "pending") return 1;
+              return new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime();
+            }).map((item) => {
               const state = invitationState(item);
               return (
                 <li key={item.id} className="flex flex-wrap items-center gap-2 py-2">

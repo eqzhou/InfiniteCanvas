@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createDefaultConfig } from "@/lib/defaults";
 import {
   comparePluginVersions,
   enabledPluginManifests,
@@ -6,6 +7,7 @@ import {
   fetchPluginManifest,
   installPluginManifest,
   normalizePluginManifests,
+  persistPluginConfigChange,
   persistPluginUpgrade,
   setPluginEnabled,
   uninstallPluginManifest,
@@ -48,6 +50,22 @@ describe("plugin catalog", () => {
     })).rejects.toThrow("disk full");
     expect(writes).toEqual([[manifest("1.1.0")], original]);
     expect(original).toEqual([manifest()]);
+  });
+
+  test("rolls a full plugin configuration change back when persistence fails", async () => {
+    const current = {
+      ...createDefaultConfig(),
+      plugins: [manifest()],
+      disabledPluginIds: [],
+    };
+    const next = { ...current, plugins: [manifest("1.1.0")] };
+    const writes: unknown[] = [];
+
+    await expect(persistPluginConfigChange(current, next, async (config) => {
+      writes.push(config);
+      if (writes.length === 1) throw new Error("disk full");
+    })).rejects.toThrow("disk full");
+    expect(writes).toEqual([next, current]);
   });
 
   test("uninstalls by id without mutating the input", () => {

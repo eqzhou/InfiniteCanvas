@@ -74,6 +74,7 @@ import {
   type CodexTranscriptState,
 } from "@/services/codex-transcript";
 import { applyAgentComposerSuggestion, detectAgentComposerTrigger } from "@/lib/agent-composer";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
 
@@ -195,6 +196,7 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
   const [approvals, setApprovals] = useState<CodexEvent[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [fullAccessConfirmOpen, setFullAccessConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState<CodexHistorySummary[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1031,10 +1033,8 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
                 value={permissionMode}
                 onChange={(event) => {
                   const next = event.target.value as CodexPermissionMode;
-                  if (next === "full-access" && !window.confirm(
-                    t("agent.confirmFullAccess"),
-                  )) {
-                    event.currentTarget.value = permissionMode;
+                  if (next === "full-access") {
+                    setFullAccessConfirmOpen(true);
                     return;
                   }
                   setPermissionMode(next);
@@ -1124,6 +1124,19 @@ export function CodexPanel({ connection }: { connection: AgentConnection }) {
           </div>
         );
       })}
+      {fullAccessConfirmOpen ? (
+        <ConfirmDialog
+          title={t("agent.permissionFull")}
+          message={t("agent.confirmFullAccess")}
+          confirmLabel={t("agent.allow")}
+          tone="danger"
+          onCancel={() => setFullAccessConfirmOpen(false)}
+          onConfirm={() => {
+            setPermissionMode("full-access");
+            setFullAccessConfirmOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

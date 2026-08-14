@@ -43,6 +43,7 @@ export function AdminLibraryPanel() {
   // result of a newer filter.
   const requestIdRef = useRef(0);
   const mutationBusyRef = useRef(false);
+  const formSectionRef = useRef<HTMLElement | null>(null);
 
   const load = useCallback(async () => {
     const requestId = ++requestIdRef.current;
@@ -108,7 +109,7 @@ export function AdminLibraryPanel() {
 
   return (
     <div className="ob-admin-stack" aria-busy={loading || saving}>
-      <section className="ob-admin-section">
+      <section ref={formSectionRef} className="ob-admin-section">
         <SectionHeader
           icon={<FilePlus2 size={16} />}
           title={editing ? t("admin.library.edit") : t("admin.library.new")}
@@ -210,6 +211,9 @@ export function AdminLibraryPanel() {
                         content: item.content ?? "", source: item.source ?? "", notes: item.notes ?? "",
                       });
                       setEditing(true);
+                      requestAnimationFrame(() => {
+                        formSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                      });
                     }}><Pencil size={13} aria-hidden />{t("common.edit")}</button>
                     <button type="button" className="ob-btn ob-btn-danger" disabled={saving} aria-label={t("admin.library.deleteLabel", { title: item.title })} onClick={() => setDeleteTarget(item)}>
                       <Trash2 size={13} aria-hidden />{t("common.delete")}

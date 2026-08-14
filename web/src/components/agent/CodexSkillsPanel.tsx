@@ -19,6 +19,7 @@ import {
 import { useBoardStore } from "@/stores/use-board-store";
 import { useI18n } from "@/i18n/I18nProvider";
 import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 
 const SKILLS_CHANNEL = "openboard.codex.skills.v1";
 
@@ -48,6 +49,7 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [pendingDeleteSkill, setPendingDeleteSkill] = useState<CodexSkill | null>(null);
 
   const selected = useMemo(() => skills.find((skill) => skill.id === selectedId), [selectedId, skills]);
 
@@ -165,8 +167,7 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
     }
   }, [broadcastChanged, connection, refresh, selectedId, t]);
 
-  const remove = useCallback(async (skill: CodexSkill) => {
-    if (!window.confirm(t("agent.confirmDeleteSkill", { name: skill.name }))) return;
+  const executeRemove = useCallback(async (skill: CodexSkill) => {
     setBusy(true);
     setError("");
     try {
@@ -182,6 +183,7 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
       await refresh();
     } finally {
       setBusy(false);
+      setPendingDeleteSkill(null);
     }
   }, [broadcastChanged, connection, refresh, selectedId]);
 
@@ -248,7 +250,14 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
                   <button type="button" className="ob-icon-btn h-6 w-6" title={t("agent.invokeSkill")} aria-label={t("agent.invokeNamed", { name: skill.name })} onClick={() => void invoke(skill)} disabled={busy || !canInvoke || !skill.enabled}>
                     <Play size={11} />
                   </button>
-                  <button type="button" className="ob-icon-btn h-6 w-6 text-[var(--ob-danger)]" title={t("agent.deleteSkill")} aria-label={t("agent.deleteNamed", { name: skill.name })} onClick={() => void remove(skill)} disabled={busy}>
+                  <button
+                    type="button"
+                    className="ob-icon-btn h-5 w-5 text-[var(--ob-danger)]"
+                    title={t("agent.deleteNamed", { name: skill.name })}
+                    aria-label={t("agent.deleteNamed", { name: skill.name })}
+                    onClick={() => setPendingDeleteSkill(skill)}
+                    disabled={busy}
+                  >
                     <Trash2 size={11} />
                   </button>
                 </div>
@@ -293,6 +302,15 @@ export function CodexSkillsPanel({ connection, canInvoke, onInvoke }: CodexSkill
           {error ? <p role="alert" className="text-[10px] text-[var(--ob-danger)]">{error}</p> : null}
           {!canInvoke ? <p className="text-[10px] text-[var(--ob-muted)]">{t("agent.startBeforeInvoke")}</p> : null}
         </div>
+      ) : null}
+      {pendingDeleteSkill ? (
+        <ConfirmDialog
+          title={t("agent.confirmDeleteSkill", { name: pendingDeleteSkill.name })}
+          confirmLabel={t("agent.deleteSkill")}
+          tone="danger"
+          onCancel={() => setPendingDeleteSkill(null)}
+          onConfirm={() => void executeRemove(pendingDeleteSkill)}
+        />
       ) : null}
     </section>
   );

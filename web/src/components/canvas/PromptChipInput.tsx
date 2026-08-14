@@ -31,14 +31,14 @@ function createReferenceChip(reference: PromptReference): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.dataset.promptReference = reference.nodeId;
   chip.dataset.refLabel = reference.label;
-  chip.className = "mx-0.5 inline-flex h-7 max-w-32 select-none items-center gap-1 rounded border border-[var(--ob-accent)] bg-[var(--ob-accent-soft)] px-1 align-middle text-[11px] text-[var(--ob-ink)]";
+  chip.className = "mx-0.5 inline-flex h-6.5 max-w-36 select-none items-center gap-1.5 rounded-md border border-[color-mix(in_srgb,var(--ob-accent)_35%,transparent)] bg-[var(--ob-accent-soft)] px-1.5 align-middle text-[11px] font-medium text-[var(--ob-ink)] shadow-xs";
   chip.title = `${reference.label} · ${reference.title}`;
 
   if (reference.kind === "image" && reference.content) {
     const image = document.createElement("img");
     image.src = reference.content;
     image.alt = reference.label;
-    image.className = "h-5 w-5 rounded-sm object-cover";
+    image.className = "h-4.5 w-4.5 rounded object-cover";
     image.draggable = false;
     chip.append(image);
   }
@@ -333,7 +333,7 @@ export function PromptChipInput({
         aria-placeholder={placeholder}
         contentEditable
         suppressContentEditableWarning
-        className={`max-h-40 min-h-[56px] overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-[var(--ob-line)] bg-transparent p-2 text-xs outline-none ${className}`}
+        className={`max-h-40 min-h-[56px] overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface-2)] p-2.5 text-xs text-[var(--ob-ink)] outline-none transition-all focus:border-[var(--ob-accent)] focus:ring-1 focus:ring-[var(--ob-accent)] focus:bg-[var(--ob-panel)] ${className}`}
         style={style}
         onInput={() => {
           sync();
@@ -358,7 +358,7 @@ export function PromptChipInput({
         <div
           role="listbox"
           aria-label={t("promptChip.references")}
-          className="absolute z-50 max-h-48 min-w-48 overflow-auto rounded-md border border-[var(--ob-line)] bg-[var(--ob-panel)] p-1 shadow-[var(--ob-shadow)]"
+          className="ob-surface ob-view-fade-in absolute z-50 max-h-48 min-w-52 overflow-auto rounded-xl border border-[var(--ob-line)] p-1.5 shadow-[var(--ob-elev-2)]"
           style={{ left: mention.x, top: mention.y }}
         >
           {filtered.map((reference, index) => (
@@ -367,21 +367,21 @@ export function PromptChipInput({
               type="button"
               role="option"
               aria-selected={index === activeIndex}
-              className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-[var(--ob-accent-soft)] aria-selected:bg-[var(--ob-accent-soft)]"
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] aria-selected:bg-[var(--ob-accent-soft)] aria-selected:text-[var(--ob-accent)]"
               onPointerDown={(event) => {
                 event.preventDefault();
                 insertReference(reference);
               }}
             >
               {reference.kind === "image" && reference.content ? (
-                <img src={reference.content} alt="" className="h-8 w-8 rounded object-cover" />
+                <img src={reference.content} alt="" className="h-7 w-7 rounded-md object-cover" />
               ) : (
-                <span className="grid h-8 w-8 place-items-center rounded bg-[var(--ob-accent-soft)]">
+                <span className="grid h-7 w-7 place-items-center rounded-md bg-[var(--ob-accent-soft)] text-[10px] text-[var(--ob-accent)] font-medium">
                   {reference.kind === "video" ? t("promptChip.video") : t("promptChip.audio")}
                 </span>
               )}
-              <span className="min-w-0">
-                <span className="block font-medium">{reference.label}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium text-[var(--ob-ink)]">{reference.label}</span>
                 <span className="block max-w-36 truncate text-[10px] text-[var(--ob-muted)]">{reference.title}</span>
               </span>
             </button>
