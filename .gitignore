@@ -16,3 +16,5 @@ server/data/
 coverage/
 *.tsbuildinfo
 .claude/
+.postman/
+postman/
