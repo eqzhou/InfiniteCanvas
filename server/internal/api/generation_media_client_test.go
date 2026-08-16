@@ -109,6 +109,51 @@ func TestHTTPVideoExecutorOpenAICompletedTaskDownloadsContent(t *testing.T) {
 	}
 }
 
+func TestHTTPVideoExecutorUsesGrokVideoGenerationContract(t *testing.T) {
+	var upstream *httptest.Server
+	upstream = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/videos/generations":
+			var body map[string]any
+			if json.NewDecoder(r.Body).Decode(&body) != nil {
+				t.Fatal("decode Grok create request")
+			}
+			image := mediaMap(body["image"])
+			if body["model"] != "grok-imagine-video-1.5" || body["duration"] != float64(5) ||
+				body["aspect_ratio"] != "16:9" || body["resolution"] != "720p" ||
+				image == nil || !strings.HasPrefix(mediaString(image, "url"), "data:image/png;base64,") {
+				t.Fatalf("unexpected Grok create body: %#v", body)
+			}
+			_, _ = io.WriteString(w, `{"request_id":"grok-video-1"}`)
+		case "/v1/videos/grok-video-1":
+			_, _ = io.WriteString(w, `{"status":"done","video":{"url":"`+upstream.URL+`/result.mp4"}}`)
+		case "/result.mp4":
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write(minimalMP4())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	executor := newHTTPVideoExecutor()
+	executor.client = upstream.Client()
+	executor.pollInterval = 0
+	executor.maxDuration = time.Second
+	media, err := executor.Generate(context.Background(), videoGenerationRequest{
+		BaseURL: upstream.URL + "/v1", APIKey: "sk", Protocol: "openai", Model: "grok-imagine-video-1.5",
+		Prompt: "move", Seconds: 5, Ratio: "16:9", Resolution: "720p",
+		References: []generatedMedia{{MIMEType: "image/png", Data: []byte("png")}},
+	}, nil, func(value videoProviderCheckpoint) error {
+		if value.TaskID != "grok-video-1" {
+			t.Fatalf("checkpoint = %#v", value)
+		}
+		return nil
+	})
+	if err != nil || media.MIMEType != "video/mp4" {
+		t.Fatalf("media = %#v, %v", media, err)
+	}
+}
+
 func TestHTTPVideoExecutorRunsRestrictedTemplateWithoutCheckpoint(t *testing.T) {
 	var upstream *httptest.Server
 	requests := atomic.Int32{}

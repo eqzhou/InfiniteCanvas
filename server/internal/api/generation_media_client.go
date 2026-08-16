@@ -71,7 +71,7 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 		if err != nil {
 			return generatedMedia{}, err
 		}
-		taskID := mediaString(created, "id", "task_id", "taskId")
+		taskID := mediaString(created, "id", "task_id", "taskId", "request_id")
 		if request.Protocol == "apimart" {
 			taskID = apimartTaskID(created)
 		} else if request.Protocol == "kie" {
@@ -222,7 +222,27 @@ func (e *httpVideoExecutor) create(ctx context.Context, request videoGenerationR
 	}
 	body := map[string]any{"model": request.Model}
 	endpoint := "/videos"
-	if request.Protocol == "ark" {
+	capability, registered := resolveProviderModelCapability(request.Protocol, "video", request.Model)
+	grokVideo := registered && capability.Family == "grok-imagine-video"
+	if grokVideo {
+		endpoint = "/videos/generations"
+		body["prompt"] = request.Prompt
+		if request.Seconds > 0 {
+			body["duration"] = request.Seconds
+		}
+		if request.Ratio != "" {
+			body["aspect_ratio"] = request.Ratio
+		}
+		if request.Resolution != "" {
+			body["resolution"] = request.Resolution
+		}
+		for _, reference := range request.References {
+			if mediaMIMEKind(reference.MIMEType) == "image" {
+				body["image"] = map[string]any{"url": "data:" + reference.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(reference.Data)}
+				break
+			}
+		}
+	} else if request.Protocol == "ark" {
 		endpoint = "/contents/generations/tasks"
 		content := []map[string]any{{"type": "text", "text": request.Prompt}}
 		counts := map[string]int{}
@@ -862,6 +882,7 @@ func mediaNestedString(value map[string]any, paths ...[]string) string {
 func mediaVideoURL(value map[string]any) string {
 	paths := [][]string{
 		{"url"}, {"video_url"}, {"videoUrl"}, {"output_url"}, {"download_url"},
+		{"video", "url"},
 		{"output", "url"}, {"output", "video_url"}, {"content", "video_url"},
 		{"result", "url"}, {"result", "video_url"}, {"data", "url"},
 		{"data", "output", "url"}, {"data", "result", "url"}, {"task", "output", "url"},

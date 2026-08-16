@@ -458,7 +458,12 @@ func mediaRequestAuditPayload(request resolvedMediaRequest, kind string) map[str
 	case "template":
 		endpoint, _ = imageTemplateEndpoint(request.Video.BaseURL, request.Video.Template)
 	default:
-		endpoint, _ = generationProviderEndpoint(request.Video.BaseURL, "/videos")
+		capability, registered := resolveProviderModelCapability(request.Video.Protocol, "video", request.Video.Model)
+		suffix := "/videos"
+		if registered && capability.Family == "grok-imagine-video" {
+			suffix = "/videos/generations"
+		}
+		endpoint, _ = generationProviderEndpoint(request.Video.BaseURL, suffix)
 	}
 	if endpoint != "" {
 		method := "POST"

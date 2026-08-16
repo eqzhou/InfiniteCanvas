@@ -128,6 +128,13 @@ func TestMediaCapabilityUsesRegisteredProviderModelLimits(t *testing.T) {
 		!reflect.DeepEqual(openAI.Sizes, []string{"1:1", "2:3", "3:2"}) {
 		t.Fatalf("OpenAI image capability drifted from the client registry: %#v", openAI)
 	}
+	grokVideo := capabilityForChannelDefault(adminChannelPublic{ID: "grok", Name: "Grok", Protocol: "openai"}, "video", "grok-imagine-video-1.5")
+	if grokVideo.MaxReferences != 1 || !reflect.DeepEqual(grokVideo.Modes, []string{"text_to_video", "image_to_video"}) ||
+		len(grokVideo.Durations) != 15 || grokVideo.Durations[0] != 1 || grokVideo.Durations[14] != 15 ||
+		!reflect.DeepEqual(grokVideo.Ratios, []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}) ||
+		!reflect.DeepEqual(grokVideo.Resolutions, []string{"480p", "720p", "1080p"}) {
+		t.Fatalf("Grok video capability drifted from the xAI contract: %#v", grokVideo)
+	}
 	channel := adminChannelPublic{ID: "apimart", Name: "API Mart", Protocol: "apimart"}
 	image := capabilityForChannelDefault(channel, "image", "doubao-seedream-5-0-pro")
 	if image.MaxReferences != 10 || !reflect.DeepEqual(image.Sizes, []string{"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "auto"}) {

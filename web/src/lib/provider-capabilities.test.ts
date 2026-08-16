@@ -2,6 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { resolveProviderCapability } from "@/lib/provider-capabilities";
 
 describe("provider capabilities", () => {
+  test("advertises the xAI Grok video generation contract", () => {
+    expect(resolveProviderCapability("openai", "video", "grok-imagine-video-1.5")).toMatchObject({
+      maxImageReferences: 1,
+      video: {
+        minDuration: 1,
+        maxDuration: 15,
+        aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+        resolutions: ["480p", "720p", "1080p"],
+        maxImageReferences: 1,
+      },
+    });
+  });
+
   test("resolves exact APIMart Kling families without fuzzy model matching", () => {
     const v26 = resolveProviderCapability("apimart", "video", "kling-v2-6");
     expect(v26?.family).toBe("kling-2.6");
