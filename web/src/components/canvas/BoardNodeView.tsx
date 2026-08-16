@@ -535,6 +535,103 @@ export function BoardNodeView({
                     : t("canvasNodes.emptyVideo")}
               </div>
             )}
+            {selected ? (
+              <div
+                data-canvas-control
+                className="grid grid-cols-3 gap-1 rounded-md border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-panel)_88%,transparent)] p-1.5 text-[10px] shadow-sm backdrop-blur-sm"
+                onPointerDown={(event) => event.stopPropagation()}
+                onWheel={(event) => event.stopPropagation()}
+              >
+                <label className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate">{t("canvasNodes.videoRatio")}</span>
+                  <select
+                    aria-label={t("canvasNodes.videoRatio")}
+                    className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5"
+                    value={videoRatio}
+                    onChange={(event) => {
+                      const nextRatio = event.target.value;
+                      updateNode(node.id, {
+                        metadata: {
+                          videoRatio: nextRatio,
+                          size: videoSizeAfterSelectionChange(
+                            videoProvider?.protocol,
+                            node.metadata.size,
+                            videoRatio,
+                            videoResolution,
+                            nextRatio,
+                            videoResolution,
+                          ),
+                        },
+                      });
+                    }}
+                  >
+                    {optionsWithCurrentVideoValue(videoRatioOptions, videoRatio).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate">{t("canvasNodes.resolution")}</span>
+                  <select
+                    aria-label={t("canvasNodes.resolution")}
+                    className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5"
+                    value={videoResolution}
+                    onChange={(event) => {
+                      const nextResolution = event.target.value;
+                      updateNode(node.id, {
+                        metadata: {
+                          resolution: nextResolution,
+                          size: videoSizeAfterSelectionChange(
+                            videoProvider?.protocol,
+                            node.metadata.size,
+                            videoRatio,
+                            videoResolution,
+                            videoRatio,
+                            nextResolution,
+                          ),
+                        },
+                      });
+                    }}
+                  >
+                    {optionsWithCurrentVideoValue(videoResolutionOptions, videoResolution).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate">{t("canvasNodes.durationSeconds")}</span>
+                  {videoDurationOptions.length ? (
+                    <select
+                      aria-label={t("canvasNodes.durationSeconds")}
+                      className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5"
+                      value={videoDuration}
+                      onChange={(event) => updateNode(node.id, {
+                        metadata: { duration: Number(event.target.value) },
+                      })}
+                    >
+                      {videoDurationOptions.map((value) => (
+                        <option key={value} value={value}>
+                          {t("workbench.secondsValue", { seconds: value })}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      aria-label={t("canvasNodes.durationSeconds")}
+                      type="number"
+                      min={4}
+                      max={15}
+                      disabled={Boolean(node.metadata.smartDuration)}
+                      className="min-w-0 rounded border border-[var(--ob-line)] bg-transparent px-1 py-0.5"
+                      value={videoDuration}
+                      onChange={(event) => updateNode(node.id, {
+                        metadata: { duration: Number(event.target.value) || 5 },
+                      })}
+                    />
+                  )}
+                </label>
+              </div>
+            ) : null}
             <div className="grid grid-cols-2 gap-1 text-[10px]">
               <label className="flex items-center gap-1">
                 <input
