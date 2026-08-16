@@ -338,12 +338,12 @@ export function AdminMediaCapabilityEditor({
     onChange(capabilities.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
   };
   return (
-    <section className="ob-subpanel">
-      <div className="ob-subpanel-header">
+    <details className="ob-subpanel" open={capabilities.length > 0}>
+      <summary className="ob-subpanel-header cursor-pointer select-none">
         <Layers size={14} aria-hidden />
         <strong className="ob-subpanel-title">{t("admin.channels.capabilities")}</strong>
         <span className="ob-micro-label ml-auto">{t("admin.channels.capabilityCount", { count: capabilities.length })}</span>
-      </div>
+      </summary>
       <p className="ob-subpanel-hint">{t("admin.channels.capabilitiesHint")}</p>
       {capabilities.length ? (
         <ul role="list" className="m-0 flex list-none flex-col gap-2 p-0">
@@ -370,7 +370,7 @@ export function AdminMediaCapabilityEditor({
         <Plus size={14} aria-hidden />
         {t("admin.channels.addCapability")}
       </button>
-    </section>
+    </details>
   );
 }
 

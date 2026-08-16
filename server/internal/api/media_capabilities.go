@@ -38,14 +38,15 @@ func validFilmGenerationMode(mode string) bool {
 
 func capabilityForChannelDefault(channel adminChannelPublic, kind, model string) mediaModelCapability {
 	registered, registeredOK := resolveProviderModelCapability(channel.Protocol, kind, model)
-	if !registeredOK {
-		return mediaModelCapability{}
-	}
 	capability := mediaModelCapability{
 		ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol,
-		Model: model, Kind: kind, MaxReferences: registered.MaxImageReferences,
-		Sizes: append([]string(nil), registered.Sizes...), Ratios: append([]string(nil), registered.Ratios...),
-		Resolutions: append([]string(nil), registered.Resolutions...),
+		Model: model, Kind: kind,
+	}
+	if registeredOK {
+		capability.MaxReferences = registered.MaxImageReferences
+		capability.Sizes = append([]string(nil), registered.Sizes...)
+		capability.Ratios = append([]string(nil), registered.Ratios...)
+		capability.Resolutions = append([]string(nil), registered.Resolutions...)
 	}
 	switch kind {
 	case "image":
@@ -61,7 +62,7 @@ func capabilityForChannelDefault(channel adminChannelPublic, kind, model string)
 	case "audio":
 		capability.Modes = []string{"text_to_audio"}
 	}
-	if registered.MinDuration > 0 && registered.MaxDuration >= registered.MinDuration {
+	if registeredOK && registered.MinDuration > 0 && registered.MaxDuration >= registered.MinDuration {
 		capability.Durations = make([]int, 0, registered.MaxDuration-registered.MinDuration+1)
 		for duration := registered.MinDuration; duration <= registered.MaxDuration; duration++ {
 			capability.Durations = append(capability.Durations, duration)
@@ -147,11 +148,33 @@ func appendMediaCapabilityModels(models []mediaModelCapability, channel adminCha
 		if _, configured := explicit[item.kind+"\x00"+strings.ToLower(item.model)]; configured {
 			continue
 		}
-		if _, registered := resolveProviderModelCapability(channel.Protocol, item.kind, item.model); registered {
-			models = append(models, capabilityForChannelDefault(channel, item.kind, item.model))
-		}
+		models = append(models, capabilityForChannelDefault(channel, item.kind, item.model))
 	}
 	return models
+}
+
+func sharedChannelPublishesMediaCapability(channel adminChannelPublic, kind, requestedModel, mode string) bool {
+	mode = strings.TrimSpace(mode)
+	if mode == "" || kind == "text" {
+		return true
+	}
+	model := strings.TrimSpace(requestedModel)
+	if model == "" {
+		switch kind {
+		case "image":
+			model = channel.DefaultImageModel
+		case "video":
+			model = channel.DefaultVideoModel
+		case "audio":
+			model = channel.DefaultAudioModel
+		}
+	}
+	for _, capability := range appendMediaCapabilityModels(nil, channel) {
+		if capability.Kind == kind && capability.Model == model && containsFilmMode(capability.Modes, mode) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) verifySharedMediaCapability(ctx context.Context, tenantID, channelID, kind, model, mode string) (string, error) {

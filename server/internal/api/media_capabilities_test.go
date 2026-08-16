@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -44,7 +46,7 @@ func TestMediaCapabilityCatalogDerivesOnlyEnabledSharedChannelDefaults(t *testin
 	}
 }
 
-func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndNeverGuessesUnknownDefaults(t *testing.T) {
+func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndPublishesSafeDefaultBaselines(t *testing.T) {
 	_, _, router := sharedChannelHandler(t)
 	channels, _ := json.Marshal([]adminChannelPublic{
 		{
@@ -80,17 +82,17 @@ func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndNeverGuessesUnknownDef
 	if response.Code != http.StatusOK {
 		t.Fatalf("catalog: %d %s", response.Code, response.Body.String())
 	}
-	if bytes.Contains(response.Body.Bytes(), []byte("brand-new-image")) || bytes.Contains(response.Body.Bytes(), []byte("sk-private")) || bytes.Contains(response.Body.Bytes(), []byte("explicit.example")) {
-		t.Fatalf("catalog guessed or leaked sensitive data: %s", response.Body.String())
+	if bytes.Contains(response.Body.Bytes(), []byte("sk-private")) || bytes.Contains(response.Body.Bytes(), []byte("explicit.example")) {
+		t.Fatalf("catalog leaked sensitive data: %s", response.Body.String())
 	}
 	var catalog mediaCapabilityCatalog
 	if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Models) != 3 {
+	if len(catalog.Models) != 4 {
 		t.Fatalf("models = %#v", catalog.Models)
 	}
-	var explicitImage, explicitVideo, registeredVideo *mediaModelCapability
+	var explicitImage, explicitVideo, registeredVideo, unknownImage *mediaModelCapability
 	for index := range catalog.Models {
 		capability := &catalog.Models[index]
 		switch capability.ChannelID + "/" + capability.Model {
@@ -100,6 +102,8 @@ func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndNeverGuessesUnknownDef
 			explicitVideo = capability
 		case "registered/doubao-seedance-2.0":
 			registeredVideo = capability
+		case "unknown/brand-new-image":
+			unknownImage = capability
 		}
 	}
 	if explicitImage == nil || !reflect.DeepEqual(explicitImage.Modes, []string{"text_to_image"}) || explicitImage.MaxReferences != 0 || !reflect.DeepEqual(explicitImage.Sizes, []string{"1:1"}) {
@@ -107,6 +111,9 @@ func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndNeverGuessesUnknownDef
 	}
 	if explicitVideo == nil || explicitVideo.MaxReferences != 2 || !reflect.DeepEqual(explicitVideo.Durations, []int{5, 10}) {
 		t.Fatalf("explicit non-default capability missing: %#v", explicitVideo)
+	}
+	if unknownImage == nil || !reflect.DeepEqual(unknownImage.Modes, []string{"text_to_image"}) || unknownImage.MaxReferences != 0 || len(unknownImage.Sizes) != 0 {
+		t.Fatalf("unknown default must publish only a safe text-to-image baseline: %#v", unknownImage)
 	}
 	if registeredVideo == nil || registeredVideo.MaxReferences != 9 || len(registeredVideo.Durations) != 11 ||
 		!reflect.DeepEqual(registeredVideo.Ratios, []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}) ||
@@ -116,6 +123,11 @@ func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndNeverGuessesUnknownDef
 }
 
 func TestMediaCapabilityUsesRegisteredProviderModelLimits(t *testing.T) {
+	openAI := capabilityForChannelDefault(adminChannelPublic{ID: "openai", Name: "OpenAI", Protocol: "openai"}, "image", "gpt-image-2")
+	if openAI.MaxReferences != 16 || !reflect.DeepEqual(openAI.Modes, []string{"text_to_image", "image_to_image"}) ||
+		!reflect.DeepEqual(openAI.Sizes, []string{"1:1", "2:3", "3:2"}) {
+		t.Fatalf("OpenAI image capability drifted from the client registry: %#v", openAI)
+	}
 	channel := adminChannelPublic{ID: "apimart", Name: "API Mart", Protocol: "apimart"}
 	image := capabilityForChannelDefault(channel, "image", "doubao-seedream-5-0-pro")
 	if image.MaxReferences != 10 || !reflect.DeepEqual(image.Sizes, []string{"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "auto"}) {
@@ -175,6 +187,56 @@ func TestSharedImageJobFreezesCatalogVersionAndRejectsUnlistedModels(t *testing.
 	if rejected.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("unlisted shared model accepted: %d %s", rejected.Code, rejected.Body.String())
 	}
+}
+
+func TestSharedAutoImageRoutesBeforeFreezingCapability(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	server, _, router := imageExecutionHandler(t, executor)
+	channels, _ := json.Marshal([]adminChannelPublic{
+		{
+			ID: "grok-image", Name: "Grok", BaseURL: "https://grok.example/v1", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 100, TimeoutSeconds: 30, DefaultImageModel: "grok-imagine-image-2.0",
+		},
+		{
+			ID: "gpt-image", Name: "GPT", BaseURL: "https://gpt.example/v1", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "gpt-image-2",
+		},
+	})
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	for _, id := range []string{"grok-image", "gpt-image"} {
+		if got := putSharedChannelSecret(t, router, id, "credential-"+id); got.Code != http.StatusNoContent {
+			t.Fatalf("put %s secret: %d %s", id, got.Code, got.Body.String())
+		}
+	}
+	jobID := ""
+	for index := range 200 {
+		candidate := fmt.Sprintf("shared-auto-capability-%d", index)
+		unfiltered, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", candidate, "gpt-image-2")
+		if err == nil && unfiltered.ID == "grok-image" {
+			jobID = candidate
+			break
+		}
+	}
+	if jobID == "" {
+		t.Fatal("test setup did not produce an incompatible unfiltered route")
+	}
+	body, _ := json.Marshal(map[string]any{
+		"id": jobID, "projectId": "board-1", "prompt": "a tiger", "providerId": sharedChannelAutoID, "model": "gpt-image-2",
+		"parameters": map[string]any{"size": "1024x1024", "quality": "high", "count": 1, "referenceStorageKeys": []string{}},
+	})
+	created := request(t, router, http.MethodPost, "/api/generation-jobs/image", body)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("capability-aware shared-auto create = %d %s", created.Code, created.Body.String())
+	}
+	started := awaitExecutorStart(t, executor)
+	if started.BaseURL != "https://gpt.example/v1" || started.Model != "gpt-image-2" {
+		t.Fatalf("shared-auto selected an incompatible channel: %#v", started)
+	}
+	png, _ := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	executor.release <- scriptedImageResult{images: []generatedImage{{Data: png, MIMEType: "image/png"}}}
+	server.generationWG.Wait()
 }
 
 func TestSharedVideoAndAudioJobsFreezeCatalogResolution(t *testing.T) {

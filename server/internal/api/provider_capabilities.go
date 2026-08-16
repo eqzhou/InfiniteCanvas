@@ -18,6 +18,12 @@ type providerModelCapability struct {
 }
 
 var providerModelCapabilities = []providerModelCapability{
+	{Protocol: "openai", Kind: "image", Model: "gpt-image-1", Family: "gpt-image-1", MaxImageReferences: 16, MaxOutputs: 4,
+		Sizes: []string{"1:1", "2:3", "3:2"}, Qualities: []string{"auto", "low", "medium", "high"}},
+	{Protocol: "openai", Kind: "image", Model: "gpt-image-1.5", Family: "gpt-image-1.5", MaxImageReferences: 16, MaxOutputs: 4,
+		Sizes: []string{"1:1", "2:3", "3:2"}, Qualities: []string{"auto", "low", "medium", "high"}},
+	{Protocol: "openai", Kind: "image", Model: "gpt-image-2", Family: "gpt-image-2", MaxImageReferences: 16, MaxOutputs: 4,
+		Sizes: []string{"1:1", "2:3", "3:2"}, Qualities: []string{"auto", "low", "medium", "high"}},
 	{Protocol: "apimart", Kind: "video", Model: "kling-v2-6", Family: "kling-2.6", MaxImageReferences: 2},
 	{Protocol: "apimart", Kind: "video", Model: "kling-v3", Family: "kling-3", MaxImageReferences: 2},
 	{Protocol: "apimart", Kind: "video", Model: "happyhorse-1.1", Family: "happyhorse-1.1", MaxImageReferences: 9,

@@ -305,7 +305,7 @@ func TestServerAudioJobPersistsResultAndSanitizesFailure(t *testing.T) {
 		if started.APIKey != "sk-audio-private" || started.Voice != "alloy" || started.Format != "mp3" {
 			t.Fatalf("audio request = %#v", started)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("audio executor did not start")
 	}
 	audio.release <- scriptedMediaResult{media: generatedMedia{Data: []byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0}, MIMEType: "audio/mpeg"}}

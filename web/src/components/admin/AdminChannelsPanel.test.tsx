@@ -96,7 +96,7 @@ describe("AdminChannelModelDiffReview", () => {
       />,
     );
 
-    expect(html).toContain("媒体模型能力");
+    expect(html).toContain("高级媒体能力（可选）");
     expect(html).toContain("gpt-image-1");
     expect(html).toContain("图生图");
     expect(html).toContain("1024x1024");
@@ -104,6 +104,19 @@ describe("AdminChannelModelDiffReview", () => {
     expect(html).toContain("如 1024x1024、16:9、720p");
     expect(html).toContain("添加能力");
     expect(html).not.toContain("apiKey");
+  });
+
+  test("keeps optional media overrides collapsed when automatic defaults are sufficient", () => {
+    const html = renderToStaticMarkup(
+      <AdminMediaCapabilityEditor
+        models={["gpt-image-2"]}
+        capabilities={[]}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("当前使用默认模型自动能力，无需额外配置。");
+    expect(html).not.toContain("<details open=");
   });
 
   test("keeps a saved capability model selectable after the model list changes", () => {

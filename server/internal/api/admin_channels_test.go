@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -556,6 +557,52 @@ func TestSharedChannelWeightedSelectionIsDeterministicAndCapabilityAware(t *test
 	video, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "video", "job-stable", "requested-model")
 	if err != nil || video.ID == "disabled" || video.ID == "image-only" {
 		t.Fatalf("video selection ignored eligibility: %#v, %v", video, err)
+	}
+}
+
+func TestSharedChannelSelectionFiltersByPublishedMediaCapability(t *testing.T) {
+	server, backend, _ := sharedChannelHandler(t)
+	channels := []adminChannelPublic{
+		{
+			ID: "grok-image", Name: "Grok", BaseURL: "https://grok.example/v1", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 100, TimeoutSeconds: 30, DefaultImageModel: "grok-imagine-image-2.0",
+		},
+		{
+			ID: "gpt-image", Name: "GPT", BaseURL: "https://gpt.example/v1", Protocol: "openai",
+			Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "gpt-image-2",
+		},
+	}
+	for index := range channels {
+		channels[index].SecretBindingID = "binding-" + channels[index].ID
+	}
+	raw, _ := json.Marshal(channels)
+	if err := backend.PutState(context.Background(), store.DefaultTenantID, adminChannelsStateKey, raw); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := server.encryptAdminChannelSecrets(store.DefaultTenantID, channels, map[string]string{"grok-image": "grok", "gpt-image": "gpt"})
+	if err != nil || backend.PutState(context.Background(), store.DefaultTenantID, adminChannelSecretsStateKey, envelope) != nil {
+		t.Fatal("failed to seed encrypted shared secrets")
+	}
+
+	var routingKey string
+	for index := range 200 {
+		candidate := fmt.Sprintf("job-capability-%d", index)
+		unfiltered, selectErr := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", candidate, "gpt-image-2")
+		if selectErr == nil && unfiltered.ID == "grok-image" {
+			routingKey = candidate
+			break
+		}
+	}
+	if routingKey == "" {
+		t.Fatal("test setup did not produce an incompatible weighted selection")
+	}
+	filtered, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", routingKey, "gpt-image-2", "text_to_image")
+	if err != nil || filtered.ID != "gpt-image" {
+		t.Fatalf("text-to-image routing ignored the published model capability: %#v, %v", filtered, err)
+	}
+	withReference, err := server.selectSharedChannel(context.Background(), store.DefaultTenantID, "image", routingKey, "", "image_to_image")
+	if err != nil || withReference.ID != "gpt-image" {
+		t.Fatalf("image-to-image routing selected a baseline-only channel: %#v, %v", withReference, err)
 	}
 }
 

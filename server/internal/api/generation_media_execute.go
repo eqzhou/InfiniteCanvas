@@ -228,7 +228,8 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := tenantIDFrom(r)
-	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "video", input.ID, input.ProviderID, input.Model)
+	generationMode := videoCapabilityMode(resolvedMode)
+	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "video", input.ID, input.ProviderID, input.Model, generationMode)
 	if err != nil {
 		http.Error(w, "no eligible shared video channel", http.StatusUnprocessableEntity)
 		return
@@ -241,9 +242,8 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "video references are invalid or exceed limits", http.StatusBadRequest)
 		return
 	}
-	capabilityVersion, generationMode := "", ""
+	capabilityVersion := ""
 	if sharedSnapshot != nil {
-		generationMode = videoCapabilityMode(resolvedMode)
 		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "video", input.Model, generationMode)
 		if err != nil {
 			http.Error(w, "shared video capability is unavailable", http.StatusUnprocessableEntity)
@@ -305,7 +305,8 @@ func (s *Server) createServerAudioJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := tenantIDFrom(r)
-	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "audio", input.ID, input.ProviderID, input.Model)
+	generationMode := "text_to_audio"
+	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "audio", input.ID, input.ProviderID, input.Model, generationMode)
 	if err != nil {
 		http.Error(w, "no eligible shared audio channel", http.StatusUnprocessableEntity)
 		return
@@ -314,9 +315,8 @@ func (s *Server) createServerAudioJob(w http.ResponseWriter, r *http.Request) {
 	if sharedSnapshot != nil {
 		input.Model = sharedSnapshot.Model
 	}
-	capabilityVersion, generationMode := "", ""
+	capabilityVersion := ""
 	if sharedSnapshot != nil {
-		generationMode = "text_to_audio"
 		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "audio", input.Model, generationMode)
 		if err != nil {
 			http.Error(w, "shared audio capability is unavailable", http.StatusUnprocessableEntity)

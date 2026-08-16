@@ -490,7 +490,11 @@ func sharedChannelSupports(channel adminChannelPublic, kind, requestedModel stri
 	}
 }
 
-func (s *Server) selectSharedChannel(ctx context.Context, tenantID, kind, routingKey, requestedModel string) (adminChannelPublic, error) {
+func (s *Server) selectSharedChannel(ctx context.Context, tenantID, kind, routingKey, requestedModel string, generationModes ...string) (adminChannelPublic, error) {
+	generationMode := ""
+	if len(generationModes) > 0 {
+		generationMode = generationModes[0]
+	}
 	channels, err := s.loadAdminChannels(ctx, tenantID)
 	if err != nil {
 		return adminChannelPublic{}, err
@@ -520,6 +524,7 @@ func (s *Server) selectSharedChannel(ctx context.Context, tenantID, kind, routin
 		// temporarily unusable, matching discovery and direct resolution.
 		seen[channel.ID] = struct{}{}
 		if validateAccountManagedChannelURL(channel.BaseURL) != nil || !sharedChannelSupports(channel, kind, requestedModel) ||
+			!sharedChannelPublishesMediaCapability(channel, kind, requestedModel, generationMode) ||
 			(adminChannelRequiresSecret(channel) && strings.TrimSpace(secrets[channel.ID]) == "") {
 			continue
 		}
@@ -534,6 +539,7 @@ func (s *Server) selectSharedChannel(ctx context.Context, tenantID, kind, routin
 		channel, message := normalizeAdminChannel(raw.adminChannel())
 		channel.Source = "platform"
 		if message != "" || !sharedChannelSupports(channel, kind, requestedModel) ||
+			!sharedChannelPublishesMediaCapability(channel, kind, requestedModel, generationMode) ||
 			(adminChannelRequiresSecret(channel) && strings.TrimSpace(platformSecrets[channel.ID]) == "") {
 			continue
 		}

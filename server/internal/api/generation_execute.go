@@ -354,7 +354,11 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load generation job", http.StatusInternalServerError)
 		return
 	}
-	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "image", input.ID, input.ProviderID, input.Model)
+	generationMode := "text_to_image"
+	if len(input.Parameters.ReferenceStorageKeys) > 0 {
+		generationMode = "image_to_image"
+	}
+	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "image", input.ID, input.ProviderID, input.Model, generationMode)
 	if err != nil {
 		http.Error(w, "no eligible shared image channel", http.StatusUnprocessableEntity)
 		return
@@ -376,12 +380,8 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	capabilityVersion, generationMode := "", ""
+	capabilityVersion := ""
 	if sharedSnapshot != nil {
-		generationMode = "text_to_image"
-		if len(input.Parameters.ReferenceStorageKeys) > 0 {
-			generationMode = "image_to_image"
-		}
 		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "image", input.Model, generationMode)
 		if err != nil {
 			http.Error(w, "shared image capability is unavailable", http.StatusUnprocessableEntity)

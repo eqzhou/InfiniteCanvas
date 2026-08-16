@@ -234,7 +234,7 @@ func publicGenerationJobPage(page store.GenerationJobPage) store.GenerationJobPa
 	return page
 }
 
-func (s *Server) snapshotGenerationChannel(ctx context.Context, tenantID, kind, jobID, providerID, requestedModel string) (string, *generationChannelSnapshot, error) {
+func (s *Server) snapshotGenerationChannel(ctx context.Context, tenantID, kind, jobID, providerID, requestedModel string, generationModes ...string) (string, *generationChannelSnapshot, error) {
 	config, _, err := s.loadGenerationConfig(ctx, tenantID, generationContextUserID(ctx))
 	if err != nil {
 		return "", nil, err
@@ -249,7 +249,7 @@ func (s *Server) snapshotGenerationChannel(ctx context.Context, tenantID, kind, 
 	var channel adminChannelPublic
 	var apiKey string
 	if providerID == sharedChannelAutoID {
-		channel, err = s.selectSharedChannel(ctx, tenantID, kind, jobID, requestedModel)
+		channel, err = s.selectSharedChannel(ctx, tenantID, kind, jobID, requestedModel, generationModes...)
 		if err == nil {
 			_, apiKey, err = s.resolveSharedChannel(ctx, tenantID, channel.ID)
 		}
