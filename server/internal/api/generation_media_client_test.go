@@ -126,8 +126,11 @@ func TestHTTPVideoExecutorUsesGrokVideoGenerationContract(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, `{"request_id":"grok-video-1"}`)
 		case "/v1/videos/grok-video-1":
-			_, _ = io.WriteString(w, `{"status":"done","video":{"url":"`+upstream.URL+`/result.mp4"}}`)
-		case "/result.mp4":
+			_, _ = io.WriteString(w, `{"status":"done","video":{"url":"/v1/videos/grok-video-1/content"}}`)
+		case "/v1/videos/grok-video-1/content":
+			if r.Header.Get("Authorization") != "Bearer sk" {
+				t.Fatalf("relative provider download authorization = %q", r.Header.Get("Authorization"))
+			}
 			w.Header().Set("Content-Type", "video/mp4")
 			_, _ = w.Write(minimalMP4())
 		default:
@@ -497,13 +500,51 @@ func TestGenerationResultURLRejectsLoopbackUnlessProviderIsLoopback(t *testing.T
 	}
 }
 
+func TestResolveGenerationResultURLAllowsOnlyRootRelativeProviderContent(t *testing.T) {
+	resolved, providerRelative, err := resolveGenerationResultURL(
+		"/v1/videos/video-1/content", "https://api.provider.example/v1")
+	if err != nil || !providerRelative || resolved.String() != "https://api.provider.example/v1/videos/video-1/content" {
+		t.Fatalf("resolved=%v providerRelative=%v err=%v", resolved, providerRelative, err)
+	}
+	for _, rawURL := range []string{
+		"//attacker.example/video.mp4",
+		"videos/video-1/content",
+		"/v1/videos/video-1/content#fragment",
+	} {
+		if _, _, err := resolveGenerationResultURL(rawURL, "https://api.provider.example/v1"); err == nil {
+			t.Fatalf("unsafe relative result URL accepted: %q", rawURL)
+		}
+	}
+}
+
+func TestVideoRelativeResultDoesNotFollowProviderRedirects(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("provider result redirect must not be followed")
+	}))
+	defer target.Close()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authorization := r.Header.Get("Authorization"); authorization != "Bearer provider-secret" {
+			t.Fatalf("provider content authorization = %q", authorization)
+		}
+		http.Redirect(w, r, target.URL+"/result.mp4", http.StatusFound)
+	}))
+	defer provider.Close()
+
+	video := newHTTPVideoExecutor()
+	_, err := video.download(context.Background(), "/v1/videos/video-1/content",
+		provider.URL+"/v1", "provider-secret", maxGeneratedVideoBytes)
+	if err == nil || err.Error() != "video download returned HTTP 302" {
+		t.Fatalf("redirect error = %v", err)
+	}
+}
+
 func TestGenerationDownloadErrorsNeverCarryTheRequestURL(t *testing.T) {
 	// Go's *url.Error embeds the full URL, including presigned query
 	// credentials, and workers log provider errors verbatim.
 	video := newHTTPVideoExecutor()
 	video.client = &http.Client{Transport: failingRoundTripper{}}
 	_, err := video.download(context.Background(), "https://cdn.example/result.mp4?X-Amz-Signature=leaked-secret",
-		"https://api.provider.example/v1", maxGeneratedVideoBytes)
+		"https://api.provider.example/v1", "", maxGeneratedVideoBytes)
 	if err == nil {
 		t.Fatal("expected the transport failure to surface")
 	}

@@ -210,7 +210,7 @@ func (e *httpVideoExecutor) generateTemplate(ctx context.Context, request videoG
 	if !ok || strings.TrimSpace(rawURL) == "" {
 		return generatedMedia{}, errors.New("video template response must resolve to a URL")
 	}
-	return e.download(ctx, rawURL, request.BaseURL, maxGeneratedVideoBytes)
+	return e.download(ctx, rawURL, request.BaseURL, request.APIKey, maxGeneratedVideoBytes)
 }
 
 func (e *httpVideoExecutor) create(ctx context.Context, request videoGenerationRequest) (map[string]any, error) {
@@ -333,7 +333,7 @@ func (e *httpVideoExecutor) completed(ctx context.Context, request videoGenerati
 		if status != kieTaskSucceeded || len(urls) == 0 {
 			return generatedMedia{}, true, errors.New("KIE video task completed without a result")
 		}
-		media, err := e.download(ctx, urls[0], request.BaseURL, maxGeneratedVideoBytes)
+		media, err := e.download(ctx, urls[0], request.BaseURL, request.APIKey, maxGeneratedVideoBytes)
 		if err != nil {
 			return generatedMedia{}, true, errors.New("KIE video result download failed")
 		}
@@ -351,7 +351,7 @@ func (e *httpVideoExecutor) completed(ctx context.Context, request videoGenerati
 		outputURL = apimartVideoResultURL(payload)
 	}
 	if outputURL != "" {
-		media, err := e.download(ctx, outputURL, request.BaseURL, maxGeneratedVideoBytes)
+		media, err := e.download(ctx, outputURL, request.BaseURL, request.APIKey, maxGeneratedVideoBytes)
 		return media, true, err
 	}
 	if mediaSuccessfulStatus(status) {
@@ -424,16 +424,34 @@ func (e *httpVideoExecutor) jsonRequest(ctx context.Context, request videoGenera
 	return payload, nil
 }
 
-func (e *httpVideoExecutor) download(ctx context.Context, rawURL, providerBaseURL string, limit int) (generatedMedia, error) {
-	if _, err := validateGenerationResultURL(rawURL, providerBaseURL); err != nil {
+func (e *httpVideoExecutor) download(ctx context.Context, rawURL, providerBaseURL, apiKey string, limit int) (generatedMedia, error) {
+	parsed, providerRelative, err := resolveGenerationResultURL(rawURL, providerBaseURL)
+	if err != nil {
 		return generatedMedia{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return generatedMedia{}, err
 	}
 	request.Header.Set("Accept", "video/mp4,video/webm,application/octet-stream")
-	response, err := e.client.Do(request)
+	if providerRelative && apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	client := *e.client
+	previousRedirectPolicy := client.CheckRedirect
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if _, err := validateGenerationResultURL(next.URL.String(), providerBaseURL); err != nil {
+			return err
+		}
+		if !sameGenerationOrigin(next.URL, parsed) {
+			next.Header.Del("Authorization")
+		}
+		if previousRedirectPolicy != nil {
+			return previousRedirectPolicy(next, via)
+		}
+		return nil
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return generatedMedia{}, errGenerationDownloadFailed
 	}
@@ -818,6 +836,42 @@ func validateGenerationResultURL(rawURL, providerBaseURL string) (*url.URL, erro
 		return nil, errors.New("generation result URL must not target a loopback address")
 	}
 	return parsed, nil
+}
+
+// resolveGenerationResultURL accepts absolute provider result URLs and
+// root-relative content endpoints. Relative endpoints are resolved only
+// against the configured provider origin; scheme-relative and path-relative
+// values remain invalid so a provider response cannot redirect downloads to an
+// unintended host or ambiguous base path.
+func resolveGenerationResultURL(rawURL, providerBaseURL string) (*url.URL, bool, error) {
+	trimmed := strings.TrimSpace(rawURL)
+	if len(trimmed) > 32*1024 {
+		return nil, false, errors.New("generation result URL exceeds size limit")
+	}
+	reference, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, false, errors.New("invalid generation result URL")
+	}
+	if reference.IsAbs() {
+		parsed, err := validateGenerationResultURL(trimmed, providerBaseURL)
+		return parsed, false, err
+	}
+	if reference.Host != "" || reference.User != nil || reference.Fragment != "" ||
+		!strings.HasPrefix(reference.Path, "/") || len(reference.RawQuery) > 16*1024 {
+		return nil, false, errors.New("invalid generation result URL")
+	}
+	provider, err := validateGenerationURL(providerBaseURL)
+	if err != nil {
+		return nil, false, err
+	}
+	resolved := provider.ResolveReference(reference)
+	parsed, err := validateGenerationResultURL(resolved.String(), providerBaseURL)
+	return parsed, true, err
+}
+
+func sameGenerationOrigin(left, right *url.URL) bool {
+	return left != nil && right != nil && strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Host, right.Host)
 }
 
 func isLoopbackProviderEndpoint(rawURL string) bool {
