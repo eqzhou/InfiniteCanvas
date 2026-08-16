@@ -48,6 +48,9 @@ func newHTTPAudioExecutor() *httpAudioExecutor {
 }
 
 func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGenerationRequest, existing *videoProviderCheckpoint, save func(videoProviderCheckpoint) error) (generatedMedia, error) {
+	if err := validateRegisteredVideoRequest(request); err != nil {
+		return generatedMedia{}, err
+	}
 	if e.maxDuration <= 0 {
 		e.maxDuration = 30 * time.Minute
 	}
@@ -138,6 +141,28 @@ func (e *httpVideoExecutor) Generate(ctx context.Context, request videoGeneratio
 			return media, err
 		}
 	}
+}
+
+func validateRegisteredVideoRequest(request videoGenerationRequest) error {
+	capability, registered := resolveProviderModelCapability(request.Protocol, "video", request.Model)
+	if !registered {
+		return nil
+	}
+	if request.Seconds != 0 && capability.MinDuration > 0 && capability.MaxDuration >= capability.MinDuration &&
+		(request.Seconds < capability.MinDuration || request.Seconds > capability.MaxDuration) {
+		return errors.New("video duration is not supported by the selected model")
+	}
+	if request.Ratio != "" && len(capability.Ratios) > 0 && !containsAPIMartString(capability.Ratios, request.Ratio) {
+		return errors.New("video aspect ratio is not supported by the selected model")
+	}
+	if request.Resolution != "" && len(capability.Resolutions) > 0 &&
+		!containsAPIMartString(capability.Resolutions, strings.ToLower(strings.TrimSpace(request.Resolution))) {
+		return errors.New("video resolution is not supported by the selected model")
+	}
+	if len(request.References) > capability.MaxImageReferences {
+		return errors.New("video reference count exceeds the selected model limit")
+	}
+	return nil
 }
 
 func (e *httpVideoExecutor) generateTemplate(ctx context.Context, request videoGenerationRequest) (generatedMedia, error) {

@@ -238,17 +238,30 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 	if sharedSnapshot != nil {
 		input.Model = sharedSnapshot.Model
 	}
-	if err := s.validateVideoReferenceKeys(r.Context(), tenantIDFrom(r), input.Parameters.ReferenceStorageKeys); err != nil {
-		http.Error(w, "video references are invalid or exceed limits", http.StatusBadRequest)
-		return
-	}
 	capabilityVersion := ""
 	if sharedSnapshot != nil {
-		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "video", input.Model, generationMode)
+		capabilityVersion, err = s.verifySharedVideoCapabilityRequest(
+			r.Context(), tenantID, sharedSnapshot.ProviderID, input.Model, generationMode,
+			filmGenerationConfig{
+				Size: input.Parameters.Size, Seconds: input.Parameters.Seconds,
+				Ratio: input.Parameters.Ratio, Resolution: input.Parameters.Resolution,
+				ReferenceStorageKeys: append([]string(nil), input.Parameters.ReferenceStorageKeys...),
+			},
+		)
 		if err != nil {
 			http.Error(w, "shared video capability is unavailable", http.StatusUnprocessableEntity)
 			return
 		}
+	} else if err := s.validatePersonalVideoReferenceCount(
+		r.Context(), tenantID, generationContextUserID(r.Context()), input.ProviderID, input.Model,
+		len(input.Parameters.ReferenceStorageKeys),
+	); err != nil {
+		http.Error(w, "video references exceed model capability", http.StatusUnprocessableEntity)
+		return
+	}
+	if err := s.validateVideoReferenceKeys(r.Context(), tenantID, input.Parameters.ReferenceStorageKeys); err != nil {
+		http.Error(w, "video references are invalid or exceed limits", http.StatusBadRequest)
+		return
 	}
 	parameters, _ := json.Marshal(persistedMediaJobParameters{
 		Executor: serverExecutorMarker, RequestHash: hash, Size: input.Parameters.Size, Seconds: input.Parameters.Seconds,
@@ -526,6 +539,47 @@ func (s *Server) validateVideoReferenceKeys(ctx context.Context, tenantID string
 		if total > maxMediaReferenceBytes {
 			return errors.New("media references exceed total size limit")
 		}
+	}
+	return nil
+}
+
+func (s *Server) validatePersonalVideoReferenceCount(
+	ctx context.Context,
+	tenantID, userID, providerID, model string,
+	referenceCount int,
+) error {
+	config, _, err := s.loadGenerationConfig(ctx, tenantID, userID)
+	if err != nil {
+		return err
+	}
+	protocol := ""
+	effectiveModel := strings.TrimSpace(model)
+	found := false
+	for _, channel := range config.Channels {
+		if channel.ID != providerID {
+			continue
+		}
+		found = true
+		provider, ok := channel.Providers["video"]
+		if ok {
+			protocol = provider.Protocol
+			if effectiveModel == "" {
+				effectiveModel = strings.TrimSpace(provider.Model)
+			}
+		} else if effectiveModel == "" {
+			effectiveModel = strings.TrimSpace(channel.DefaultVideoModel)
+		}
+		if protocol == "" {
+			protocol = "openai"
+		}
+		break
+	}
+	if !found || effectiveModel == "" {
+		return errors.New("personal video channel or model is unavailable")
+	}
+	capability, registered := resolveProviderModelCapability(protocol, "video", effectiveModel)
+	if registered && referenceCount > capability.MaxImageReferences {
+		return errors.New("video reference count exceeds the selected model limit")
 	}
 	return nil
 }

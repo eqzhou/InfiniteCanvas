@@ -55,7 +55,7 @@ func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndPublishesSafeDefaultBa
 			DefaultImageModel: "doubao-seedream-5-0-pro", Models: []string{"doubao-seedream-5-0-pro", "custom-video"},
 			MediaCapabilities: []adminMediaCapability{
 				{Model: "doubao-seedream-5-0-pro", Kind: "image", Modes: []string{"text_to_image"}, Sizes: []string{"1:1"}, MaxReferences: 0},
-				{Model: "custom-video", Kind: "video", Modes: []string{"text_to_video", "image_to_video"}, Durations: []int{5, 10}, MaxReferences: 2},
+				{Model: "custom-video", Kind: "video", Modes: []string{"text_to_video", "image_to_video"}, Sizes: []string{"16:9", "720p"}, Durations: []int{5, 10}, MaxReferences: 2},
 			},
 		},
 		{
@@ -109,15 +109,16 @@ func TestMediaCapabilityCatalogUsesExplicitCapabilitiesAndPublishesSafeDefaultBa
 	if explicitImage == nil || !reflect.DeepEqual(explicitImage.Modes, []string{"text_to_image"}) || explicitImage.MaxReferences != 0 || !reflect.DeepEqual(explicitImage.Sizes, []string{"1:1"}) {
 		t.Fatalf("explicit capability did not override registry: %#v", explicitImage)
 	}
-	if explicitVideo == nil || explicitVideo.MaxReferences != 2 || !reflect.DeepEqual(explicitVideo.Durations, []int{5, 10}) {
+	if explicitVideo == nil || explicitVideo.MaxReferences != 2 || !reflect.DeepEqual(explicitVideo.Durations, []int{5, 10}) ||
+		!reflect.DeepEqual(explicitVideo.Ratios, []string{"16:9"}) || !reflect.DeepEqual(explicitVideo.Resolutions, []string{"720p"}) || len(explicitVideo.Sizes) != 0 {
 		t.Fatalf("explicit non-default capability missing: %#v", explicitVideo)
 	}
 	if unknownImage == nil || !reflect.DeepEqual(unknownImage.Modes, []string{"text_to_image"}) || unknownImage.MaxReferences != 0 || len(unknownImage.Sizes) != 0 {
 		t.Fatalf("unknown default must publish only a safe text-to-image baseline: %#v", unknownImage)
 	}
-	if registeredVideo == nil || registeredVideo.MaxReferences != 9 || len(registeredVideo.Durations) != 11 ||
+	if registeredVideo == nil || registeredVideo.MaxReferences != 9 || len(registeredVideo.Durations) != 12 ||
 		!reflect.DeepEqual(registeredVideo.Ratios, []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}) ||
-		!reflect.DeepEqual(registeredVideo.Resolutions, []string{"480p", "720p", "1080p", "4k"}) {
+		!reflect.DeepEqual(registeredVideo.Resolutions, []string{"480p", "720p", "1080p"}) {
 		t.Fatalf("registered default capability missing: %#v", registeredVideo)
 	}
 }
@@ -141,9 +142,9 @@ func TestMediaCapabilityUsesRegisteredProviderModelLimits(t *testing.T) {
 		t.Fatalf("image capability ignored provider registry: %#v", image)
 	}
 	video := capabilityForChannelDefault(channel, "video", "doubao-seedance-2.0")
-	if video.MaxReferences != 9 || len(video.Durations) != 11 || video.Durations[5] != 10 ||
+	if video.MaxReferences != 9 || len(video.Durations) != 12 || video.Durations[0] != 4 || video.Durations[6] != 10 ||
 		!reflect.DeepEqual(video.Ratios, []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"}) ||
-		!reflect.DeepEqual(video.Resolutions, []string{"480p", "720p", "1080p", "4k"}) {
+		!reflect.DeepEqual(video.Resolutions, []string{"480p", "720p", "1080p"}) {
 		t.Fatalf("video capability ignored provider registry: %#v", video)
 	}
 }
@@ -254,7 +255,7 @@ func TestSharedVideoAndAudioJobsFreezeCatalogResolution(t *testing.T) {
 		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
 		DefaultVideoModel: "video-main", DefaultAudioModel: "audio-main", Models: []string{"video-main", "audio-main"},
 		MediaCapabilities: []adminMediaCapability{
-			{Model: "video-main", Kind: "video", Modes: []string{"text_to_video", "image_to_video"}, Durations: []int{5}, MaxReferences: 1},
+			{Model: "video-main", Kind: "video", Modes: []string{"text_to_video", "image_to_video"}, Sizes: []string{"16:9", "720p"}, Durations: []int{5}, MaxReferences: 1},
 			{Model: "audio-main", Kind: "audio", Modes: []string{"text_to_audio"}},
 		},
 	}})
@@ -263,6 +264,23 @@ func TestSharedVideoAndAudioJobsFreezeCatalogResolution(t *testing.T) {
 	}
 	if got := putSharedChannelSecret(t, router, "shared-media", "sk-private"); got.Code != http.StatusNoContent {
 		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+	invalidRequests := map[string]string{
+		"duration":   `{"id":"shared-video-invalid-duration","projectId":"board-1","prompt":"a tiger","providerId":"shared-media","model":"video-main","parameters":{"seconds":6,"ratio":"16:9","resolution":"720p","referenceStorageKeys":[]}}`,
+		"auto":       `{"id":"shared-video-invalid-auto","projectId":"board-1","prompt":"a tiger","providerId":"shared-media","model":"video-main","parameters":{"ratio":"16:9","resolution":"720p","referenceStorageKeys":[]}}`,
+		"ratio":      `{"id":"shared-video-invalid-ratio","projectId":"board-1","prompt":"a tiger","providerId":"shared-media","model":"video-main","parameters":{"seconds":5,"ratio":"9:16","resolution":"720p","referenceStorageKeys":[]}}`,
+		"resolution": `{"id":"shared-video-invalid-resolution","projectId":"board-1","prompt":"a tiger","providerId":"shared-media","model":"video-main","parameters":{"seconds":5,"ratio":"16:9","resolution":"1080p","referenceStorageKeys":[]}}`,
+		"references": `{"id":"shared-video-invalid-references","projectId":"board-1","prompt":"a tiger","providerId":"shared-media","model":"video-main","parameters":{"seconds":5,"ratio":"16:9","resolution":"720p","referenceStorageKeys":["media:first.png","media:second.png"]}}`,
+	}
+	for name, body := range invalidRequests {
+		invalidVideo := request(t, router, http.MethodPost, "/api/generation-jobs/video", []byte(body))
+		if invalidVideo.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("unsupported shared video %s accepted: %d %s", name, invalidVideo.Code, invalidVideo.Body.String())
+		}
+	}
+	missingPersonal := request(t, router, http.MethodPost, "/api/generation-jobs/video", []byte(`{"id":"personal-video-missing-channel","projectId":"board-1","prompt":"a tiger","providerId":"missing-personal","model":"grok-imagine-video","parameters":{"seconds":5,"ratio":"16:9","resolution":"720p","referenceStorageKeys":["media:first.png","media:second.png"]}}`))
+	if missingPersonal.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing personal channel reached reference loading: %d %s", missingPersonal.Code, missingPersonal.Body.String())
 	}
 	video := request(t, router, http.MethodPost, "/api/generation-jobs/video", []byte(`{"id":"shared-video","projectId":"board-1","prompt":"a tiger","providerId":"shared-media","model":"video-main","parameters":{"seconds":5,"ratio":"16:9","resolution":"720p","referenceStorageKeys":[]}}`))
 	if video.Code != http.StatusAccepted {

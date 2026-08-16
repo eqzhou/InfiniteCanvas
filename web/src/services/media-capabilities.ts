@@ -55,3 +55,48 @@ export async function listMediaCapabilities(): Promise<MediaCapabilityCatalog> {
 export function mediaOptionsForKind(catalog: MediaCapabilityCatalog, kind: MediaKind): Array<Omit<MediaCapability, "kind">> {
   return catalog.models.filter((item) => item.kind === kind).map(({ kind: _kind, ...item }) => ({ ...item, modes: [...item.modes], sizes: [...item.sizes], ratios: [...item.ratios], resolutions: [...item.resolutions], durations: [...item.durations] }));
 }
+
+export function intersectMediaCapabilities(items: readonly MediaCapability[]): MediaCapability | undefined {
+  const first = items[0];
+  if (!first) return undefined;
+  const common = <T extends string | number>(select: (item: MediaCapability) => readonly T[]): T[] => {
+    const constrained = items.map(select).filter((values) => values.length > 0);
+    if (!constrained.length) return [];
+    return constrained[0]!.filter((value) => constrained.every((values) => values.includes(value)));
+  };
+  const modes = common((item) => item.modes);
+  const sizes = common((item) => item.sizes);
+  const ratios = common((item) => item.ratios);
+  const resolutions = common((item) => item.resolutions);
+  const durations = common((item) => item.durations);
+  if (!modes.length ||
+    (items.some((item) => item.sizes.length) && !sizes.length) ||
+    (items.some((item) => item.ratios.length) && !ratios.length) ||
+    (items.some((item) => item.resolutions.length) && !resolutions.length) ||
+    (items.some((item) => item.durations.length) && !durations.length)) return undefined;
+  return {
+    ...first,
+    channelId: "shared-auto",
+    channelName: "Auto",
+    modes,
+    sizes,
+    ratios,
+    resolutions,
+    durations,
+    maxReferences: Math.min(...items.map((item) => item.maxReferences)),
+  };
+}
+
+export function resolveMediaCapabilityForRequest(
+  catalog: MediaCapabilityCatalog | null | undefined,
+  channelId: string,
+  kind: MediaKind,
+  model: string,
+  mode: MediaGenerationMode,
+): MediaCapability | undefined {
+  const matching = catalog?.models.filter((item) =>
+    item.kind === kind && item.model === model && item.modes.includes(mode) &&
+    (channelId === "shared-auto" || item.channelId === channelId),
+  ) ?? [];
+  return channelId === "shared-auto" ? intersectMediaCapabilities(matching) : matching[0];
+}

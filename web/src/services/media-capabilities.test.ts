@@ -1,6 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 
-import { listMediaCapabilities, mediaOptionsForKind } from "./media-capabilities";
+import {
+  intersectMediaCapabilities,
+  listMediaCapabilities,
+  mediaOptionsForKind,
+  resolveMediaCapabilityForRequest,
+} from "./media-capabilities";
 import { normalizeAdminMediaCapabilities } from "./admin";
 
 describe("media capability catalog", () => {
@@ -37,6 +42,31 @@ describe("media capability catalog", () => {
     await expect(listMediaCapabilities()).resolves.toMatchObject({
       models: [{ sizes: ["16:9", "720p", "4K", "adaptive"] }],
     });
+  });
+
+  test("intersects automatic shared-channel controls so every eligible channel can execute them", () => {
+    const base = {
+      channelName: "Video", protocol: "openai", model: "video-main", kind: "video" as const,
+      sizes: [], modes: ["text_to_video", "image_to_video"] as const,
+    };
+    const result = intersectMediaCapabilities([
+      { ...base, channelId: "a", ratios: ["16:9", "9:16"], resolutions: ["720p", "1080p"], durations: [5, 10], maxReferences: 2 },
+      { ...base, channelId: "b", ratios: ["16:9"], resolutions: ["720p"], durations: [5], maxReferences: 1 },
+    ]);
+    expect(result).toMatchObject({
+      channelId: "shared-auto", ratios: ["16:9"], resolutions: ["720p"], durations: [5], maxReferences: 1,
+    });
+  });
+
+  test("resolves automatic channel controls only from candidates for the actual generation mode", () => {
+    const catalog = { version: "d".repeat(64), models: [
+      { channelId: "text", channelName: "Text", protocol: "openai", model: "video-main", kind: "video" as const, modes: ["text_to_video" as const], sizes: [], ratios: ["16:9"], resolutions: ["720p"], durations: [5], maxReferences: 0 },
+      { channelId: "image", channelName: "Image", protocol: "openai", model: "video-main", kind: "video" as const, modes: ["image_to_video" as const], sizes: [], ratios: ["9:16"], resolutions: ["1080p"], durations: [10], maxReferences: 1 },
+    ] };
+    expect(resolveMediaCapabilityForRequest(catalog, "shared-auto", "video", "video-main", "text_to_video"))
+      .toMatchObject({ ratios: ["16:9"], durations: [5] });
+    expect(resolveMediaCapabilityForRequest(catalog, "shared-auto", "video", "video-main", "image_to_video"))
+      .toMatchObject({ ratios: ["9:16"], durations: [10] });
   });
 
   test("normalizes explicit admin capabilities and rejects models outside the channel allow list", () => {

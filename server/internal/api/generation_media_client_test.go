@@ -157,6 +157,24 @@ func TestHTTPVideoExecutorUsesGrokVideoGenerationContract(t *testing.T) {
 	}
 }
 
+func TestHTTPVideoExecutorRejectsUnsupportedRegisteredVideoControls(t *testing.T) {
+	for name, request := range map[string]videoGenerationRequest{
+		"grok resolution":   {Protocol: "openai", Model: "grok-imagine-video", Prompt: "move", Seconds: 5, Ratio: "16:9", Resolution: "1080p"},
+		"seedance duration": {Protocol: "apimart", Model: "doubao-seedance-2.0", Prompt: "move", Seconds: 3, Ratio: "16:9", Resolution: "720p"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateRegisteredVideoRequest(request); err == nil {
+				t.Fatal("unsupported registered video controls accepted")
+			}
+		})
+	}
+	if err := validateRegisteredVideoRequest(videoGenerationRequest{
+		Protocol: "apimart", Model: "kling-v2-6", Prompt: "move", Seconds: 5, Ratio: "16:9", Resolution: "720p",
+	}); err != nil {
+		t.Fatalf("provider-specific validation controls rejected early: %v", err)
+	}
+}
+
 func TestHTTPVideoExecutorRunsRestrictedTemplateWithoutCheckpoint(t *testing.T) {
 	var upstream *httptest.Server
 	requests := atomic.Int32{}

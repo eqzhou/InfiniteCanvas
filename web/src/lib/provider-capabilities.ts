@@ -60,7 +60,9 @@ const PROVIDER_CAPABILITIES: readonly ProviderCapability[] = [
       minDuration: 1,
       maxDuration: 15,
       aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const,
-      resolutions: ["480p", "720p", "1080p"] as const,
+      resolutions: model === "grok-imagine-video-1.5"
+        ? ["480p", "720p", "1080p"] as const
+        : ["480p", "720p"] as const,
       maxImageReferences: 1,
       audioModes: ["std"] as const,
       lastFrameModes: [] as const,
@@ -131,10 +133,10 @@ const PROVIDER_CAPABILITIES: readonly ProviderCapability[] = [
     maxImageReferences: 9,
     video: {
       modes: ["std"] as const,
-      minDuration: 5,
+      minDuration: 4,
       maxDuration: 15,
       aspectRatios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"] as const,
-      resolutions: model === "doubao-seedance-2.0" ? ["480p", "720p", "1080p", "4k"] as const : ["480p", "720p"] as const,
+      resolutions: model === "doubao-seedance-2.0" ? ["480p", "720p", "1080p"] as const : ["480p", "720p"] as const,
       maxImageReferences: 9,
       maxVideoReferences: 0,
       maxAudioReferences: 0,

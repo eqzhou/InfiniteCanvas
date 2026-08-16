@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BoardNode } from "@/types/board";
+import type { AiChannel, BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { audioJobParameters, audioSpeechOptions } from "@/lib/audio-generation";
 import {
@@ -37,7 +37,12 @@ import {
 } from "@/lib/image-generation";
 import { applyCameraPrompt } from "@/lib/camera-prompt";
 import { applyServerImagePlaceholders, submitServerImageGeneration } from "@/lib/canvas-server-image";
-import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
+import { normalizeVideoFrameMode } from "@/lib/video-generation";
+import {
+  normalizeVideoRatioForProvider,
+  normalizeVideoResolutionForProvider,
+  resolveVideoDurationForProvider,
+} from "@/lib/video-generation-options";
 import {
   cancelServerGenerationJob,
   createServerAudioGenerationJob,
@@ -65,8 +70,37 @@ import {
   resolveAudioVoice,
 } from "@/lib/audio-provider";
 import { useI18n } from "@/i18n/I18nProvider";
+import {
+  resolveMediaCapabilityForRequest,
+  type MediaCapability,
+  type MediaCapabilityCatalog,
+} from "@/services/media-capabilities";
 
-export function NodePromptBar({ node }: { node: BoardNode }) {
+function nodeVideoControls(node: BoardNode, channel: AiChannel, capability?: MediaCapability) {
+  const provider = getProvider(channel, "video");
+  const model = node.metadata.model || provider.model;
+  const requestedRatio = node.metadata.videoRatio || "16:9";
+  const requestedResolution = node.metadata.resolution || "720p";
+  return {
+    seconds: resolveVideoDurationForProvider(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5, provider.protocol, model, capability?.durations),
+    ratio: capability?.ratios.length
+      ? capability.ratios.includes(requestedRatio) ? requestedRatio : capability.ratios[0]!
+      : normalizeVideoRatioForProvider(requestedRatio, provider.protocol, model),
+    resolution: capability?.resolutions.length
+      ? capability.resolutions.includes(requestedResolution) ? requestedResolution : capability.resolutions[0]!
+      : normalizeVideoResolutionForProvider(requestedResolution, provider.protocol, model),
+  };
+}
+
+export function NodePromptBar({
+  node,
+  videoCapability,
+  mediaCatalog,
+}: {
+  node: BoardNode;
+  videoCapability?: MediaCapability;
+  mediaCatalog?: MediaCapabilityCatalog | null;
+}) {
   const { t } = useI18n();
   const config = useBoardStore((s) => s.config);
   const prompts = useBoardStore((s) => s.prompts);
@@ -334,6 +368,17 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
         const referenceStorageKeys = durableReferences
           .map((reference) => reference.storageKey)
           .filter((value): value is string => Boolean(value));
+        const resolvedVideoCapability = resolveMediaCapabilityForRequest(
+          mediaCatalog,
+          requestChannel.id,
+          "video",
+          node.metadata.model || videoProvider.model,
+          durableReferences.length > 0 ? "image_to_video" : "text_to_video",
+        );
+        if (mediaCatalog && sharedChannels.some((candidate) => candidate.id === requestChannel.id) && !resolvedVideoCapability) {
+          throw new Error(t("creative.sharedCapabilityMissing"));
+        }
+        const requestVideoCapability = resolvedVideoCapability ?? videoCapability;
         const serverVideoSupported = videoProvider.protocol === "openai" || videoProvider.protocol === "ark" ||
           (videoProvider.protocol === "template" && Boolean(videoProvider.template)) ||
           videoProvider.baseUrl.includes("/api/v3") || videoProvider.baseUrl.includes("/api/plan/v3");
@@ -345,9 +390,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
             model: node.metadata.model || videoProvider.model,
             parameters: {
               size: node.metadata.size,
-              seconds: resolveVideoDuration(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5),
-              ratio: node.metadata.videoRatio || "16:9",
-              resolution: node.metadata.resolution || "720p",
+              ...nodeVideoControls(node, requestChannel, requestVideoCapability),
               generateAudio: Boolean(node.metadata.generateAudio),
               watermark: Boolean(node.metadata.watermark),
               frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
@@ -381,12 +424,7 @@ export function NodePromptBar({ node }: { node: BoardNode }) {
           model: node.metadata.model || getProvider(requestChannel, "video").model,
           prompt: applyCameraPrompt(rawPrompt, node.metadata.cameraPrompt),
           size: node.metadata.size,
-          seconds: resolveVideoDuration(
-            Boolean(node.metadata.smartDuration),
-            node.metadata.duration ?? 5,
-          ),
-          ratio: node.metadata.videoRatio || "16:9",
-          resolution: node.metadata.resolution || "720p",
+          ...nodeVideoControls(node, requestChannel, requestVideoCapability),
           generateAudio: Boolean(node.metadata.generateAudio),
           watermark: Boolean(node.metadata.watermark),
           frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),

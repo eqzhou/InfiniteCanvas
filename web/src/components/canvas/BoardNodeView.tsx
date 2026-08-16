@@ -30,9 +30,12 @@ import {
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
 import {
+  normalizeVideoDuration,
+  normalizeVideoDurationForProvider,
   normalizeVideoRatioForProvider,
   normalizeVideoResolutionForProvider,
   optionsWithCurrentVideoValue,
+  videoDurationOptionsFor,
   videoRatioOptionsFor,
   videoResolutionOptionsFor,
   videoSizeAfterSelectionChange,
@@ -43,11 +46,16 @@ import { getProvider } from "@/lib/ai-config";
 import { Clapperboard, Globe2, Image, Film, FolderOpen, Music2, Puzzle, Settings2, Type, Upload } from "lucide-react";
 import { isSphericalDirectorEnvironment, listDirectorEnvironmentOptions, resolveDirectorPanorama } from "@/lib/director-panorama";
 import { shouldRenderFloatingNodeActions, shouldRenderNodePromptBar } from "@/lib/node-action-visibility";
-import { buildDirectorShotPrompt, planDirectorShotGeneration } from "@/lib/director-shot-generation";
+import { buildDirectorShotPrompt, directorShotGenerationContext, planDirectorShotGeneration } from "@/lib/director-shot-generation";
 import { createImageGenerationMetadata, normalizeImageGenerationForProvider } from "@/lib/image-generation";
 import { createServerImageGenerationJob, cancelServerGenerationJob } from "@/services/generation-jobs";
 import { uid } from "@/lib/id";
 import { useI18n } from "@/i18n/I18nProvider";
+import {
+  intersectMediaCapabilities,
+  type MediaCapability,
+  type MediaCapabilityCatalog,
+} from "@/services/media-capabilities";
 
 const DirectorDialog = lazy(() => import("@/components/director/DirectorDialog").then((module) => ({
   default: module.DirectorDialog,
@@ -86,6 +94,7 @@ type Props = {
   onContextMenu?: (e: React.MouseEvent) => void;
   /** All personal and currently published shared channels, supplied by the canvas once. */
   generationChannels?: readonly AiChannel[];
+  mediaCatalog?: MediaCapabilityCatalog | null;
 };
 
 export function BoardNodeView({
@@ -101,6 +110,7 @@ export function BoardNodeView({
   onCompleteConnect,
   onContextMenu,
   generationChannels = [],
+  mediaCatalog = null,
 }: Props) {
   const { t } = useI18n();
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -111,6 +121,18 @@ export function BoardNodeView({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(node.title);
   const project = useBoardStore((s) => s.getActive());
+  const videoCapabilityMode = useMemo(() => {
+    if (!project) return "text_to_video" as const;
+    const incoming = new Set(project.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from));
+    const hasIncomingMedia = project.nodes.some((candidate) => incoming.has(candidate.id) &&
+      (candidate.type === "image" || candidate.type === "video" || candidate.type === "audio") &&
+      Boolean(candidate.metadata.storageKey || candidate.metadata.content));
+    const hasOwnMedia = (node.type === "image" || node.type === "video" || node.type === "audio") &&
+      Boolean(node.metadata.storageKey || node.metadata.content);
+    const hasStoredReferences = Boolean(node.metadata.referenceStorageKeys?.length) ||
+      Boolean(directorShotGenerationContext(project, node.id)?.referenceStorageKeys.length);
+    return hasIncomingMedia || hasOwnMedia || hasStoredReferences ? "image_to_video" as const : "text_to_video" as const;
+  }, [node.id, node.metadata.content, node.metadata.referenceStorageKeys, node.metadata.storageKey, node.type, project]);
   const auth = useOptionalAuth();
   const captureOwnerScope = useMemo(
     () => getDirectorCaptureOwnerScope(auth?.user),
@@ -134,8 +156,11 @@ export function BoardNodeView({
     imageOutputLimit,
     imageQuality,
     videoProvider,
+    videoCapability,
     videoRatioOptions,
     videoResolutionOptions,
+    videoDurationOptions,
+    videoDuration,
     videoRatio,
     videoResolution,
     videoSize,
@@ -156,16 +181,28 @@ export function BoardNodeView({
     const imageModel = node.metadata.model || imageProvider?.model || "";
     const videoProvider = imageChannel ? getProvider(imageChannel, "video") : undefined;
     const videoModel = node.metadata.model || videoProvider?.model || "";
-    const videoRatio = normalizeVideoRatioForProvider(
-      node.metadata.videoRatio ?? "16:9",
-      videoProvider?.protocol,
-      videoModel,
-    );
-    const videoResolution = normalizeVideoResolutionForProvider(
-      node.metadata.resolution ?? "720p",
-      videoProvider?.protocol,
-      videoModel,
-    );
+    const videoCapabilityCandidates = mediaCatalog?.models.filter((item) =>
+      item.kind === "video" && item.model === videoModel && item.channelId === imageChannel?.id && item.modes.includes(videoCapabilityMode),
+    ) ?? [];
+    const videoCapability: MediaCapability | undefined = imageChannel?.id === "shared-auto"
+      ? intersectMediaCapabilities(mediaCatalog?.models.filter((item) =>
+        item.kind === "video" && item.model === videoModel && item.modes.includes(videoCapabilityMode),
+      ) ?? [])
+      : videoCapabilityCandidates[0];
+    const requestedVideoRatio = node.metadata.videoRatio ?? "16:9";
+    const requestedVideoResolution = node.metadata.resolution ?? "720p";
+    const videoRatio = videoCapability?.ratios.length
+      ? videoCapability.ratios.includes(requestedVideoRatio) ? requestedVideoRatio : videoCapability.ratios[0]!
+      : normalizeVideoRatioForProvider(requestedVideoRatio, videoProvider?.protocol, videoModel);
+    const videoResolution = videoCapability?.resolutions.length
+      ? videoCapability.resolutions.includes(requestedVideoResolution) ? requestedVideoResolution : videoCapability.resolutions[0]!
+      : normalizeVideoResolutionForProvider(requestedVideoResolution, videoProvider?.protocol, videoModel);
+    const videoDurationOptions = videoCapability?.durations.length
+      ? videoCapability.durations
+      : videoDurationOptionsFor(videoProvider?.protocol, videoModel);
+    const videoDuration = videoCapability?.durations.length
+      ? normalizeVideoDuration(node.metadata.duration ?? 5, videoCapability.durations)
+      : normalizeVideoDurationForProvider(node.metadata.duration ?? 5, videoProvider?.protocol, videoModel);
     return {
       activeChannel,
       imageChannel,
@@ -179,8 +216,15 @@ export function BoardNodeView({
         imageModel,
       ),
       videoProvider,
-      videoRatioOptions: videoRatioOptionsFor(videoProvider?.protocol, videoModel),
-      videoResolutionOptions: videoResolutionOptionsFor(videoProvider?.protocol, videoModel),
+      videoCapability,
+      videoRatioOptions: videoCapability?.ratios.length
+        ? videoCapability.ratios.map((value) => ({ value, label: value }))
+        : videoRatioOptionsFor(videoProvider?.protocol, videoModel),
+      videoResolutionOptions: videoCapability?.resolutions.length
+        ? videoCapability.resolutions.map((value) => ({ value, label: `${value} 分辨率` }))
+        : videoResolutionOptionsFor(videoProvider?.protocol, videoModel),
+      videoDurationOptions,
+      videoDuration,
       videoRatio,
       videoResolution,
       videoSize: videoSizeForProvider(videoProvider?.protocol, videoRatio, videoResolution),
@@ -193,12 +237,15 @@ export function BoardNodeView({
   }, [
     config,
     generationChannels,
+    mediaCatalog,
+    videoCapabilityMode,
     node.type,
     node.metadata.generationChannelId,
     node.metadata.model,
     node.metadata.quality,
     node.metadata.videoRatio,
     node.metadata.resolution,
+    node.metadata.duration,
     node.metadata.pluginId,
   ]);
   const Icon =
@@ -779,24 +826,40 @@ export function BoardNodeView({
                 </label>
                 <label className="flex flex-col gap-1">
                   {t("canvasNodes.durationSeconds")}
-                  <input
-                    type="number"
-                    min={4}
-                    max={15}
-                    disabled={Boolean(node.metadata.smartDuration)}
-                    className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
-                    value={node.metadata.duration ?? 5}
-                    onChange={(e) =>
-                      updateNode(node.id, {
-                        metadata: { duration: Number(e.target.value) || 5 },
-                      })
-                    }
-                  />
+                  {videoDurationOptions.length ? (
+                    <select
+                      aria-label={t("canvasNodes.durationSeconds")}
+                      className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                      value={videoDuration}
+                      onChange={(event) => updateNode(node.id, { metadata: { duration: Number(event.target.value) } })}
+                    >
+                      {videoDurationOptions.map((value) => (
+                        <option key={value} value={value}>
+                          {t("workbench.secondsValue", { seconds: value })}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      min={4}
+                      max={15}
+                      disabled={Boolean(node.metadata.smartDuration)}
+                      className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                      value={node.metadata.duration ?? 5}
+                      onChange={(e) =>
+                        updateNode(node.id, {
+                          metadata: { duration: Number(e.target.value) || 5 },
+                        })
+                      }
+                    />
+                  )}
                 </label>
                 <label className="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    checked={Boolean(node.metadata.smartDuration)}
+                    disabled={videoDurationOptions.length > 0}
+                    checked={videoDurationOptions.length === 0 && Boolean(node.metadata.smartDuration)}
                     onChange={(event) => updateNode(node.id, {
                       metadata: { smartDuration: event.target.checked },
                     })}
@@ -935,7 +998,7 @@ export function BoardNodeView({
                 );
               })()}
             </div>
-            <NodeActions node={node} inlineConfigOnly />
+            <NodeActions node={node} inlineConfigOnly videoCapability={videoCapability} mediaCatalog={mediaCatalog} />
             <div className="text-[var(--ob-muted)]">
               {t("canvasNodes.status", { status: node.metadata.status ?? "idle" })}
               {node.metadata.errorDetails
@@ -1005,6 +1068,8 @@ export function BoardNodeView({
       {shouldRenderFloatingNodeActions(node.type, selected, resizing) ? (
         <NodeActions
           node={node}
+          videoCapability={videoCapability}
+          mediaCatalog={mediaCatalog}
           avoidTopToolbarOverlap={Boolean(project && (
             node.position.y * project.viewport.k + project.viewport.y <= NODE_ACTIONS_TOP_SAFE_AREA
           ))}
@@ -1017,7 +1082,7 @@ export function BoardNodeView({
         />
       ) : null}
       {shouldRenderNodePromptBar(selected, resizing) && node.type !== "config" && node.type !== "group" && node.type !== "plugin" && node.type !== "director" && node.type !== "panorama" ? (
-        <NodePromptBar node={node} />
+        <NodePromptBar node={node} videoCapability={videoCapability} mediaCatalog={mediaCatalog} />
       ) : null}
       {(node.metadata.isBatchRoot || node.metadata.batchRootId) ? (
         <BatchGroupControls node={node} />

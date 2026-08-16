@@ -3,16 +3,18 @@ import { resolveProviderCapability } from "@/lib/provider-capabilities";
 
 describe("provider capabilities", () => {
   test("advertises the xAI Grok video generation contract", () => {
-    expect(resolveProviderCapability("openai", "video", "grok-imagine-video-1.5")).toMatchObject({
+    expect(resolveProviderCapability("openai", "video", "grok-imagine-video")).toMatchObject({
       maxImageReferences: 1,
       video: {
         minDuration: 1,
         maxDuration: 15,
         aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
-        resolutions: ["480p", "720p", "1080p"],
+        resolutions: ["480p", "720p"],
         maxImageReferences: 1,
       },
     });
+    expect(resolveProviderCapability("openai", "video", "grok-imagine-video-1.5")?.video?.resolutions)
+      .toEqual(["480p", "720p", "1080p"]);
   });
 
   test("resolves exact APIMart Kling families without fuzzy model matching", () => {
@@ -61,10 +63,10 @@ describe("provider capabilities", () => {
     const standard = resolveProviderCapability("apimart", "video", "doubao-seedance-2.0");
     expect(standard).toMatchObject({ family: "seedance-2.0", maxImageReferences: 9 });
     expect(standard?.video).toMatchObject({
-      minDuration: 5,
+      minDuration: 4,
       maxDuration: 15,
       aspectRatios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
-      resolutions: ["480p", "720p", "1080p", "4k"],
+      resolutions: ["480p", "720p", "1080p"],
       maxImageReferences: 9,
     });
     for (const model of ["doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"]) {

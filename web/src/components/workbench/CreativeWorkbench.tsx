@@ -5,7 +5,7 @@ import type { GenerationJob } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { getProvider } from "@/lib/ai-config";
 import { resolveProviderCapability } from "@/lib/provider-capabilities";
-import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
+import { normalizeVideoFrameMode } from "@/lib/video-generation";
 import { assertResolvedImageReferences } from "@/lib/image-generation";
 import { generateImages, generateVideo, resolveMediaRefs } from "@/services/ai-client";
 import {
@@ -52,7 +52,12 @@ import { DraggableWorkflowEntry } from "@/components/workbench/DraggableWorkflow
 import { KlingVideoControls, type KlingWorkbenchOptions } from "@/components/workbench/KlingVideoControls";
 import { validateKlingVideoParameters } from "@/lib/kling-video";
 import { mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
-import { listMediaCapabilities, type MediaCapability, type MediaCapabilityCatalog } from "@/services/media-capabilities";
+import {
+  intersectMediaCapabilities,
+  listMediaCapabilities,
+  type MediaCapability,
+  type MediaCapabilityCatalog,
+} from "@/services/media-capabilities";
 import { adoptFilmCanvasMedia } from "@/services/film-client";
 import { resolveWorkbenchRunChannel } from "@/lib/workbench-provider";
 import {
@@ -78,9 +83,12 @@ import {
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
 import {
+  normalizeVideoDuration,
   normalizeVideoRatioForProvider,
   normalizeVideoResolutionForProvider,
   optionsWithCurrentVideoValue,
+  resolveVideoDurationForProvider,
+  videoDurationOptionsFor,
   videoRatioOptionsFor,
   videoResolutionOptionsFor,
   videoSizeForProvider,
@@ -196,12 +204,25 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		return mediaCatalog.models.filter((item) => item.kind === kind &&
 			(channelId === "shared-auto" || item.channelId === channelId));
 	}, [channelId, kind, mediaCatalog, sharedChannelSelected]);
-	const sharedModelOptions = useMemo(() => [...new Set(sharedCapabilities.map((item) => item.model))], [sharedCapabilities]);
-  const sharedCapability = sharedCapabilities.find((item) => item.model === model);
+	const estimateGenerationMode = kind === "image"
+		? (references.length > 0 || selectedAssetIds.length > 0 ? "image_to_image" : "text_to_image")
+		: (references.length > 0 || selectedAssetIds.length > 0 || klingOptions.elements.length > 0 ? "image_to_video" : "text_to_video");
+	const sharedModelOptions = useMemo(() => {
+    const eligible = sharedCapabilities.filter((item) => item.modes.includes(estimateGenerationMode));
+    const models = [...new Set(eligible.map((item) => item.model))];
+    return channelId === "shared-auto"
+      ? models.filter((candidate) => intersectMediaCapabilities(eligible.filter((item) => item.model === candidate)))
+      : models;
+  }, [channelId, estimateGenerationMode, sharedCapabilities]);
+  const sharedCapability = useMemo(() => {
+    const matching = sharedCapabilities.filter((item) => item.model === model && item.modes.includes(estimateGenerationMode));
+    return channelId === "shared-auto" ? intersectMediaCapabilities(matching) : matching[0];
+  }, [channelId, estimateGenerationMode, model, sharedCapabilities]);
+  const availableVideoDurations = useMemo(() => {
+    if (sharedCapability?.durations.length) return sharedCapability.durations;
+    return videoDurationOptionsFor(provider?.protocol, model);
+  }, [model, provider?.protocol, sharedCapability?.durations]);
 	const sharedImageSizes = kind === "image" ? sharedCapability?.sizes ?? [] : [];
-  const estimateGenerationMode = kind === "image"
-    ? (references.length > 0 || selectedAssetIds.length > 0 ? "image_to_image" : "text_to_image")
-    : (references.length > 0 || selectedAssetIds.length > 0 || klingOptions.elements.length > 0 ? "image_to_video" : "text_to_video");
   const preferredModel = config.preferredModels?.[channelId]?.[kind];
 	const adoptAssetResult = useCallback(async (completedJob: GenerationJob, items: WorkbenchResultItem[]) => {
 		if (!filmAssetTarget?.projectId || !filmAssetTarget.assetId || !Number.isSafeInteger(filmAssetTarget.revision) || filmAssetTarget.revision < 1) return;
@@ -292,11 +313,29 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 
   useEffect(() => {
     if (kind !== "video") return;
-    const nextRatio = normalizeVideoRatioForProvider(ratio, provider?.protocol, model);
-    const nextResolution = normalizeVideoResolutionForProvider(resolution, provider?.protocol, model);
+    const nextRatio = sharedCapability?.ratios.length
+      ? sharedCapability.ratios.includes(ratio) ? ratio : sharedCapability.ratios[0]!
+      : normalizeVideoRatioForProvider(ratio, provider?.protocol, model);
+    const nextResolution = sharedCapability?.resolutions.length
+      ? sharedCapability.resolutions.includes(resolution) ? resolution : sharedCapability.resolutions[0]!
+      : normalizeVideoResolutionForProvider(resolution, provider?.protocol, model);
+    const nextSeconds = normalizeVideoDuration(seconds, availableVideoDurations);
     if (nextRatio !== ratio) setRatio(nextRatio);
     if (nextResolution !== resolution) setResolution(nextResolution);
-  }, [kind, model, provider?.protocol, ratio, resolution]);
+    if (nextSeconds !== seconds) setSeconds(nextSeconds);
+    if (availableVideoDurations.length && smartDuration) setSmartDuration(false);
+  }, [
+    availableVideoDurations,
+    kind,
+    model,
+    provider?.protocol,
+    ratio,
+    resolution,
+    seconds,
+    sharedCapability?.ratios,
+    sharedCapability?.resolutions,
+    smartDuration,
+  ]);
 
   // Refresh the pre-flight cost whenever the model or unit count changes so the
   // primary button can show "预计 N 算力" without an extra click.
@@ -521,19 +560,44 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       return;
     }
 		const runProvider = runChannel ? getProvider(runChannel, kind) : undefined;
-		const runSharedCapability: MediaCapability | undefined = sharedChannelSelected
-			? sharedCapabilities.find((item) => item.model === runModel)
+    const runSharedChannelSelected = sharedChannels.some((candidate) => candidate.id === runChannel?.id);
+    const runGenerationMode = kind === "image"
+      ? (source ? Array.isArray(source.parameters.referenceStorageKeys) && source.parameters.referenceStorageKeys.length > 0 : references.length > 0 || selectedAssetIds.length > 0)
+        ? "image_to_image" : "text_to_image"
+      : (source ? Array.isArray(source.parameters.referenceStorageKeys) && source.parameters.referenceStorageKeys.length > 0 : references.length > 0 || selectedAssetIds.length > 0 || klingOptions.elements.length > 0)
+        ? "image_to_video" : "text_to_video";
+    const matchingRunCapabilities = sharedCapabilities.filter((item) => item.model === runModel && item.modes.includes(runGenerationMode));
+		const runSharedCapability: MediaCapability | undefined = runSharedChannelSelected
+      ? runChannel?.id === "shared-auto"
+        ? intersectMediaCapabilities(matchingRunCapabilities)
+        : matchingRunCapabilities.find((item) => item.channelId === runChannel?.id)
 			: undefined;
-		if (sharedChannelSelected && !runSharedCapability) {
-				setError(t("creative.sharedCapabilityMissing"));
+		if (runSharedChannelSelected && !runSharedCapability) {
+			setError(t("creative.sharedCapabilityMissing"));
 			return;
 		}
+		const requestedVideoRatio = String(source?.parameters.ratio ?? ratio);
+		const requestedVideoResolution = String(source?.parameters.resolution ?? resolution);
 		const effectiveVideoRatio = kind === "video"
-			? normalizeVideoRatioForProvider(String(source?.parameters.ratio ?? ratio), runProvider?.protocol, runModel)
+			? runSharedCapability?.ratios.length
+				? runSharedCapability.ratios.includes(requestedVideoRatio) ? requestedVideoRatio : runSharedCapability.ratios[0]!
+				: normalizeVideoRatioForProvider(requestedVideoRatio, runProvider?.protocol, runModel)
 			: "";
 		const effectiveVideoResolution = kind === "video"
-			? normalizeVideoResolutionForProvider(String(source?.parameters.resolution ?? resolution), runProvider?.protocol, runModel)
+			? runSharedCapability?.resolutions.length
+				? runSharedCapability.resolutions.includes(requestedVideoResolution) ? requestedVideoResolution : runSharedCapability.resolutions[0]!
+				: normalizeVideoResolutionForProvider(requestedVideoResolution, runProvider?.protocol, runModel)
 			: "";
+		const runVideoDurations = kind === "video"
+			? runSharedCapability ? runSharedCapability.durations : videoDurationOptionsFor(runProvider?.protocol, runModel)
+			: [];
+		const effectiveVideoSeconds = kind === "video" ? resolveVideoDurationForProvider(
+			Boolean(source?.parameters.smartDuration ?? smartDuration),
+			Number(source?.parameters.seconds ?? seconds),
+			runProvider?.protocol,
+			runModel,
+			runVideoDurations,
+		) : undefined;
 		const effectiveVideoSize = kind === "video"
 			? videoSizeForProvider(runProvider?.protocol, effectiveVideoRatio, effectiveVideoResolution)
 			: "";
@@ -652,6 +716,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             referenceStorageKeys,
 		})),
 		...(kind === "video" ? {
+			seconds: effectiveVideoSeconds,
+			smartDuration: effectiveVideoSeconds === undefined,
 			ratio: effectiveVideoRatio,
 			resolution: effectiveVideoResolution,
 			size: String(source?.parameters.size ?? "") || effectiveVideoSize,
@@ -683,7 +749,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					prompt: runPrompt,
 					negativePrompt: String(parameters.negativePrompt ?? ""),
 					mode: (parameters.mode ?? "std") as "std" | "pro" | "4k",
-					duration: resolveVideoDuration(Boolean(parameters.smartDuration), Number(parameters.seconds ?? seconds)) ?? seconds,
+					duration: resolveVideoDurationForProvider(Boolean(parameters.smartDuration), Number(parameters.seconds ?? seconds), runProvider.protocol, runModel, runVideoDurations) ?? seconds,
 					aspectRatio: String(parameters.ratio ?? ratio),
 					audio: Boolean(parameters.generateAudio),
 					watermark: Boolean(parameters.watermark),
@@ -721,7 +787,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				model: runModel,
 				parameters: {
 					size: String(parameters.size ?? effectiveVideoSize),
-					seconds: resolveVideoDuration(Boolean(parameters.smartDuration), Number(parameters.seconds ?? seconds)),
+					seconds: resolveVideoDurationForProvider(Boolean(parameters.smartDuration), Number(parameters.seconds ?? seconds), runProvider.protocol, runModel, runVideoDurations),
 					ratio: String(parameters.ratio ?? ratio),
 					resolution: String(parameters.resolution ?? resolution),
 					generateAudio: Boolean(parameters.generateAudio),
@@ -789,10 +855,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
           channel: runChannel,
           model: runModel,
           prompt: runPrompt.trim(),
-          seconds: resolveVideoDuration(
-            Boolean(parameters.smartDuration),
-            Number(parameters.seconds ?? seconds),
-          ),
+		  seconds: resolveVideoDurationForProvider(
+		    Boolean(parameters.smartDuration),
+		    Number(parameters.seconds ?? seconds),
+		    runProvider.protocol,
+		    runModel,
+		    runVideoDurations,
+		  ),
           ratio: String(parameters.ratio ?? ratio),
           resolution: String(parameters.resolution ?? resolution),
           size: String(parameters.size ?? effectiveVideoSize),
@@ -1110,20 +1179,30 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="ob-label">{t("workbench.seconds")}</span>
-                  {sharedCapability?.durations.length ? <select
-					aria-label={t("workbench.videoSeconds")}
-					className="ob-field cursor-pointer"
-					value={seconds}
-					onChange={(event) => setSeconds(Number(event.target.value))}
-				  >{sharedCapability.durations.map((value) => <option key={value} value={value}>{t("workbench.secondsValue", { seconds: value })}</option>)}</select> : <input
-					type="number"
-					min={4}
-					max={15}
-					disabled={smartDuration}
-					className="ob-field"
-					value={seconds}
-					onChange={(event) => setSeconds(Number(event.target.value) || 5)}
-				  />}
+                  {availableVideoDurations.length ? (
+                    <select
+                      aria-label={t("workbench.videoSeconds")}
+                      className="ob-field cursor-pointer"
+                      value={seconds}
+                      onChange={(event) => setSeconds(Number(event.target.value))}
+                    >
+                      {availableVideoDurations.map((value) => (
+                        <option key={value} value={value}>
+                          {t("workbench.secondsValue", { seconds: value })}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      min={4}
+                      max={15}
+                      disabled={smartDuration}
+                      className="ob-field"
+                      value={seconds}
+                      onChange={(event) => setSeconds(Number(event.target.value) || 5)}
+                    />
+                  )}
                 </label>
                 <label className="block">
                   <span className="ob-label">{t("workbench.ratio")}</span>
@@ -1191,10 +1270,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={smartDuration}
+                    aria-checked={availableVideoDurations.length === 0 && smartDuration}
                     aria-label={t("workbench.smartDuration")}
                     className="ob-switch"
-                    data-checked={smartDuration ? "true" : "false"}
+                    data-checked={availableVideoDurations.length === 0 && smartDuration ? "true" : "false"}
+                    disabled={availableVideoDurations.length > 0}
                     onClick={() => setSmartDuration((value) => !value)}
                   />
                   <span aria-hidden="true">{t("workbench.smartDuration")}</span>

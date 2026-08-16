@@ -42,6 +42,7 @@ import { useCanvasGenerationRecovery } from "@/components/canvas/useCanvasGenera
 import { OPENBOARD_ASSET_DRAG_MIME, readOpenBoardAssetDrag } from "@/lib/asset-drag";
 import { resizeFromCorner, type NodeRect, type NodeResizeCorner } from "@/lib/node-resize";
 import { mergeSharedChannelChoices, useSharedChannels } from "@/services/shared-channels";
+import { listMediaCapabilities, type MediaCapabilityCatalog } from "@/services/media-capabilities";
 import {
   canvasExportFilename,
   downloadCanvasSnapshot,
@@ -73,6 +74,14 @@ export function BoardCanvas() {
     () => mergeSharedChannelChoices(configuredChannels, sharedChannels),
     [configuredChannels, sharedChannels],
   );
+  const [mediaCatalog, setMediaCatalog] = useState<MediaCapabilityCatalog | null>(null);
+  useEffect(() => {
+    let active = true;
+    void listMediaCapabilities()
+      .then((catalog) => { if (active) setMediaCatalog(catalog); })
+      .catch(() => { if (active) setMediaCatalog(null); });
+    return () => { active = false; };
+  }, []);
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const connectingFrom = useBoardStore((s) => s.connectingFrom);
   const showMinimap = useBoardStore((s) => s.showMinimap);
@@ -928,6 +937,7 @@ export function BoardCanvas() {
               key={node.id}
               node={node}
               generationChannels={generationChannels}
+              mediaCatalog={mediaCatalog}
               selected={selectedIds.includes(node.id)}
               resizing={drag?.kind === "resize" && drag.id === node.id}
               related={related.has(node.id)}

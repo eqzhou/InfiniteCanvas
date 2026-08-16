@@ -72,12 +72,28 @@ func capabilityForChannelDefault(channel adminChannelPublic, kind, model string)
 }
 
 func capabilityForExplicitChannelModel(channel adminChannelPublic, configured adminMediaCapability) mediaModelCapability {
-	return mediaModelCapability{
+	capability := mediaModelCapability{
 		ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol,
 		Model: configured.Model, Kind: configured.Kind,
 		Modes: append([]string(nil), configured.Modes...), Sizes: append([]string(nil), configured.Sizes...),
 		Durations: append([]int(nil), configured.Durations...), MaxReferences: configured.MaxReferences,
 	}
+	if configured.Kind == "video" {
+		capability.Sizes = nil
+		for _, value := range configured.Sizes {
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			switch {
+			case strings.Contains(normalized, ":") || normalized == "adaptive":
+				capability.Ratios = append(capability.Ratios, value)
+			case strings.HasSuffix(normalized, "p") || strings.HasSuffix(normalized, "k"):
+				capability.Resolutions = append(capability.Resolutions, value)
+			case normalized == "auto":
+				capability.Ratios = append(capability.Ratios, value)
+				capability.Resolutions = append(capability.Resolutions, value)
+			}
+		}
+	}
+	return capability
 }
 
 func (s *Server) buildMediaCapabilityCatalog(ctx context.Context, tenantID string) (mediaCapabilityCatalog, error) {
@@ -198,6 +214,30 @@ func (s *Server) verifySharedMediaCapability(ctx context.Context, tenantID, chan
 	return "", errors.New("shared media capability is not listed")
 }
 
+func (s *Server) verifySharedVideoCapabilityRequest(
+	ctx context.Context,
+	tenantID, channelID, model, mode string,
+	config filmGenerationConfig,
+) (string, error) {
+	if !validFilmGenerationMode(mode) {
+		return "", errors.New("invalid media generation mode")
+	}
+	catalog, err := s.buildMediaCapabilityCatalog(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	for _, capability := range catalog.Models {
+		if capability.ChannelID != channelID || capability.Kind != "video" || capability.Model != model {
+			continue
+		}
+		if err := validateMediaCapabilityRequest(capability, mode, config); err != nil {
+			return "", err
+		}
+		return catalog.Version, nil
+	}
+	return "", errors.New("shared media capability is not listed")
+}
+
 func validateMediaCapabilityRequest(capability mediaModelCapability, mode string, config filmGenerationConfig) error {
 	if !containsFilmMode(capability.Modes, mode) {
 		return errors.New("media generation mode is not supported")
@@ -225,7 +265,7 @@ func validateMediaCapabilityRequest(capability mediaModelCapability, mode string
 	if requestedResolution != "" && len(allowedResolutions) > 0 && !containsFilmStorageKey(allowedResolutions, requestedResolution) {
 		return errors.New("media resolution is not supported by channel capability")
 	}
-	if config.Seconds > 0 && len(capability.Durations) > 0 {
+	if len(capability.Durations) > 0 {
 		allowed := false
 		for _, duration := range capability.Durations {
 			allowed = allowed || duration == config.Seconds

@@ -299,8 +299,13 @@ func TestAPIMartSeedanceValidationMatrix(t *testing.T) {
 	if err := validateAPIMartVideoRequest(base); err != nil {
 		t.Fatalf("valid Seedance request rejected: %v", err)
 	}
+	minimumDuration := base
+	minimumDuration.Seconds = 4
+	if err := validateAPIMartVideoRequest(minimumDuration); err != nil {
+		t.Fatalf("documented four-second Seedance request rejected: %v", err)
+	}
 	for name, mutate := range map[string]func(*videoGenerationRequest){
-		"duration below documented contract": func(value *videoGenerationRequest) { value.Seconds = 4 },
+		"duration below documented contract": func(value *videoGenerationRequest) { value.Seconds = 3 },
 		"duration above contract":            func(value *videoGenerationRequest) { value.Seconds = 16 },
 		"unknown ratio":                      func(value *videoGenerationRequest) { value.Ratio = "2:1" },
 		"standard prompt too long":           func(value *videoGenerationRequest) { value.Prompt = strings.Repeat("x", 4_001) },
@@ -333,8 +338,8 @@ func TestAPIMartSeedanceValidationMatrix(t *testing.T) {
 
 	standard4K := base
 	standard4K.Resolution = "4k"
-	if err := validateAPIMartVideoRequest(standard4K); err != nil {
-		t.Fatalf("standard 4k rejected: %v", err)
+	if err := validateAPIMartVideoRequest(standard4K); err == nil {
+		t.Fatal("standard model accepted undocumented 4k resolution")
 	}
 	for _, model := range []string{"doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini"} {
 		request := standard4K

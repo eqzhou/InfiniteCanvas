@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { BoardNode } from "@/types/board";
+import type { AiChannel, BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
   generateImages,
@@ -47,7 +47,12 @@ import {
   createImageGenerationMetadata,
   normalizeImageGenerationForProvider,
 } from "@/lib/image-generation";
-import { normalizeVideoFrameMode, resolveVideoDuration } from "@/lib/video-generation";
+import { normalizeVideoFrameMode } from "@/lib/video-generation";
+import {
+  normalizeVideoRatioForProvider,
+  normalizeVideoResolutionForProvider,
+  resolveVideoDurationForProvider,
+} from "@/lib/video-generation-options";
 import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
 import { applyServerImagePlaceholders, submitServerImageGeneration } from "@/lib/canvas-server-image";
 import { resolveConfigPrompt } from "@/lib/config-generation";
@@ -96,6 +101,27 @@ import {
 } from "lucide-react";
 import { toast } from "@/components/common/toast";
 import { useI18n } from "@/i18n/I18nProvider";
+import {
+  resolveMediaCapabilityForRequest,
+  type MediaCapability,
+  type MediaCapabilityCatalog,
+} from "@/services/media-capabilities";
+
+function nodeVideoControls(node: BoardNode, channel: AiChannel, capability?: MediaCapability) {
+  const provider = getProvider(channel, "video");
+  const model = node.metadata.model || provider.model;
+  const requestedRatio = node.metadata.videoRatio || "16:9";
+  const requestedResolution = node.metadata.resolution || "720p";
+  return {
+    seconds: resolveVideoDurationForProvider(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5, provider.protocol, model, capability?.durations),
+    ratio: capability?.ratios.length
+      ? capability.ratios.includes(requestedRatio) ? requestedRatio : capability.ratios[0]!
+      : normalizeVideoRatioForProvider(requestedRatio, provider.protocol, model),
+    resolution: capability?.resolutions.length
+      ? capability.resolutions.includes(requestedResolution) ? requestedResolution : capability.resolutions[0]!
+      : normalizeVideoResolutionForProvider(requestedResolution, provider.protocol, model),
+  };
+}
 
 type PromptDialogKind = "rewrite" | "image" | "video" | "audio";
 
@@ -114,11 +140,15 @@ export function NodeActions({
   onEditText,
   avoidTopToolbarOverlap = false,
   inlineConfigOnly = false,
+  videoCapability,
+  mediaCatalog,
 }: {
   node: BoardNode;
   onEditText?: () => void;
   avoidTopToolbarOverlap?: boolean;
   inlineConfigOnly?: boolean;
+  videoCapability?: MediaCapability;
+  mediaCatalog?: MediaCapabilityCatalog | null;
 }) {
   const { t } = useI18n();
   const project = useBoardStore((s) => s.getActive());
@@ -441,6 +471,14 @@ export function NodeActions({
 			videos.filter((value) => value.storageKey || value.content).length +
 			audios.filter((value) => value.storageKey || value.content).length;
 		const referenceStorageKeys = [...imageKeys, ...videoKeys, ...audioKeys];
+		const resolvedVideoCapability = resolveMediaCapabilityForRequest(
+			mediaCatalog, channel.id, "video", node.metadata.model || getProvider(channel, "video").model,
+			referenceCount > 0 ? "image_to_video" : "text_to_video",
+		);
+		if (mediaCatalog && sharedChannels.some((candidate) => candidate.id === channel.id) && !resolvedVideoCapability) {
+			throw new Error(t("creative.sharedCapabilityMissing"));
+		}
+		const requestVideoCapability = resolvedVideoCapability ?? videoCapability;
 		if (serverProviderSupported("video") && referenceStorageKeys.length === referenceCount) {
 			const job = await createServerVideoGenerationJob({
 				projectId: project?.id,
@@ -449,9 +487,7 @@ export function NodeActions({
 				model: node.metadata.model || getProvider(channel, "video").model,
 				parameters: {
 					size: node.metadata.size,
-					seconds: resolveVideoDuration(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5),
-					ratio: node.metadata.videoRatio || "16:9",
-					resolution: node.metadata.resolution || "720p",
+					...nodeVideoControls(node, channel, requestVideoCapability),
 					generateAudio: Boolean(node.metadata.generateAudio),
 					watermark: Boolean(node.metadata.watermark),
 					frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
@@ -481,12 +517,7 @@ export function NodeActions({
           model: node.metadata.model || getProvider(channel, "video").model,
           prompt: promptForGeneration(prompt),
           size: node.metadata.size,
-          seconds: resolveVideoDuration(
-            Boolean(node.metadata.smartDuration),
-            node.metadata.duration ?? 5,
-          ),
-          ratio: node.metadata.videoRatio || "16:9",
-          resolution: node.metadata.resolution || "720p",
+          ...nodeVideoControls(node, channel, requestVideoCapability),
           generateAudio: Boolean(node.metadata.generateAudio),
           watermark: Boolean(node.metadata.watermark),
           frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
@@ -807,6 +838,14 @@ export function NodeActions({
 		const referenceStorageKeys = materializedRefs
 			.map((item) => item.metadata.storageKey)
 			.filter((value): value is string => Boolean(value));
+		const resolvedVideoCapability = resolveMediaCapabilityForRequest(
+			mediaCatalog, channel.id, "video", node.metadata.model || getProvider(channel, "video").model,
+			materializedRefs.length > 0 ? "image_to_video" : "text_to_video",
+		);
+		if (mediaCatalog && sharedChannels.some((candidate) => candidate.id === channel.id) && !resolvedVideoCapability) {
+			throw new Error(t("creative.sharedCapabilityMissing"));
+		}
+		const requestVideoCapability = resolvedVideoCapability ?? videoCapability;
 		if (serverProviderSupported("video") && referenceStorageKeys.length === materializedRefs.length) {
 			const job = await createServerVideoGenerationJob({
 				projectId: project?.id,
@@ -815,9 +854,7 @@ export function NodeActions({
 				model: node.metadata.model || getProvider(channel, "video").model,
 				parameters: {
 					size: node.metadata.size,
-					seconds: resolveVideoDuration(Boolean(node.metadata.smartDuration), node.metadata.duration ?? 5),
-					ratio: node.metadata.videoRatio || "16:9",
-					resolution: node.metadata.resolution || "720p",
+					...nodeVideoControls(node, channel, requestVideoCapability),
 					generateAudio: Boolean(node.metadata.generateAudio),
 					watermark: Boolean(node.metadata.watermark),
 					frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),
@@ -872,12 +909,7 @@ export function NodeActions({
         model: node.metadata.model || getProvider(channel, "video").model,
         prompt: promptForGeneration(prompt),
         size: node.metadata.size,
-        seconds: resolveVideoDuration(
-          Boolean(node.metadata.smartDuration),
-          node.metadata.duration ?? 5,
-        ),
-        ratio: node.metadata.videoRatio || "16:9",
-        resolution: node.metadata.resolution || "720p",
+        ...nodeVideoControls(node, channel, requestVideoCapability),
         generateAudio: Boolean(node.metadata.generateAudio),
         watermark: Boolean(node.metadata.watermark),
         frameMode: normalizeVideoFrameMode(node.metadata.videoFrameMode),

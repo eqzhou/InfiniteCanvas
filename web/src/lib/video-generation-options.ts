@@ -57,6 +57,49 @@ export function videoResolutionOptionsFor(
   );
 }
 
+export function videoDurationOptionsFor(
+  protocol: string | undefined,
+  model: string | undefined,
+): readonly number[] {
+  const capability = resolveProviderCapability(protocol ?? "", "video", model ?? "")?.video;
+  if (capability?.durations?.length) return Object.freeze([...capability.durations]);
+  if (!capability?.minDuration || !capability.maxDuration || capability.maxDuration < capability.minDuration) return Object.freeze([]);
+  return Object.freeze(Array.from(
+    { length: capability.maxDuration - capability.minDuration + 1 },
+    (_, index) => capability.minDuration! + index,
+  ));
+}
+
+export function normalizeVideoDuration(value: number, allowed: readonly number[], fallback = 5): number {
+  const current = Number.isFinite(value) ? Math.round(value) : fallback;
+  if (!allowed.length) return current > 0 ? current : fallback;
+  if (allowed.includes(current)) return current;
+  return allowed.reduce((best, candidate) =>
+    Math.abs(candidate - current) < Math.abs(best - current) ? candidate : best, allowed[0]!);
+}
+
+export function normalizeVideoDurationForProvider(
+  value: number,
+  protocol: string | undefined,
+  model: string | undefined,
+): number {
+  return normalizeVideoDuration(value, videoDurationOptionsFor(protocol, model));
+}
+
+export function resolveVideoDurationForProvider(
+  smartDuration: boolean,
+  value: number,
+  protocol: string | undefined,
+  model: string | undefined,
+  allowedDurations?: readonly number[],
+): number | undefined {
+  const allowed = allowedDurations === undefined
+    ? videoDurationOptionsFor(protocol, model)
+    : allowedDurations;
+  if (smartDuration && !allowed.length) return undefined;
+  return normalizeVideoDuration(value, allowed);
+}
+
 export function normalizeVideoRatioForProvider(
   value: string,
   protocol: string | undefined,
@@ -100,6 +143,8 @@ export function videoSizePresetFor(ratio: string, resolution: string): string {
     "1:1": [1, 1],
     "4:3": [4, 3],
     "3:4": [3, 4],
+    "3:2": [3, 2],
+    "2:3": [2, 3],
     "21:9": [21, 9],
   });
   const dimensionsForRatio = dimensions[normalizedRatio];
