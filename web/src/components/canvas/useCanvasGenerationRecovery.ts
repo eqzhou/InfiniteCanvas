@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import type { GenerationJob, NodeMetadata } from "@/types/board";
 import { getGenerationJob, usesServerGenerationJobs } from "@/services/generation-jobs";
 import { getBlob } from "@/services/storage";
+import { createServerBlobDisplayUrls } from "@/services/server-storage";
 import { useBoardStore } from "@/stores/use-board-store";
 
 type GenerationResultItem = {
@@ -120,6 +121,7 @@ export function missingGenerationPatch(
 export function useCanvasGenerationRecovery(): void {
   const project = useBoardStore((state) => state.getActive());
   const updateNode = useBoardStore((state) => state.updateNode);
+  const mediaLoads = useMemo(() => new Map<string, Promise<string | undefined>>(), []);
   const pending = useMemo(() => (project?.nodes ?? [])
     .filter((node) => (node.type === "image" || node.type === "video" || node.type === "audio") &&
       node.metadata.status === "loading" && node.metadata.generationJobId)
@@ -129,6 +131,30 @@ export function useCanvasGenerationRecovery(): void {
       jobId: node.metadata.generationJobId!,
       resultIndex: node.metadata.generationResultIndex ?? 0,
     })), [project?.nodes]);
+  const pendingKey = pending.map(({ nodeId, jobId, resultIndex }) =>
+    `${nodeId}:${jobId}:${resultIndex}`).join("|");
+
+  const loadMediaUrl = (storageKey: string): Promise<string | undefined> => {
+    const existing = mediaLoads.get(storageKey);
+    if (existing) return existing;
+    const promise = createServerBlobDisplayUrls([storageKey]).catch(() => new Map()).then((displayUrls) => {
+      const displayUrl = displayUrls.get(storageKey);
+      if (displayUrl) return displayUrl;
+      return getBlob(storageKey.startsWith("image:") ? "image" : "media", storageKey)
+        .then((blob) => blob ? URL.createObjectURL(blob) : undefined);
+    }).then(
+      (value) => {
+        if (mediaLoads.get(storageKey) === promise) mediaLoads.delete(storageKey);
+        return value;
+      },
+      (error: unknown) => {
+        if (mediaLoads.get(storageKey) === promise) mediaLoads.delete(storageKey);
+        throw error;
+      },
+    );
+    mediaLoads.set(storageKey, promise);
+    return promise;
+  };
 
   useEffect(() => {
     if (!usesServerGenerationJobs() || pending.length === 0) return;
@@ -165,9 +191,9 @@ export function useCanvasGenerationRecovery(): void {
               updateNode(nodeId, { metadata: canvasGenerationPatch(job, undefined, resultIndex) });
               return;
             }
-            const blob = await getBlob(item.storageKey.startsWith("image:") ? "image" : "media", item.storageKey);
+            const content = await loadMediaUrl(item.storageKey);
             if (disposed) return;
-            updateNode(nodeId, { metadata: canvasGenerationPatch(job, blob ? URL.createObjectURL(blob) : undefined, resultIndex) });
+            updateNode(nodeId, { metadata: canvasGenerationPatch(job, content, resultIndex) });
           }));
         } catch {
           // A transient API/media read failure remains loading and is retried.
@@ -182,7 +208,7 @@ export function useCanvasGenerationRecovery(): void {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [pending, updateNode]);
+  }, [pendingKey, updateNode]);
 
   useEffect(() => {
     const nodes = project?.nodes ?? [];
