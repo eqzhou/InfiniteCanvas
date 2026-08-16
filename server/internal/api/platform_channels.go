@@ -152,6 +152,18 @@ func platformChannelBases(channels []platformChannelPublic) []adminChannelPublic
 	return bases
 }
 
+// platformChannelRevision excludes response-only secret presence. The secret
+// status is hydrated after loading and is not part of the persisted channel
+// catalog, so including it would make every revision stale as soon as a secret
+// is configured.
+func platformChannelRevision(channels []platformChannelPublic) string {
+	persisted := append([]platformChannelPublic(nil), channels...)
+	for index := range persisted {
+		persisted[index].SecretConfigured = false
+	}
+	return adminConfigRevision(persisted)
+}
+
 func (s *Server) loadPlatformChannels(ctx context.Context) ([]platformChannelPublic, error) {
 	raw, err := getOptionalState(ctx, s.store, store.DefaultTenantID, platformChannelsStateKey)
 	if err != nil {
@@ -241,7 +253,7 @@ func (s *Server) replacePlatformChannels(ctx context.Context, expectedRevision s
 	if err != nil {
 		return nil, err
 	}
-	if expectedRevision == "" || expectedRevision != adminConfigRevision(current) {
+	if expectedRevision == "" || expectedRevision != platformChannelRevision(current) {
 		return nil, store.ErrConflict
 	}
 	currentByID := make(map[string]platformChannelPublic, len(current))
@@ -474,7 +486,7 @@ func (s *Server) migrateLocalChannelsToPlatform(w http.ResponseWriter, r *http.R
 	for index := range channels {
 		channels[index].SecretConfigured = configured[channels[index].ID]
 	}
-	w.Header().Set(adminRevisionHeader, adminConfigRevision(channels))
+	w.Header().Set(adminRevisionHeader, platformChannelRevision(channels))
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSONStatus(w, http.StatusOK, channels)
 }
@@ -496,7 +508,7 @@ func (s *Server) getPlatformChannels(w http.ResponseWriter, r *http.Request) {
 	for index := range channels {
 		channels[index].SecretConfigured = configured[channels[index].ID]
 	}
-	w.Header().Set(adminRevisionHeader, adminConfigRevision(channels))
+	w.Header().Set(adminRevisionHeader, platformChannelRevision(channels))
 	writeJSON(w, channels)
 }
 
@@ -568,7 +580,7 @@ func (s *Server) putPlatformChannels(w http.ResponseWriter, r *http.Request) {
 	for index := range next {
 		next[index].SecretConfigured = configured[next[index].ID]
 	}
-	w.Header().Set(adminRevisionHeader, adminConfigRevision(next))
+	w.Header().Set(adminRevisionHeader, platformChannelRevision(next))
 	writeJSON(w, next)
 }
 
@@ -669,7 +681,7 @@ func (s *Server) deletePlatformChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load platform channels", http.StatusInternalServerError)
 		return
 	}
-	if revision := r.Header.Get(adminRevisionHeader); revision == "" || revision != adminConfigRevision(channels) {
+	if revision := r.Header.Get(adminRevisionHeader); revision == "" || revision != platformChannelRevision(channels) {
 		http.Error(w, "platform channels changed concurrently", http.StatusConflict)
 		return
 	}
@@ -713,7 +725,7 @@ func (s *Server) deletePlatformChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete platform channel", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set(adminRevisionHeader, adminConfigRevision(next))
+	w.Header().Set(adminRevisionHeader, platformChannelRevision(next))
 	w.WriteHeader(http.StatusNoContent)
 }
 

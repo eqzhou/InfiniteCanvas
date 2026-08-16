@@ -28,6 +28,23 @@ func TestPlatformChannelAudienceIsTenantScoped(t *testing.T) {
 	}
 }
 
+func TestPlatformChannelRevisionIgnoresOnlySecretPresence(t *testing.T) {
+	channel := platformChannelPublic{
+		ID: "revision-channel", Name: "Revision Channel", BaseURL: "https://provider.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "image-1", PublishToAll: true,
+	}
+	withSecretPresence := channel
+	withSecretPresence.SecretConfigured = true
+	if platformChannelRevision([]platformChannelPublic{channel}) != platformChannelRevision([]platformChannelPublic{withSecretPresence}) {
+		t.Fatal("response-only secret presence must not change the persisted catalog revision")
+	}
+	changed := channel
+	changed.Name = "Changed Channel"
+	if platformChannelRevision([]platformChannelPublic{channel}) == platformChannelRevision([]platformChannelPublic{changed}) {
+		t.Fatal("persisted channel changes must change the catalog revision")
+	}
+}
+
 func TestAccountPlatformChannelsRejectLoopbackDestinations(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "required")
 	backend := newMemoryStore()
@@ -146,6 +163,21 @@ func TestPlatformChannelEndpointsKeepGlobalSecretSeparate(t *testing.T) {
 	listed := request(t, router, http.MethodGet, "/api/platform/channels", nil)
 	if listed.Code != http.StatusOK || !containsJSONString(listed.Body.Bytes(), `"secretConfigured": true`) || containsJSONString(listed.Body.Bytes(), platformCredential) {
 		t.Fatalf("platform admin catalog leaked secret = %d %s", listed.Code, listed.Body.String())
+	}
+	var listedChannels []platformChannelPublic
+	if err := json.Unmarshal(listed.Body.Bytes(), &listedChannels); err != nil {
+		t.Fatalf("decode platform catalog with configured secret: %v", err)
+	}
+	listedChannels = append(listedChannels, platformChannelPublic{
+		ID: "platform-video", Name: "Platform Video", BaseURL: "https://video.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultVideoModel: "video-1", PublishToAll: true,
+	})
+	secondBody, _ := json.Marshal(listedChannels)
+	second := requestWithHeaders(t, router, http.MethodPut, "/api/platform/channels", secondBody, map[string]string{
+		"Authorization": "Bearer test-token", adminRevisionHeader: listed.Header().Get(adminRevisionHeader),
+	})
+	if second.Code != http.StatusOK || !containsJSONString(second.Body.Bytes(), "platform-video") {
+		t.Fatalf("save second platform channel after configuring first secret = %d %s", second.Code, second.Body.String())
 	}
 	shared := request(t, withActor(router, store.AuthUser{ID: "tenant-user", TenantID: "tenant-x", Role: "member", Status: "active"}), http.MethodGet, "/api/shared-channels", nil)
 	if shared.Code != http.StatusOK || !containsJSONString(shared.Body.Bytes(), "platform-image") || containsJSONString(shared.Body.Bytes(), "provider.example") {
