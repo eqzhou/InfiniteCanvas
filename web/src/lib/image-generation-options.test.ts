@@ -33,6 +33,10 @@ describe("image generation setting options", () => {
   test("offers only the supported quality presets", () => {
     expect(IMAGE_QUALITY_OPTIONS.map((option) => option.value))
       .toEqual(["auto", "low", "medium", "high"]);
+    expect(imageQualityOptionsFor("openai", "grok-imagine-image-2.0").map((option) => option.value))
+      .toEqual(["low", "medium", "high"]);
+    expect(normalizeImageQualityForProvider("auto", "openai", "grok-imagine-image-2.0"))
+      .toBe("medium");
   });
 
   test("uses resolution presets for APIMart current image models", () => {

@@ -130,7 +130,12 @@ export function normalizeImageQualityForProvider(
   if (!current) return "auto";
   const options = imageQualityOptionsFor(protocol, model);
   if (options.some((option) => option.value === current)) return current;
-  return resolveProviderCapability(protocol ?? "", "image", model ?? "") ? "auto" : current;
+  const capability = resolveProviderCapability(protocol ?? "", "image", model ?? "");
+  if (!capability) return current;
+  if (capability.qualities?.length && !capability.qualities.includes("auto")) {
+    return capability.qualities.includes("medium") ? "medium" : capability.qualities[0] ?? "auto";
+  }
+  return "auto";
 }
 
 export function imageOutputLimitFor(

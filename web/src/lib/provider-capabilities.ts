@@ -40,6 +40,15 @@ const PROVIDER_CAPABILITIES: readonly ProviderCapability[] = [
     sizes: ["1:1", "2:3", "3:2"] as const,
     qualities: ["auto", "low", "medium", "high"] as const,
   })),
+  ...(["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"] as const).map((model) => ({
+    protocol: "openai" as const,
+    kind: "image" as const,
+    model,
+    family: model,
+    maxImageReferences: 0,
+    maxOutputs: 1,
+    qualities: ["low", "medium", "high"] as const,
+  })),
   {
     protocol: "apimart",
     kind: "video",

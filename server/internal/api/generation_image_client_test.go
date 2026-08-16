@@ -158,6 +158,29 @@ func TestOpenAIImageExecutorGenerationsRequestAndBase64Result(t *testing.T) {
 	}
 }
 
+func TestOpenAIImageExecutorNormalizesGrokAutoQuality(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["quality"] != "medium" {
+			t.Fatalf("Grok quality = %#v, want medium", body["quality"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+onePixelPNGBase64()+`"}]}`)
+	}))
+	defer upstream.Close()
+
+	images, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
+		Protocol: "openai", BaseURL: upstream.URL + "/v1", Model: "grok-imagine-image-2.0",
+		Prompt: "draw a square", Size: "1024x1024", Quality: "auto", Count: 1,
+	})
+	if err != nil || len(images) != 1 {
+		t.Fatalf("images = %#v, %v", images, err)
+	}
+}
+
 func TestOpenAIImageExecutorReturnsTypedHTTPError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "upstream secret detail", http.StatusBadGateway)

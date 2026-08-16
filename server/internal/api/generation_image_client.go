@@ -153,6 +153,7 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 	if isGPTImage2(request.Model) && request.TransparentBackground {
 		return nil, errors.New("gpt-image-2 does not support transparent backgrounds")
 	}
+	request.Quality = normalizeProviderImageQuality("openai", request.Model, request.Quality)
 	endpoint, err := imageProviderEndpoint(request.BaseURL, len(request.References) > 0)
 	if err != nil {
 		return nil, err

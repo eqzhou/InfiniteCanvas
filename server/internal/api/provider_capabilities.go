@@ -24,6 +24,12 @@ var providerModelCapabilities = []providerModelCapability{
 		Sizes: []string{"1:1", "2:3", "3:2"}, Qualities: []string{"auto", "low", "medium", "high"}},
 	{Protocol: "openai", Kind: "image", Model: "gpt-image-2", Family: "gpt-image-2", MaxImageReferences: 16, MaxOutputs: 4,
 		Sizes: []string{"1:1", "2:3", "3:2"}, Qualities: []string{"auto", "low", "medium", "high"}},
+	{Protocol: "openai", Kind: "image", Model: "grok-imagine-image", Family: "grok-imagine-image", MaxOutputs: 1,
+		Qualities: []string{"low", "medium", "high"}},
+	{Protocol: "openai", Kind: "image", Model: "grok-imagine-image-2.0", Family: "grok-imagine-image-2.0", MaxOutputs: 1,
+		Qualities: []string{"low", "medium", "high"}},
+	{Protocol: "openai", Kind: "image", Model: "grok-imagine-image-quality", Family: "grok-imagine-image-quality", MaxOutputs: 1,
+		Qualities: []string{"low", "medium", "high"}},
 	{Protocol: "apimart", Kind: "video", Model: "kling-v2-6", Family: "kling-2.6", MaxImageReferences: 2},
 	{Protocol: "apimart", Kind: "video", Model: "kling-v3", Family: "kling-3", MaxImageReferences: 2},
 	{Protocol: "apimart", Kind: "video", Model: "happyhorse-1.1", Family: "happyhorse-1.1", MaxImageReferences: 9,
@@ -64,4 +70,26 @@ func resolveProviderModelCapability(protocol, kind, model string) (providerModel
 		}
 	}
 	return providerModelCapability{}, false
+}
+
+func normalizeProviderImageQuality(protocol, model, quality string) string {
+	quality = strings.TrimSpace(quality)
+	capability, ok := resolveProviderModelCapability(protocol, "image", model)
+	if !ok || len(capability.Qualities) == 0 {
+		return quality
+	}
+	for _, supported := range capability.Qualities {
+		if quality == supported {
+			return quality
+		}
+	}
+	if quality != "" && quality != "auto" {
+		return quality
+	}
+	for _, supported := range capability.Qualities {
+		if supported == "medium" {
+			return supported
+		}
+	}
+	return capability.Qualities[0]
 }
