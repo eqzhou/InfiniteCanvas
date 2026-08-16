@@ -230,6 +230,9 @@ func (s *Server) getClaudeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sendClaudeMessage(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxClaudeBody)
 	var req struct {
 		SessionID       string `json:"sessionId"`

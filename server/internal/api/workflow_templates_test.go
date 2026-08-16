@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/openboard/openboard/server/internal/store"
 )
 
 const validPersonalWorkflowTemplate = `{
@@ -41,6 +44,26 @@ func TestWorkflowTemplateCRUDAndBulkReplace(t *testing.T) {
 	listed = request(t, handler, http.MethodGet, "/api/workflow-templates", nil)
 	if listed.Code != http.StatusOK || listed.Body.String() != "[]\n" {
 		t.Fatalf("empty templates: %d %q", listed.Code, listed.Body.String())
+	}
+}
+
+func TestPersonalWorkflowTemplatesAreIsolatedPerUser(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	router := chi.NewRouter()
+	MountServer(router, server)
+	first := store.AuthUser{ID: "user-a", TenantID: "tenant-a", Role: "member", Status: "active"}
+	second := store.AuthUser{ID: "user-b", TenantID: first.TenantID, Role: "member", Status: "active"}
+
+	created := request(t, withActor(router, first), http.MethodPut, "/api/workflow-templates/personal_story", []byte(validPersonalWorkflowTemplate))
+	if created.Code != http.StatusOK {
+		t.Fatalf("first user save = %d %s", created.Code, created.Body.String())
+	}
+	listed := request(t, withActor(router, second), http.MethodGet, "/api/workflow-templates", nil)
+	if listed.Code != http.StatusOK || listed.Body.String() != "[]\n" {
+		t.Fatalf("second user observed first user's template = %d %s", listed.Code, listed.Body.String())
 	}
 }
 

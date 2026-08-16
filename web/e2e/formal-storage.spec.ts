@@ -80,6 +80,9 @@ async function saveFormalConfig(
   config: unknown,
   apiKeys: Record<string, Record<string, string>>,
 ) {
+	const deterministicConfig = config && typeof config === "object" && !Array.isArray(config)
+		? { ...config, locale: "zh-CN" }
+		: config;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const current = await request.get("/api/config");
     const headers: Record<string, string> = {};
@@ -93,7 +96,7 @@ async function saveFormalConfig(
     }
     const saved = await request.put("/api/config", {
       headers,
-      data: { config, secrets: { apiKeys, webdavPass: "" } },
+      data: { config: deterministicConfig, secrets: { apiKeys, webdavPass: "" } },
     });
     if (saved.status() === 204) return;
     if (saved.status() !== 412 || attempt === 2) {
@@ -558,10 +561,10 @@ test("formal Film AI candidate review survives a browser reload", async ({ page,
 
   await page.goto(`/film/${projectId}`);
   await expect(page.getByRole("heading", { name: "Formal Film AI Review" })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "The signal 集标题" })).toHaveValue("The signal");
+  await expect(page.getByRole("textbox", { name: /The signal.*标题/ })).toHaveValue("The signal");
   await page.reload();
   await expect(page.getByRole("heading", { name: "Formal Film AI Review" })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "The signal 集标题" })).toHaveValue("The signal");
+  await expect(page.getByRole("textbox", { name: /The signal.*标题/ })).toHaveValue("The signal");
 });
 
 test("formal restricted Template image jobs survive reload", async ({ page, request }) => {
@@ -620,14 +623,14 @@ test("formal restricted Template image jobs survive reload", async ({ page, requ
     body: { prompt: "formal template rule\n\ndurable restricted template", model: "relay-image", count: 1 },
   });
   let card = page.locator("article").filter({ hasText: "durable restricted template" });
-  await expect(card.getByText("进行中", { exact: false })).toBeVisible();
+  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
   await page.reload();
   card = page.locator("article").filter({ hasText: "durable restricted template" });
-  await expect(card.getByText("进行中", { exact: false })).toBeVisible();
+  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
   blockTemplate = false;
   releaseTemplate?.();
   releaseTemplate = undefined;
-  await expect(card.getByText("成功", { exact: false })).toBeVisible({ timeout: 20_000 });
+  await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 20_000 });
   await expect(card).toContainText("正式模板");
   await expect(card).toContainText(/\d+(?:\.\d+)? (?:KB|MB)/);
   await page.getByLabel("生成历史分类").selectOption("正式模板");
@@ -704,14 +707,14 @@ test("formal restricted Template video jobs survive reload", async ({ page, requ
     },
   });
   let card = page.locator("article").filter({ hasText: "durable restricted template video" });
-  await expect(card.getByText("进行中", { exact: false })).toBeVisible();
+  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
   await page.reload();
   card = page.locator("article").filter({ hasText: "durable restricted template video" });
-  await expect(card.getByText("进行中", { exact: false })).toBeVisible();
+  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
   blockTemplateVideo = false;
   releaseTemplateVideo?.();
   releaseTemplateVideo = undefined;
-  await expect(card.getByText("成功", { exact: false })).toBeVisible({ timeout: 20_000 });
+  await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 20_000 });
 
   const jobsResponse = await request.get("/api/generation-jobs?kind=video&page=1&pageSize=20");
   const jobs = await jobsResponse.json() as { items: Array<{ id: string; prompt: string; status: string; result: { items?: Array<{ storageKey: string }> } }> };
@@ -967,13 +970,13 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 		body: { model: "sora-2", prompt: "durable formal video", seconds: 5 },
 	});
 	let card = page.locator("article").filter({ hasText: "durable formal video" });
-	await expect(card.getByText("进行中", { exact: false })).toBeVisible();
+	await expect(card.getByText("运行中", { exact: false })).toBeVisible();
 	await page.reload();
 	card = page.locator("article").filter({ hasText: "durable formal video" });
-	await expect(card.getByText("进行中", { exact: false })).toBeVisible();
+	await expect(card.getByText("运行中", { exact: false })).toBeVisible();
 	releaseVideo?.();
 	releaseVideo = undefined;
-	await expect(card.getByText("成功", { exact: false })).toBeVisible({ timeout: 15_000 });
+	await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 15_000 });
 	const videoJobs = await request.get("/api/generation-jobs?kind=video&page=1&pageSize=20");
 	const videoPage = await videoJobs.json() as { items: Array<{ id: string; prompt: string; result: { items?: Array<{ storageKey?: string }> } }> };
 	const videoJob = videoPage.items.find((item) => item.prompt === "durable formal video");
@@ -1014,7 +1017,24 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 	}
 });
 
-test("formal local runtime persists projects, blobs, state, and Agent access", async ({ page, request }) => {
+test("formal local runtime persists projects, blobs, state, and Agent access", async ({ page, request: bootstrapRequest }) => {
+	const tenantId = "e2e-fedcba987654321001234567";
+	const tenantHeaders = {
+		"X-OpenBoard-E2E-Tenant": tenantId,
+		"X-OpenBoard-E2E-Token": "e2e-tenant-token-0123456789abcdef",
+	};
+	await expect(bootstrapRequest.post("/api/e2e/tenant", {
+		headers: { "X-OpenBoard-E2E-Token": tenantHeaders["X-OpenBoard-E2E-Token"] },
+		data: { tenantId },
+	})).resolves.toBeOK();
+	await page.context().setExtraHTTPHeaders(tenantHeaders);
+	const request = page.context().request;
+	await expect(request.put("/api/admin/tenant-quota", {
+		data: { generationQuotaMonthly: 1_000 },
+	})).resolves.toBeOK();
+	await expect(request.post(`/api/admin/users/${tenantId}-user/credit-adjustments`, {
+		data: { delta: 1_000, reason: "formal isolated runtime", idempotencyKey: "formal-isolated-runtime-credits-v1" },
+	})).resolves.toBeOK();
 	await ensureFormalCanvasProject(request);
   await page.route("https://formal-prompts.example/catalog.json", async (route) => route.fulfill({
     contentType: "application/json",
@@ -1056,12 +1076,12 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
     model: "gpt-image-1", prompt: "survives a browser reload", n: 1, size: "1024x1024",
   });
   let durableCard = page.locator("article").filter({ hasText: "survives a browser reload" });
-  await expect(durableCard.getByText("进行中", { exact: false })).toBeVisible();
+  await expect(durableCard.getByText("运行中", { exact: false })).toBeVisible();
   await page.reload();
   durableCard = page.locator("article").filter({ hasText: "survives a browser reload" });
-  await expect(durableCard.getByText("进行中", { exact: false })).toBeVisible();
+  await expect(durableCard.getByText("运行中", { exact: false })).toBeVisible();
   releasePendingImageRequest();
-  await expect(durableCard.getByText("成功", { exact: false })).toBeVisible({ timeout: 15_000 });
+  await expect(durableCard.getByText("已完成", { exact: false })).toBeVisible({ timeout: 15_000 });
   const durableJobs = await request.get("/api/generation-jobs?projectId=&kind=image&page=1&pageSize=20");
   await expect(durableJobs).toBeOK();
   const durableJobPage = await durableJobs.json() as { items: Array<{ prompt: string; status: string; result: { items?: Array<{ storageKey?: string }> } }> };
@@ -1077,7 +1097,7 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
 	await expect(page.getByRole("toolbar", { name: "画布工具栏" })).toBeVisible();
   await page.getByRole("button", { name: "打开设置" }).click();
   await expect(page.getByRole("button", { name: "拉取文本模型" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "拉取生图模型" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "拉取图片模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取视频模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "拉取音频模型" })).toBeVisible();
   const encryptionNotice = page.getByText(
@@ -1131,7 +1151,7 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
   await page.getByRole("button", { name: "管理来源" }).click();
   let sourceManager = page.getByRole("dialog", { name: "管理提示词来源" });
   await sourceManager.getByLabel("来源名称").fill("Formal source");
-  await sourceManager.getByLabel("来源解析格式").selectOption("json");
+  await sourceManager.getByLabel("解析格式").selectOption("json");
   await sourceManager.getByLabel("来源 URL").fill("https://formal-prompts.example/catalog.json");
   await sourceManager.getByLabel("条目路径").fill("payload.entries");
   await sourceManager.getByLabel("标题路径").fill("label");

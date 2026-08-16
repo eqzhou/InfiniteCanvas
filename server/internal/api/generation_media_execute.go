@@ -216,8 +216,15 @@ func (s *Server) createServerVideoJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid video generation job", http.StatusBadRequest)
 		return
 	}
-	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), input.ID); getErr == nil && isMatchingServerMediaJob(existing, "video", hash) {
-		writeJSON(w, publicGenerationJob(existing))
+	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), input.ID); getErr == nil {
+		if requestOwnsGenerationJob(r, existing) && isMatchingServerMediaJob(existing, "video", hash) {
+			writeJSON(w, publicGenerationJob(existing))
+			return
+		}
+		http.Error(w, "generation job id already belongs to another request", http.StatusConflict)
+		return
+	} else if !errors.Is(getErr, store.ErrNotFound) {
+		http.Error(w, "failed to load generation job", http.StatusInternalServerError)
 		return
 	}
 	tenantID := tenantIDFrom(r)
@@ -286,8 +293,15 @@ func (s *Server) createServerAudioJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid audio generation job", http.StatusBadRequest)
 		return
 	}
-	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), input.ID); getErr == nil && isMatchingServerMediaJob(existing, "audio", hash) {
-		writeJSON(w, publicGenerationJob(existing))
+	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), input.ID); getErr == nil {
+		if requestOwnsGenerationJob(r, existing) && isMatchingServerMediaJob(existing, "audio", hash) {
+			writeJSON(w, publicGenerationJob(existing))
+			return
+		}
+		http.Error(w, "generation job id already belongs to another request", http.StatusConflict)
+		return
+	} else if !errors.Is(getErr, store.ErrNotFound) {
+		http.Error(w, "failed to load generation job", http.StatusInternalServerError)
 		return
 	}
 	tenantID := tenantIDFrom(r)
@@ -443,12 +457,13 @@ func hashGenerationInput(input any) (string, error) {
 
 func (s *Server) createServerMediaJob(w http.ResponseWriter, r *http.Request, job store.GenerationJob, requestHash string, notify func()) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	job.UserID = strings.TrimSpace(userIDFrom(r))
 	job.CreatedAt, job.UpdatedAt = now, now
 	meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind, "executor": serverExecutorMarker})
 	err := s.store.CreateServerGenerationJob(r.Context(), tenantIDFrom(r), userIDFrom(r), job, 1, meta)
 	if errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), job.ID)
-		if getErr == nil && isMatchingServerMediaJob(existing, job.Kind, requestHash) {
+		if getErr == nil && requestOwnsGenerationJob(r, existing) && isMatchingServerMediaJob(existing, job.Kind, requestHash) {
 			writeJSON(w, publicGenerationJob(existing))
 			return
 		}
@@ -567,7 +582,7 @@ func (s *Server) mediaWorkerLoopFor(kind, executor string, wake <-chan struct{},
 	for {
 		now := time.Now().UTC()
 		claimed, err := s.store.ClaimServerGenerationJob(s.generationRoot,
-			store.GenerationClaim{Kind: kind, Executor: executor}, randomGenerationOwner(), now, now.Add(generationLeaseDuration))
+			store.GenerationClaim{Kind: kind, Executor: executor, RequireUserID: authMode() != "off"}, randomGenerationOwner(), now, now.Add(generationLeaseDuration))
 		if err == nil {
 			activeWG.Add(1)
 			execute(claimed)
@@ -705,28 +720,23 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 			return resolvedMediaRequest{}, err
 		}
 	}
-	configValue, err := s.store.GetState(ctx, tenantID, "config")
-	if err != nil || len(configValue) > 1<<20 {
-		return resolvedMediaRequest{}, errors.New("generation config unavailable")
+	_, secretKey, err := generationCredentialStorageKeys(job.UserID)
+	if err != nil {
+		return resolvedMediaRequest{}, err
 	}
 	var config storedImageConfig
-	if json.Unmarshal(configValue, &config) != nil || len(config.Channels) > 100 {
-		return resolvedMediaRequest{}, errors.New("invalid generation config")
-	}
 	var channel *storedImageChannel
-	for index := range config.Channels {
-		if config.Channels[index].ID == job.ProviderID {
-			channel = &config.Channels[index]
-			break
-		}
-	}
+	personalChannel := false
 	apiKey := ""
-	systemPrompt := config.SystemPrompt
+	systemPrompt := ""
 	providerTimeout := time.Duration(0)
 	if parameters.SharedChannel != nil {
 		snapshot := parameters.SharedChannel
 		if snapshot.ProviderID != job.ProviderID {
 			return resolvedMediaRequest{}, errors.New("invalid generation channel snapshot")
+		}
+		if err := validateGenerationSnapshotDestination(*snapshot); err != nil {
+			return resolvedMediaRequest{}, err
 		}
 		apiKey, err = s.openGenerationChannelSecret(tenantID, job.ID, job.Kind, *snapshot)
 		if err != nil {
@@ -742,34 +752,44 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 			Providers: map[string]storedImageProvider{job.Kind: {BaseURL: snapshot.BaseURL, Model: snapshot.Model, Protocol: snapshot.Protocol}},
 		}
 		systemPrompt = snapshot.SystemPrompt
-	} else if channel == nil {
-		shared, sharedSecret, sharedErr := s.resolveSharedChannel(ctx, tenantID, job.ProviderID)
-		if sharedErr != nil {
-			return resolvedMediaRequest{}, errors.New("channel not found")
-		}
-		providerTimeout, err = personalChannelTimeout(shared.TimeoutSeconds)
-		if err != nil {
-			return resolvedMediaRequest{}, err
-		}
-		value := sharedChannelStoredValue(shared)
-		channel, apiKey = &value, sharedSecret
 	} else {
-		secretValue, secretErr := s.decryptSecrets(ctx, tenantID)
-		if secretErr != nil {
-			return resolvedMediaRequest{}, secretErr
-		}
-		var secrets storedConfigSecrets
-		if json.Unmarshal(secretValue, &secrets) != nil {
-			return resolvedMediaRequest{}, errors.New("invalid secrets")
-		}
-		apiKey = secrets.APIKeys[job.ProviderID][job.Kind]
-		// Read the timeout here, while channel still points at the personal
-		// entry. A snapshot job replaces channel with a synthesized value that
-		// carries no TimeoutSeconds, so deferring this would resolve the
-		// pinned shared timeout back to the personal default.
-		providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
+		config, _, err = s.loadGenerationConfig(ctx, tenantID, job.UserID)
 		if err != nil {
 			return resolvedMediaRequest{}, err
+		}
+		systemPrompt = config.SystemPrompt
+		for index := range config.Channels {
+			if config.Channels[index].ID == job.ProviderID {
+				channel = &config.Channels[index]
+				personalChannel = true
+				break
+			}
+		}
+		if channel == nil {
+			shared, sharedSecret, sharedErr := s.resolveSharedChannel(ctx, tenantID, job.ProviderID)
+			if sharedErr != nil {
+				return resolvedMediaRequest{}, errors.New("channel not found")
+			}
+			providerTimeout, err = personalChannelTimeout(shared.TimeoutSeconds)
+			if err != nil {
+				return resolvedMediaRequest{}, err
+			}
+			value := sharedChannelStoredValue(shared)
+			channel, apiKey = &value, sharedSecret
+		} else {
+			secretValue, secretErr := s.decryptSecretsKey(ctx, tenantID, secretKey)
+			if secretErr != nil {
+				return resolvedMediaRequest{}, secretErr
+			}
+			var secrets storedConfigSecrets
+			if json.Unmarshal(secretValue, &secrets) != nil {
+				return resolvedMediaRequest{}, errors.New("invalid secrets")
+			}
+			apiKey = secrets.APIKeys[job.ProviderID][job.Kind]
+			providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
+			if err != nil {
+				return resolvedMediaRequest{}, err
+			}
 		}
 	}
 	provider, ok := channel.Providers[job.Kind]
@@ -787,6 +807,11 @@ func (s *Server) resolveMediaGenerationRequest(ctx context.Context, tenantID str
 	if job.Kind == "video" && (protocol == "openai") &&
 		(strings.Contains(provider.BaseURL, "/api/v3") || strings.Contains(provider.BaseURL, "/api/plan/v3")) {
 		protocol = "ark"
+	}
+	if personalChannel {
+		if err := validateAccountManagedChannelURL(provider.BaseURL); err != nil {
+			return resolvedMediaRequest{}, err
+		}
 	}
 	if (job.Kind == "video" && protocol != "openai" && protocol != "ark" && protocol != "template" && protocol != "apimart" && protocol != "kie") ||
 		(job.Kind == "audio" && protocol != "openai" && protocol != "azure" && protocol != "edge") || len(provider.BaseURL) > 8<<10 {

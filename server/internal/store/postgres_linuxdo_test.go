@@ -31,6 +31,15 @@ func openLinuxDoTestStore(t *testing.T) *PostgresStore {
 	return backend
 }
 
+func bootstrapAuthorizedIfEmpty(t *testing.T, backend *PostgresStore) bool {
+	t.Helper()
+	count, err := backend.CountUsers(t.Context())
+	if err != nil {
+		t.Fatalf("count test users: %v", err)
+	}
+	return count == 0
+}
+
 // A password account must never become loggable through Linux.do merely because
 // the OAuth profile reports the same email. Auto-linking would let any Linux.do
 // identity that claims that address take over the workspace.
@@ -41,19 +50,19 @@ func TestUpsertLinuxDoUserRejectsUnlinkedEmailCollision(t *testing.T) {
 	email := fmt.Sprintf("owner-%s@example.com", suffix)
 
 	passwordUser, _, err := backend.RegisterUser(ctx, RegisterInput{
-		Email:       email,
-		Password:    linuxDoFixturePassphrase,
-		DisplayName: "Password Owner",
+		Email: email, Password: linuxDoFixturePassphrase, DisplayName: "Password Owner",
+		BootstrapAuthorized: bootstrapAuthorizedIfEmpty(t, backend),
 	})
 	if err != nil {
 		t.Fatalf("register password user: %v", err)
 	}
 
 	_, token, err := backend.UpsertLinuxDoUser(ctx, LinuxDoUserInput{
-		LinuxDoID:   "linuxdo-" + suffix,
-		Email:       email,
-		DisplayName: "Linux Do Impersonator",
-		Username:    "impersonator",
+		LinuxDoID:     "linuxdo-" + suffix,
+		Email:         email,
+		DisplayName:   "Linux Do Impersonator",
+		Username:      "impersonator",
+		CreateAllowed: true,
 	})
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("email collision should return ErrConflict, got user token=%q err=%v", token, err)
@@ -78,18 +87,18 @@ func TestUpsertLinuxDoUserCreatesIndependentAccountWhenEmailIsFree(t *testing.T)
 	// Ensure the installation already has at least one user so the new Linux.do
 	// account is forced into its own tenant instead of claiming local.
 	if _, _, err := backend.RegisterUser(ctx, RegisterInput{
-		Email:       fmt.Sprintf("seed-%s@example.com", suffix),
-		Password:    linuxDoFixturePassphrase,
-		DisplayName: "Seed",
+		Email: fmt.Sprintf("seed-%s@example.com", suffix), Password: linuxDoFixturePassphrase, DisplayName: "Seed",
+		BootstrapAuthorized: bootstrapAuthorizedIfEmpty(t, backend),
 	}); err != nil {
 		t.Fatalf("seed first user: %v", err)
 	}
 
 	user, token, err := backend.UpsertLinuxDoUser(ctx, LinuxDoUserInput{
-		LinuxDoID:   "linuxdo-new-" + suffix,
-		Email:       fmt.Sprintf("linuxdo-%s@example.com", suffix),
-		DisplayName: "Linux Do User",
-		Username:    "linuxdo-user",
+		LinuxDoID:     "linuxdo-new-" + suffix,
+		Email:         fmt.Sprintf("linuxdo-%s@example.com", suffix),
+		DisplayName:   "Linux Do User",
+		Username:      "linuxdo-user",
+		CreateAllowed: true,
 	})
 	if err != nil {
 		t.Fatalf("create linux.do user: %v", err)
@@ -112,5 +121,32 @@ func TestUpsertLinuxDoUserCreatesIndependentAccountWhenEmailIsFree(t *testing.T)
 	}
 	if again.ID != user.ID || again.TenantID != user.TenantID || againToken == "" {
 		t.Fatalf("relogin changed identity: first=%#v again=%#v", user, again)
+	}
+}
+
+func TestUpsertLinuxDoUserHonorsRegistrationPolicyForNewAccounts(t *testing.T) {
+	backend := openLinuxDoTestStore(t)
+	ctx := t.Context()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	if _, _, err := backend.RegisterUser(ctx, RegisterInput{
+		Email: fmt.Sprintf("policy-seed-%s@example.com", suffix), Password: linuxDoFixturePassphrase,
+		DisplayName: "Policy Seed", BootstrapAuthorized: bootstrapAuthorizedIfEmpty(t, backend),
+	}); err != nil {
+		t.Fatalf("seed first user: %v", err)
+	}
+	email := fmt.Sprintf("linuxdo-policy-%s@example.com", suffix)
+	_, token, err := backend.UpsertLinuxDoUser(ctx, LinuxDoUserInput{
+		LinuxDoID: "linuxdo-policy-" + suffix, Email: email,
+		DisplayName: "Blocked Linux Do User", Username: "blocked-linuxdo",
+	})
+	if !errors.Is(err, ErrRegistrationDisabled) || token != "" {
+		t.Fatalf("disabled registration should reject a new OAuth account, token=%q err=%v", token, err)
+	}
+	var count int
+	if err := backend.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_users WHERE email=$1`, email).Scan(&count); err != nil {
+		t.Fatalf("verify blocked account: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("disabled registration created %d OAuth accounts", count)
 	}
 }

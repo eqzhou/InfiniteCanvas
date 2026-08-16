@@ -92,7 +92,7 @@ type tenantBlobStoreCacheEntry struct {
 
 // resolveBlobObjectStore chooses the protected media backend for a tenant.
 // Precedence matches the public Tiger behavior: a valid, enabled user S3/R2
-// preference wins; otherwise the tenant administrator's weighted pool is used;
+// preference wins; otherwise the tenant owner's weighted pool is used;
 // otherwise the process-level OPENBOARD_S3_* backend or shared filesystem is used.
 func (s *Server) resolveBlobObjectStore(ctx context.Context, tenantID string) (blobObjectStore, error) {
 	if s.store != nil && s.secrets != nil {

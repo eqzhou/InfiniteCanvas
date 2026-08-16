@@ -26,10 +26,12 @@ import (
 type contextKey string
 
 const (
-	authUserKey          contextKey = "openboardAuthUser"
-	sessionHeader                   = "X-OpenBoard-Session"
-	e2eTenantHeader                 = "X-OpenBoard-E2E-Tenant"
-	e2eTenantTokenHeader            = "X-OpenBoard-E2E-Token"
+	authUserKey               contextKey = "openboardAuthUser"
+	bootstrapProcessAccessKey contextKey = "openboardBootstrapProcessAccess"
+	sessionHeader                        = "X-OpenBoard-Session"
+	bootstrapTokenHeader                 = "X-OpenBoard-Bootstrap-Token"
+	e2eTenantHeader                      = "X-OpenBoard-E2E-Tenant"
+	e2eTenantTokenHeader                 = "X-OpenBoard-E2E-Token"
 )
 
 var e2eTenantIDPattern = regexp.MustCompile(`^e2e-[a-f0-9]{24}$`)
@@ -47,6 +49,11 @@ func authMode() string {
 func authUserFrom(ctx context.Context) (store.AuthUser, bool) {
 	user, ok := ctx.Value(authUserKey).(store.AuthUser)
 	return user, ok
+}
+
+func requestHasBootstrapProcessAccess(r *http.Request) bool {
+	allowed, _ := r.Context().Value(bootstrapProcessAccessKey).(bool)
+	return allowed
 }
 
 func tenantIDFrom(r *http.Request) string {
@@ -68,6 +75,14 @@ func (s *Server) authorizeProcessToken(r *http.Request) bool {
 	providedHash := sha256.Sum256([]byte(provided))
 	expectedHash := sha256.Sum256([]byte(s.processToken))
 	return provided != "" && s.processToken != "" && subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
+}
+
+func authorizeBootstrapToken(r *http.Request) bool {
+	provided := strings.TrimSpace(r.Header.Get(bootstrapTokenHeader))
+	expected := strings.TrimSpace(os.Getenv("OPENBOARD_BOOTSTRAP_TOKEN"))
+	providedHash := sha256.Sum256([]byte(provided))
+	expectedHash := sha256.Sum256([]byte(expected))
+	return provided != "" && expected != "" && subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
 }
 
 // withE2ETenant gives every browser test an isolated database tenant. The
@@ -161,8 +176,8 @@ func isLoopbackRemote(remoteAddr string) bool {
 }
 
 // authorizeSecrets gates the encrypted config-secret bag.
-// Any authenticated active user may read/write their own bag (members use a
-// per-user key; admins use the tenant bag). When auth is off, the process token
+// Any authenticated active user may read/write their own per-user bag. When
+// auth is off, the process token
 // is required. Optional mode still allows token bootstrap before the first user.
 func (s *Server) authorizeSecrets(w http.ResponseWriter, r *http.Request) bool {
 	if authMode() == "off" {
@@ -177,7 +192,7 @@ func (s *Server) authorizeSecrets(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	if user, ok := authUserFrom(r.Context()); ok {
-		// Members and admins both sync direct-connect keys; isolation is handled
+		// Users and Owners both sync direct-connect keys; isolation is handled
 		// by secretStorageKey, not by this gate.
 		if strings.EqualFold(strings.TrimSpace(user.Status), "ban") {
 			http.Error(w, "account disabled", http.StatusForbidden)
@@ -270,7 +285,8 @@ func (s *Server) requireUserWhenNeeded(next http.Handler) http.Handler {
 					http.Error(w, "login required", http.StatusUnauthorized)
 					return
 				}
-				next.ServeHTTP(w, r)
+				ctx := context.WithValue(r.Context(), bootstrapProcessAccessKey, true)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 		}
@@ -300,6 +316,19 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inviteToken := strings.TrimSpace(body.InviteToken)
+	userCount, err := s.store.CountUsers(r.Context())
+	if err != nil {
+		http.Error(w, "failed to verify account bootstrap", http.StatusServiceUnavailable)
+		return
+	}
+	bootstrapAuthorized := false
+	if userCount == 0 && inviteToken == "" {
+		if !authorizeBootstrapToken(r) {
+			http.Error(w, "first account requires bootstrap authorization", http.StatusForbidden)
+			return
+		}
+		bootstrapAuthorized = true
+	}
 	allowed, err := s.registrationAllowed(r.Context(), sitePolicyTenantForRegister(r))
 	if err != nil {
 		http.Error(w, "failed to load site policy", http.StatusInternalServerError)
@@ -309,12 +338,13 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	// even when the public, tenant-wide registration switch is off. The
 	// transaction still verifies the token, expiry, and email before creating
 	// the account.
-	if !allowed && inviteToken == "" {
+	if !allowed && inviteToken == "" && !bootstrapAuthorized {
 		http.Error(w, registrationDisabledMessage, http.StatusForbidden)
 		return
 	}
 	user, token, err := s.store.RegisterUser(r.Context(), store.RegisterInput{
 		Email: body.Email, Password: body.Password, DisplayName: body.DisplayName, InviteToken: inviteToken,
+		BootstrapAuthorized: bootstrapAuthorized,
 	})
 	if errors.Is(err, store.ErrConflict) {
 		http.Error(w, "email already registered", http.StatusConflict)
@@ -322,6 +352,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, store.ErrInvitationInvalid) {
 		http.Error(w, "invitation is invalid, expired, revoked, or does not match this email", http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, store.ErrBootstrapRequired) {
+		http.Error(w, "first account requires bootstrap authorization", http.StatusForbidden)
 		return
 	}
 	if err != nil {
@@ -576,6 +610,15 @@ func (s *Server) linuxDoOAuthStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "linux.do oauth not configured", http.StatusServiceUnavailable)
 		return
 	}
+	userCount, err := s.store.CountUsers(r.Context())
+	if err != nil {
+		http.Error(w, "failed to verify account bootstrap", http.StatusServiceUnavailable)
+		return
+	}
+	if userCount == 0 {
+		http.Error(w, "first account requires bootstrap authorization", http.StatusForbidden)
+		return
+	}
 	redirectURL := linuxDoRedirectURL()
 	if redirectURL == "" {
 		http.Error(w, "OPENBOARD_PUBLIC_BASE_URL or OPENBOARD_LINUXDO_REDIRECT_URL required", http.StatusServiceUnavailable)
@@ -684,8 +727,14 @@ func (s *Server) linuxDoOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing linux.do user id", http.StatusBadGateway)
 		return
 	}
+	createAllowed, err := s.registrationAllowed(r.Context(), sitePolicyTenantForRegister(r))
+	if err != nil {
+		http.Error(w, "failed to load site policy", http.StatusInternalServerError)
+		return
+	}
 	_, sessionToken, err := s.store.UpsertLinuxDoUser(r.Context(), store.LinuxDoUserInput{
 		LinuxDoID: linuxID, Email: profile.Email, DisplayName: profile.Name, Username: profile.Username,
+		CreateAllowed: createAllowed,
 	})
 	if errors.Is(err, store.ErrBanned) {
 		http.Error(w, "account banned", http.StatusForbidden)
@@ -693,6 +742,14 @@ func (s *Server) linuxDoOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, store.ErrConflict) {
 		http.Error(w, "email already registered", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, store.ErrRegistrationDisabled) {
+		http.Error(w, registrationDisabledMessage, http.StatusForbidden)
+		return
+	}
+	if errors.Is(err, store.ErrBootstrapRequired) {
+		http.Error(w, "first account requires bootstrap authorization", http.StatusForbidden)
 		return
 	}
 	if err != nil {

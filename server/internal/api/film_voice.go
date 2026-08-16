@@ -280,8 +280,8 @@ func (s *Server) createVoiceConsent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, authenticated := authUserFrom(r.Context())
-	if !authenticated || !strings.EqualFold(actor.Status, "active") || !isTenantAdmin(actor) {
-		writeFilmError(w, http.StatusForbidden, "consent_admin_required", "Only an active tenant administrator can record voice consent")
+	if !authenticated || !strings.EqualFold(actor.Status, "active") || !isTenantOwner(actor) {
+		writeFilmError(w, http.StatusForbidden, "consent_admin_required", "Only an active tenant owner can record voice consent")
 		return
 	}
 	voiceID := chi.URLParam(r, "voiceId")
@@ -357,7 +357,7 @@ func (s *Server) listVoiceConsents(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries := make([]voiceConsentSummary, 0, len(values))
 	actor, _ := authUserFrom(r.Context())
-	showAuditDetails := isTenantAdmin(actor)
+	showAuditDetails := isTenantOwner(actor)
 	for _, value := range values {
 		summary := voiceConsentSummary{ID: value.ID, ProjectID: value.ProjectID, VoiceIdentityID: value.VoiceIdentityID, Accepted: value.Accepted, AcceptedAt: value.AcceptedAt}
 		if showAuditDetails {

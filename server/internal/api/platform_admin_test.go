@@ -148,13 +148,13 @@ func TestTenantInvitationEndpointsEnforceRolesAndDoNotLeakToken(t *testing.T) {
 		memoryStore: newMemoryStore(),
 		createdInvite: store.CreatedTenantInvitation{
 			TenantInvitation: store.TenantInvitation{
-				ID: "invite-1", TenantID: "tenant-a", Email: "new@example.com", Role: "admin",
+				ID: "invite-1", TenantID: "tenant-a", Email: "new@example.com", Role: "member",
 				ExpiresAt: createdAt.Add(24 * time.Hour), CreatedBy: "owner-a", CreatedAt: createdAt,
 			},
 			Token: fixtureToken,
 		},
 		invitations: []store.TenantInvitation{{
-			ID: "invite-1", TenantID: "tenant-a", Email: "new@example.com", Role: "admin",
+			ID: "invite-1", TenantID: "tenant-a", Email: "new@example.com", Role: "member",
 			ExpiresAt: createdAt.Add(24 * time.Hour), CreatedBy: "owner-a", CreatedAt: createdAt,
 		}},
 	}
@@ -164,19 +164,19 @@ func TestTenantInvitationEndpointsEnforceRolesAndDoNotLeakToken(t *testing.T) {
 	}
 
 	admin := store.AuthUser{ID: "admin-a", TenantID: "tenant-a", Role: "admin", Status: "active"}
-	if got := request(t, capabilityHandler(t, backend, admin), http.MethodPost, "/api/tenant/invitations", []byte(`{"email":"new@example.com","role":"admin"}`)); got.Code != http.StatusForbidden {
-		t.Fatalf("admin creating admin invitation = %d %s", got.Code, got.Body.String())
+	if got := request(t, capabilityHandler(t, backend, admin), http.MethodPost, "/api/tenant/invitations", []byte(`{"email":"new@example.com","role":"admin"}`)); got.Code != http.StatusBadRequest {
+		t.Fatalf("legacy admin creating a new privileged invitation = %d %s", got.Code, got.Body.String())
 	}
 
 	owner := store.AuthUser{ID: "owner-a", TenantID: "tenant-a", Role: "owner", Status: "active"}
-	created := request(t, capabilityHandler(t, backend, owner), http.MethodPost, "/api/tenant/invitations", []byte(`{"email":"new@example.com","role":"admin"}`))
+	created := request(t, capabilityHandler(t, backend, owner), http.MethodPost, "/api/tenant/invitations", []byte(`{"email":"new@example.com","role":"user"}`))
 	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), fixtureToken) {
 		t.Fatalf("owner invitation create = %d %s", created.Code, created.Body.String())
 	}
 	if created.Header().Get("Cache-Control") != "no-store" || created.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("invitation response cache headers = %q/%q", created.Header().Get("Cache-Control"), created.Header().Get("Pragma"))
 	}
-	if backend.createdInput.TenantID != "tenant-a" || backend.createdInput.CreatedBy != "owner-a" || backend.createdInput.Role != "admin" {
+	if backend.createdInput.TenantID != "tenant-a" || backend.createdInput.CreatedBy != "owner-a" || backend.createdInput.Role != "member" {
 		t.Fatalf("created invitation input = %#v", backend.createdInput)
 	}
 

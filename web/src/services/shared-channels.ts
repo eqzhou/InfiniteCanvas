@@ -8,6 +8,8 @@ export type SharedChannel = {
   id: string;
   name: string;
   protocol: Exclude<AiProtocol, "ark" | "template">;
+  /** Ownership scope returned by the server; legacy servers may omit it. */
+  source?: "tenant" | "platform" | "automatic";
   defaultTextModel?: string;
   defaultImageModel?: string;
   defaultVideoModel?: string;

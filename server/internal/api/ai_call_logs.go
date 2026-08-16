@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) requireAICallLogAdmin(w http.ResponseWriter, r *http.Request) bool {
-	return s.requireTenantAdmin(w, r, "ai call logs unavailable")
+	return s.requireTenantOwner(w, r, "tenant AI call logs unavailable")
 }
 
 func (s *Server) listAICallLogs(w http.ResponseWriter, r *http.Request) {

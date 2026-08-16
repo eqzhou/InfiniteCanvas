@@ -84,7 +84,7 @@ func TestFilmStageWaiverRejectsUnsafeOrUnauthorizedRequests(t *testing.T) {
 	member := store.AuthUser{ID: "member-1", Role: "member", Status: "active"}
 	valid := filmStageWaiverRequest{Revision: document.Revision, StageRevision: 1, Reason: "External approved artifact supplied.", RiskAccepted: true}
 
-	if _, err := createFilmStageWaiver(document, "script", valid, member, "2026-08-11T00:00:00Z"); err == nil || !strings.Contains(err.Error(), "owner or admin") {
+	if _, err := createFilmStageWaiver(document, "script", valid, member, "2026-08-11T00:00:00Z"); err == nil || !strings.Contains(err.Error(), "owner") {
 		t.Fatalf("member waiver error = %v", err)
 	}
 	for _, stage := range []string{"decompose", "compose", "delivery"} {
@@ -106,7 +106,7 @@ func TestFilmStageWaiverRejectsUnsafeOrUnauthorizedRequests(t *testing.T) {
 
 func TestFilmStageWaiverCanBeRevokedAndIsDisclosed(t *testing.T) {
 	document := newFilmDocument("film-waiver")
-	actor := store.AuthUser{ID: "admin-1", Role: "admin", Status: "active"}
+	actor := store.AuthUser{ID: "owner-1", Role: "owner", Status: "active"}
 	next, err := createFilmStageWaiver(document, "script", filmStageWaiverRequest{
 		Revision: 1, StageRevision: 1, Reason: "External approved artifact supplied.", RiskAccepted: true,
 	}, actor, "2026-08-11T00:00:00Z")

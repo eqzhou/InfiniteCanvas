@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/openboard/openboard/server/internal/store"
@@ -99,14 +100,19 @@ func (s *Server) createServerWorkflowJob(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid workflow generation job", http.StatusBadRequest)
 		return
 	}
+	actorID := strings.TrimSpace(userIDFrom(r))
+	if authMode() != "off" && actorID == "" {
+		http.Error(w, "login required", http.StatusUnauthorized)
+		return
+	}
 	parameters, _ := json.Marshal(workflowRunParameters{
-		Executor: "workflow", BillingUserID: userIDFrom(r), RequestHash: requestHash, TemplateID: template.ID,
+		Executor: "workflow", BillingUserID: actorID, RequestHash: requestHash, TemplateID: template.ID,
 		TemplateRevision: template.Revision, TemplateSnapshot: template, Values: values,
 	})
 	result, _ := json.Marshal(initialWorkflowRunResult(template))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job := store.GenerationJob{
-		ID: input.ID, ProjectID: input.ProjectID, Kind: "workflow", Status: "queued", Prompt: template.Title,
+		ID: input.ID, UserID: actorID, ProjectID: input.ProjectID, Kind: "workflow", Status: "queued", Prompt: template.Title,
 		Parameters: parameters, Result: result, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.CheckGenerationQuota(r.Context(), tenantID); errors.Is(err, store.ErrQuotaExceeded) {
@@ -118,8 +124,8 @@ func (s *Server) createServerWorkflowJob(w http.ResponseWriter, r *http.Request)
 	}
 	if err := s.store.CreateGenerationJob(r.Context(), tenantID, job); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, job.ID)
-		if getErr == nil && matchingWorkflowRequest(existing, requestHash) {
-			writeJSON(w, existing)
+		if getErr == nil && requestOwnsGenerationJob(r, existing) && matchingWorkflowRequest(existing, requestHash) {
+			writeJSON(w, publicGenerationJob(existing))
 			return
 		}
 		http.Error(w, "generation job id already belongs to another request", http.StatusConflict)
@@ -134,7 +140,7 @@ func (s *Server) createServerWorkflowJob(w http.ResponseWriter, r *http.Request)
 	s.notifyWorkflowWorkers()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	writeJSON(w, job)
+	writeJSON(w, publicGenerationJob(job))
 }
 
 func hashWorkflowRequest(projectID string, template workflowTemplate, values map[string]json.RawMessage) (string, error) {

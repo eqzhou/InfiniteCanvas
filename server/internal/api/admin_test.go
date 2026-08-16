@@ -36,6 +36,18 @@ func TestTenantAdminAuthOffRequiresProcessToken(t *testing.T) {
 	}
 }
 
+func TestLegacyAdminRoleRetainsTenantOwnerCapabilityDuringMigration(t *testing.T) {
+	backend := newMemoryStore()
+	actor := store.AuthUser{ID: "legacy-admin", TenantID: "tenant-a", Role: "admin", Status: "active"}
+	seedAdminUser(backend, actor)
+	handler := tenantAdminHandler(t, backend, actor)
+
+	got := request(t, handler, http.MethodGet, "/api/admin/channels", nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("legacy admin compatibility = %d %s", got.Code, got.Body.String())
+	}
+}
+
 func putAdminConfigForTest(t *testing.T, handler http.Handler, path string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	listed := request(t, handler, http.MethodGet, path, nil)
@@ -81,7 +93,7 @@ func seedAdminUser(backend *memoryStore, user store.AuthUser) {
 
 func TestAdminModelsPutValidatesAndPersistsTenantCosts(t *testing.T) {
 	backend := newMemoryStore()
-	actor := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active"}
+	actor := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active", PlatformAdmin: true}
 	seedAdminUser(backend, actor)
 	handler := tenantAdminHandler(t, backend, actor)
 	initial := request(t, handler, http.MethodGet, "/api/admin/models", nil)
@@ -146,7 +158,7 @@ func TestAdminModelsPutValidatesAndPersistsTenantCosts(t *testing.T) {
 
 func TestAdminTenantGenerationQuotaCanBeReadAndSetToZero(t *testing.T) {
 	backend := newMemoryStore()
-	actor := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active"}
+	actor := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active", PlatformAdmin: true}
 	seedAdminUser(backend, actor)
 	handler := tenantAdminHandler(t, backend, actor)
 
@@ -177,7 +189,7 @@ func TestAdminTenantGenerationQuotaCanBeReadAndSetToZero(t *testing.T) {
 
 func TestAdminCreditAdjustmentIsIdempotentAndQueryable(t *testing.T) {
 	backend := newMemoryStore()
-	actor := store.AuthUser{ID: "admin-1", TenantID: "tenant-a", Role: "admin", Status: "active"}
+	actor := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active", PlatformAdmin: true}
 	target := store.AuthUser{ID: "member-1", TenantID: actor.TenantID, Role: "member", Status: "active", Credits: 10}
 	seedAdminUser(backend, actor)
 	seedAdminUser(backend, target)
@@ -231,7 +243,9 @@ func TestAdminCreditAdjustmentIsIdempotentAndQueryable(t *testing.T) {
 func TestAdminUserProtectsOwnersAndMapsStoreErrors(t *testing.T) {
 	backend := newMemoryStore()
 	owner := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active"}
+	member := store.AuthUser{ID: "member-1", TenantID: owner.TenantID, Role: "member", Status: "active"}
 	seedAdminUser(backend, owner)
+	seedAdminUser(backend, member)
 	handler := tenantAdminHandler(t, backend, owner)
 
 	ban := request(t, handler, http.MethodPatch, "/api/admin/users/owner-1", []byte(`{"status":"ban"}`))
@@ -243,7 +257,7 @@ func TestAdminUserProtectsOwnersAndMapsStoreErrors(t *testing.T) {
 	}
 
 	backend.updateUserErr = errors.New("pq: secret database detail")
-	failed := request(t, handler, http.MethodPatch, "/api/admin/users/owner-1", []byte(`{"displayName":"Owner"}`))
+	failed := request(t, handler, http.MethodPatch, "/api/admin/users/member-1", []byte(`{"status":"ban"}`))
 	if failed.Code != http.StatusInternalServerError || failed.Body.String() != "failed to update user\n" {
 		t.Fatalf("failed = %d %q", failed.Code, failed.Body.String())
 	}
@@ -251,7 +265,7 @@ func TestAdminUserProtectsOwnersAndMapsStoreErrors(t *testing.T) {
 
 func TestTenantAdminCannotChangeOwnerRoleOrStatus(t *testing.T) {
 	backend := newMemoryStore()
-	actor := store.AuthUser{ID: "admin-1", TenantID: "tenant-a", Role: "admin", Status: "active"}
+	actor := store.AuthUser{ID: "user-1", TenantID: "tenant-a", Role: "member", Status: "active"}
 	owner := store.AuthUser{ID: "owner-1", TenantID: actor.TenantID, Role: "owner", Status: "active"}
 	seedAdminUser(backend, actor)
 	seedAdminUser(backend, owner)
@@ -259,7 +273,7 @@ func TestTenantAdminCannotChangeOwnerRoleOrStatus(t *testing.T) {
 
 	for _, body := range []string{`{"role":"member"}`, `{"status":"ban"}`} {
 		got := request(t, handler, http.MethodPatch, "/api/admin/users/owner-1", []byte(body))
-		if got.Code != http.StatusForbidden || got.Body.String() != "only an owner can modify an owner\n" {
+		if got.Code != http.StatusForbidden || got.Body.String() != "tenant owner required\n" {
 			t.Fatalf("body %s = %d %q", body, got.Code, got.Body.String())
 		}
 	}
@@ -272,19 +286,20 @@ func TestAdminMutationsRejectTenantMembers(t *testing.T) {
 	handler := tenantAdminHandler(t, backend, member)
 
 	requests := []struct {
-		method string
-		path   string
-		body   []byte
+		method  string
+		path    string
+		body    []byte
+		message string
 	}{
-		{http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[],"defaultCredits":1}`)},
-		{http.MethodGet, "/api/admin/tenant-quota", nil},
-		{http.MethodPut, "/api/admin/tenant-quota", []byte(`{"generationQuotaMonthly":1}`)},
-		{http.MethodGet, "/api/admin/credit-logs", nil},
-		{http.MethodPost, "/api/admin/users/member-1/credit-adjustments", []byte(`{"delta":1,"reason":"test","idempotencyKey":"member-adjust-1"}`)},
+		{http.MethodPut, "/api/admin/models", []byte(`{"modelCosts":[],"defaultCredits":1}`), "platform administrator required\n"},
+		{http.MethodGet, "/api/admin/tenant-quota", nil, "tenant owner required\n"},
+		{http.MethodPut, "/api/admin/tenant-quota", []byte(`{"generationQuotaMonthly":1}`), "platform administrator required\n"},
+		{http.MethodGet, "/api/admin/credit-logs", nil, "tenant owner required\n"},
+		{http.MethodPost, "/api/admin/users/member-1/credit-adjustments", []byte(`{"delta":1,"reason":"test","idempotencyKey":"member-adjust-1"}`), "platform administrator required\n"},
 	}
 	for _, item := range requests {
 		got := request(t, handler, item.method, item.path, item.body)
-		if got.Code != http.StatusForbidden || got.Body.String() != "admin required\n" {
+		if got.Code != http.StatusForbidden || got.Body.String() != item.message {
 			t.Fatalf("%s %s = %d %q", item.method, item.path, got.Code, got.Body.String())
 		}
 	}
@@ -297,7 +312,7 @@ func TestAdminUserPatchRejectsNonIdempotentCreditDelta(t *testing.T) {
 	handler := tenantAdminHandler(t, backend, owner)
 
 	got := request(t, handler, http.MethodPatch, "/api/admin/users/owner-1", []byte(`{"creditsDelta":1}`))
-	if got.Code != http.StatusBadRequest || got.Body.String() != "use credit adjustments endpoint\n" {
+	if got.Code != http.StatusBadRequest || got.Body.String() != "invalid json\n" {
 		t.Fatalf("PATCH = %d %q", got.Code, got.Body.String())
 	}
 }
@@ -309,7 +324,7 @@ func TestStoreAuthorizationRechecksOwnerUnderUpdateLock(t *testing.T) {
 	seedAdminUser(backend, owner)
 	seedAdminUser(backend, secondOwner)
 	role := "member"
-	_, err := backend.UpdateUser(t.Context(), owner.TenantID, owner.ID, store.UserPatch{Role: &role, ActorRole: "admin"})
+	_, err := backend.UpdateUser(t.Context(), owner.TenantID, owner.ID, store.UserPatch{Role: &role, ActorRole: "member"})
 	if !errors.Is(err, store.ErrUnauthorized) {
 		t.Fatalf("err = %v", err)
 	}

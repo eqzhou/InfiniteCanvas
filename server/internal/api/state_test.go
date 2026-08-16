@@ -226,6 +226,9 @@ func (m *memoryStore) ListGenerationJobs(_ context.Context, tenantID string, que
 		if !query.IncludeDeleted && job.Status == "deleted" {
 			continue
 		}
+		if query.UserID != "" && job.UserID != query.UserID {
+			continue
+		}
 		if query.ProjectID != "" && job.ProjectID != query.ProjectID {
 			continue
 		}
@@ -283,7 +286,8 @@ func (m *memoryStore) CreateGenerationJob(_ context.Context, tenantID string, jo
 	return nil
 }
 
-func (m *memoryStore) CreateServerGenerationJob(_ context.Context, tenantID, _ string, job store.GenerationJob, _ int, _ json.RawMessage) error {
+func (m *memoryStore) CreateServerGenerationJob(_ context.Context, tenantID, userID string, job store.GenerationJob, _ int, _ json.RawMessage) error {
+	job.UserID = userID
 	return m.CreateGenerationJob(context.Background(), tenantID, job)
 }
 
@@ -1090,6 +1094,7 @@ func (m *memoryStore) UpdateUser(_ context.Context, tenantID, userID string, pat
 	return user, nil
 }
 func (m *memoryStore) GetModelCreditConfig(_ context.Context, tenantID string) (store.ModelCreditConfig, error) {
+	tenantID = store.DefaultTenantID
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	raw, ok := m.state[tenantKey(tenantID, "adminBilling")]
@@ -1114,6 +1119,7 @@ func (m *memoryStore) GetModelCreditConfig(_ context.Context, tenantID string) (
 	return config, nil
 }
 func (m *memoryStore) PutModelCreditConfig(_ context.Context, tenantID string, config store.ModelCreditConfig) error {
+	tenantID = store.DefaultTenantID
 	raw, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -1124,6 +1130,7 @@ func (m *memoryStore) PutModelCreditConfig(_ context.Context, tenantID string, c
 	return nil
 }
 func (m *memoryStore) GetModelCreditCost(_ context.Context, tenantID, model string) (int, error) {
+	tenantID = store.DefaultTenantID
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	raw, ok := m.state[tenantKey(tenantID, "adminBilling")]
@@ -1341,7 +1348,7 @@ func TestPersistentProjectAndStateLifecycle(t *testing.T) {
 	}
 }
 
-func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
+func TestMemberGenerationUsesOnlyItsUserScopedConfigAndSecrets(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "optional")
 	t.Setenv("OPENBOARD_TOKEN", "")
 	backend := newMemoryStore()
@@ -1354,14 +1361,18 @@ func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
 	MountServer(router, server)
 
 	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
-	admin := store.AuthUser{ID: "admin-1", TenantID: member.TenantID, Role: "admin", Status: "active"}
+	admin := store.AuthUser{ID: "owner-1", TenantID: member.TenantID, Role: "owner", Status: "active"}
 	safeConfig := []byte(`{"channels":[{"id":"primary","name":"Primary","baseUrl":"https://safe.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://safe.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"safe"}`)
 	if err := backend.PutState(t.Context(), member.TenantID, "config", safeConfig); err != nil {
 		t.Fatal(err)
 	}
 	secretBody := []byte(`{"apiKeys":{"primary":{"image":"sk-tenant-private"}},"webdavPass":""}`)
-	if got := putConfigSecrets(t, withActor(router, admin), secretBody); got.Code != http.StatusNoContent {
-		t.Fatalf("seed secret = %d %s", got.Code, got.Body.String())
+	encryptedSecret, err := server.encryptSecrets(secretBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutState(t.Context(), member.TenantID, secretStateKey, encryptedSecret); err != nil {
+		t.Fatal(err)
 	}
 
 	memberHandler := withActor(router, member)
@@ -1378,6 +1389,14 @@ func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
 	if memberConfig.Code != http.StatusOK || !bytes.Equal(memberConfig.Body.Bytes(), attackerConfig) {
 		t.Fatalf("member-scoped config = %d %s", memberConfig.Code, memberConfig.Body.String())
 	}
+	memberSecretBody := []byte(`{"apiKeys":{"primary":{"image":"sk-member-private"}},"webdavPass":""}`)
+	memberEncryptedSecret, err := server.encryptSecrets(memberSecretBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutState(t.Context(), member.TenantID, userSecretStateKeyPrefix+member.ID, memberEncryptedSecret); err != nil {
+		t.Fatal(err)
+	}
 	if got := requestWithHeaders(t, memberHandler, http.MethodPut, "/api/migration/state/config", []byte(`{}`), nil); got.Code != http.StatusNotFound {
 		t.Fatalf("removed migration endpoint = %d %s", got.Code, got.Body.String())
 	}
@@ -1388,13 +1407,18 @@ func TestMemberConfigIsUserScopedAndCannotRebindStoredTenantKey(t *testing.T) {
 
 	parameters, _ := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, Size: "1024x1024", Count: 1})
 	resolved, err := server.resolveImageGenerationRequest(t.Context(), member.TenantID, store.GenerationJob{
-		ID: "job-safe-binding", Kind: "image", ProviderID: "primary", Model: "gpt-image-1", Prompt: "draw", Parameters: parameters,
+		ID: "job-personal-binding", UserID: member.ID, Kind: "image", ProviderID: "primary", Model: "gpt-image-1", Prompt: "draw", Parameters: parameters,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.BaseURL != "https://safe.example/v1" || resolved.APIKey != "sk-tenant-private" || resolved.BaseURL == "https://attacker.example/v1" {
-		t.Fatalf("stored key rebound to untrusted destination: %#v", resolved)
+	if resolved.BaseURL != "https://attacker.example/v1" || resolved.APIKey != "sk-member-private" || resolved.APIKey == "sk-tenant-private" {
+		t.Fatalf("generation escaped the member credential boundary: %#v", resolved)
+	}
+	if _, err := server.resolveImageGenerationRequest(t.Context(), member.TenantID, store.GenerationJob{
+		ID: "job-without-user", Kind: "image", ProviderID: "primary", Model: "gpt-image-1", Prompt: "draw", Parameters: parameters,
+	}); !errors.Is(err, store.ErrUnauthorized) {
+		t.Fatalf("account-mode job without a user binding = %v, want unauthorized", err)
 	}
 
 	adminConfig := []byte(`{"channels":[{"id":"primary","name":"Primary","baseUrl":"https://safe.example/v1","defaultImageModel":"gpt-image-1","providers":{"image":{"baseUrl":"https://safe.example/v1","apiKey":"","model":"gpt-image-1","protocol":"openai"}}}],"systemPrompt":"admin update"}`)
@@ -1426,7 +1450,7 @@ func TestDisabledCustomChannelsRejectMemberRouteAndAPIKeyChanges(t *testing.T) {
 	MountServer(router, server)
 
 	member := store.AuthUser{ID: "member-policy", TenantID: "tenant-policy", Role: "member", Status: "active"}
-	admin := store.AuthUser{ID: "admin-policy", TenantID: "tenant-policy", Role: "admin", Status: "active"}
+	admin := store.AuthUser{ID: "owner-policy", TenantID: "tenant-policy", Role: "owner", Status: "active"}
 	originalConfig := []byte(`{"theme":"light","channels":[{"id":"primary","name":"Primary","providers":{"text":{"baseUrl":"https://trusted.example/v1","apiKey":"","model":"gpt-4.1","protocol":"openai"}}}]}`)
 	if err := backend.PutState(t.Context(), member.TenantID, "config", originalConfig); err != nil {
 		t.Fatal(err)
@@ -1480,6 +1504,9 @@ func TestDisabledCustomChannelsRejectMemberRouteAndAPIKeyChanges(t *testing.T) {
 		"If-Match": stateRead.Header().Get("ETag"),
 	}); got.Code != http.StatusForbidden {
 		t.Fatalf("member direct state route change = %d %s", got.Code, got.Body.String())
+	}
+	if got := request(t, memberHandler, http.MethodPost, "/api/provider-models", []byte(`{"channelId":"primary","kind":"text"}`)); got.Code != http.StatusForbidden {
+		t.Fatalf("member used a disabled custom channel at runtime = %d %s", got.Code, got.Body.String())
 	}
 
 	adminHandler := withActor(router, admin)
@@ -1749,7 +1776,7 @@ func TestMemberPersonalSecretsAreIsolatedFromTenantBag(t *testing.T) {
 	router := chi.NewRouter()
 	MountServer(router, server)
 
-	admin := store.AuthUser{ID: "admin-1", TenantID: store.DefaultTenantID, Role: "admin", Status: "active"}
+	admin := store.AuthUser{ID: "owner-1", TenantID: store.DefaultTenantID, Role: "owner", Status: "active"}
 	memberA := store.AuthUser{ID: "member-a", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
 	memberB := store.AuthUser{ID: "member-b", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
 	if err := backend.PutState(t.Context(), store.DefaultTenantID, "config", []byte(`{"channels":[]}`)); err != nil {

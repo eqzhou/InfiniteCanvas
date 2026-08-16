@@ -73,7 +73,7 @@ func (m *filmMemoryStore) workspaceSnapshotLocked(tenantID string) store.Workspa
 	}
 	for key, job := range m.jobs {
 		if strings.HasPrefix(key, prefix) {
-			snapshot.GenerationJobs = append(snapshot.GenerationJobs, store.WorkspaceGenerationJob{Job: job})
+			snapshot.GenerationJobs = append(snapshot.GenerationJobs, store.WorkspaceGenerationJob{UserID: job.UserID, Job: job})
 		}
 	}
 	for _, key := range workspaceTransactionStateKeys {
@@ -128,6 +128,7 @@ func (m *filmMemoryStore) applyWorkspaceLocked(tenantID string, snapshot store.W
 		m.films[tenantKey(tenantID, film.ProjectID)] = store.FilmRecord{ProjectID: film.ProjectID, Revision: revision, Document: append([]byte(nil), film.Document...)}
 	}
 	for _, item := range snapshot.GenerationJobs {
+		item.Job.UserID = item.UserID
 		m.jobs[tenantKey(tenantID, item.Job.ID)] = item.Job
 	}
 	for _, state := range snapshot.States {
@@ -413,7 +414,7 @@ func (m *filmMemoryStore) CompareAndSwapFilmProject(ctx context.Context, tenantI
 
 func (m *filmMemoryStore) CreateFilmGenerationBatch(
 	_ context.Context,
-	tenantID, _ string, projectID string,
+	tenantID, userID string, projectID string,
 	expectedRevision int,
 	document []byte,
 	reservations []store.FilmGenerationReservation,
@@ -442,7 +443,9 @@ func (m *filmMemoryStore) CreateFilmGenerationBatch(
 		}
 	}
 	for _, reservation := range reservations {
-		m.jobs[tenantKey(tenantID, reservation.Job.ID)] = reservation.Job
+		job := reservation.Job
+		job.UserID = userID
+		m.jobs[tenantKey(tenantID, job.ID)] = job
 	}
 	m.lastReservations = append([]store.FilmGenerationReservation(nil), reservations...)
 	record.Revision++

@@ -21,6 +21,9 @@ var codexImageExtensions = map[string]string{
 }
 
 func (s *Server) uploadCodexAttachments(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxCodexAttachmentBytes+(1<<20))
 	if err := r.ParseMultipartForm(maxCodexAttachmentBytes + (1 << 20)); err != nil {
 		http.Error(w, "invalid or oversized Codex attachments", http.StatusBadRequest)

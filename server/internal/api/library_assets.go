@@ -11,17 +11,8 @@ import (
 	"github.com/openboard/openboard/server/internal/store"
 )
 
-func isTenantAdmin(user store.AuthUser) bool {
-	switch strings.ToLower(strings.TrimSpace(user.Role)) {
-	case "owner", "admin":
-		return true
-	default:
-		return false
-	}
-}
-
 func (s *Server) requireLibraryAdmin(w http.ResponseWriter, r *http.Request) bool {
-	return s.requireTenantAdmin(w, r, "library unavailable")
+	return s.requireTenantOwner(w, r, "tenant library unavailable")
 }
 
 func (s *Server) listLibraryAssets(w http.ResponseWriter, r *http.Request) {

@@ -54,7 +54,7 @@ func sameStoragePoolProviderConfiguration(left, right tenantStoragePoolProvider)
 }
 
 func (s *Server) getAdminStoragePool(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "storage pool unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant storage pool unavailable") {
 		return
 	}
 	webDAVEnabled := "false"
@@ -117,7 +117,7 @@ func (s *Server) getAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "storage pool unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant storage pool unavailable") {
 		return
 	}
 	var input []tenantStoragePoolProvider
@@ -179,6 +179,13 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 			}
 			provider.SecretBindingID = previous.SecretBindingID
 		} else {
+			// A platform administrator approves the server-side private-network
+			// destination once. The tenant Owner may later adjust operational
+			// fields without needing a standing platform grant, while endpoint and
+			// private-network flags remain immutable for this provider ID.
+			if provider.AllowPrivate && !s.requirePlatformAdmin(w, r) {
+				return
+			}
 			if provider.Kind == "webdav" && !webDAVEnabled {
 				http.Error(w, "WebDAV media storage is disabled", http.StatusNotFound)
 				return
@@ -217,7 +224,7 @@ func (s *Server) putAdminStoragePool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putAdminStoragePoolSecret(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "storage pool unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant storage pool unavailable") {
 		return
 	}
 	var input tenantStoragePoolCredential
@@ -279,7 +286,7 @@ func (s *Server) putAdminStoragePoolSecret(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) deleteAdminStoragePoolProvider(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "storage pool unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant storage pool unavailable") {
 		return
 	}
 	tenantID, id := tenantIDFrom(r), chi.URLParam(r, "id")

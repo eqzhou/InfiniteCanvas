@@ -5,17 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
 )
 
 const workflowTemplateStateKey = "workflow-templates"
+const workflowTemplateUserStateKeyPrefix = "__user_workflow_templates_v1:"
 const maxWorkflowTemplateDocumentBytes = 8 << 20
 
 type workflowTemplateDocument struct {
 	Version   int                `json:"version"`
 	Templates []workflowTemplate `json:"templates"`
+}
+
+func workflowTemplateStorageKey(r *http.Request) string {
+	if user, ok := authUserFrom(r.Context()); ok {
+		if id := strings.TrimSpace(user.ID); id != "" && len(id) <= 128 {
+			return workflowTemplateUserStateKeyPrefix + id
+		}
+	}
+	return workflowTemplateStateKey
 }
 
 func (s *Server) loadWorkflowTemplates(r *http.Request) ([]workflowTemplate, error) {
@@ -24,7 +35,7 @@ func (s *Server) loadWorkflowTemplates(r *http.Request) ([]workflowTemplate, err
 }
 
 func (s *Server) loadWorkflowTemplateSnapshot(r *http.Request) ([]workflowTemplate, []byte, error) {
-	value, err := s.store.GetState(r.Context(), tenantIDFrom(r), workflowTemplateStateKey)
+	value, err := s.store.GetState(r.Context(), tenantIDFrom(r), workflowTemplateStorageKey(r))
 	if errors.Is(err, store.ErrNotFound) {
 		return []workflowTemplate{}, nil, nil
 	}
@@ -56,7 +67,7 @@ func (s *Server) persistWorkflowTemplatesCAS(r *http.Request, expected []byte, t
 	if err != nil {
 		return err
 	}
-	return s.store.CompareAndSwapState(r.Context(), tenantIDFrom(r), workflowTemplateStateKey, expected, value)
+	return s.store.CompareAndSwapState(r.Context(), tenantIDFrom(r), workflowTemplateStorageKey(r), expected, value)
 }
 
 func (s *Server) listWorkflowTemplates(w http.ResponseWriter, r *http.Request) {

@@ -73,6 +73,8 @@ func (s *Server) readTenantBlob(ctx context.Context, tenantID, key string, limit
 
 const maxStateBytes = 32 << 20
 
+const userConfigStateKeyPrefix = "__user_config_v1:"
+
 type blobReservation struct {
 	ID    string `json:"id"`
 	Bytes int64  `json:"bytes"`
@@ -90,9 +92,12 @@ var stateKeys = map[string]struct{}{
 }
 
 func requestStateStorageKey(r *http.Request, key string) (string, bool) {
-	if key == "config" {
-		if user, ok := authUserFrom(r.Context()); ok && !isTenantAdmin(user) {
-			return "__user_config_v1:" + user.ID, false
+	if key == "config" && authMode() != "off" {
+		if user, ok := authUserFrom(r.Context()); ok {
+			id := strings.TrimSpace(user.ID)
+			if id != "" && len(id) <= 128 {
+				return userConfigStateKeyPrefix + id, false
+			}
 		}
 	}
 	return key, true
@@ -201,11 +206,11 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// Config contains tenant-wide provider destinations. Keep it tenant scoped:
-	// otherwise a member could rebind an existing channel ID to an attacker
-	// endpoint and cause the server to send the tenant's stored credential there.
+	// Account-backed config is always personal, including for tenant Owners.
+	// Tenant provider destinations and credentials live behind the explicit
+	// /api/tenant/channels control plane instead of being inferred from a role.
 	storageKey, tenantWide := requestStateStorageKey(r, key)
-	if key == "config" && tenantWide && !s.requireTenantAdmin(w, r, "state unavailable") {
+	if key == "config" && tenantWide && !s.requireTenantOwner(w, r, "tenant state unavailable") {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxStateBytes)
@@ -216,6 +221,10 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID := tenantIDFrom(r)
 	if key == "config" && !tenantWide {
+		if err := validatePersonalChannelDestinations(value); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		_, _, _, _, currentConfig, _, _, readErr := s.currentConfigBundle(r)
 		if readErr != nil {
 			http.Error(w, "failed to read config bundle", http.StatusInternalServerError)

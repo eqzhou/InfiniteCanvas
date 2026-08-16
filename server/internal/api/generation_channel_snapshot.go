@@ -16,6 +16,7 @@ import (
 // destination, protocol, model and encrypted credential selected at creation.
 // This prevents later administrative changes from silently rerouting retries.
 type generationChannelSnapshot struct {
+	Source         string         `json:"source,omitempty"`
 	ProviderID     string         `json:"providerId"`
 	BaseURL        string         `json:"baseUrl"`
 	Protocol       string         `json:"protocol"`
@@ -33,6 +34,10 @@ func generationChannelTimeout(snapshot *generationChannelSnapshot) (time.Duratio
 		return 0, errors.New("invalid generation channel timeout")
 	}
 	return time.Duration(snapshot.TimeoutSeconds) * time.Second, nil
+}
+
+func validateGenerationSnapshotDestination(snapshot generationChannelSnapshot) error {
+	return validateAccountManagedChannelURL(snapshot.BaseURL)
 }
 
 func generationProviderContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -84,33 +89,44 @@ func (s *Server) openGenerationChannelSecret(tenantID, jobID, kind string, snaps
 	return string(plain), nil
 }
 
-func (s *Server) personalChannelExists(ctx context.Context, tenantID, providerID string) bool {
-	raw, err := s.store.GetState(ctx, tenantID, "config")
-	if err != nil || len(raw) > 1<<20 {
-		return false
+func generationCredentialStorageKeys(userID string) (string, string, error) {
+	if authMode() == "off" {
+		return "config", secretStateKey, nil
 	}
-	var config storedImageConfig
-	if unmarshalErr := jsonUnmarshalStrictEnough(raw, &config); unmarshalErr != nil {
-		return false
+	userID = strings.TrimSpace(userID)
+	if userID == "" || len(userID) > 128 {
+		return "", "", store.ErrUnauthorized
 	}
-	for _, channel := range config.Channels {
-		if channel.ID == providerID {
-			return true
-		}
-	}
-	return false
+	return userConfigStateKeyPrefix + userID, userSecretStateKeyPrefix + userID, nil
 }
 
-func (s *Server) generationSystemPrompt(ctx context.Context, tenantID string) string {
-	raw, err := s.store.GetState(ctx, tenantID, "config")
-	if err != nil || len(raw) > 1<<20 {
-		return ""
+func generationContextUserID(ctx context.Context) string {
+	if user, ok := authUserFrom(ctx); ok {
+		return user.ID
+	}
+	return ""
+}
+
+func (s *Server) loadGenerationConfig(ctx context.Context, tenantID, userID string) (storedImageConfig, bool, error) {
+	configKey, _, err := generationCredentialStorageKeys(userID)
+	if err != nil {
+		return storedImageConfig{}, false, err
+	}
+	raw, err := s.store.GetState(ctx, tenantID, configKey)
+	if errors.Is(err, store.ErrNotFound) {
+		return storedImageConfig{}, false, nil
+	}
+	if err != nil {
+		return storedImageConfig{}, false, err
+	}
+	if len(raw) > 1<<20 {
+		return storedImageConfig{}, false, errors.New("generation config exceeds limits")
 	}
 	var config storedImageConfig
-	if json.Unmarshal(raw, &config) != nil || len(config.SystemPrompt) > 20_000 {
-		return ""
+	if jsonUnmarshalStrictEnough(raw, &config) != nil || len(config.Channels) > 100 || len(config.SystemPrompt) > 20_000 {
+		return storedImageConfig{}, false, errors.New("invalid generation config")
 	}
-	return config.SystemPrompt
+	return config, true, nil
 }
 
 func jsonUnmarshalStrictEnough(value []byte, output any) error {
@@ -219,12 +235,19 @@ func publicGenerationJobPage(page store.GenerationJobPage) store.GenerationJobPa
 }
 
 func (s *Server) snapshotGenerationChannel(ctx context.Context, tenantID, kind, jobID, providerID, requestedModel string) (string, *generationChannelSnapshot, error) {
-	if providerID != sharedChannelAutoID && s.personalChannelExists(ctx, tenantID, providerID) {
-		return providerID, nil, nil
+	config, _, err := s.loadGenerationConfig(ctx, tenantID, generationContextUserID(ctx))
+	if err != nil {
+		return "", nil, err
+	}
+	if providerID != sharedChannelAutoID {
+		for _, channel := range config.Channels {
+			if channel.ID == providerID {
+				return providerID, nil, nil
+			}
+		}
 	}
 	var channel adminChannelPublic
 	var apiKey string
-	var err error
 	if providerID == sharedChannelAutoID {
 		channel, err = s.selectSharedChannel(ctx, tenantID, kind, jobID, requestedModel)
 		if err == nil {
@@ -238,6 +261,11 @@ func (s *Server) snapshotGenerationChannel(ctx context.Context, tenantID, kind, 
 	}
 	if err != nil {
 		return "", nil, err
+	}
+	if channel.Source != "platform" {
+		if err := validateAccountManagedChannelURL(channel.BaseURL); err != nil {
+			return "", nil, err
+		}
 	}
 	model := strings.TrimSpace(requestedModel)
 	if model == "" {
@@ -257,7 +285,7 @@ func (s *Server) snapshotGenerationChannel(ctx context.Context, tenantID, kind, 
 		return "", nil, err
 	}
 	return channel.ID, &generationChannelSnapshot{
-		ProviderID: channel.ID, BaseURL: channel.BaseURL, Protocol: channel.Protocol, Model: model,
-		TimeoutSeconds: channel.TimeoutSeconds, SystemPrompt: s.generationSystemPrompt(ctx, tenantID), Secret: sealed,
+		Source: channel.Source, ProviderID: channel.ID, BaseURL: channel.BaseURL, Protocol: channel.Protocol, Model: model,
+		TimeoutSeconds: channel.TimeoutSeconds, SystemPrompt: config.SystemPrompt, Secret: sealed,
 	}, nil
 }

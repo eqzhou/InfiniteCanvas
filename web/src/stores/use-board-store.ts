@@ -46,7 +46,7 @@ import {
   uploadMedia,
   resolveObjectUrl,
 } from "@/services/storage";
-import { replaceCompleteWorkspace } from "@/services/workspace-transactions";
+import { replaceCompleteWorkspace, type TenantWorkspaceSnapshot } from "@/services/workspace-transactions";
 import { ConfigPreconditionError, hasPersistedProjectChanges, SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
 import type { GenerationDefaults } from "@/lib/generation-defaults";
@@ -1382,13 +1382,11 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     if ((imported.films?.length ?? 0) > 0) {
       throw new Error("Film workspace replacement requires the complete bundle transaction");
     }
-    const workspace: Omit<WorkspaceSnapshot, "films"> = {
+    const workspace: TenantWorkspaceSnapshot = {
       projects: imported.projects,
       assets: imported.assets,
       prompts: imported.prompts,
-      config: imported.config,
       generationJobs: imported.generationJobs,
-      workflowTemplates: imported.workflowTemplates,
     };
     await replaceCompleteWorkspace({ snapshot: workspace, films: [] });
     adoptCommittedWorkspace(imported);
@@ -1410,9 +1408,7 @@ export function adoptCommittedProject(project: BoardProject): void {
 export function adoptCommittedWorkspace(snapshot: WorkspaceSnapshot): void {
   const raw = structuredClone(snapshot);
   const importedAudioRoles = migrateLegacyAudioRoles(raw.projects, raw.config.audioRoles);
-  const config = raw.config.audioRoles === undefined
-    ? raw.config
-    : { ...raw.config, audioRoles: undefined };
+  const config = structuredClone(useBoardStore.getState().config);
   histories.clear();
   useBoardStore.setState({
     projects: importedAudioRoles.projects,

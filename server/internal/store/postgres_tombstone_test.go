@@ -54,6 +54,28 @@ func tombstoneProjectDocument(t *testing.T, title string, updatedAt time.Time) [
 	return document
 }
 
+func TestGenerationJobOwnershipPersistsAndFiltersListings(t *testing.T) {
+	backend := openTombstoneTestStore(t)
+	tenantID := seedTombstoneTenant(t, backend)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, job := range []GenerationJob{
+		{ID: "owned-job-a", UserID: "user-a", Kind: "image", Status: "succeeded", Prompt: "a", Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now},
+		{ID: "owned-job-b", UserID: "user-b", Kind: "image", Status: "succeeded", Prompt: "b", Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := backend.CreateGenerationJob(t.Context(), tenantID, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, err := backend.GetGenerationJob(t.Context(), tenantID, "owned-job-a")
+	if err != nil || loaded.UserID != "user-a" {
+		t.Fatalf("loaded owner = %q err=%v", loaded.UserID, err)
+	}
+	page, err := backend.ListGenerationJobs(t.Context(), tenantID, GenerationJobQuery{UserID: "user-a", Page: 1, PageSize: 20})
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "owned-job-a" || page.Items[0].UserID != "user-a" {
+		t.Fatalf("filtered jobs = %#v err=%v", page, err)
+	}
+}
+
 // A tab that still holds a pre-delete document must not be able to autosave the
 // project back into existence. Upstream keeps a tombstone for exactly this reason.
 func TestDeletedProjectResistsStaleAutosave(t *testing.T) {

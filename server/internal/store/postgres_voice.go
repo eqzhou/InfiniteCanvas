@@ -222,6 +222,7 @@ func (s *PostgresStore) CreateVoiceCloneBatch(ctx context.Context, tenantID, use
 
 func (s *PostgresStore) createVoiceCloneBatchOnce(ctx context.Context, tenantID, userID, projectID, idempotencyKeyHash string, value VoiceIdentityVersion, job GenerationJob, units int, usageMeta json.RawMessage, expectedCredits int) (VoiceIdentityVersion, bool, error) {
 	tenantID = normalizeTenantID(tenantID)
+	userID = strings.TrimSpace(userID)
 	var binding struct {
 		Executor        string `json:"executor"`
 		ProjectID       string `json:"projectId"`
@@ -229,7 +230,7 @@ func (s *PostgresStore) createVoiceCloneBatchOnce(ctx context.Context, tenantID,
 		VersionID       string `json:"versionId"`
 		ConsentID       string `json:"consentId"`
 	}
-	if strings.TrimSpace(userID) == "" || projectID == "" || !validVoiceSHA256(idempotencyKeyHash) || value.ID == "" || value.VoiceIdentityID == "" || len(value.SampleIDs) == 0 || len(value.SampleIDs) > 10 ||
+	if userID == "" || len(userID) > 128 || projectID == "" || !validVoiceSHA256(idempotencyKeyHash) || value.ID == "" || value.VoiceIdentityID == "" || len(value.SampleIDs) == 0 || len(value.SampleIDs) > 10 ||
 		value.GenerationJobID != job.ID || value.ProjectID != projectID || job.ProjectID != projectID || job.Kind != "audio" || job.Status != "queued" ||
 		value.ProviderID == "" || value.Model == "" || value.ProviderID != job.ProviderID || value.Model != job.Model || units < 1 || units > 1_000 || expectedCredits < 1 || expectedCredits > 1_000_000_000 ||
 		json.Unmarshal(job.Parameters, &binding) != nil || binding.Executor != "voice-clone" || binding.ProjectID != projectID || binding.VoiceIdentityID != value.VoiceIdentityID ||
@@ -303,9 +304,9 @@ func (s *PostgresStore) createVoiceCloneBatchOnce(ctx context.Context, tenantID,
 		return VoiceIdentityVersion{}, false, err
 	}
 	inserted, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-		(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
-		VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		ON CONFLICT (tenant_id,id) DO NOTHING`, tenantID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt,
+		(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+		VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		ON CONFLICT (tenant_id,id) DO NOTHING`, tenantID, userID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt,
 		job.ProviderID, job.Model, job.Parameters, job.Result, job.Error, jobCreatedAt, jobUpdatedAt)
 	if err != nil {
 		return VoiceIdentityVersion{}, false, err

@@ -10,10 +10,34 @@ import (
 	"github.com/openboard/openboard/server/internal/store"
 )
 
-const sitePolicyStateKey = "sitePolicy"
+const (
+	// sitePolicyStateKey is the legacy mixed-scope document. It is read as a
+	// migration fallback, but new writes use the explicit keys below.
+	sitePolicyStateKey     = "sitePolicy"
+	tenantPolicyStateKey   = "tenantPolicy"
+	platformPolicyStateKey = "platformPolicy"
+	policySaveMaxAttempts  = 8
+)
 
-// SitePolicy is the tenant admin-controlled policy surface from Tiger public docs:
-// registration, custom model channels, and cloud-channel generation.
+type PlatformPolicy struct {
+	AllowRegister  bool `json:"allowRegister"`
+	LinuxDoEnabled bool `json:"linuxDoEnabled"`
+}
+
+type TenantPolicy struct {
+	AllowCustomChannel bool     `json:"allowCustomChannel"`
+	AllowCloudChannel  bool     `json:"allowCloudChannel"`
+	AvailableModels    []string `json:"availableModels,omitempty"`
+	DefaultModel       string   `json:"defaultModel,omitempty"`
+	DefaultTextModel   string   `json:"defaultTextModel,omitempty"`
+	DefaultImageModel  string   `json:"defaultImageModel,omitempty"`
+	DefaultVideoModel  string   `json:"defaultVideoModel,omitempty"`
+	DefaultAudioModel  string   `json:"defaultAudioModel,omitempty"`
+}
+
+// SitePolicy is the public compatibility projection. It combines one
+// platform-owned field with tenant-owned generation policy and is read-only for
+// ordinary clients. Mixed writes require both independent capabilities.
 type SitePolicy struct {
 	AllowRegister      bool `json:"allowRegister"`
 	AllowCustomChannel bool `json:"allowCustomChannel"`
@@ -45,9 +69,43 @@ func defaultSitePolicy() SitePolicy {
 	}
 }
 
-func normalizeSitePolicy(policy SitePolicy) SitePolicy {
-	// linuxDoEnabled is derived from process env and is not persisted.
-	policy.LinuxDoEnabled = false
+func defaultPlatformPolicy() PlatformPolicy {
+	return PlatformPolicy{AllowRegister: true}
+}
+
+func defaultTenantPolicy() TenantPolicy {
+	return TenantPolicy{AllowCustomChannel: true, AllowCloudChannel: true}
+}
+
+func tenantPolicyFromSite(policy SitePolicy) TenantPolicy {
+	return TenantPolicy{
+		AllowCustomChannel: policy.AllowCustomChannel,
+		AllowCloudChannel:  policy.AllowCloudChannel,
+		AvailableModels:    policy.AvailableModels,
+		DefaultModel:       policy.DefaultModel,
+		DefaultTextModel:   policy.DefaultTextModel,
+		DefaultImageModel:  policy.DefaultImageModel,
+		DefaultVideoModel:  policy.DefaultVideoModel,
+		DefaultAudioModel:  policy.DefaultAudioModel,
+	}
+}
+
+func sitePolicyFromScopes(platform PlatformPolicy, tenant TenantPolicy) SitePolicy {
+	return SitePolicy{
+		AllowRegister:      platform.AllowRegister,
+		AllowCustomChannel: tenant.AllowCustomChannel,
+		AllowCloudChannel:  tenant.AllowCloudChannel,
+		LinuxDoEnabled:     platform.LinuxDoEnabled,
+		AvailableModels:    tenant.AvailableModels,
+		DefaultModel:       tenant.DefaultModel,
+		DefaultTextModel:   tenant.DefaultTextModel,
+		DefaultImageModel:  tenant.DefaultImageModel,
+		DefaultVideoModel:  tenant.DefaultVideoModel,
+		DefaultAudioModel:  tenant.DefaultAudioModel,
+	}
+}
+
+func normalizeTenantPolicy(policy TenantPolicy) TenantPolicy {
 	policy.AvailableModels = cleanSitePolicyModels(policy.AvailableModels)
 	policy.DefaultModel = strings.TrimSpace(policy.DefaultModel)
 	policy.DefaultTextModel = strings.TrimSpace(policy.DefaultTextModel)
@@ -55,6 +113,11 @@ func normalizeSitePolicy(policy SitePolicy) SitePolicy {
 	policy.DefaultVideoModel = strings.TrimSpace(policy.DefaultVideoModel)
 	policy.DefaultAudioModel = strings.TrimSpace(policy.DefaultAudioModel)
 	return policy
+}
+
+func normalizeSitePolicy(policy SitePolicy) SitePolicy {
+	tenant := normalizeTenantPolicy(tenantPolicyFromSite(policy))
+	return sitePolicyFromScopes(PlatformPolicy{AllowRegister: policy.AllowRegister}, tenant)
 }
 
 // cleanSitePolicyModels trims, drops blanks and keeps first-seen order.
@@ -83,7 +146,7 @@ func cleanSitePolicyModels(values []string) []string {
 
 // validateSitePolicyModels rejects oversized catalogs and defaults that name a
 // model outside a non-empty allow list, so the stored catalog is always usable.
-func validateSitePolicyModels(policy SitePolicy) error {
+func validateTenantPolicyModels(policy TenantPolicy) error {
 	if len(policy.AvailableModels) > maxSitePolicyModels {
 		return errors.New("too many models")
 	}
@@ -113,25 +176,20 @@ func validateSitePolicyModels(policy SitePolicy) error {
 	return nil
 }
 
+func validateSitePolicyModels(policy SitePolicy) error {
+	return validateTenantPolicyModels(tenantPolicyFromSite(policy))
+}
+
 func (s *Server) loadSitePolicy(ctx context.Context, tenantID string) (SitePolicy, error) {
-	policy := defaultSitePolicy()
-	if s == nil || s.store == nil {
-		return policy, nil
-	}
-	raw, err := s.store.GetState(ctx, tenantID, sitePolicyStateKey)
-	if errors.Is(err, store.ErrNotFound) {
-		return policy, nil
-	}
+	platform, err := s.loadPlatformPolicy(ctx)
 	if err != nil {
-		return policy, err
-	}
-	if len(raw) == 0 {
-		return policy, nil
-	}
-	if err := json.Unmarshal(raw, &policy); err != nil {
 		return defaultSitePolicy(), err
 	}
-	return normalizeSitePolicy(policy), nil
+	tenant, err := s.loadTenantPolicy(ctx, tenantID)
+	if err != nil {
+		return defaultSitePolicy(), err
+	}
+	return sitePolicyFromScopes(platform, tenant), nil
 }
 
 func (s *Server) saveSitePolicy(ctx context.Context, tenantID string, policy SitePolicy) error {
@@ -139,15 +197,179 @@ func (s *Server) saveSitePolicy(ctx context.Context, tenantID string, policy Sit
 		return errors.New("store unavailable")
 	}
 	policy = normalizeSitePolicy(policy)
+	if tenantID != store.DefaultTenantID {
+		// Historical behavior scoped the mixed endpoint's tenant fields to the
+		// caller and changed registration only from the default tenant.
+		return s.saveTenantPolicy(ctx, tenantID, tenantPolicyFromSite(policy))
+	}
+	tenant := normalizeTenantPolicy(tenantPolicyFromSite(policy))
+	platform := PlatformPolicy{AllowRegister: policy.AllowRegister}
+	tenantRaw, err := json.Marshal(tenant)
+	if err != nil {
+		return err
+	}
+	platformRaw, err := json.Marshal(platform)
+	if err != nil {
+		return err
+	}
+	legacyRaw, err := json.Marshal(sitePolicyFromScopes(platform, tenant))
+	if err != nil {
+		return err
+	}
+	keys := []string{tenantPolicyStateKey, platformPolicyStateKey, sitePolicyStateKey}
+	for range policySaveMaxAttempts {
+		current, err := s.store.GetStates(ctx, tenantID, keys)
+		if err != nil {
+			return err
+		}
+		err = s.store.CompareAndSwapStates(ctx, tenantID, []store.StateMutation{
+			{Key: tenantPolicyStateKey, Expected: current[tenantPolicyStateKey], Value: tenantRaw},
+			{Key: platformPolicyStateKey, Expected: current[platformPolicyStateKey], Value: platformRaw},
+			{Key: sitePolicyStateKey, Expected: current[sitePolicyStateKey], Value: legacyRaw},
+		})
+		if !errors.Is(err, store.ErrConflict) {
+			return err
+		}
+	}
+	return store.ErrConflict
+}
+
+func tenantPolicyFromState(scopedRaw, legacyRaw []byte) (TenantPolicy, error) {
+	policy := defaultTenantPolicy()
+	if len(scopedRaw) != 0 {
+		if err := json.Unmarshal(scopedRaw, &policy); err != nil {
+			return defaultTenantPolicy(), err
+		}
+		return normalizeTenantPolicy(policy), nil
+	}
+	if len(legacyRaw) == 0 {
+		return policy, nil
+	}
+	var legacy SitePolicy
+	if json.Unmarshal(legacyRaw, &legacy) != nil {
+		return policy, nil
+	}
+	return normalizeTenantPolicy(tenantPolicyFromSite(legacy)), nil
+}
+
+func (s *Server) loadTenantPolicy(ctx context.Context, tenantID string) (TenantPolicy, error) {
+	policy := defaultTenantPolicy()
+	if s == nil || s.store == nil {
+		return policy, nil
+	}
+	values, err := s.store.GetStates(ctx, tenantID, []string{tenantPolicyStateKey, sitePolicyStateKey})
+	if err != nil {
+		return policy, err
+	}
+	return tenantPolicyFromState(values[tenantPolicyStateKey], values[sitePolicyStateKey])
+}
+
+func (s *Server) saveTenantPolicy(ctx context.Context, tenantID string, policy TenantPolicy) error {
+	if s == nil || s.store == nil {
+		return errors.New("store unavailable")
+	}
+	policy = normalizeTenantPolicy(policy)
 	raw, err := json.Marshal(policy)
 	if err != nil {
 		return err
 	}
-	return s.store.PutState(ctx, tenantID, sitePolicyStateKey, raw)
+	keys := []string{tenantPolicyStateKey, sitePolicyStateKey}
+	if tenantID == store.DefaultTenantID {
+		keys = append(keys, platformPolicyStateKey)
+	}
+	for range policySaveMaxAttempts {
+		current, err := s.store.GetStates(ctx, tenantID, keys)
+		if err != nil {
+			return err
+		}
+		var platform PlatformPolicy
+		if tenantID == store.DefaultTenantID {
+			platform, err = platformPolicyFromState(current[platformPolicyStateKey], current[sitePolicyStateKey])
+		} else {
+			platform, err = s.loadPlatformPolicy(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		legacyRaw, err := json.Marshal(sitePolicyFromScopes(platform, policy))
+		if err != nil {
+			return err
+		}
+		err = s.store.CompareAndSwapStates(ctx, tenantID, []store.StateMutation{
+			{Key: tenantPolicyStateKey, Expected: current[tenantPolicyStateKey], Value: raw},
+			{Key: sitePolicyStateKey, Expected: current[sitePolicyStateKey], Value: legacyRaw},
+		})
+		if !errors.Is(err, store.ErrConflict) {
+			return err
+		}
+	}
+	return store.ErrConflict
 }
 
-func (s *Server) requireSitePolicyAdmin(w http.ResponseWriter, r *http.Request) bool {
-	return s.requireTenantAdmin(w, r, "site policy unavailable")
+func platformPolicyFromState(scopedRaw, legacyRaw []byte) (PlatformPolicy, error) {
+	policy := defaultPlatformPolicy()
+	if len(scopedRaw) != 0 {
+		if err := json.Unmarshal(scopedRaw, &policy); err != nil {
+			return defaultPlatformPolicy(), err
+		}
+		policy.LinuxDoEnabled = false
+		return policy, nil
+	}
+	if len(legacyRaw) == 0 {
+		return policy, nil
+	}
+	var legacy SitePolicy
+	if json.Unmarshal(legacyRaw, &legacy) != nil {
+		return policy, nil
+	}
+	policy.AllowRegister = legacy.AllowRegister
+	return policy, nil
+}
+
+func (s *Server) loadPlatformPolicy(ctx context.Context) (PlatformPolicy, error) {
+	policy := defaultPlatformPolicy()
+	if s == nil || s.store == nil {
+		return policy, nil
+	}
+	values, err := s.store.GetStates(ctx, store.DefaultTenantID, []string{platformPolicyStateKey, sitePolicyStateKey})
+	if err != nil {
+		return policy, err
+	}
+	return platformPolicyFromState(values[platformPolicyStateKey], values[sitePolicyStateKey])
+}
+
+func (s *Server) savePlatformPolicy(ctx context.Context, policy PlatformPolicy) error {
+	if s == nil || s.store == nil {
+		return errors.New("store unavailable")
+	}
+	policy.LinuxDoEnabled = false
+	raw, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+	keys := []string{platformPolicyStateKey, tenantPolicyStateKey, sitePolicyStateKey}
+	for range policySaveMaxAttempts {
+		current, err := s.store.GetStates(ctx, store.DefaultTenantID, keys)
+		if err != nil {
+			return err
+		}
+		tenant, err := tenantPolicyFromState(current[tenantPolicyStateKey], current[sitePolicyStateKey])
+		if err != nil {
+			return err
+		}
+		legacyRaw, err := json.Marshal(sitePolicyFromScopes(policy, tenant))
+		if err != nil {
+			return err
+		}
+		err = s.store.CompareAndSwapStates(ctx, store.DefaultTenantID, []store.StateMutation{
+			{Key: platformPolicyStateKey, Expected: current[platformPolicyStateKey], Value: raw},
+			{Key: sitePolicyStateKey, Expected: current[sitePolicyStateKey], Value: legacyRaw},
+		})
+		if !errors.Is(err, store.ErrConflict) {
+			return err
+		}
+	}
+	return store.ErrConflict
 }
 
 func (s *Server) getSitePolicy(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +390,9 @@ func (s *Server) getSitePolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putSitePolicy(w http.ResponseWriter, r *http.Request) {
-	if !s.requireSitePolicyAdmin(w, r) {
+	// The legacy payload mixes platform and tenant fields. It is writable only by
+	// an actor holding both capabilities; all normal UI uses the scoped routes.
+	if !s.requireTenantOwner(w, r, "site policy unavailable") || !s.requirePlatformAdmin(w, r) {
 		return
 	}
 	var body SitePolicy
@@ -192,12 +416,76 @@ func (s *Server) putSitePolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, body)
 }
 
+func (s *Server) getTenantPolicy(w http.ResponseWriter, r *http.Request) {
+	policy, err := s.loadTenantPolicy(r.Context(), tenantIDFrom(r))
+	if err != nil {
+		http.Error(w, "failed to load tenant policy", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, policy)
+}
+
+func (s *Server) putTenantPolicy(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant policy unavailable") {
+		return
+	}
+	var body TenantPolicy
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	body = normalizeTenantPolicy(body)
+	if err := validateTenantPolicyModels(body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.saveTenantPolicy(r.Context(), tenantIDFrom(r), body); err != nil {
+		http.Error(w, "failed to save tenant policy", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, body)
+}
+
+func (s *Server) getPlatformPolicy(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePlatformAdmin(w, r) {
+		return
+	}
+	policy, err := s.loadPlatformPolicy(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load platform policy", http.StatusInternalServerError)
+		return
+	}
+	policy.LinuxDoEnabled = linuxDoOAuthConfigured()
+	writeJSON(w, policy)
+}
+
+func (s *Server) putPlatformPolicy(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePlatformAdmin(w, r) {
+		return
+	}
+	var body PlatformPolicy
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&body) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.savePlatformPolicy(r.Context(), body); err != nil {
+		http.Error(w, "failed to save platform policy", http.StatusInternalServerError)
+		return
+	}
+	body.LinuxDoEnabled = linuxDoOAuthConfigured()
+	writeJSON(w, body)
+}
+
 // registrationAllowed reports whether open registration is currently permitted.
-func (s *Server) registrationAllowed(ctx context.Context, tenantID string) (bool, error) {
+func (s *Server) registrationAllowed(ctx context.Context, _ string) (bool, error) {
 	if authMode() == "off" {
 		return false, nil
 	}
-	policy, err := s.loadSitePolicy(ctx, tenantID)
+	policy, err := s.loadPlatformPolicy(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -206,7 +494,7 @@ func (s *Server) registrationAllowed(ctx context.Context, tenantID string) (bool
 
 // cloudChannelAllowed reports whether backend/cloud generation proxy is permitted.
 func (s *Server) cloudChannelAllowed(ctx context.Context, tenantID string) (bool, error) {
-	policy, err := s.loadSitePolicy(ctx, tenantID)
+	policy, err := s.loadTenantPolicy(ctx, tenantID)
 	if err != nil {
 		return false, err
 	}
@@ -235,7 +523,7 @@ func (s *Server) modelAllowedByPolicy(ctx context.Context, tenantID, model strin
 		// configured; there is nothing the user chose to police here.
 		return true, nil
 	}
-	policy, err := s.loadSitePolicy(ctx, tenantID)
+	policy, err := s.loadTenantPolicy(ctx, tenantID)
 	if err != nil {
 		return false, err
 	}

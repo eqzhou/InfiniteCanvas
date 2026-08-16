@@ -172,7 +172,7 @@ export type FilmStageWaiver = {
   stageRevision: number;
   reason: string;
   actorId: string;
-  actorRole: "owner" | "admin";
+  actorRole: "owner" | "user" | "admin";
   createdAt: string;
   projectRevision: number;
   riskAccepted: true;

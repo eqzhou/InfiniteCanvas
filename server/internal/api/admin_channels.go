@@ -44,6 +44,7 @@ type sharedChannelPublic struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name"`
 	Protocol          string   `json:"protocol"`
+	Source            string   `json:"source"`
 	DefaultTextModel  string   `json:"defaultTextModel,omitempty"`
 	DefaultImageModel string   `json:"defaultImageModel,omitempty"`
 	DefaultVideoModel string   `json:"defaultVideoModel,omitempty"`
@@ -56,32 +57,71 @@ func (s *Server) getSharedChannels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []sharedChannelPublic{})
 		return
 	}
-	channels, err := s.loadAdminChannels(r.Context(), tenantIDFrom(r))
+	tenantID := tenantIDFrom(r)
+	channels, err := s.loadAdminChannels(r.Context(), tenantID)
 	if err != nil {
 		http.Error(w, "failed to load shared channels", http.StatusInternalServerError)
 		return
 	}
-	presence, err := s.adminChannelSecretPresence(r.Context(), tenantIDFrom(r))
+	presence, err := s.adminChannelSecretPresence(r.Context(), tenantID)
 	if err != nil {
 		http.Error(w, "failed to load shared channels", http.StatusInternalServerError)
 		return
 	}
-	result := make([]sharedChannelPublic, 0, len(channels)+1)
+	platformChannels, err := s.loadPlatformChannels(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load shared channels", http.StatusInternalServerError)
+		return
+	}
+	platformPresence, err := s.platformChannelSecretPresence(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load shared channels", http.StatusInternalServerError)
+		return
+	}
+	result := make([]sharedChannelPublic, 0, len(channels)+len(platformChannels)+1)
+	seen := make(map[string]struct{}, len(channels)+len(platformChannels))
 	for _, raw := range channels {
 		channel, message := normalizeAdminChannel(raw)
-		if message != "" || !channel.Enabled || !channel.AllowUserUse ||
+		channel.Source = "tenant"
+		if message != "" || validateAccountManagedChannelURL(channel.BaseURL) != nil {
+			continue
+		}
+		// A tenant definition intentionally shadows the platform channel with
+		// the same ID even when the tenant disabled it. This keeps discovery and
+		// execution semantics identical and lets an Owner opt their tenant out.
+		seen[channel.ID] = struct{}{}
+		if !channel.Enabled || !channel.AllowUserUse ||
 			(adminChannelRequiresSecret(channel) && !presence[channel.ID]) {
 			continue
 		}
 		result = append(result, sharedChannelPublic{
-			ID: channel.ID, Name: channel.Name, Protocol: channel.Protocol,
+			ID: channel.ID, Name: channel.Name, Protocol: channel.Protocol, Source: "tenant",
 			DefaultTextModel:  channel.DefaultTextModel,
 			DefaultImageModel: channel.DefaultImageModel, DefaultVideoModel: channel.DefaultVideoModel,
 			DefaultAudioModel: channel.DefaultAudioModel, Models: append([]string(nil), channel.Models...),
 		})
 	}
+	for _, raw := range platformChannels {
+		_, duplicate := seen[raw.ID]
+		if !platformChannelVisibleToTenant(raw, tenantID) {
+			continue
+		}
+		channel, message := normalizeAdminChannel(raw.adminChannel())
+		channel.Source = "platform"
+		if message != "" || !channel.Enabled || !channel.AllowUserUse || duplicate ||
+			(adminChannelRequiresSecret(channel) && !platformPresence[channel.ID]) {
+			continue
+		}
+		seen[channel.ID] = struct{}{}
+		result = append(result, sharedChannelPublic{
+			ID: channel.ID, Name: channel.Name, Protocol: channel.Protocol, Source: "platform",
+			DefaultTextModel: channel.DefaultTextModel, DefaultImageModel: channel.DefaultImageModel,
+			DefaultVideoModel: channel.DefaultVideoModel, DefaultAudioModel: channel.DefaultAudioModel,
+			Models: append([]string(nil), channel.Models...),
+		})
+	}
 	if len(result) > 0 {
-		result = append([]sharedChannelPublic{{ID: sharedChannelAutoID, Name: "共享渠道（自动）", Protocol: "openai"}}, result...)
+		result = append([]sharedChannelPublic{{ID: sharedChannelAutoID, Name: "共享渠道（自动）", Protocol: "openai", Source: "automatic"}}, result...)
 	}
 	writeJSON(w, result)
 }
@@ -354,6 +394,10 @@ func (s *Server) findAdminChannel(ctx context.Context, tenantID, id string) (adm
 	}
 	for _, channel := range channels {
 		if channel.ID == id {
+			channel.Source = "tenant"
+			if err := validateAccountManagedChannelURL(channel.BaseURL); err != nil {
+				return adminChannelPublic{}, err
+			}
 			return channel, nil
 		}
 	}
@@ -362,6 +406,19 @@ func (s *Server) findAdminChannel(ctx context.Context, tenantID, id string) (adm
 
 func (s *Server) resolveSharedChannel(ctx context.Context, tenantID, id string) (adminChannelPublic, string, error) {
 	channel, err := s.findAdminChannel(ctx, tenantID, id)
+	var secrets map[string]string
+	if errors.Is(err, store.ErrNotFound) {
+		channel, apiKey, platformErr := s.platformChannelForSharedUse(ctx, tenantID, id)
+		if platformErr != nil {
+			return adminChannelPublic{}, "", platformErr
+		}
+		channel.Source = "platform"
+		return validateResolvedSharedChannel(channel, apiKey)
+	}
+	if err != nil {
+		return adminChannelPublic{}, "", err
+	}
+	secrets, err = s.decryptAdminChannelSecrets(ctx, tenantID)
 	if err != nil {
 		return adminChannelPublic{}, "", err
 	}
@@ -369,11 +426,16 @@ func (s *Server) resolveSharedChannel(ctx context.Context, tenantID, id string) 
 	if message != "" || !channel.Enabled || !channel.AllowUserUse {
 		return adminChannelPublic{}, "", errors.New("shared channel is unavailable")
 	}
-	secrets, err := s.decryptAdminChannelSecrets(ctx, tenantID)
-	if err != nil {
-		return adminChannelPublic{}, "", err
-	}
 	apiKey := secrets[id]
+	return validateResolvedSharedChannel(channel, apiKey)
+}
+
+func validateResolvedSharedChannel(channel adminChannelPublic, apiKey string) (adminChannelPublic, string, error) {
+	if channel.Source != "platform" {
+		if err := validateAccountManagedChannelURL(channel.BaseURL); err != nil {
+			return adminChannelPublic{}, "", errors.New("shared channel destination is unavailable")
+		}
+	}
 	if adminChannelRequiresSecret(channel) && strings.TrimSpace(apiKey) == "" {
 		return adminChannelPublic{}, "", errors.New("shared channel secret is not configured")
 	}
@@ -437,15 +499,46 @@ func (s *Server) selectSharedChannel(ctx context.Context, tenantID, kind, routin
 	if err != nil {
 		return adminChannelPublic{}, err
 	}
-	eligible := make([]adminChannelPublic, 0, len(channels))
+	platformChannels, err := s.loadPlatformChannels(ctx)
+	if err != nil {
+		return adminChannelPublic{}, err
+	}
+	platformSecrets, err := s.decryptPlatformChannelSecrets(ctx)
+	if err != nil {
+		return adminChannelPublic{}, err
+	}
+	eligible := make([]adminChannelPublic, 0, len(channels)+len(platformChannels))
+	seen := make(map[string]struct{}, len(channels)+len(platformChannels))
 	totalWeight := uint64(0)
 	for _, raw := range channels {
 		channel, message := normalizeAdminChannel(raw)
-		if message != "" || !sharedChannelSupports(channel, kind, requestedModel) ||
+		channel.Source = "tenant"
+		if message != "" {
+			continue
+		}
+		// A tenant definition shadows the platform ID even when disabled or
+		// temporarily unusable, matching discovery and direct resolution.
+		seen[channel.ID] = struct{}{}
+		if validateAccountManagedChannelURL(channel.BaseURL) != nil || !sharedChannelSupports(channel, kind, requestedModel) ||
 			(adminChannelRequiresSecret(channel) && strings.TrimSpace(secrets[channel.ID]) == "") {
 			continue
 		}
 		eligible = append(eligible, channel)
+		totalWeight += uint64(channel.Weight)
+	}
+	for _, raw := range platformChannels {
+		_, duplicate := seen[raw.ID]
+		if !platformChannelVisibleToTenant(raw, tenantID) || duplicate {
+			continue
+		}
+		channel, message := normalizeAdminChannel(raw.adminChannel())
+		channel.Source = "platform"
+		if message != "" || !sharedChannelSupports(channel, kind, requestedModel) ||
+			(adminChannelRequiresSecret(channel) && strings.TrimSpace(platformSecrets[channel.ID]) == "") {
+			continue
+		}
+		eligible = append(eligible, channel)
+		seen[channel.ID] = struct{}{}
 		totalWeight += uint64(channel.Weight)
 	}
 	if len(eligible) == 0 || totalWeight == 0 {
@@ -500,8 +593,12 @@ func sharedChannelStoredValue(channel adminChannelPublic) storedImageChannel {
 }
 
 func adminChannelSecretAAD(tenantID string, channel adminChannelPublic) []byte {
+	stateKey := adminChannelSecretsStateKey
+	if tenantID == platformChannelSecretScope {
+		stateKey = platformChannelSecretsStateKey
+	}
 	return []byte(strings.Join([]string{
-		adminChannelSecretsStateKey,
+		stateKey,
 		tenantID,
 		channel.ID,
 		channel.Protocol,
@@ -707,7 +804,7 @@ func (s *Server) replaceAdminChannels(ctx context.Context, tenantID, expectedRev
 }
 
 func (s *Server) putAdminChannelSecret(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin channels unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
 		return
 	}
 	if s.secrets == nil {
@@ -787,7 +884,7 @@ func (s *Server) putAdminChannelSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteAdminChannel(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin channels unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
 		return
 	}
 	tenantID, id := tenantIDFrom(r), chi.URLParam(r, "id")
@@ -867,18 +964,32 @@ func (s *Server) fetchAdminChannelModels(ctx context.Context, tenantID, id strin
 	if err != nil || strings.TrimSpace(secrets[id]) == "" {
 		return nil, errors.New("channel secret is not configured")
 	}
+	return s.fetchChannelModels(ctx, channel, secrets[id])
+}
+
+func (s *Server) fetchChannelModels(ctx context.Context, channel adminChannelPublic, apiKey string) ([]string, error) {
+	channel, message := normalizeAdminChannel(channel)
+	if message != "" {
+		return nil, errors.New(message)
+	}
+	if !channel.Enabled {
+		return nil, errors.New("channel is disabled")
+	}
+	if channel.Protocol != "openai" && channel.Protocol != "apimart" {
+		return nil, errors.New("model discovery is unsupported for this protocol")
+	}
 	timeout := time.Duration(channel.TimeoutSeconds) * time.Second
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return fetchProviderModelsWithClient(requestCtx, providerModelConnection{
 		BaseURL:  channel.BaseURL,
-		APIKey:   secrets[id],
+		APIKey:   apiKey,
 		Protocol: channel.Protocol,
 	}, providerModelHTTPClient, true)
 }
 
 func (s *Server) getAdminChannelModels(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin channels unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
 		return
 	}
 	models, err := s.fetchAdminChannelModels(r.Context(), tenantIDFrom(r), chi.URLParam(r, "id"))
@@ -894,7 +1005,7 @@ func (s *Server) getAdminChannelModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) testAdminChannel(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin channels unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
 		return
 	}
 	modelCount, err := s.checkAdminChannelConnection(r.Context(), tenantIDFrom(r), chi.URLParam(r, "id"))
@@ -923,6 +1034,19 @@ func (s *Server) checkAdminChannelConnection(ctx context.Context, tenantID, id s
 		return 0, errors.New("channel secret is unavailable")
 	}
 	apiKey := strings.TrimSpace(secrets[id])
+	return s.checkChannelConnection(ctx, channel, apiKey)
+}
+
+func (s *Server) checkChannelConnection(ctx context.Context, channel adminChannelPublic, apiKey string) (int, error) {
+	channel, message := normalizeAdminChannel(channel)
+	if message != "" {
+		return 0, errors.New(message)
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if channel.Protocol == "openai" || channel.Protocol == "apimart" {
+		models, err := s.fetchChannelModels(ctx, channel, apiKey)
+		return len(models), err
+	}
 	if channel.Protocol == "azure" || channel.Protocol == "edge" {
 		if channel.Protocol == "azure" && apiKey == "" {
 			return 0, errors.New("channel secret is not configured")

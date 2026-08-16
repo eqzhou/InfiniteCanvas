@@ -76,6 +76,7 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
+		locale: "zh-CN",
         ...(chromiumExecutable ? { launchOptions: { executablePath: chromiumExecutable } } : {}),
       },
     },

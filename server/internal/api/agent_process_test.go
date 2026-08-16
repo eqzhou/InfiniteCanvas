@@ -182,15 +182,18 @@ func TestSanitizedAgentEnvironmentFiltersServiceSecrets(t *testing.T) {
 func TestAccountAgentExecutionRequiresExplicitOptIn(t *testing.T) {
 	authenticated := agentScope{tenantID: "tenant-a", userID: "user-a"}
 	t.Setenv("OPENBOARD_AGENT_ACCOUNT_EXECUTION", "")
-	if accountAgentExecutionAllowed(authenticated) {
+	if accountAgentExecutionAllowed(authenticated, true) {
 		t.Fatal("account-owned host agent execution was enabled by default")
 	}
 	if !accountAgentExecutionAllowed(agentScope{}) {
 		t.Fatal("auth-off local agent execution was disabled")
 	}
 	t.Setenv("OPENBOARD_AGENT_ACCOUNT_EXECUTION", "true")
-	if !accountAgentExecutionAllowed(authenticated) {
-		t.Fatal("explicit account execution opt-in was ignored")
+	if accountAgentExecutionAllowed(authenticated, false) {
+		t.Fatal("ordinary account received host execution from a global feature flag")
+	}
+	if !accountAgentExecutionAllowed(authenticated, true) {
+		t.Fatal("platform administrator execution opt-in was ignored")
 	}
 }
 

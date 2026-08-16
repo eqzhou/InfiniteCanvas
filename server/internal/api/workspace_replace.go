@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
-	"math/big"
 	"net/http"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -18,7 +15,7 @@ import (
 
 const maxWorkspaceReplaceBytes = 128 << 20
 
-var workspaceTransactionStateKeys = []string{"assets", "config", "prompts", workflowTemplateStateKey, secretStateKey}
+var workspaceTransactionStateKeys = []string{"assets", "prompts"}
 
 type workspaceReplaceRequest struct {
 	ExpectedVersion   string                `json:"expectedVersion"`
@@ -48,115 +45,12 @@ type workspaceRollbackRequest struct {
 	RestoreToken    string `json:"restoreToken"`
 }
 
-type workspaceJSONNumber string
-
-func canonicalWorkspaceJSONNumber(number json.Number) (workspaceJSONNumber, error) {
-	value := string(number)
-	sign := ""
-	if strings.HasPrefix(value, "-") {
-		sign, value = "-", value[1:]
-	}
-	exponent := new(big.Int)
-	exponent.SetInt64(0)
-	if index := strings.IndexAny(value, "eE"); index >= 0 {
-		if _, ok := exponent.SetString(value[index+1:], 10); !ok {
-			return "", errors.New("invalid JSON number")
-		}
-		value = value[:index]
-	}
-	fractionDigits := 0
-	if index := strings.IndexByte(value, '.'); index >= 0 {
-		fractionDigits = len(value) - index - 1
-		value = value[:index] + value[index+1:]
-	}
-	value = strings.TrimLeft(value, "0")
-	if value == "" {
-		return "0", nil
-	}
-	trailingZeros := len(value) - len(strings.TrimRight(value, "0"))
-	value = strings.TrimRight(value, "0")
-	exponent.Sub(exponent, big.NewInt(int64(fractionDigits)))
-	exponent.Add(exponent, big.NewInt(int64(trailingZeros)))
-	return workspaceJSONNumber(sign + value + "e" + exponent.String()), nil
-}
-
-func decodeStrictWorkspaceJSONValue(decoder *json.Decoder) (any, error) {
-	token, err := decoder.Token()
-	if err != nil {
-		return nil, err
-	}
-	delimiter, isDelimiter := token.(json.Delim)
-	if !isDelimiter {
-		if number, ok := token.(json.Number); ok {
-			return canonicalWorkspaceJSONNumber(number)
-		}
-		return token, nil
-	}
-	switch delimiter {
-	case '{':
-		object := map[string]any{}
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			key, ok := keyToken.(string)
-			if err != nil || !ok {
-				return nil, errors.New("invalid JSON object")
-			}
-			if _, duplicate := object[key]; duplicate {
-				return nil, errors.New("duplicate JSON object key")
-			}
-			value, err := decodeStrictWorkspaceJSONValue(decoder)
-			if err != nil {
-				return nil, err
-			}
-			object[key] = value
-		}
-		if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') {
-			return nil, errors.New("invalid JSON object")
-		}
-		return object, nil
-	case '[':
-		array := []any{}
-		for decoder.More() {
-			value, err := decodeStrictWorkspaceJSONValue(decoder)
-			if err != nil {
-				return nil, err
-			}
-			array = append(array, value)
-		}
-		if closing, err := decoder.Token(); err != nil || closing != json.Delim(']') {
-			return nil, errors.New("invalid JSON array")
-		}
-		return array, nil
-	default:
-		return nil, errors.New("invalid JSON delimiter")
-	}
-}
-
-func decodeStrictWorkspaceJSON(raw []byte) (any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	value, err := decodeStrictWorkspaceJSONValue(decoder)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("invalid trailing JSON data")
-	}
-	return value, nil
-}
-
-func workspaceJSONSemanticEqual(left, right []byte) bool {
-	leftValue, leftErr := decodeStrictWorkspaceJSON(left)
-	rightValue, rightErr := decodeStrictWorkspaceJSON(right)
-	return leftErr == nil && rightErr == nil && reflect.DeepEqual(leftValue, rightValue)
-}
-
 func normalizeWorkspaceVersion(value string) string {
 	return strings.Trim(strings.TrimSpace(value), `"`)
 }
 
 func validateWorkspaceReplacement(input workspaceReplaceRequest) (store.WorkspaceSnapshot, error) {
-	if input.Projects == nil || input.Films == nil || input.GenerationJobs == nil || input.Assets == nil || input.Config == nil || input.Prompts == nil || input.WorkflowTemplates == nil ||
+	if input.Projects == nil || input.Films == nil || input.GenerationJobs == nil || input.Assets == nil || input.Prompts == nil ||
 		len(input.Projects) > maxProjectCount || len(input.Films) > maxProjectCount || len(input.GenerationJobs) > maxGenerationRestoreItems {
 		return store.WorkspaceSnapshot{}, errors.New("workspace exceeds its project limit")
 	}
@@ -225,67 +119,23 @@ func validateWorkspaceReplacement(input workspaceReplaceRequest) (store.Workspac
 		value json.RawMessage
 		limit int
 	}{
-		{key: "assets", value: input.Assets, limit: maxStateBytes}, {key: "config", value: input.Config, limit: maxStateBytes},
-		{key: "prompts", value: input.Prompts, limit: maxStateBytes}, {key: workflowTemplateStateKey, value: input.WorkflowTemplates, limit: maxWorkflowTemplateDocumentBytes},
+		{key: "assets", value: input.Assets, limit: maxStateBytes},
+		{key: "prompts", value: input.Prompts, limit: maxStateBytes},
 	}
 	for _, state := range states {
 		total += len(state.value)
 		if len(state.value) == 0 || len(state.value) > state.limit || total > maxWorkspaceReplaceBytes || !json.Valid(state.value) {
 			return store.WorkspaceSnapshot{}, errors.New("workspace state is invalid or oversized")
 		}
-		if state.key == "config" {
-			if _, err := decodeStrictWorkspaceJSON(state.value); err != nil {
-				return store.WorkspaceSnapshot{}, errors.New("workspace state is invalid or oversized")
-			}
-		}
 		snapshot.States = append(snapshot.States, store.WorkspaceState{Key: state.key, Exists: true, Value: append([]byte(nil), state.value...)})
-	}
-	var templates workflowTemplateDocument
-	decoder := json.NewDecoder(bytes.NewReader(input.WorkflowTemplates))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&templates) != nil || ensureJSONEOF(decoder) != nil || templates.Version != 1 || templates.Templates == nil || len(templates.Templates) > maxWorkflowTemplates {
-		return store.WorkspaceSnapshot{}, errors.New("workspace workflow templates are invalid")
-	}
-	for _, template := range templates.Templates {
-		if validateWorkflowTemplate(template) != nil || template.Scope != "personal" {
-			return store.WorkspaceSnapshot{}, errors.New("workspace workflow templates are invalid")
-		}
 	}
 	return snapshot, nil
 }
 
-func (s *Server) authorizeWorkspaceConfigReplacement(w http.ResponseWriter, r *http.Request, requested []byte, snapshot *store.WorkspaceSnapshot) (bool, bool) {
-	values, err := s.store.GetStates(r.Context(), tenantIDFrom(r), []string{"config", secretStateKey})
-	if err != nil {
-		http.Error(w, "failed to read tenant config", http.StatusInternalServerError)
-		return false, false
-	}
-	currentConfig := values["config"]
-	currentSecrets := values[secretStateKey]
-	configChanged := !workspaceJSONSemanticEqual(currentConfig, requested)
-	if configChanged {
-		if !s.requireTenantAdmin(w, r, "state unavailable") {
-			return false, false
-		}
-		if err := s.preventTenantObjectStorageRebind(r.Context(), tenantIDFrom(r), requested); errors.Is(err, errTenantObjectStorageRebind) {
-			http.Error(w, "object storage destination cannot be changed while data exists", http.StatusConflict)
-			return false, false
-		} else if err != nil {
-			http.Error(w, "invalid object storage configuration", http.StatusBadRequest)
-			return false, false
-		}
-		if currentSecrets != nil {
-			http.Error(w, "config and secrets must be saved together", http.StatusConflict)
-			return false, false
-		}
-	}
-	snapshot.States = append(snapshot.States, store.WorkspaceState{
-		Key: secretStateKey, Exists: currentSecrets != nil, Value: bytes.Clone(currentSecrets),
-	})
-	return configChanged, true
-}
-
 func (s *Server) replaceWorkspace(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant workspace unavailable") {
+		return
+	}
 	backend, ok := s.store.(store.WorkspaceStore)
 	if !ok {
 		http.Error(w, "transactional workspace replacement is unavailable", http.StatusServiceUnavailable)
@@ -306,11 +156,16 @@ func (s *Server) replaceWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	tenantID := tenantIDFrom(r)
-	configChanged, ok := s.authorizeWorkspaceConfigReplacement(w, r, input.Config, &snapshot)
-	if !ok {
+	actorID := strings.TrimSpace(userIDFrom(r))
+	if authMode() != "off" && !requestHasBootstrapProcessAccess(r) && actorID == "" {
+		http.Error(w, "login required", http.StatusUnauthorized)
 		return
 	}
+	for index := range snapshot.GenerationJobs {
+		snapshot.GenerationJobs[index].UserID = actorID
+		snapshot.GenerationJobs[index].Job.UserID = actorID
+	}
+	tenantID := tenantIDFrom(r)
 	createdByProject := make(map[string][]string, len(snapshot.Films))
 	createdMedia := []store.WorkspaceMedia{}
 	migrated := map[string]struct{}{}
@@ -381,9 +236,6 @@ func (s *Server) replaceWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workspace replacement failed", http.StatusInternalServerError)
 		return
 	}
-	if configChanged {
-		s.InvalidateTenantBlobStore(tenantID)
-	}
 	w.Header().Set("ETag", `"`+result.Version+`"`)
 	migratedStorageKeys := make([]string, 0, len(migrated))
 	for key := range migrated {
@@ -394,6 +246,9 @@ func (s *Server) replaceWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) replaceProjectAggregate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant workspace unavailable") {
+		return
+	}
 	backend, ok := s.store.(store.WorkspaceStore)
 	if !ok {
 		http.Error(w, "transactional project replacement is unavailable", http.StatusServiceUnavailable)
@@ -487,6 +342,9 @@ func (s *Server) replaceProjectAggregate(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) rollbackWorkspace(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant workspace unavailable") {
+		return
+	}
 	backend, ok := s.store.(store.WorkspaceStore)
 	if !ok {
 		http.Error(w, "transactional workspace rollback is unavailable", http.StatusServiceUnavailable)

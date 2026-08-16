@@ -269,6 +269,9 @@ func (s *Server) resolveProviderModelConnection(r *http.Request, input providerM
 		}
 		provider = storedImageProvider{BaseURL: selected.BaseURL, Model: model, Protocol: "openai"}
 	}
+	if err := validateAccountManagedChannelURL(provider.BaseURL); err != nil {
+		return providerModelConnection{}, err
+	}
 	secretKey, _ := secretStorageKey(r)
 	secretValue, err := s.decryptSecretsKey(r.Context(), tenantID, secretKey)
 	if err != nil {
@@ -294,6 +297,9 @@ func (s *Server) resolveProviderModelConnection(r *http.Request, input providerM
 
 func (s *Server) getProviderModels(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeSecrets(w, r) {
+		return
+	}
+	if !s.authorizePersonalChannelRuntime(w, r) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxProviderModelRequestBytes)

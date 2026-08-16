@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
-import { canManageAdmin } from "@/services/admin";
+import { hasTenantOwnerCapability } from "@/services/admin";
 import {
-  DEFAULT_SITE_POLICY,
-  getSitePolicy,
-  updateSitePolicy,
-  type SitePolicy,
+  DEFAULT_TENANT_POLICY,
+  getTenantPolicy,
+  type TenantPolicy,
   type UsageSnapshot,
 } from "@/services/auth-session";
 import { createDefaultChannel } from "@/lib/defaults";
@@ -111,24 +110,21 @@ const MEMBER_SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = Object.fr
   { id: "webdav", labelKey: "settings.webdavTitle", icon: Database },
 ]);
 
-const SITE_POLICY_SECTION: SettingsSectionDefinition = Object.freeze({
-  id: "policy",
-  labelKey: "settings.sitePolicy",
-  icon: ShieldCheck,
-});
-
 type SettingsFeedback = {
   tone: "success" | "danger";
   message: string;
 };
 
-export function settingsSectionsFor(canManageSitePolicy: boolean): readonly SettingsSectionDefinition[] {
-  if (!canManageSitePolicy) return [...MEMBER_SETTINGS_SECTIONS];
-  return [
-    ...MEMBER_SETTINGS_SECTIONS.slice(0, 6),
-    SITE_POLICY_SECTION,
-    ...MEMBER_SETTINGS_SECTIONS.slice(6),
-  ];
+export function settingsSectionsFor(_tenantOwner: boolean): readonly SettingsSectionDefinition[] {
+  return [...MEMBER_SETTINGS_SECTIONS];
+}
+
+export function settingsWorkspacePermissions(tenantOwner: boolean) {
+  return {
+    importCompleteProject: tenantOwner,
+    exportCompleteWorkspace: tenantOwner,
+    restoreCompleteWorkspace: tenantOwner,
+  } as const;
 }
 
 function formatUsageBytes(bytes: number): string {
@@ -228,14 +224,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<SettingsFeedback | null>(null);
   const auth = useOptionalAuth();
-  const canManageSitePolicy = canManageAdmin(auth);
-  const [sitePolicy, setSitePolicy] = useState<SitePolicy>(DEFAULT_SITE_POLICY);
-  const [sitePolicyLoaded, setSitePolicyLoaded] = useState(false);
-  const [sitePolicyBusy, setSitePolicyBusy] = useState(false);
+  const tenantOwner = hasTenantOwnerCapability(auth);
+  const workspacePermissions = settingsWorkspacePermissions(tenantOwner);
+  const [tenantPolicy, setTenantPolicy] = useState<TenantPolicy>(DEFAULT_TENANT_POLICY);
+  const [tenantPolicyLoaded, setTenantPolicyLoaded] = useState(false);
 	const sharedChannels = useSharedChannels();
   const settingsSections = useMemo(
-    () => settingsSectionsFor(canManageSitePolicy),
-    [canManageSitePolicy],
+    () => settingsSectionsFor(tenantOwner),
+    [tenantOwner],
   );
   const [activeSection, setActiveSection] = useState("interface");
   const [restoreWorkspacePending, setRestoreWorkspacePending] = useState(false);
@@ -265,16 +261,17 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void getSitePolicy()
+    setTenantPolicyLoaded(false);
+    void getTenantPolicy()
       .then((policy) => {
         if (cancelled) return;
-        setSitePolicy(policy);
-        setSitePolicyLoaded(true);
+        setTenantPolicy(policy);
+        setTenantPolicyLoaded(true);
       })
       .catch(() => {
         if (cancelled) return;
-        setSitePolicy(DEFAULT_SITE_POLICY);
-        setSitePolicyLoaded(true);
+        setTenantPolicy(DEFAULT_TENANT_POLICY);
+        setTenantPolicyLoaded(false);
       });
     return () => {
       cancelled = true;
@@ -317,36 +314,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     return () => window.cancelAnimationFrame(frame);
   }, [activeSection, open]);
 
-  // Only the boolean switches are toggleable; model-catalog fields are edited
-  // through their own control and must not be flipped by this helper.
-  const toggleSitePolicy = async (key: "allowRegister" | "allowCustomChannel" | "allowCloudChannel") => {
-    if (!canManageSitePolicy || sitePolicyBusy) return;
-    const next = { ...sitePolicy, [key]: !sitePolicy[key] };
-    setSitePolicyBusy(true);
-    setError(null);
-    try {
-      const saved = await updateSitePolicy(next);
-      setSitePolicy(saved);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("settings.sitePolicySaveFailed"));
-    } finally {
-      setSitePolicyBusy(false);
-    }
-  };
-
-  const saveModelCatalog = async (patch: Partial<SitePolicy>) => {
-    if (!canManageSitePolicy || sitePolicyBusy) return;
-    setSitePolicyBusy(true);
-    setError(null);
-    try {
-      setSitePolicy(await updateSitePolicy({ ...sitePolicy, ...patch }));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("settings.modelCatalogSaveFailed"));
-    } finally {
-      setSitePolicyBusy(false);
-    }
-  };
-
   const requestClose = useCallback(() => {
     if (closing) return;
     setClosing(true);
@@ -364,6 +331,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const restoreWorkspace = () => {
     setRestoreWorkspacePending(false);
     setFeedback(null);
+    if (!workspacePermissions.restoreCompleteWorkspace) {
+      setFeedback({ tone: "danger", message: t("admin.permissionRequired") });
+      return;
+    }
     void (async () => {
       try {
         const state = useBoardStore.getState();
@@ -432,8 +403,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const imageSize = normalizeImageSizeForProvider(config.imageSize);
   const sharedChannelSelected = Boolean(config.activeSharedChannelId);
 	const selectedSharedChannelAvailable = !sharedChannelSelected || sharedChannels.some((item) => item.id === config.activeSharedChannelId);
-  const personalChannelEditable = canManageSitePolicy || (
-    sitePolicyLoaded && sitePolicy.allowCustomChannel
+  const personalChannelEditable = tenantOwner || (
+    tenantPolicyLoaded && tenantPolicy.allowCustomChannel
   );
 
   const updateChannel = (patch: Partial<typeof channel>) => {
@@ -480,9 +451,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       // catalog: seed an unset model from the admin default and replace one the
       // channel no longer offers, so the field cannot keep a model that is
       // certain to fail at request time.
-      const selectable = resolveSelectableModels(sitePolicy, list);
+      const selectable = resolveSelectableModels(tenantPolicy, list);
       const current = getProvider(channel, kind).model;
-      const reconciled = reconcileProviderModel(sitePolicy, kind, current, selectable);
+      const reconciled = reconcileProviderModel(tenantPolicy, kind, current, selectable);
       updateProvider(kind, {
         models: list,
         ...(reconciled !== current ? { model: reconciled } : {}),
@@ -679,7 +650,9 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 							<option key={item.id} value={`personal:${item.id}`}>{item.name} {t("settings.personalSuffix")}</option>
                   ))}
 						{sharedChannels.filter((item) => !config.channels.some((personal) => personal.id === item.id)).map((item) => (
-							<option key={item.id} value={`shared:${item.id}`}>{item.name} {t("settings.sharedSuffix")}</option>
+							<option key={item.id} value={`shared:${item.id}`}>
+								{item.name} · {item.source === "platform" ? t("settings.channelSourcePlatform") : item.source === "automatic" ? t("settings.channelSourceAutomatic") : t("settings.channelSourceTenant")}
+							</option>
 						))}
                 </select>
               </Field>
@@ -771,7 +744,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   key={kind}
                   kind={kind}
                   provider={getProvider(channel, kind)}
-                  models={resolveSelectableModels(sitePolicy, models[kind] ?? getProvider(channel, kind).models ?? [])}
+                  models={resolveSelectableModels(tenantPolicy, models[kind] ?? getProvider(channel, kind).models ?? [])}
                   busy={busyKind === kind}
                   disabled={busyKind !== null || sharedChannelSelected || !personalChannelEditable}
                   onPull={() => void pullModels(kind)}
@@ -792,45 +765,27 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             </div>
             <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
             <div>
-              {canManageSitePolicy ? (
-                <>
-                  <Field label={t("settings.globalSystemPrompt")}>
-                    <textarea
-                      className="ob-field min-h-28 resize-y"
-                      maxLength={SYSTEM_PROMPT_MAX_LENGTH}
-                      value={config.systemPrompt}
-                      onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
-                      placeholder={t("settings.globalSystemPromptPlaceholder")}
-                    />
-                  </Field>
-                  <Field label={t("settings.workflowSystemPrompt")}>
-                    <textarea
-                      className="ob-field min-h-24 resize-y"
-                      maxLength={SYSTEM_PROMPT_MAX_LENGTH}
-                      value={config.workflowAgentSystemPrompt ?? ""}
-                      onChange={(e) => setConfig({ ...config, workflowAgentSystemPrompt: e.target.value })}
-                      placeholder={t("settings.workflowSystemPromptPlaceholder")}
-                    />
-                  </Field>
-                  <p className="mb-3 text-xs text-[var(--ob-muted)]">
-                    {t("settings.tenantPromptHint")}
-                  </p>
-                </>
-              ) : (
-                <div className="mb-3 rounded-xl border border-[var(--ob-line)] bg-[color-mix(in_srgb,var(--ob-canvas)_70%,transparent)] px-3 py-3 text-xs text-[var(--ob-muted)]">
-                  <p className="font-medium text-[var(--ob-ink)]">{t("settings.promptManaged")}</p>
-                  <p className="mt-1">
-                    {t("settings.promptManagedHint")}
-                  </p>
-                  {config.systemPrompt.trim() ? (
-                    <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-[var(--ob-ink)]/80" title={config.systemPrompt}>
-                      {t("settings.activePrompt", { prompt: config.systemPrompt.trim() })}
-                    </p>
-                  ) : (
-                    <p className="mt-2">{t("settings.noPrompt")}</p>
-                  )}
-                </div>
-              )}
+              <Field label={t("settings.globalSystemPrompt")}>
+                <textarea
+                  className="ob-field min-h-28 resize-y"
+                  maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+                  value={config.systemPrompt}
+                  onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
+                  placeholder={t("settings.globalSystemPromptPlaceholder")}
+                />
+              </Field>
+              <Field label={t("settings.workflowSystemPrompt")}>
+                <textarea
+                  className="ob-field min-h-24 resize-y"
+                  maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+                  value={config.workflowAgentSystemPrompt ?? ""}
+                  onChange={(e) => setConfig({ ...config, workflowAgentSystemPrompt: e.target.value })}
+                  placeholder={t("settings.workflowSystemPromptPlaceholder")}
+                />
+              </Field>
+              <p className="mb-3 text-xs text-[var(--ob-muted)]">
+                {t("settings.tenantPromptHint")}
+              </p>
             </div>
             <div className="grid content-start grid-cols-1 gap-3 sm:grid-cols-3 lg:mt-8 lg:grid-cols-1">
               <Field label={t("settings.imageSize")}>
@@ -875,97 +830,6 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               onChange={(generationDefaults) => setConfig({ ...config, generationDefaults })}
             />
           </section>
-
-          {canManageSitePolicy ? (
-            <section className="ob-settings-section mb-5" data-section-id="policy">
-            <div className="ob-settings-section-header">
-              <span className="ob-settings-section-icon"><ShieldCheck size={14} /></span>
-              <div>
-                <div className="ob-settings-section-title">{t("settings.sitePolicy")}</div>
-                <div className="ob-settings-section-desc">{t("settings.sitePolicyDescription")}</div>
-              </div>
-            </div>
-              <p className="mb-3 text-xs text-[var(--ob-muted)]">
-                {t("settings.sitePolicyHint")}
-              </p>
-              {!sitePolicyLoaded ? (
-                <p className="text-xs text-[var(--ob-muted)]">{t("settings.loadingPolicy")}</p>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div
-                    className="ob-toggle-field"
-                    onClick={(event) => {
-                      if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
-                      void toggleSitePolicy("allowRegister");
-                    }}
-                  >
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={sitePolicy.allowRegister}
-                      aria-label={t("settings.allowRegistration")}
-                      className="ob-switch"
-                      data-checked={sitePolicy.allowRegister ? "true" : "false"}
-                      disabled={sitePolicyBusy}
-                      onClick={() => void toggleSitePolicy("allowRegister")}
-                    />
-                    <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowRegistration")}</span>
-                  </div>
-                  <div
-                    className="ob-toggle-field"
-                    onClick={(event) => {
-                      if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
-                      void toggleSitePolicy("allowCustomChannel");
-                    }}
-                  >
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={sitePolicy.allowCustomChannel}
-                      aria-label={t("settings.allowCustomChannels")}
-                      className="ob-switch"
-                      data-checked={sitePolicy.allowCustomChannel ? "true" : "false"}
-                      disabled={sitePolicyBusy}
-                      onClick={() => void toggleSitePolicy("allowCustomChannel")}
-                    />
-                    <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowCustomChannels")}</span>
-                  </div>
-                  <div
-                    className="ob-toggle-field"
-                    onClick={(event) => {
-                      if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
-                      void toggleSitePolicy("allowCloudChannel");
-                    }}
-                  >
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={sitePolicy.allowCloudChannel}
-                      aria-label={t("settings.allowCloudGeneration")}
-                      className="ob-switch"
-                      data-checked={sitePolicy.allowCloudChannel ? "true" : "false"}
-                      disabled={sitePolicyBusy}
-                      onClick={() => void toggleSitePolicy("allowCloudChannel")}
-                    />
-                    <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowCloudGeneration")}</span>
-                  </div>
-                </div>
-              )}
-              {!sitePolicy.allowCustomChannel ? (
-                <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.customChannelDisabledHint")}</p>
-              ) : null}
-              {!sitePolicy.allowCloudChannel ? (
-                <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("settings.cloudGenerationDisabledHint")}</p>
-              ) : null}
-              {sitePolicyLoaded ? (
-                <ModelCatalogEditor
-                  policy={sitePolicy}
-                  busy={sitePolicyBusy}
-                  onSave={(patch) => void saveModelCatalog(patch)}
-                />
-              ) : null}
-            </section>
-          ) : null}
 
           <section className="ob-settings-section mb-5" data-section-id="toolbar">
             <div className="ob-settings-section-header">
@@ -1152,7 +1016,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   aria-label={t("settings.importConfigLabel")}
                   accept="application/json,.json"
                   className="hidden"
-                  disabled={!canManageSitePolicy && !sitePolicyLoaded}
+                  disabled={!tenantOwner && !tenantPolicyLoaded}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     event.currentTarget.value = "";
@@ -1162,7 +1026,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                       const state = useBoardStore.getState();
                       const previous = structuredClone(state.config);
                       const next = importConfigFile(raw, state.config);
-                      if (!canManageSitePolicy && !sitePolicy.allowCustomChannel &&
+                      if (!tenantOwner && !tenantPolicy.allowCustomChannel &&
                         !hasSameChannelConfiguration(state.config, next)) {
                         throw new Error(t("settings.channelImportLocked"));
                       }
@@ -1227,7 +1091,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                 >
                   <CloudUpload size={15} /> {t("settings.uploadCanvas")}
                 </button>
-                <button
+                {workspacePermissions.exportCompleteWorkspace ? <button
                   type="button"
                   className="ob-btn"
                   onClick={() => {
@@ -1252,8 +1116,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   }}
                 >
                   <CloudUpload size={15} /> {t("settings.uploadWorkspace")}
-                </button>
-                <button
+                </button> : null}
+                {workspacePermissions.importCompleteProject ? <button
                   type="button"
                   className="ob-btn"
                   onClick={() => {
@@ -1274,8 +1138,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   }}
                 >
                   <CloudDownload size={15} /> {t("settings.importCloudCanvas")}
-                </button>
-                <button
+                </button> : null}
+                {workspacePermissions.restoreCompleteWorkspace ? <button
                   type="button"
                   className="ob-btn"
                   onClick={() => {
@@ -1283,7 +1147,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                   }}
                 >
                   <RotateCcw size={15} /> {t("settings.restoreWorkspace")}
-                </button>
+                </button> : null}
             </div>
           </section>
 
@@ -1302,7 +1166,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <ShieldCheck className="mt-0.5 shrink-0" size={15} />
             <p>{t("settings.securityHint")}</p>
           </div>
-          {restoreWorkspacePending ? (
+          {workspacePermissions.restoreCompleteWorkspace && restoreWorkspacePending ? (
             <ConfirmDialog
               title={t("settings.restoreWorkspace")}
               message={t("settings.confirmRestoreWorkspace")}
@@ -1421,91 +1285,6 @@ function ProviderRow({
 }
 
 
-
-/**
- * Tenant model governance. The allow list narrows what ordinary users may pick;
- * leaving it empty means "no restriction" so a misconfiguration cannot strand
- * users with zero models. Defaults must name a model inside a non-empty list,
- * which the server enforces independently.
- */
-function ModelCatalogEditor({
-  policy,
-  busy,
-  onSave,
-}: {
-  policy: SitePolicy;
-  busy: boolean;
-  onSave: (patch: Partial<SitePolicy>) => void;
-}) {
-  const { t } = useI18n();
-  const [draft, setDraft] = useState(() => (policy.availableModels ?? []).join("\n"));
-  const [dirty, setDirty] = useState(false);
-  useEffect(() => {
-    if (!dirty) setDraft((policy.availableModels ?? []).join("\n"));
-  }, [policy.availableModels, dirty]);
-
-  const defaults: Array<{ key: keyof SitePolicy; label: string }> = [
-    { key: "defaultTextModel", label: t("settings.defaultTextModel") },
-    { key: "defaultImageModel", label: t("settings.defaultImageModel") },
-    { key: "defaultVideoModel", label: t("settings.defaultVideoModel") },
-    { key: "defaultAudioModel", label: t("settings.defaultAudioModel") },
-  ];
-  const allowList = (policy.availableModels ?? []);
-  // The select must be able to display whatever is currently stored. An empty
-  // allow list means "no restriction", and a default configured before the
-  // list was narrowed is still the effective value, so both cases need an
-  // option or the control would silently read back as "未设置".
-  const optionsFor = (current: string): string[] =>
-    current && !allowList.includes(current) ? [...allowList, current] : allowList;
-
-  return (
-    <div className="mt-4 rounded-xl border border-[var(--ob-line)] p-3">
-      <p className="mb-2 text-xs text-[var(--ob-muted)]">
-        {t("settings.availableModels")}
-      </p>
-      <textarea
-        aria-label={t("settings.availableModelsLabel")}
-        className="ob-field min-h-20 w-full resize-y font-mono text-xs"
-        placeholder="gpt-image-2&#10;gpt-5.5"
-        value={draft}
-        disabled={busy}
-        onChange={(event) => { setDraft(event.target.value); setDirty(true); }}
-      />
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        {defaults.map(({ key, label }) => (
-          <label key={key} className="grid gap-1">
-            <span className="text-xs text-[var(--ob-muted)]">{label}</span>
-            <select
-              className="ob-field"
-              aria-label={label}
-              value={(policy[key] as string | undefined) ?? ""}
-              disabled={busy}
-              onChange={(event) => onSave({ [key]: event.target.value } as Partial<SitePolicy>)}
-            >
-              <option value="">{t("settings.unsetModel")}</option>
-              {optionsFor((policy[key] as string | undefined) ?? "")
-                .map((model) => <option key={model} value={model}>{model}</option>)}
-            </select>
-          </label>
-        ))}
-      </div>
-      <button
-        type="button"
-        className="ob-btn mt-2"
-        disabled={busy || !dirty}
-        onClick={() => {
-          const availableModels = [...new Set(
-            draft.split("\n").map((line) => line.trim()).filter(Boolean),
-          )];
-          setDirty(false);
-          onSave({ availableModels });
-        }}
-      >
-        {t("settings.saveModelList")}
-      </button>
-    </div>
-  );
-}
 
 function CompactField({ label, children }: { label: string; children: React.ReactNode }) {
   return (

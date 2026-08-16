@@ -162,7 +162,7 @@ function StyleExtractionPanel({ status, channels, onFilmStatus }: PanelProps) {
 function VoiceIdentityPanel({ status, channels }: PanelProps) {
   const { t } = useI18n();
   const auth = useOptionalAuth();
-  const isAdmin = auth?.localAdmin === true || auth?.user?.role === "owner" || auth?.user?.role === "admin";
+  const isAdmin = auth?.localAdmin === true || auth?.user?.role === "owner";
   const [identities, setIdentities] = useState<FilmVoiceIdentity[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [versions, setVersions] = useState<FilmVoiceVersion[]>([]);

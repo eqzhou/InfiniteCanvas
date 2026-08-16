@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	// secretStateKey is the tenant-wide encrypted bag used by admins and by
-	// server-side generation/object-storage when auth is off.
+	// secretStateKey is the legacy/local tenant-wide encrypted bag used by
+	// server-side generation/object-storage and auth-off deployments.
 	secretStateKey = "__encrypted_config_secrets"
-	// userSecretStateKeyPrefix scopes each member's direct-connect keys and
+	// userSecretStateKeyPrefix scopes each user's direct-connect keys and
 	// personal object-storage credentials so they can sync across devices
 	// without reading or overwriting the tenant bag.
 	userSecretStateKeyPrefix = "__encrypted_user_config_secrets_v1:"
@@ -33,10 +33,10 @@ type secretEnvelope struct {
 }
 
 // secretStorageKey returns the encrypted-bag key for this request.
-// Tenant admins (and token/bootstrap paths with no user) share the tenant bag;
-// ordinary members get a private per-user bag.
+// Every authenticated account, including a tenant Owner or platform admin,
+// receives a private bag. Only auth-off/bootstrap paths use the tenant bag.
 func secretStorageKey(r *http.Request) (key string, tenantWide bool) {
-	if user, ok := authUserFrom(r.Context()); ok && !isTenantAdmin(user) {
+	if user, ok := authUserFrom(r.Context()); ok && authMode() != "off" {
 		id := strings.TrimSpace(user.ID)
 		if id != "" && len(id) <= 128 {
 			return userSecretStateKeyPrefix + id, false

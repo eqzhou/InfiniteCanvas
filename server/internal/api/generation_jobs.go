@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -49,8 +50,13 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	includeDeleted := r.URL.Query().Get("includeDeleted") == "1" || r.URL.Query().Get("includeDeleted") == "true"
+	userID, authorized := generationJobScopeUserID(r)
+	if !authorized {
+		http.Error(w, "login required", http.StatusUnauthorized)
+		return
+	}
 	result, err := s.store.ListGenerationJobs(r.Context(), tenantIDFrom(r), store.GenerationJobQuery{
-		ProjectID: projectID, Kind: kind, Page: page, PageSize: pageSize, IncludeDeleted: includeDeleted,
+		UserID: userID, ProjectID: projectID, Kind: kind, Page: page, PageSize: pageSize, IncludeDeleted: includeDeleted,
 	})
 	if err != nil {
 		http.Error(w, "failed to list generation jobs", http.StatusInternalServerError)
@@ -89,6 +95,11 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	job.UserID = strings.TrimSpace(userIDFrom(r))
+	if authMode() != "off" && !requestHasBootstrapProcessAccess(r) && job.UserID == "" {
+		http.Error(w, "login required", http.StatusUnauthorized)
+		return
+	}
 	job.CreatedAt, job.UpdatedAt = now, now
 	if err := s.store.CreateGenerationJob(r.Context(), tenantID, job); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "generation job already exists", http.StatusConflict)
@@ -108,6 +119,9 @@ func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant generation history unavailable") {
+		return
+	}
 	if s.store == nil {
 		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
 		return
@@ -135,6 +149,14 @@ func (s *Server) replaceGenerationJobs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ids[job.ID] = struct{}{}
+	}
+	actorID := strings.TrimSpace(userIDFrom(r))
+	if authMode() != "off" && !requestHasBootstrapProcessAccess(r) && actorID == "" {
+		http.Error(w, "login required", http.StatusUnauthorized)
+		return
+	}
+	for index := range jobs {
+		jobs[index].UserID = actorID
 	}
 	if err := validateRestoredGenerationJobRelations(jobs); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -172,6 +194,10 @@ func (s *Server) getGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
 		return
 	}
+	if !requestCanAccessGenerationJob(r, job) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	job = s.filmStageGenerationView(r.Context(), tenantIDFrom(r), job)
 	writeJSON(w, publicGenerationJob(job))
 }
@@ -196,6 +222,10 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
 		return
 	}
+	if !requestCanAccessGenerationJob(r, current) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if current.Status == "deleted" {
 		http.Error(w, "generation job was deleted", http.StatusGone)
 		return
@@ -209,6 +239,7 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job.CreatedAt = current.CreatedAt
+	job.UserID = current.UserID
 	job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.store.PutGenerationJob(r.Context(), tenantIDFrom(r), job); errors.Is(err, store.ErrGone) {
 		http.Error(w, "generation job was deleted", http.StatusGone)
@@ -221,6 +252,9 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteGenerationJob(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant generation history unavailable") {
+		return
+	}
 	if s.store == nil {
 		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
 		return
@@ -273,6 +307,9 @@ func (s *Server) deleteGenerationJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) bulkDeleteGenerationJobs(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant generation history unavailable") {
+		return
+	}
 	if s.store == nil {
 		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
 		return
@@ -357,6 +394,9 @@ func (s *Server) bulkDeleteGenerationJobs(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) deleteGenerationJobsForProject(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant generation history unavailable") {
+		return
+	}
 	if s.store == nil {
 		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
 		return

@@ -6,6 +6,7 @@ import {
   settingsHorizontalScrollTarget,
   settingsScrollTarget,
   settingsSectionsFor,
+  settingsWorkspacePermissions,
 } from "./SettingsModal";
 
 describe("UsageOverview", () => {
@@ -26,20 +27,20 @@ describe("UsageOverview", () => {
 });
 
 describe("SharedChannelManagedNotice", () => {
-  test("explains that shared channel credentials are managed by admins without rendering a key field", () => {
+  test("explains that shared channel credentials are managed by the Owner without rendering a key field", () => {
     const html = renderToStaticMarkup(<SharedChannelManagedNotice channelName="生产生图" />);
 
     expect(html).toContain("生产生图");
-    expect(html).toContain("管理员已配置");
+    expect(html).toContain("Owner 已配置");
     expect(html).not.toContain("API Key");
     expect(html).not.toContain("server-managed");
   });
 });
 
 describe("settings section navigation", () => {
-  test("exposes site policy only to administrators without mutating the base order", () => {
+  test("keeps the settings modal personal for owners and ordinary users", () => {
     const memberSections = settingsSectionsFor(false);
-    const adminSections = settingsSectionsFor(true);
+    const ownerSections = settingsSectionsFor(true);
 
     expect(memberSections.map((section) => section.id)).toEqual([
       "interface",
@@ -53,20 +54,33 @@ describe("settings section navigation", () => {
       "configfile",
       "webdav",
     ]);
-    expect(adminSections.map((section) => section.id)).toEqual([
+    expect(ownerSections.map((section) => section.id)).toEqual([
       "interface",
       "channel",
       "usage",
       "model",
       "generation",
       "defaults",
-      "policy",
       "toolbar",
       "storage",
       "configfile",
       "webdav",
     ]);
-    expect(memberSections).not.toBe(adminSections);
+    expect(memberSections).not.toBe(ownerSections);
+    expect(ownerSections.some((section) => section.id === "policy")).toBe(false);
+  });
+
+  test("reserves tenant-wide import, backup, and restore for the tenant owner", () => {
+    expect(settingsWorkspacePermissions(false)).toEqual({
+      importCompleteProject: false,
+      exportCompleteWorkspace: false,
+      restoreCompleteWorkspace: false,
+    });
+    expect(settingsWorkspacePermissions(true)).toEqual({
+      importCompleteProject: true,
+      exportCompleteWorkspace: true,
+      restoreCompleteWorkspace: true,
+    });
   });
 
   test("calculates a container-local scroll target and never scrolls above the start", () => {

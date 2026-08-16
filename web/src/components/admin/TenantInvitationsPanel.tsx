@@ -21,11 +21,11 @@ export function normalizeInvitationExpiryHours(value: string): number | null {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 720 ? parsed : null;
 }
 
-export function TenantInvitationsPanel({ actorRole }: { actorRole: string }) {
+export function TenantInvitationsPanel() {
   const { t } = useI18n();
   const [items, setItems] = useState<TenantInvitation[]>([]);
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"member" | "admin">("member");
+  const [role, setRole] = useState<"user">("user");
   const [expiry, setExpiry] = useState("168");
   const [createdLink, setCreatedLink] = useState("");
   const [notice, setNotice] = useState("");
@@ -87,9 +87,8 @@ export function TenantInvitationsPanel({ actorRole }: { actorRole: string }) {
         </label>
         <label className="block">
           <span className="ob-micro-label mb-1">{t("admin.invitationRole")}</span>
-          <select className="ob-field w-32" value={role} disabled={busy} onChange={(event) => setRole(event.target.value as "member" | "admin")}>
-            <option value="member">{t("admin.invitationMember")}</option>
-            <option value="admin" disabled={actorRole !== "owner"}>{t("admin.invitationAdmin")}</option>
+          <select className="ob-field w-32" value={role} disabled={busy} onChange={() => setRole("user")}>
+            <option value="user">{t("admin.invitationMember")}</option>
           </select>
         </label>
         <label className="block">
@@ -135,7 +134,7 @@ export function TenantInvitationsPanel({ actorRole }: { actorRole: string }) {
                 <li key={item.id} className="flex flex-wrap items-center gap-2 py-2">
                   <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-[var(--ob-ink)]">{item.email}</span>
                   <span className="ob-micro-label">
-                    {item.role === "admin" ? t("admin.invitationAdmin") : t("admin.invitationMember")}
+                    {t("admin.invitationMember")}
                   </span>
                   <span className="ob-status-chip" data-tone={stateTone[state]}>
                     <span className="ob-status-dot" data-status={stateDot[state]} aria-hidden />

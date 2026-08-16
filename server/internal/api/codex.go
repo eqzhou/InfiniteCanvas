@@ -679,6 +679,9 @@ func validateCodexSelection(catalog codexModelListResponse, model, effort string
 }
 
 func (s *Server) listCodexModels(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
 	if !projectIDPattern.MatchString(sessionID) {
 		http.Error(w, "invalid Codex session id", http.StatusBadRequest)
@@ -704,6 +707,9 @@ func (s *Server) listCodexModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateCodexPreferences(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxCodexBody)
 	var req struct {
 		SessionID string `json:"sessionId"`
@@ -1074,6 +1080,9 @@ func (s *Server) findCodexForScope(scope agentScope, id string) (*codexSession, 
 }
 
 func (s *Server) sendCodexMessage(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxCodexBody)
 	var req struct {
 		SessionID         string                  `json:"sessionId"`
@@ -1444,6 +1453,9 @@ func (s *Server) interruptCodex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) respondCodexApproval(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxCodexBody)
 	var req struct {
 		SessionID string          `json:"sessionId"`

@@ -2,12 +2,127 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openboard/openboard/server/internal/store"
 )
+
+func TestScopedPolicyAndLegacyProjectionUseOneAtomicMutation(t *testing.T) {
+	tests := []struct {
+		name       string
+		tenantID   string
+		expected   []string
+		savePolicy func(*Server) error
+	}{
+		{
+			name:     "tenant",
+			tenantID: "tenant-atomic",
+			expected: []string{sitePolicyStateKey, tenantPolicyStateKey},
+			savePolicy: func(srv *Server) error {
+				return srv.saveTenantPolicy(t.Context(), "tenant-atomic", TenantPolicy{AllowCustomChannel: false, AllowCloudChannel: true})
+			},
+		},
+		{
+			name:     "platform",
+			tenantID: store.DefaultTenantID,
+			expected: []string{platformPolicyStateKey, sitePolicyStateKey},
+			savePolicy: func(srv *Server) error {
+				return srv.savePlatformPolicy(t.Context(), PlatformPolicy{AllowRegister: false})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := newMemoryStore()
+			calls := 0
+			var keys []string
+			backend.compareAndSwapStatesHook = func(tenantID string, mutations []store.StateMutation) {
+				calls++
+				if tenantID != test.tenantID {
+					t.Errorf("mutation tenant = %q, want %q", tenantID, test.tenantID)
+				}
+				keys = keys[:0]
+				for _, mutation := range mutations {
+					keys = append(keys, mutation.Key)
+				}
+				slices.Sort(keys)
+			}
+			srv := NewServerWithStore(t.TempDir(), backend)
+			defer srv.Close()
+			if err := test.savePolicy(srv); err != nil {
+				t.Fatal(err)
+			}
+			wanted := append([]string(nil), test.expected...)
+			slices.Sort(wanted)
+			if calls != 1 || !slices.Equal(keys, wanted) {
+				t.Fatalf("atomic calls=%d keys=%v, want one call with %v", calls, keys, wanted)
+			}
+		})
+	}
+}
+
+func TestPolicyAtomicMutationFailureLeavesNoPartialDocument(t *testing.T) {
+	backend := newMemoryStore()
+	backend.compareAndSwapStateErr = errors.New("injected atomic policy failure")
+	srv := NewServerWithStore(t.TempDir(), backend)
+	defer srv.Close()
+
+	err := srv.saveTenantPolicy(t.Context(), "tenant-atomic-failure", TenantPolicy{AllowCloudChannel: true})
+	if err == nil {
+		t.Fatal("policy save unexpectedly succeeded")
+	}
+	for _, key := range []string{tenantPolicyStateKey, sitePolicyStateKey} {
+		if _, getErr := backend.GetState(t.Context(), "tenant-atomic-failure", key); !errors.Is(getErr, store.ErrNotFound) {
+			t.Fatalf("partial policy document %q remained after failure: %v", key, getErr)
+		}
+	}
+}
+
+func TestTenantPolicySaveRetriesAroundConcurrentPlatformProjection(t *testing.T) {
+	backend := newMemoryStore()
+	initialPlatform, _ := json.Marshal(PlatformPolicy{AllowRegister: true})
+	initialLegacy, _ := json.Marshal(sitePolicyFromScopes(PlatformPolicy{AllowRegister: true}, defaultTenantPolicy()))
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, platformPolicyStateKey, initialPlatform); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, sitePolicyStateKey, initialLegacy); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	backend.compareAndSwapStatesHook = func(tenantID string, _ []store.StateMutation) {
+		calls++
+		if calls != 1 {
+			return
+		}
+		concurrentPlatform, _ := json.Marshal(PlatformPolicy{AllowRegister: false})
+		concurrentLegacy, _ := json.Marshal(sitePolicyFromScopes(PlatformPolicy{AllowRegister: false}, defaultTenantPolicy()))
+		backend.mu.Lock()
+		backend.state[tenantKey(tenantID, platformPolicyStateKey)] = concurrentPlatform
+		backend.state[tenantKey(tenantID, sitePolicyStateKey)] = concurrentLegacy
+		backend.mu.Unlock()
+	}
+	srv := NewServerWithStore(t.TempDir(), backend)
+	defer srv.Close()
+	if err := srv.saveTenantPolicy(t.Context(), store.DefaultTenantID, TenantPolicy{AllowCloudChannel: false}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("atomic mutation calls = %d, want one conflict and one retry", calls)
+	}
+	raw, err := backend.GetState(t.Context(), store.DefaultTenantID, sitePolicyStateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy SitePolicy
+	if json.Unmarshal(raw, &legacy) != nil || legacy.AllowRegister || legacy.AllowCloudChannel {
+		t.Fatalf("compatibility projection lost a concurrent platform update: %s", raw)
+	}
+}
 
 func TestSitePolicyGetDefaultsAndAdminUpdate(t *testing.T) {
 	storeMem := newMemoryStore()
@@ -129,6 +244,7 @@ func TestSitePolicyModelCatalogIsAdminOnlyAndBounded(t *testing.T) {
 
 func TestSitePolicyBlocksRegistration(t *testing.T) {
 	storeMem := newMemoryStore()
+	storeMem.users = 1
 	// Pin the auth mode so the assertion is exact: accepting either 403 or 404
 	// would pass even if the policy check were removed entirely.
 	t.Setenv("OPENBOARD_AUTH_MODE", "required")
@@ -194,7 +310,7 @@ func TestRetentionAndSitePolicyWritesRequireATenantAdmin(t *testing.T) {
 	seedAdminUser(backend, member)
 	handler := tenantAdminHandler(t, backend, member)
 
-	// Both consoles govern tenant-wide behaviour, so an ordinary member must be
+	// Both consoles govern tenant-wide behaviour, so an ordinary user must be
 	// refused rather than merely hidden in the UI.
 	for _, item := range []struct {
 		method string

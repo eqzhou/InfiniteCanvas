@@ -279,7 +279,7 @@ func (s *Server) getPublicPromptCatalog(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) getAdminPromptCatalog(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt catalog unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt catalog unavailable") {
 		return
 	}
 	catalog, _, err := s.loadAdminPromptCatalog(r.Context(), tenantIDFrom(r))
@@ -291,7 +291,7 @@ func (s *Server) getAdminPromptCatalog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createAdminPromptCategory(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt catalog unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt catalog unavailable") {
 		return
 	}
 	var input adminPromptCategory
@@ -322,7 +322,7 @@ func (s *Server) createAdminPromptCategory(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) putAdminPromptCategory(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt catalog unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt catalog unavailable") {
 		return
 	}
 	var input adminPromptCategory
@@ -352,7 +352,7 @@ func (s *Server) putAdminPromptCategory(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) deleteAdminPromptCategory(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt catalog unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt catalog unavailable") {
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -384,7 +384,7 @@ func (s *Server) putAdminPrompt(w http.ResponseWriter, r *http.Request) {
 	s.upsertAdminPrompt(w, r, false)
 }
 func (s *Server) upsertAdminPrompt(w http.ResponseWriter, r *http.Request, create bool) {
-	if !s.requireTenantAdmin(w, r, "admin prompt catalog unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt catalog unavailable") {
 		return
 	}
 	var input adminPromptEntry
@@ -433,7 +433,7 @@ func (s *Server) upsertAdminPrompt(w http.ResponseWriter, r *http.Request, creat
 }
 
 func (s *Server) bulkDeleteAdminPrompts(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt catalog unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt catalog unavailable") {
 		return
 	}
 	var body struct {
@@ -479,7 +479,7 @@ func (s *Server) putAdminPromptSource(w http.ResponseWriter, r *http.Request) {
 	s.upsertAdminPromptSource(w, r, false)
 }
 func (s *Server) upsertAdminPromptSource(w http.ResponseWriter, r *http.Request, create bool) {
-	if !s.requireTenantAdmin(w, r, "admin prompt sources unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt sources unavailable") {
 		return
 	}
 	var input adminPromptSource
@@ -551,7 +551,7 @@ func (s *Server) upsertAdminPromptSource(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) deleteAdminPromptSource(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt sources unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt sources unavailable") {
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -583,7 +583,7 @@ func (s *Server) deleteAdminPromptSource(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) syncAdminPromptSource(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt sync unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt sync unavailable") {
 		return
 	}
 	run, err := s.runAdminPromptSourceSync(r.Context(), tenantIDFrom(r), chi.URLParam(r, "id"))
@@ -599,7 +599,7 @@ func (s *Server) syncAdminPromptSource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) syncAllAdminPromptSources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt sync unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt sync unavailable") {
 		return
 	}
 	catalog, _, err := s.loadAdminPromptCatalog(r.Context(), tenantIDFrom(r))
@@ -628,7 +628,7 @@ func (s *Server) syncAllAdminPromptSources(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) runDueAdminPromptSources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin prompt scheduler unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant prompt scheduler unavailable") {
 		return
 	}
 	runs, err := s.runDuePromptSources(r.Context(), tenantIDFrom(r), time.Now().UTC())

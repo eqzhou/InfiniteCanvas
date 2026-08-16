@@ -134,10 +134,10 @@ func decodeAgentSessionID(t *testing.T, response *httptest.ResponseRecorder) str
 
 func agentIsolationActors() map[string]store.AuthUser {
 	return map[string]store.AuthUser{
-		"owner":                  {ID: "user-owner", TenantID: "tenant-a", Role: "member", Status: "active"},
-		"same-tenant":            {ID: "user-peer", TenantID: "tenant-a", Role: "member", Status: "active"},
-		"other-tenant":           {ID: "user-other", TenantID: "tenant-b", Role: "member", Status: "active"},
-		"same-user-other-tenant": {ID: "user-owner", TenantID: "tenant-b", Role: "member", Status: "active"},
+		"owner":                  {ID: "user-owner", TenantID: "tenant-a", Role: "member", Status: "active", PlatformAdmin: true},
+		"same-tenant":            {ID: "user-peer", TenantID: "tenant-a", Role: "member", Status: "active", PlatformAdmin: true},
+		"other-tenant":           {ID: "user-other", TenantID: "tenant-b", Role: "member", Status: "active", PlatformAdmin: true},
+		"same-user-other-tenant": {ID: "user-owner", TenantID: "tenant-b", Role: "member", Status: "active", PlatformAdmin: true},
 	}
 }
 
@@ -292,5 +292,34 @@ func TestCodexAttachmentUploadRejectsOtherOwners(t *testing.T) {
 				t.Fatalf("rejected cross-owner upload stored attachment files: %v", stored)
 			}
 		})
+	}
+}
+
+func TestActiveAgentSessionsRecheckPlatformExecutionGrant(t *testing.T) {
+	actors := agentIsolationActors()
+	fixture := newAgentIsolationFixture(t, actors)
+	codexID := decodeAgentSessionID(t, fixture.request(t, "owner", http.MethodPost, "/api/codex/session", []byte(`{"profile":"revoked-codex"}`)))
+	claudeID := decodeAgentSessionID(t, fixture.request(t, "owner", http.MethodPost, "/api/claude/session", []byte(`{"profile":"revoked-claude"}`)))
+
+	revoked := actors["owner"]
+	revoked.PlatformAdmin = false
+	actors["owner"] = revoked
+
+	codexMessage := fixture.request(t, "owner", http.MethodPost, "/api/codex/message", []byte(`{"sessionId":"`+codexID+`","text":"must not run"}`))
+	if codexMessage.Code != http.StatusForbidden {
+		t.Fatalf("revoked Codex message = %d %s", codexMessage.Code, codexMessage.Body.String())
+	}
+	approval := fixture.request(t, "owner", http.MethodPost, "/api/codex/approval", []byte(`{"sessionId":"`+codexID+`","id":1,"approve":true}`))
+	if approval.Code != http.StatusForbidden {
+		t.Fatalf("revoked Codex approval = %d %s", approval.Code, approval.Body.String())
+	}
+	upload := fixture.uploadCodexAttachment(t, "owner", codexID)
+	if upload.Code != http.StatusForbidden {
+		t.Fatalf("revoked Codex attachment upload = %d %s", upload.Code, upload.Body.String())
+	}
+	claudeBody, _ := json.Marshal(map[string]string{"sessionId": claudeID, "prompt": "must not run"})
+	claudeMessage := fixture.request(t, "owner", http.MethodPost, "/api/claude/message", claudeBody)
+	if claudeMessage.Code != http.StatusForbidden {
+		t.Fatalf("revoked Claude message = %d %s", claudeMessage.Code, claudeMessage.Body.String())
 	}
 }

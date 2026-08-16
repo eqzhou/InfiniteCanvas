@@ -343,8 +343,15 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid image generation job", http.StatusBadRequest)
 		return
 	}
-	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID); getErr == nil && isMatchingServerImageJob(existing, requestHash) {
-		writeJSON(w, publicGenerationJob(existing))
+	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID); getErr == nil {
+		if requestOwnsGenerationJob(r, existing) && isMatchingServerImageJob(existing, requestHash) {
+			writeJSON(w, publicGenerationJob(existing))
+			return
+		}
+		http.Error(w, "generation job id already belongs to another request", http.StatusConflict)
+		return
+	} else if !errors.Is(getErr, store.ErrNotFound) {
+		http.Error(w, "failed to load generation job", http.StatusInternalServerError)
 		return
 	}
 	selectedProviderID, sharedSnapshot, err := s.snapshotGenerationChannel(r.Context(), tenantID, "image", input.ID, input.ProviderID, input.Model)
@@ -394,14 +401,14 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job := store.GenerationJob{
-		ID: input.ID, ProjectID: input.ProjectID, Kind: "image", Status: "queued",
+		ID: input.ID, UserID: strings.TrimSpace(userIDFrom(r)), ProjectID: input.ProjectID, Kind: "image", Status: "queued",
 		Prompt: strings.TrimSpace(input.Prompt), ProviderID: input.ProviderID, Model: input.Model,
 		Parameters: parameters, Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind, "executor": serverExecutorMarker})
 	if err := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, input.Parameters.Count, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID)
-		if getErr == nil && isMatchingServerImageJob(existing, requestHash) {
+		if getErr == nil && requestOwnsGenerationJob(r, existing) && isMatchingServerImageJob(existing, requestHash) {
 			w.WriteHeader(http.StatusOK)
 			writeJSON(w, publicGenerationJob(existing))
 			return
@@ -640,7 +647,7 @@ func (s *Server) generationWorkerLoop() {
 			now := time.Now().UTC()
 			attempt := randomGenerationOwner()
 			claimed, err := s.store.ClaimServerGenerationJob(s.generationRoot,
-				store.GenerationClaim{Kind: kinds[kindIndex], Executor: serverExecutorMarker},
+				store.GenerationClaim{Kind: kinds[kindIndex], Executor: serverExecutorMarker, RequireUserID: authMode() != "off"},
 				attempt, now, now.Add(generationLeaseDuration))
 			if err == nil {
 				nextKind = (kindIndex + 1) % len(kinds)
@@ -845,6 +852,10 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "failed to load generation job", http.StatusInternalServerError)
 		return
 	}
+	if !requestCanAccessGenerationJob(r, existing) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if existing.Kind == "film-stage" {
 		var parameters filmStageGenerationParameters
 		if json.Unmarshal(existing.Parameters, &parameters) != nil || parameters.Executor != "film-stage" || len(parameters.ChildJobIDs) > 1_000 {
@@ -871,6 +882,10 @@ func (s *Server) cancelServerGenerationJob(w http.ResponseWriter, r *http.Reques
 				} else {
 					http.Error(w, "failed to load film stage child job", http.StatusInternalServerError)
 				}
+				return
+			}
+			if authMode() != "off" && child.UserID != existing.UserID {
+				http.Error(w, "film stage child job binding is invalid", http.StatusConflict)
 				return
 			}
 			expectedCredits := 0
@@ -946,31 +961,23 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Executor != serverExecutorMarker {
 		return imageGenerationRequest{}, errors.New("invalid server job parameters")
 	}
-	configValue, err := s.store.GetState(ctx, tenantID, "config")
+	_, secretKey, err := generationCredentialStorageKeys(job.UserID)
 	if err != nil {
 		return imageGenerationRequest{}, err
 	}
-	if len(configValue) > 1<<20 {
-		return imageGenerationRequest{}, errors.New("image provider configuration exceeds limits")
-	}
 	var config storedImageConfig
-	if json.Unmarshal(configValue, &config) != nil || len(config.Channels) > 100 {
-		return imageGenerationRequest{}, errors.New("invalid config")
-	}
 	var channel *storedImageChannel
-	for index := range config.Channels {
-		if config.Channels[index].ID == job.ProviderID {
-			channel = &config.Channels[index]
-			break
-		}
-	}
+	personalChannel := false
 	apiKey := ""
-	systemPrompt := config.SystemPrompt
+	systemPrompt := ""
 	providerTimeout := time.Duration(0)
 	if parameters.SharedChannel != nil {
 		snapshot := parameters.SharedChannel
 		if snapshot.ProviderID != job.ProviderID {
 			return imageGenerationRequest{}, errors.New("invalid generation channel snapshot")
+		}
+		if err := validateGenerationSnapshotDestination(*snapshot); err != nil {
+			return imageGenerationRequest{}, err
 		}
 		apiKey, err = s.openGenerationChannelSecret(tenantID, job.ID, job.Kind, *snapshot)
 		if err != nil {
@@ -985,32 +992,44 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 			Providers: map[string]storedImageProvider{"image": {BaseURL: snapshot.BaseURL, Model: snapshot.Model, Protocol: snapshot.Protocol}},
 		}
 		systemPrompt = snapshot.SystemPrompt
-	} else if channel == nil {
-		shared, sharedSecret, sharedErr := s.resolveSharedChannel(ctx, tenantID, job.ProviderID)
-		if sharedErr != nil {
-			return imageGenerationRequest{}, errors.New("channel not found")
-		}
-		providerTimeout, err = personalChannelTimeout(shared.TimeoutSeconds)
-		if err != nil {
-			return imageGenerationRequest{}, err
-		}
-		value := sharedChannelStoredValue(shared)
-		channel, apiKey = &value, sharedSecret
 	} else {
-		secretValue, secretErr := s.decryptSecrets(ctx, tenantID)
-		if secretErr != nil {
-			return imageGenerationRequest{}, secretErr
-		}
-		var secrets storedConfigSecrets
-		if json.Unmarshal(secretValue, &secrets) != nil {
-			return imageGenerationRequest{}, errors.New("invalid secrets")
-		}
-		apiKey = secrets.APIKeys[job.ProviderID]["image"]
-		// See resolveMediaGenerationRequest: this must be read before a
-		// snapshot job can replace channel with a timeout-less synthetic value.
-		providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
+		config, _, err = s.loadGenerationConfig(ctx, tenantID, job.UserID)
 		if err != nil {
 			return imageGenerationRequest{}, err
+		}
+		systemPrompt = config.SystemPrompt
+		for index := range config.Channels {
+			if config.Channels[index].ID == job.ProviderID {
+				channel = &config.Channels[index]
+				personalChannel = true
+				break
+			}
+		}
+		if channel == nil {
+			shared, sharedSecret, sharedErr := s.resolveSharedChannel(ctx, tenantID, job.ProviderID)
+			if sharedErr != nil {
+				return imageGenerationRequest{}, errors.New("channel not found")
+			}
+			providerTimeout, err = personalChannelTimeout(shared.TimeoutSeconds)
+			if err != nil {
+				return imageGenerationRequest{}, err
+			}
+			value := sharedChannelStoredValue(shared)
+			channel, apiKey = &value, sharedSecret
+		} else {
+			secretValue, secretErr := s.decryptSecretsKey(ctx, tenantID, secretKey)
+			if secretErr != nil {
+				return imageGenerationRequest{}, secretErr
+			}
+			var secrets storedConfigSecrets
+			if json.Unmarshal(secretValue, &secrets) != nil {
+				return imageGenerationRequest{}, errors.New("invalid secrets")
+			}
+			apiKey = secrets.APIKeys[job.ProviderID]["image"]
+			providerTimeout, err = personalChannelTimeout(channel.TimeoutSeconds)
+			if err != nil {
+				return imageGenerationRequest{}, err
+			}
 		}
 	}
 	provider, ok := channel.Providers["image"]
@@ -1020,6 +1039,11 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	if provider.Protocol == "" {
 		provider.Protocol = "openai"
 	}
+	if personalChannel {
+		if err := validateAccountManagedChannelURL(provider.BaseURL); err != nil {
+			return imageGenerationRequest{}, err
+		}
+	}
 	if (provider.Protocol != "openai" && provider.Protocol != "gemini" && provider.Protocol != "template" && provider.Protocol != "apimart" && provider.Protocol != "kie") || strings.TrimSpace(provider.BaseURL) == "" {
 		return imageGenerationRequest{}, errors.New("unsupported image provider")
 	}
@@ -1028,7 +1052,7 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 			return imageGenerationRequest{}, err
 		}
 	}
-	if len(provider.BaseURL) > 8*1024 || len(provider.Model) > 500 || len(config.SystemPrompt) > 20_000 {
+	if len(provider.BaseURL) > 8*1024 || len(provider.Model) > 500 || len(systemPrompt) > 20_000 {
 		return imageGenerationRequest{}, errors.New("image provider configuration exceeds limits")
 	}
 	if apiKey == "" || len(apiKey) > 64*1024 {

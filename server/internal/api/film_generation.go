@@ -511,9 +511,8 @@ func (s *Server) filmGenerationProvider(ctx context.Context, tenantID, stage, pr
 	if providerID != "" {
 		return providerID, model
 	}
-	var config storedImageConfig
-	raw, err := s.store.GetState(ctx, tenantID, "config")
-	if err == nil && len(raw) <= 1<<20 && json.Unmarshal(raw, &config) == nil {
+	config, exists, err := s.loadGenerationConfig(ctx, tenantID, generationContextUserID(ctx))
+	if err == nil && exists {
 		providerID = config.ActiveChannelID
 		for _, channel := range config.Channels {
 			if channel.ID != providerID || model != "" {

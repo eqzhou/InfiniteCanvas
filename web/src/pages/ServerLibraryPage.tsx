@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
-import { canManageAdmin } from "@/services/admin";
+import { hasTenantOwnerCapability } from "@/services/admin";
 import {
   createLibraryAsset,
   deleteLibraryAsset,
@@ -69,7 +69,7 @@ export function ServerLibraryPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LibraryAsset | null>(null);
   const pageSize = 12;
-  const canManage = canManageAdmin(auth);
+  const canManage = hasTenantOwnerCapability(auth);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const load = useCallback(async () => {

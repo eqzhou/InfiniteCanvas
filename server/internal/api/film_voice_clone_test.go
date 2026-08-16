@@ -215,6 +215,7 @@ func (m *voiceFilmMemoryStore) CreateVoiceCloneBatch(_ context.Context, tenantID
 		}
 	}
 	value.IdempotencyKeyHash = idempotencyKey
+	job.UserID = userID
 	m.jobs[tenantKey(tenantID, job.ID)] = job
 	m.versions[voiceStoreKey(tenantID, projectID, value.ID)] = value
 	m.idempotencies[idempotency] = value.ID
@@ -695,14 +696,18 @@ func TestVoiceCloneWorkerResolvesExistingChannelWithoutPersistingCredential(t *t
 	executor := &scriptedVoiceCloneExecutor{requests: make(chan voiceCloneProviderRequest, 1)}
 	server.voiceCloneExecutor = executor
 	config := []byte(`{"channels":[{"id":"audio-main","name":"Audio","baseUrl":"https://audio.example/v1","defaultAudioModel":"voice-clone-1","providers":{"audio":{"baseUrl":"https://audio.example/v1","model":"voice-clone-1","protocol":"openai"}}}]}`)
-	if err := backend.PutState(t.Context(), store.DefaultTenantID, "config", config); err != nil {
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, userConfigStateKeyPrefix+"voice-owner", config); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
 		t.Fatal(err)
 	}
-	if response := putConfigSecrets(t, handler, []byte(`{"apiKeys":{"audio-main":{"audio":"`+authValue+`"}}}`)); response.Code != http.StatusNoContent {
-		t.Fatalf("store secrets: %d %s", response.Code, response.Body.String())
+	encryptedSecret, err := server.encryptSecrets([]byte(`{"apiKeys":{"audio-main":{"audio":"` + authValue + `"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PutState(t.Context(), store.DefaultTenantID, userSecretStateKeyPrefix+"voice-owner", encryptedSecret); err != nil {
+		t.Fatal(err)
 	}
 	identity, sample, consent := createVoiceIdentityAndSample(t, handler)
 	body := []byte(`{"providerId":"audio-main","model":"voice-clone-1","sampleIds":["` + sample.ID + `"],"consentId":"` + consent.ID + `","idempotencyKey":"voice-clone-worker-1"}`)
@@ -714,7 +719,9 @@ func TestVoiceCloneWorkerResolvesExistingChannelWithoutPersistingCredential(t *t
 			t.Fatalf("provider request=%#v", providerRequest)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("voice clone worker did not execute")
+		job, jobErr := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, version.GenerationJobID)
+		versions, versionErr := backend.ListVoiceIdentityVersions(t.Context(), store.DefaultTenantID, "voice-film", identity.ID)
+		t.Fatalf("voice clone worker did not execute: jobStatus=%q jobError=%q jobErr=%v versions=%#v versionErr=%v", job.Status, job.Error, jobErr, versions, versionErr)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {

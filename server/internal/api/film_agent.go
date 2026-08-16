@@ -279,7 +279,7 @@ func (s *Server) runFilmAgentTool(ctx context.Context, tenantID, tool string, ra
 		}
 		actor, ok := authUserFrom(ctx)
 		if !ok || !filmWaiverActorAllowed(actor) {
-			return nil, &toolError{status: http.StatusForbidden, message: "Film stage waiver requires an owner or admin"}
+			return nil, &toolError{status: http.StatusForbidden, message: "Film stage waiver requires an owner"}
 		}
 		backend, record, document, err := s.loadFilmForAgent(ctx, tenantID, args.ProjectID)
 		if err != nil {

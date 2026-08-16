@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,7 +87,7 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 26
+const currentSchemaVersion = 28
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -283,7 +284,221 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 27 {
+		if err := migrateV27(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
+	if version < 28 {
+		if err := migrateV28(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+const generationJobOwnershipBackfillSQL = `
+-- Prefer durable billing and audit evidence that was written alongside the
+-- original job. Every candidate must still resolve to an active account in
+-- the same tenant; stale or cross-tenant identifiers are ignored.
+WITH reserve_owner AS (
+  SELECT DISTINCT ON (credit.tenant_id,credit.job_id)
+    credit.tenant_id,credit.job_id,credit.user_id
+  FROM openboard_credit_logs AS credit
+  JOIN openboard_users AS account
+    ON account.tenant_id=credit.tenant_id
+   AND account.id=credit.user_id
+   AND account.status='active'
+  WHERE credit.reason='reserve' AND credit.job_id<>'' AND credit.user_id<>''
+  ORDER BY credit.tenant_id,credit.job_id,credit.id
+)
+UPDATE openboard_generation_jobs AS job
+SET user_id=evidence.user_id
+FROM reserve_owner AS evidence
+WHERE job.tenant_id=evidence.tenant_id
+  AND job.id=evidence.job_id
+  AND job.user_id='';
+
+WITH usage_owner AS (
+  SELECT DISTINCT ON (usage.tenant_id,usage.meta->>'jobId')
+    usage.tenant_id,usage.meta->>'jobId' AS job_id,usage.user_id
+  FROM openboard_usage_events AS usage
+  JOIN openboard_users AS account
+    ON account.tenant_id=usage.tenant_id
+   AND account.id=usage.user_id
+   AND account.status='active'
+  WHERE usage.kind='generation'
+    AND usage.user_id IS NOT NULL
+    AND usage.user_id<>''
+    AND usage.meta->>'jobId'<>''
+  ORDER BY usage.tenant_id,usage.meta->>'jobId',usage.id
+)
+UPDATE openboard_generation_jobs AS job
+SET user_id=evidence.user_id
+FROM usage_owner AS evidence
+WHERE job.tenant_id=evidence.tenant_id
+  AND job.id=evidence.job_id
+  AND job.user_id='';
+
+WITH ai_call_owner AS (
+  SELECT DISTINCT ON (ai_call.tenant_id,ai_call.job_id)
+    ai_call.tenant_id,ai_call.job_id,ai_call.user_id
+  FROM openboard_ai_call_logs AS ai_call
+  JOIN openboard_users AS account
+    ON account.tenant_id=ai_call.tenant_id
+   AND account.id=ai_call.user_id
+   AND account.status='active'
+  WHERE ai_call.job_id<>'' AND ai_call.user_id<>''
+  ORDER BY ai_call.tenant_id,ai_call.job_id,ai_call.created_at,ai_call.id
+)
+UPDATE openboard_generation_jobs AS job
+SET user_id=evidence.user_id
+FROM ai_call_owner AS evidence
+WHERE job.tenant_id=evidence.tenant_id
+  AND job.id=evidence.job_id
+  AND job.user_id='';
+
+-- Only server-defined executor/kind pairs may supply identity through job
+-- parameters. Generic browser job parameters are intentionally not trusted.
+WITH parameter_owner AS (
+  SELECT job.tenant_id,job.id,account.id AS user_id
+  FROM openboard_generation_jobs AS job
+  JOIN openboard_users AS account
+    ON account.tenant_id=job.tenant_id
+   AND account.status='active'
+   AND account.id=CASE
+     WHEN job.kind='workflow' AND job.parameters->>'executor'='workflow'
+       THEN job.parameters->>'billingUserId'
+     WHEN job.kind IN ('image','video','audio') AND job.parameters->>'executor'='comfyui'
+       THEN job.parameters->>'billingUserId'
+     WHEN job.kind='export' AND job.parameters->>'executor'='film-export'
+       THEN job.parameters->>'userId'
+     ELSE NULL
+   END
+  WHERE job.user_id=''
+)
+UPDATE openboard_generation_jobs AS job
+SET user_id=evidence.user_id
+FROM parameter_owner AS evidence
+WHERE job.tenant_id=evidence.tenant_id
+  AND job.id=evidence.id
+  AND job.user_id='';
+
+-- Film-stage parents do not consume credits themselves. They inherit an
+-- owner only when every referenced child exists and all children resolve to
+-- the same active tenant account.
+WITH film_child_owner AS (
+  SELECT parent.tenant_id,parent.id,MIN(child_account.id) AS user_id
+  FROM openboard_generation_jobs AS parent
+  CROSS JOIN LATERAL jsonb_array_elements_text(
+    CASE
+      WHEN jsonb_typeof(parent.parameters->'childJobIds')='array'
+        THEN parent.parameters->'childJobIds'
+      ELSE '[]'::jsonb
+    END
+  ) AS child_ref(child_id)
+  LEFT JOIN openboard_generation_jobs AS child
+    ON child.tenant_id=parent.tenant_id AND child.id=child_ref.child_id
+  LEFT JOIN openboard_users AS child_account
+    ON child_account.tenant_id=parent.tenant_id
+   AND child_account.id=child.user_id
+   AND child_account.status='active'
+  WHERE parent.user_id=''
+    AND parent.kind='film-stage'
+    AND parent.parameters->>'executor'='film-stage'
+  GROUP BY parent.tenant_id,parent.id
+  HAVING COUNT(*)>0
+    AND COUNT(child_account.id)=COUNT(*)
+    AND COUNT(DISTINCT child_account.id)=1
+)
+UPDATE openboard_generation_jobs AS job
+SET user_id=evidence.user_id
+FROM film_child_owner AS evidence
+WHERE job.tenant_id=evidence.tenant_id
+  AND job.id=evidence.id
+  AND job.user_id='';
+
+-- Old browser-only jobs may have no durable actor evidence. Assign only those
+-- remaining rows to a deterministic active tenant Owner. Ownerless tenants
+-- remain deliberately unclaimed so a normal user never inherits another
+-- account's prompts or generated media.
+WITH canonical_user AS (
+  SELECT DISTINCT ON (tenant_id) tenant_id,id
+  FROM openboard_users
+  WHERE status='active' AND role IN ('owner','admin')
+  ORDER BY tenant_id,created_at,id
+)
+UPDATE openboard_generation_jobs AS job
+SET user_id=account.id
+FROM canonical_user AS account
+WHERE job.tenant_id=account.tenant_id AND job.user_id='';
+`
+
+func migrateV28(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 28, `
+ALTER TABLE openboard_generation_jobs
+  ADD COLUMN IF NOT EXISTS user_id text NOT NULL DEFAULT '';
+
+`+generationJobOwnershipBackfillSQL+`
+
+CREATE INDEX IF NOT EXISTS openboard_generation_jobs_tenant_user_created_idx
+  ON openboard_generation_jobs (tenant_id,user_id,created_at DESC,id DESC);
+
+-- Claim legacy single-user settings for exactly one deterministic tenant
+-- owner. The encrypted value is copied as-is, so the migration never exposes
+-- plaintext credentials and ON CONFLICT preserves settings already saved in
+-- the new personal scope.
+WITH canonical_owner AS (
+  SELECT DISTINCT ON (tenant_id) tenant_id,id
+  FROM openboard_users
+  WHERE role='owner' AND status='active'
+  ORDER BY tenant_id,created_at,id
+)
+INSERT INTO openboard_state (tenant_id,key,value,updated_at)
+SELECT state.tenant_id,'__user_config_v1:' || owner.id,state.value,state.updated_at
+FROM openboard_state AS state
+JOIN canonical_owner AS owner ON owner.tenant_id=state.tenant_id
+WHERE state.key='config'
+ON CONFLICT (tenant_id,key) DO NOTHING;
+
+WITH canonical_owner AS (
+  SELECT DISTINCT ON (tenant_id) tenant_id,id
+  FROM openboard_users
+  WHERE role='owner' AND status='active'
+  ORDER BY tenant_id,created_at,id
+)
+INSERT INTO openboard_state (tenant_id,key,value,updated_at)
+SELECT state.tenant_id,'__encrypted_user_config_secrets_v1:' || owner.id,state.value,state.updated_at
+FROM openboard_state AS state
+JOIN canonical_owner AS owner ON owner.tenant_id=state.tenant_id
+WHERE state.key='__encrypted_config_secrets'
+ON CONFLICT (tenant_id,key) DO NOTHING;
+
+WITH canonical_owner AS (
+  SELECT DISTINCT ON (tenant_id) tenant_id,id
+  FROM openboard_users
+  WHERE role='owner' AND status='active'
+  ORDER BY tenant_id,created_at,id
+)
+INSERT INTO openboard_state (tenant_id,key,value,updated_at)
+SELECT state.tenant_id,'__user_workflow_templates_v1:' || owner.id,state.value,state.updated_at
+FROM openboard_state AS state
+JOIN canonical_owner AS owner ON owner.tenant_id=state.tenant_id
+WHERE state.key='workflow-templates'
+ON CONFLICT (tenant_id,key) DO NOTHING;
+`)
+}
+
+func migrateV27(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 27, `
+-- The former tenant-admin role is retained in the database constraint for
+-- rolling-upgrade compatibility. It had tenant-management authority, so map
+-- existing accounts to Owner rather than silently revoking that authority.
+UPDATE openboard_users SET role='owner' WHERE role='admin';
+-- Pending legacy admin invitations keep their constrained storage value. The
+-- registration transaction canonicalizes them to Owner when consumed; new
+-- invitation writes only permit ordinary tenant users.
+`)
 }
 
 func migrateV24(ctx context.Context, connection *pgxpool.Conn) error {
@@ -886,7 +1101,7 @@ func migrateV7(ctx context.Context, connection *pgxpool.Conn) error {
 	rows, err := tx.Query(ctx, `SELECT c.conname FROM pg_constraint c
 		JOIN pg_class t ON c.conrelid=t.oid JOIN pg_namespace n ON t.relnamespace=n.oid
 		WHERE c.contype='c' AND t.relname='openboard_generation_jobs'
-		AND pg_get_constraintdef(c.oid) LIKE '%status%'`)
+		AND n.nspname=current_schema() AND pg_get_constraintdef(c.oid) LIKE '%status%'`)
 	if err != nil {
 		return fmt.Errorf("list generation job status constraints: %w", err)
 	}
@@ -904,6 +1119,9 @@ func migrateV7(ctx context.Context, connection *pgxpool.Conn) error {
 		return err
 	}
 	for _, name := range names {
+		if !safeIdent(name) {
+			return errors.New("unsafe generation status constraint")
+		}
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`ALTER TABLE openboard_generation_jobs DROP CONSTRAINT %s`, name)); err != nil {
 			return fmt.Errorf("drop status constraint %s: %w", name, err)
 		}
@@ -1783,6 +2001,10 @@ func (s *PostgresStore) createFilmGenerationBatchOnce(
 	reservations []FilmGenerationReservation,
 ) (FilmRecord, error) {
 	tenantID = normalizeTenantID(tenantID)
+	userID = strings.TrimSpace(userID)
+	if len(userID) > 128 {
+		return FilmRecord{}, ErrInvalidInput
+	}
 	if expectedRevision < 1 || !json.Valid(document) || len(reservations) == 0 || len(reservations) > 1_000 {
 		return FilmRecord{}, ErrInvalidInput
 	}
@@ -1877,9 +2099,9 @@ func (s *PostgresStore) createFilmGenerationBatchOnce(
 	for _, item := range prepared {
 		reservation, job := item.reservation, item.reservation.Job
 		inserted, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-			(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
-			VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-			ON CONFLICT (tenant_id, id) DO NOTHING`, tenantID, job.ID, job.ProjectID, job.Kind,
+			(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+			VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			ON CONFLICT (tenant_id, id) DO NOTHING`, tenantID, userID, job.ID, job.ProjectID, job.Kind,
 			job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error,
 			item.created, item.updated)
 		if err != nil {
@@ -2115,7 +2337,7 @@ func loadWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string) (Wor
 		return WorkspaceSnapshot{}, err
 	}
 	rows.Close()
-	rows, err = tx.Query(ctx, `SELECT id,COALESCE(project_id,''),kind,status,prompt,provider_id,model,
+	rows, err = tx.Query(ctx, `SELECT id,user_id,COALESCE(project_id,''),kind,status,prompt,provider_id,model,
 		parameters,result,error,created_at,updated_at,lease_owner,lease_expires_at,deleted_at
 		FROM openboard_generation_jobs WHERE tenant_id=$1 ORDER BY id`, tenantID)
 	if err != nil {
@@ -2125,7 +2347,7 @@ func loadWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string) (Wor
 		var item WorkspaceGenerationJob
 		var created, updated time.Time
 		var leaseExpires, deletedAt *time.Time
-		if err := rows.Scan(&item.Job.ID, &item.Job.ProjectID, &item.Job.Kind, &item.Job.Status, &item.Job.Prompt,
+		if err := rows.Scan(&item.Job.ID, &item.UserID, &item.Job.ProjectID, &item.Job.Kind, &item.Job.Status, &item.Job.Prompt,
 			&item.Job.ProviderID, &item.Job.Model, &item.Job.Parameters, &item.Job.Result, &item.Job.Error,
 			&created, &updated, &item.Job.LeaseOwner, &leaseExpires, &deletedAt); err != nil {
 			rows.Close()
@@ -2133,6 +2355,7 @@ func loadWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string) (Wor
 		}
 		item.Job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
 		item.Job.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
+		item.Job.UserID = item.UserID
 		if leaseExpires != nil {
 			item.Job.LeaseExpiresAt = leaseExpires.UTC().Format(time.RFC3339Nano)
 		}
@@ -2161,7 +2384,7 @@ func loadWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string) (Wor
 	return snapshot, nil
 }
 
-var workspaceManagedStateKeys = []string{"assets", "config", "prompts", "workflow-templates", "__encrypted_config_secrets"}
+var workspaceManagedStateKeys = []string{"assets", "prompts"}
 
 func validateWorkspaceFilmRevisions(current, desired WorkspaceSnapshot) error {
 	revisions := make(map[string]int, len(current.Films))
@@ -2174,6 +2397,35 @@ func validateWorkspaceFilmRevisions(current, desired WorkspaceSnapshot) error {
 		}
 	}
 	return nil
+}
+
+func workspaceHasActiveServerGenerationJobs(snapshot WorkspaceSnapshot) bool {
+	for _, item := range snapshot.GenerationJobs {
+		if (item.Job.Status == "queued" || item.Job.Status == "running") && serverOwnedGenerationJob(item.Job) {
+			return true
+		}
+	}
+	return false
+}
+
+func upsertWorkspaceProject(ctx context.Context, tx pgx.Tx, tenantID string, project WorkspaceProject) error {
+	var metadata struct {
+		Title     string `json:"title"`
+		UpdatedAt string `json:"updatedAt"`
+	}
+	if json.Unmarshal(project.Document, &metadata) != nil {
+		return ErrInvalidInput
+	}
+	updated, err := time.Parse(time.RFC3339Nano, metadata.UpdatedAt)
+	if err != nil {
+		return ErrInvalidInput
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO openboard_projects
+		(tenant_id,id,title,updated_at,document,deleted_at) VALUES ($1,$2,$3,$4,$5,NULL)
+		ON CONFLICT (tenant_id,id) DO UPDATE SET title=EXCLUDED.title,
+		updated_at=EXCLUDED.updated_at,document=EXCLUDED.document,deleted_at=NULL`,
+		tenantID, project.ID, metadata.Title, updated, project.Document)
+	return err
 }
 
 func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, snapshot WorkspaceSnapshot) error {
@@ -2197,23 +2449,8 @@ func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, sna
 	}
 	projectIDs := make([]string, 0, len(snapshot.Projects))
 	for _, project := range snapshot.Projects {
-		var metadata struct {
-			Title     string `json:"title"`
-			UpdatedAt string `json:"updatedAt"`
-		}
-		if json.Unmarshal(project.Document, &metadata) != nil {
-			return ErrInvalidInput
-		}
-		updated, err := time.Parse(time.RFC3339Nano, metadata.UpdatedAt)
-		if err != nil {
-			return ErrInvalidInput
-		}
 		projectIDs = append(projectIDs, project.ID)
-		if _, err := tx.Exec(ctx, `INSERT INTO openboard_projects
-			(tenant_id,id,title,updated_at,document,deleted_at) VALUES ($1,$2,$3,$4,$5,NULL)
-			ON CONFLICT (tenant_id,id) DO UPDATE SET title=EXCLUDED.title,
-			updated_at=EXCLUDED.updated_at,document=EXCLUDED.document,deleted_at=NULL`,
-			tenantID, project.ID, metadata.Title, updated, project.Document); err != nil {
+		if err := upsertWorkspaceProject(ctx, tx, tenantID, project); err != nil {
 			return err
 		}
 	}
@@ -2229,6 +2466,13 @@ func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, sna
 		return err
 	}
 	for _, item := range snapshot.GenerationJobs {
+		userID := strings.TrimSpace(item.UserID)
+		if userID == "" {
+			userID = strings.TrimSpace(item.Job.UserID)
+		}
+		if len(userID) > 128 {
+			return ErrInvalidInput
+		}
 		created, err := time.Parse(time.RFC3339Nano, item.Job.CreatedAt)
 		if err != nil {
 			return ErrInvalidInput
@@ -2253,10 +2497,10 @@ func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, sna
 			deletedAt = parsed
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-			(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,
+			(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,
 			 created_at,updated_at,lease_owner,lease_expires_at,deleted_at)
-			VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-			tenantID, item.Job.ID, item.Job.ProjectID, item.Job.Kind, item.Job.Status, item.Job.Prompt,
+			VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			tenantID, userID, item.Job.ID, item.Job.ProjectID, item.Job.Kind, item.Job.Status, item.Job.Prompt,
 			item.Job.ProviderID, item.Job.Model, item.Job.Parameters, item.Job.Result, item.Job.Error,
 			created, updated, item.Job.LeaseOwner, leaseExpires, deletedAt); err != nil {
 			return err
@@ -2265,7 +2509,15 @@ func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, sna
 	if _, err := tx.Exec(ctx, `DELETE FROM openboard_state WHERE tenant_id=$1 AND key=ANY($2)`, tenantID, workspaceManagedStateKeys); err != nil {
 		return err
 	}
+	seenStateKeys := make(map[string]struct{}, len(snapshot.States))
 	for _, state := range snapshot.States {
+		if !slices.Contains(workspaceManagedStateKeys, state.Key) {
+			return ErrInvalidInput
+		}
+		if _, duplicate := seenStateKeys[state.Key]; duplicate {
+			return ErrInvalidInput
+		}
+		seenStateKeys[state.Key] = struct{}{}
 		if !state.Exists {
 			continue
 		}
@@ -2292,6 +2544,41 @@ func applyWorkspaceSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, sna
 		}
 	}
 	return nil
+}
+
+// applyWorkspaceProjectSnapshot updates only the selected project aggregate.
+// It intentionally leaves generation history, state, and unrelated projects
+// untouched; recreating those tables for a one-project import loses ownership
+// metadata and races independent user activity.
+func applyWorkspaceProjectSnapshot(ctx context.Context, tx pgx.Tx, tenantID string, project WorkspaceProject, film *WorkspaceFilm) error {
+	if err := upsertWorkspaceProject(ctx, tx, tenantID, project); err != nil {
+		return err
+	}
+	currentRevision := 0
+	err := tx.QueryRow(ctx, `SELECT revision FROM openboard_film_projects
+		WHERE tenant_id=$1 AND project_id=$2`, tenantID, project.ID).Scan(&currentRevision)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM openboard_film_projects WHERE tenant_id=$1 AND project_id=$2`, tenantID, project.ID); err != nil {
+		return err
+	}
+	if film == nil {
+		return nil
+	}
+	revision := currentRevision
+	if film.Revision > revision {
+		revision = film.Revision
+	}
+	revision++
+	if revision < 1 {
+		revision = 1
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO openboard_film_projects
+		(tenant_id,project_id,revision,document) VALUES ($1,$2,$3,$4)`, tenantID, film.ProjectID, revision, film.Document); err != nil {
+		return err
+	}
+	return syncFilmEntityProjection(ctx, tx, tenantID, film.ProjectID, revision, film.Document)
 }
 
 func lockWorkspace(ctx context.Context, tx pgx.Tx, tenantID string) error {
@@ -2341,6 +2628,12 @@ func (s *PostgresStore) ReplaceWorkspace(ctx context.Context, tenantID, expected
 	if currentVersion != expectedVersion {
 		return WorkspaceReplaceResult{}, ErrConflict
 	}
+	if workspaceHasActiveServerGenerationJobs(prior) {
+		return WorkspaceReplaceResult{}, ErrConflict
+	}
+	if workspaceHasActiveServerGenerationJobs(snapshot) {
+		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
 	if err := validateWorkspaceFilmRevisions(prior, snapshot); err != nil {
 		return WorkspaceReplaceResult{}, err
 	}
@@ -2373,7 +2666,7 @@ func (s *PostgresStore) ReplaceWorkspace(ctx context.Context, tenantID, expected
 
 func (s *PostgresStore) ReplaceWorkspaceProject(ctx context.Context, tenantID, projectID, expectedVersion, tokenDigest string, expiresAt time.Time, project WorkspaceProject, film *WorkspaceFilm, createdMedia []WorkspaceMedia) (WorkspaceReplaceResult, error) {
 	tenantID = normalizeTenantID(tenantID)
-	if project.ID != projectID || expectedVersion == "" || len(tokenDigest) != 64 || !expiresAt.After(time.Now()) {
+	if project.ID != projectID || film != nil && film.ProjectID != projectID || expectedVersion == "" || len(tokenDigest) != 64 || !expiresAt.After(time.Now()) {
 		return WorkspaceReplaceResult{}, ErrInvalidInput
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -2429,7 +2722,7 @@ func (s *PostgresStore) ReplaceWorkspaceProject(ctx context.Context, tenantID, p
 	}
 	priorJSON, _ := json.Marshal(prior)
 	createdMediaJSON, _ := json.Marshal(createdMedia)
-	if err := applyWorkspaceSnapshot(ctx, tx, tenantID, desired); err != nil {
+	if err := applyWorkspaceProjectSnapshot(ctx, tx, tenantID, project, film); err != nil {
 		return WorkspaceReplaceResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO openboard_workspace_restore_tokens
@@ -2485,6 +2778,9 @@ func (s *PostgresStore) RollbackWorkspace(ctx context.Context, tenantID, expecte
 	var prior WorkspaceSnapshot
 	if json.Unmarshal(priorJSON, &prior) != nil {
 		return WorkspaceReplaceResult{}, ErrInvalidInput
+	}
+	if workspaceHasActiveServerGenerationJobs(current) || workspaceHasActiveServerGenerationJobs(prior) {
+		return WorkspaceReplaceResult{}, ErrConflict
 	}
 	if err := applyWorkspaceSnapshot(ctx, tx, tenantID, prior); err != nil {
 		return WorkspaceReplaceResult{}, err
@@ -2679,18 +2975,21 @@ func (s *PostgresStore) CompareAndSwapStates(ctx context.Context, tenantID strin
 
 func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string, query GenerationJobQuery) (GenerationJobPage, error) {
 	tenantID = normalizeTenantID(tenantID)
+	query.UserID = strings.TrimSpace(query.UserID)
 	var total int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
-		WHERE tenant_id=$1 AND ($2='' OR project_id=$2) AND ($3='' OR kind=$3) AND ($4 OR status <> 'deleted')`,
-		tenantID, query.ProjectID, query.Kind, query.IncludeDeleted).Scan(&total); err != nil {
+		WHERE tenant_id=$1 AND ($2='' OR user_id=$2) AND ($3='' OR project_id=$3)
+		  AND ($4='' OR kind=$4) AND ($5 OR status <> 'deleted')`,
+		tenantID, query.UserID, query.ProjectID, query.Kind, query.IncludeDeleted).Scan(&total); err != nil {
 		return GenerationJobPage{}, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+	rows, err := s.pool.Query(ctx, `SELECT id, user_id, COALESCE(project_id,''), kind, status, prompt,
 		provider_id, model, parameters, result, error, created_at, updated_at
 		FROM openboard_generation_jobs
-		WHERE tenant_id=$1 AND ($2='' OR project_id=$2) AND ($3='' OR kind=$3) AND ($4 OR status <> 'deleted')
-		ORDER BY created_at DESC, id DESC LIMIT $5 OFFSET $6`,
-		tenantID, query.ProjectID, query.Kind, query.IncludeDeleted, query.PageSize, (query.Page-1)*query.PageSize)
+		WHERE tenant_id=$1 AND ($2='' OR user_id=$2) AND ($3='' OR project_id=$3)
+		  AND ($4='' OR kind=$4) AND ($5 OR status <> 'deleted')
+		ORDER BY created_at DESC, id DESC LIMIT $6 OFFSET $7`,
+		tenantID, query.UserID, query.ProjectID, query.Kind, query.IncludeDeleted, query.PageSize, (query.Page-1)*query.PageSize)
 	if err != nil {
 		return GenerationJobPage{}, err
 	}
@@ -2699,7 +2998,7 @@ func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string,
 	for rows.Next() {
 		var job GenerationJob
 		var created, updated time.Time
-		if err := rows.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt,
+		if err := rows.Scan(&job.ID, &job.UserID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt,
 			&job.ProviderID, &job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated); err != nil {
 			return GenerationJobPage{}, err
 		}
@@ -2718,11 +3017,11 @@ func (s *PostgresStore) GetGenerationJob(ctx context.Context, tenantID, id strin
 	var job GenerationJob
 	var created, updated time.Time
 	var leaseExpires *time.Time
-	err := s.pool.QueryRow(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+	err := s.pool.QueryRow(ctx, `SELECT id, user_id, COALESCE(project_id,''), kind, status, prompt,
 		provider_id, model, parameters, result, error, created_at, updated_at,
 		lease_owner, lease_expires_at
 		FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL`, tenantID, id).Scan(
-		&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
+		&job.ID, &job.UserID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
 		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated,
 		&job.LeaseOwner, &leaseExpires)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -2741,6 +3040,10 @@ func (s *PostgresStore) GetGenerationJob(ctx context.Context, tenantID, id strin
 
 func (s *PostgresStore) PutGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error {
 	tenantID = normalizeTenantID(tenantID)
+	job.UserID = strings.TrimSpace(job.UserID)
+	if len(job.UserID) > 128 {
+		return ErrInvalidInput
+	}
 	if job.Status == "deleted" {
 		return ErrGone
 	}
@@ -2761,13 +3064,13 @@ func (s *PostgresStore) PutGenerationJob(ctx context.Context, tenantID string, j
 		return err
 	}
 	result, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-		(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
-		VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+		VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (tenant_id, id) DO UPDATE SET project_id=EXCLUDED.project_id, kind=EXCLUDED.kind,
 		status=EXCLUDED.status, prompt=EXCLUDED.prompt, provider_id=EXCLUDED.provider_id,
 		model=EXCLUDED.model, parameters=EXCLUDED.parameters, result=EXCLUDED.result,
 		error=EXCLUDED.error, updated_at=EXCLUDED.updated_at
-		WHERE openboard_generation_jobs.deleted_at IS NULL AND openboard_generation_jobs.status <> 'deleted'`, tenantID, job.ID, job.ProjectID, job.Kind,
+		WHERE openboard_generation_jobs.deleted_at IS NULL AND openboard_generation_jobs.status <> 'deleted'`, tenantID, job.UserID, job.ID, job.ProjectID, job.Kind,
 		job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error,
 		created, updated)
 	if err != nil {
@@ -2781,6 +3084,10 @@ func (s *PostgresStore) PutGenerationJob(ctx context.Context, tenantID string, j
 
 func (s *PostgresStore) CreateGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error {
 	tenantID = normalizeTenantID(tenantID)
+	job.UserID = strings.TrimSpace(job.UserID)
+	if len(job.UserID) > 128 {
+		return ErrInvalidInput
+	}
 	if job.Status == "deleted" {
 		return ErrGone
 	}
@@ -2801,9 +3108,9 @@ func (s *PostgresStore) CreateGenerationJob(ctx context.Context, tenantID string
 		return err
 	}
 	result, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-		(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
-		VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		ON CONFLICT (tenant_id, id) DO NOTHING`, tenantID, job.ID, job.ProjectID, job.Kind,
+		(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+		VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		ON CONFLICT (tenant_id, id) DO NOTHING`, tenantID, job.UserID, job.ID, job.ProjectID, job.Kind,
 		job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error,
 		created, updated)
 	if err != nil {
@@ -2830,6 +3137,10 @@ func generationJobConflictError(ctx context.Context, tx pgx.Tx, tenantID, id str
 
 func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID, userID string, job GenerationJob, units int, usageMeta json.RawMessage) error {
 	tenantID = normalizeTenantID(tenantID)
+	userID = strings.TrimSpace(userID)
+	if len(userID) > 128 {
+		return ErrInvalidInput
+	}
 	if job.Status == "deleted" {
 		return ErrGone
 	}
@@ -2860,9 +3171,9 @@ func (s *PostgresStore) CreateServerGenerationJob(ctx context.Context, tenantID,
 		return err
 	}
 	inserted, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-		(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
-		VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		ON CONFLICT (tenant_id, id) DO NOTHING`, tenantID, job.ID, job.ProjectID, job.Kind,
+		(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+		VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		ON CONFLICT (tenant_id, id) DO NOTHING`, tenantID, userID, job.ID, job.ProjectID, job.Kind,
 		job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error,
 		created, updated)
 	if err != nil {
@@ -2931,8 +3242,9 @@ func (s *PostgresStore) ClaimServerGenerationJob(ctx context.Context, claim Gene
 		var tenantID, id string
 		err := s.pool.QueryRow(ctx, `SELECT tenant_id,id FROM openboard_generation_jobs
 			WHERE kind=$1 AND parameters->>'executor'=$2 AND deleted_at IS NULL
+			  AND (NOT $3 OR user_id<>'')
 			  AND (status='queued' OR (status='running' AND (lease_expires_at IS NULL OR lease_expires_at < clock_timestamp())))
-			ORDER BY created_at,id LIMIT 1`, claim.Kind, claim.Executor).Scan(&tenantID, &id)
+			ORDER BY created_at,id LIMIT 1`, claim.Kind, claim.Executor, claim.RequireUserID).Scan(&tenantID, &id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return TenantGenerationJob{}, ErrNotFound
 		}
@@ -2954,9 +3266,9 @@ func (s *PostgresStore) ClaimServerGenerationJob(ctx context.Context, claim Gene
 			status='running',lease_owner=$3,lease_expires_at=clock_timestamp()+interval '2 minutes',updated_at=clock_timestamp()
 			WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL AND
 			 (status='queued' OR (status='running' AND (lease_expires_at IS NULL OR lease_expires_at<clock_timestamp())))
-			RETURNING tenant_id,id,COALESCE(project_id,''),kind,status,prompt,provider_id,model,parameters,result,error,
+			RETURNING tenant_id,user_id,id,COALESCE(project_id,''),kind,status,prompt,provider_id,model,parameters,result,error,
 			created_at,updated_at,lease_owner,lease_expires_at`, tenantID, id, owner).Scan(
-			&claimed.TenantID, &claimed.Job.ID, &claimed.Job.ProjectID, &claimed.Job.Kind, &claimed.Job.Status,
+			&claimed.TenantID, &claimed.Job.UserID, &claimed.Job.ID, &claimed.Job.ProjectID, &claimed.Job.Kind, &claimed.Job.Status,
 			&claimed.Job.Prompt, &claimed.Job.ProviderID, &claimed.Job.Model, &claimed.Job.Parameters,
 			&claimed.Job.Result, &claimed.Job.Error, &created, &updated, &claimed.Job.LeaseOwner, &leaseExpires)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2992,11 +3304,11 @@ func (s *PostgresStore) CheckpointServerGenerationJob(ctx context.Context, tenan
 	}
 	row := tx.QueryRow(ctx, `UPDATE openboard_generation_jobs SET result=$4, updated_at=$5
 		WHERE tenant_id=$1 AND id=$2 AND lease_owner=$3 AND status='running'
-		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
+		RETURNING id, user_id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
 		parameters, result, error, created_at, updated_at`, tenantID, id, owner, result, now)
 	var job GenerationJob
 	var created, updated time.Time
-	err = row.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
+	err = row.Scan(&job.ID, &job.UserID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
 		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GenerationJob{}, ErrConflict
@@ -3066,7 +3378,7 @@ func (s *PostgresStore) completeServerGenerationJobOnce(ctx context.Context, ten
 		status=$4, result=$5, error=$6, updated_at=$7, lease_owner='', lease_expires_at=NULL,
 		parameters=parameters #- '{sharedChannel,secret}'
 		WHERE tenant_id=$1 AND id=$2 AND lease_owner=$3 AND status='running'
-		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
+		RETURNING id, user_id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
 		parameters, result, error, created_at, updated_at`, tenantID, id, owner, status, result, errorMessage, now))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GenerationJob{}, ErrConflict
@@ -3124,10 +3436,10 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 		   (kind='workflow' AND parameters->>'executor'='workflow') OR
 		   (kind='film-stage' AND parameters->>'executor'='film-stage') OR
 		   (kind='export' AND parameters->>'executor'='film-export'))
-		RETURNING id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
+		RETURNING id, user_id, COALESCE(project_id,''), kind, status, prompt, provider_id, model,
 		parameters, result, error, created_at, updated_at`, tenantID, id, now))
 	if errors.Is(err, pgx.ErrNoRows) {
-		job, getErr := scanGenerationJob(tx.QueryRow(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+		job, getErr := scanGenerationJob(tx.QueryRow(ctx, `SELECT id, user_id, COALESCE(project_id,''), kind, status, prompt,
 			provider_id, model, parameters, result, error, created_at, updated_at
 			FROM openboard_generation_jobs WHERE tenant_id=$1 AND id=$2`, tenantID, id))
 		if errors.Is(getErr, pgx.ErrNoRows) {
@@ -3173,7 +3485,7 @@ func (s *PostgresStore) cancelServerGenerationJobOnce(ctx context.Context, tenan
 func scanGenerationJob(row pgx.Row) (GenerationJob, error) {
 	var job GenerationJob
 	var created, updated time.Time
-	err := row.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
+	err := row.Scan(&job.ID, &job.UserID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID,
 		&job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated)
 	if err != nil {
 		return GenerationJob{}, err
@@ -3401,7 +3713,10 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND status IN ('queued','running') AND
 		  ((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR
+		   (kind IN ('image','video','audio') AND parameters->>'executor'='comfyui') OR
+		   (kind='audio' AND parameters->>'executor'='voice-clone') OR
 		   (kind='workflow' AND parameters->>'executor'='workflow') OR
+		   (kind='film-stage' AND parameters->>'executor'='film-stage') OR
 		   (kind='export' AND parameters->>'executor'='film-export'))`, tenantID).Scan(&activeServerJobs); err != nil {
 		return err
 	}
@@ -3412,6 +3727,10 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 		return err
 	}
 	for _, job := range jobs {
+		job.UserID = strings.TrimSpace(job.UserID)
+		if len(job.UserID) > 128 {
+			return ErrInvalidInput
+		}
 		created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
 		if err != nil {
 			return fmt.Errorf("invalid generation createdAt: %w", err)
@@ -3421,9 +3740,9 @@ func (s *PostgresStore) ReplaceGenerationJobs(ctx context.Context, tenantID stri
 			return fmt.Errorf("invalid generation updatedAt: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-			(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
-			VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			tenantID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt, job.ProviderID,
+			(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+			VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			tenantID, job.UserID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt, job.ProviderID,
 			job.Model, job.Parameters, job.Result, job.Error, created, updated); err != nil {
 			return err
 		}
@@ -3441,7 +3760,7 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	if err := lockWorkspace(ctx, tx, tenantID); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT id, COALESCE(project_id,''), kind, status, prompt,
+	rows, err := tx.Query(ctx, `SELECT id, user_id, COALESCE(project_id,''), kind, status, prompt,
 		provider_id, model, parameters, result, error, created_at, updated_at
 		FROM openboard_generation_jobs WHERE tenant_id=$1 ORDER BY id`, tenantID)
 	if err != nil {
@@ -3451,7 +3770,7 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	for rows.Next() {
 		var job GenerationJob
 		var created, updated time.Time
-		if err := rows.Scan(&job.ID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID, &job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated); err != nil {
+		if err := rows.Scan(&job.ID, &job.UserID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt, &job.ProviderID, &job.Model, &job.Parameters, &job.Result, &job.Error, &created, &updated); err != nil {
 			rows.Close()
 			return err
 		}
@@ -3474,8 +3793,12 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	}
 	var active int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs WHERE tenant_id=$1 AND status IN ('queued','running') AND
-			((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR (kind='workflow' AND parameters->>'executor'='workflow') OR
-		 (kind='export' AND parameters->>'executor'='film-export'))`, tenantID).Scan(&active); err != nil {
+			((kind IN ('text','image','video','audio') AND parameters->>'executor'='server') OR
+			 (kind IN ('image','video','audio') AND parameters->>'executor'='comfyui') OR
+			 (kind='audio' AND parameters->>'executor'='voice-clone') OR
+			 (kind='workflow' AND parameters->>'executor'='workflow') OR
+			 (kind='film-stage' AND parameters->>'executor'='film-stage') OR
+			 (kind='export' AND parameters->>'executor'='film-export'))`, tenantID).Scan(&active); err != nil {
 		return err
 	}
 	if active > 0 {
@@ -3484,7 +3807,18 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 	if _, err := tx.Exec(ctx, `DELETE FROM openboard_generation_jobs WHERE tenant_id=$1 AND deleted_at IS NULL`, tenantID); err != nil {
 		return err
 	}
+	currentOwners := make(map[string]string, len(current))
+	for _, job := range current {
+		currentOwners[job.ID] = job.UserID
+	}
 	for _, job := range jobs {
+		job.UserID = strings.TrimSpace(job.UserID)
+		if job.UserID == "" {
+			job.UserID = currentOwners[job.ID]
+		}
+		if len(job.UserID) > 128 {
+			return ErrInvalidInput
+		}
 		created, err := time.Parse(time.RFC3339Nano, job.CreatedAt)
 		if err != nil {
 			return err
@@ -3494,8 +3828,8 @@ func (s *PostgresStore) CompareAndSwapGenerationJobs(ctx context.Context, tenant
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO openboard_generation_jobs
-			(tenant_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
-			VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, tenantID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error, created, updated); err != nil {
+			(tenant_id,user_id,id,project_id,kind,status,prompt,provider_id,model,parameters,result,error,created_at,updated_at)
+			VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, tenantID, job.UserID, job.ID, job.ProjectID, job.Kind, job.Status, job.Prompt, job.ProviderID, job.Model, job.Parameters, job.Result, job.Error, created, updated); err != nil {
 			return err
 		}
 	}
@@ -3959,6 +4293,41 @@ func (s *PostgresStore) DeleteAICallLogs(ctx context.Context, tenantID string, i
 
 // --- Auth / usage ---
 
+const accountBootstrapLockID int64 = 0x4f42415554484254
+
+func lockAccountBootstrap(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, accountBootstrapLockID)
+	return err
+}
+
+func validateBootstrapClaim(userCount int, authorized bool) error {
+	if (userCount == 0) != authorized {
+		return ErrBootstrapRequired
+	}
+	return nil
+}
+
+func claimLegacyLocalDataTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	for _, mapping := range []struct {
+		legacyKey string
+		userKey   string
+	}{
+		{legacyKey: "config", userKey: "__user_config_v1:" + userID},
+		{legacyKey: "__encrypted_config_secrets", userKey: "__encrypted_user_config_secrets_v1:" + userID},
+		{legacyKey: "workflow-templates", userKey: "__user_workflow_templates_v1:" + userID},
+	} {
+		if _, err := tx.Exec(ctx, `INSERT INTO openboard_state (tenant_id,key,value,updated_at)
+			SELECT tenant_id,$3,value,updated_at FROM openboard_state
+			WHERE tenant_id=$1 AND key=$2
+			ON CONFLICT (tenant_id,key) DO NOTHING`, DefaultTenantID, mapping.legacyKey, mapping.userKey); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE openboard_generation_jobs
+		SET user_id=$2 WHERE tenant_id=$1 AND user_id=''`, DefaultTenantID, userID)
+	return err
+}
+
 func (s *PostgresStore) CountUsers(ctx context.Context) (int, error) {
 	var n int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_users`).Scan(&n); err != nil {
@@ -3999,6 +4368,11 @@ func (s *PostgresStore) RegisterUser(ctx context.Context, input RegisterInput) (
 		return AuthUser{}, "", err
 	}
 	defer tx.Rollback(ctx)
+	if inviteToken == "" {
+		if err := lockAccountBootstrap(ctx, tx); err != nil {
+			return AuthUser{}, "", err
+		}
+	}
 
 	userID, err := newID()
 	if err != nil {
@@ -4008,6 +4382,7 @@ func (s *PostgresStore) RegisterUser(ctx context.Context, input RegisterInput) (
 	var tenantID string
 	role := "owner"
 	var invitationID string
+	firstUser := false
 	if inviteToken != "" {
 		var invitationEmail string
 		if err := tx.QueryRow(ctx, `
@@ -4021,16 +4396,22 @@ FOR UPDATE`, HashSessionToken(inviteToken)).Scan(&invitationID, &tenantID, &invi
 		} else if !strings.EqualFold(strings.TrimSpace(invitationEmail), email) {
 			return AuthUser{}, "", ErrInvitationInvalid
 		}
-		if role != "admin" && role != "member" {
+		role = strings.ToLower(strings.TrimSpace(role))
+		if role != "member" && role != "admin" {
 			return AuthUser{}, "", ErrInvitationInvalid
 		}
+		role = CanonicalTenantRole(role)
 	} else {
 		var userCount int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_users`).Scan(&userCount); err != nil {
 			return AuthUser{}, "", err
 		}
+		if err := validateBootstrapClaim(userCount, input.BootstrapAuthorized); err != nil {
+			return AuthUser{}, "", err
+		}
 		if userCount == 0 {
 			// First user claims the local tenant (existing data).
+			firstUser = true
 			tenantID = DefaultTenantID
 			if _, err := tx.Exec(ctx, `
 INSERT INTO openboard_tenants (id, name, plan, storage_quota_bytes, generation_quota_monthly)
@@ -4059,6 +4440,11 @@ VALUES ($1, $2, $3, $4, $5, $6)`, userID, tenantID, email, passwordHash, display
 			return AuthUser{}, "", ErrConflict
 		}
 		return AuthUser{}, "", err
+	}
+	if firstUser {
+		if err := claimLegacyLocalDataTx(ctx, tx, userID); err != nil {
+			return AuthUser{}, "", err
+		}
 	}
 
 	token, tokenHash, err := NewSessionToken()
@@ -4094,7 +4480,7 @@ WHERE id=$1 AND accepted_at IS NULL AND revoked_at IS NULL`, invitationID, userI
 	user := AuthUser{
 		ID: userID, TenantID: tenantID, Email: email, DisplayName: displayName, Role: role, Status: "active", Credits: 0,
 	}
-	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
+	user.PlatformAdmin = IsConfiguredPlatformAdminUserID(user.ID)
 	return user, token, nil
 }
 
@@ -4118,7 +4504,7 @@ FROM openboard_users WHERE email=$1`, email).Scan(
 	if strings.EqualFold(user.Status, "ban") {
 		return AuthUser{}, "", ErrBanned
 	}
-	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
+	user.PlatformAdmin = IsConfiguredPlatformAdminUserID(user.ID)
 	token, tokenHash, err := NewSessionToken()
 	if err != nil {
 		return AuthUser{}, "", err
@@ -4171,7 +4557,7 @@ WHERE s.token_hash=$1`, hash).Scan(
 	if strings.EqualFold(user.Status, "ban") {
 		return AuthUser{}, ErrBanned
 	}
-	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
+	user.PlatformAdmin = IsConfiguredPlatformAdminUserID(user.ID)
 	return user, nil
 }
 
@@ -4314,7 +4700,7 @@ func (s *PostgresStore) CreateTenantInvitation(ctx context.Context, input Tenant
 	email, validEmail := NormalizeEmail(input.Email)
 	role := strings.ToLower(strings.TrimSpace(input.Role))
 	if createdBy == "" || !validEmail ||
-		(role != "member" && role != "admin") || input.ExpiresAt.Before(time.Now().UTC()) ||
+		role != "member" || input.ExpiresAt.Before(time.Now().UTC()) ||
 		input.ExpiresAt.After(time.Now().UTC().Add(30*24*time.Hour)) {
 		return CreatedTenantInvitation{}, ErrInvalidInput
 	}
@@ -4354,7 +4740,7 @@ WHERE tenant_id=$1 AND lower(email)=lower($2) AND accepted_at IS NULL AND revoke
 	err = s.pool.QueryRow(ctx, `
 INSERT INTO openboard_tenant_invitations (id, tenant_id, email, role, token_hash, expires_at, created_by)
 SELECT $1, $2, $3, $4, $5, $6, $7
-WHERE EXISTS (SELECT 1 FROM openboard_users WHERE id=$7 AND tenant_id=$2 AND role IN ('owner','admin') AND status='active')
+		WHERE EXISTS (SELECT 1 FROM openboard_users WHERE id=$7 AND tenant_id=$2 AND role='owner' AND status='active')
 RETURNING id, tenant_id, email, role, expires_at, created_at`, id, tenantID, email, role, tokenHash, input.ExpiresAt.UTC(), createdBy).
 		Scan(&invitation.ID, &invitation.TenantID, &invitation.Email, &invitation.Role, &expires, &created)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -4624,7 +5010,10 @@ func scanAuthUser(row pgx.Row) (AuthUser, error) {
 	if user.Status == "" {
 		user.Status = "active"
 	}
-	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
+	if role := CanonicalTenantRole(user.Role); role != "" {
+		user.Role = role
+	}
+	user.PlatformAdmin = IsConfiguredPlatformAdminUserID(user.ID)
 	return user, nil
 }
 
@@ -4779,7 +5168,9 @@ FROM openboard_users WHERE tenant_id=$1 AND id=$2`, tenantID, userID))
 }
 
 func (s *PostgresStore) GetModelCreditConfig(ctx context.Context, tenantID string) (ModelCreditConfig, error) {
-	tenantID = normalizeTenantID(tenantID)
+	// Credit pricing is platform-owned. Keep the parameter for interface
+	// compatibility, but resolve every tenant against the global catalog.
+	tenantID = DefaultTenantID
 	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}, DefaultCredits: 1}
 	raw, err := s.GetState(ctx, tenantID, adminBillingStateKey)
 	if errors.Is(err, ErrNotFound) || len(raw) == 0 {
@@ -4806,7 +5197,7 @@ func (s *PostgresStore) GetModelCreditConfig(ctx context.Context, tenantID strin
 }
 
 func (s *PostgresStore) PutModelCreditConfig(ctx context.Context, tenantID string, config ModelCreditConfig) error {
-	tenantID = normalizeTenantID(tenantID)
+	tenantID = DefaultTenantID
 	raw, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -4815,7 +5206,6 @@ func (s *PostgresStore) PutModelCreditConfig(ctx context.Context, tenantID strin
 }
 
 func (s *PostgresStore) GetModelCreditCost(ctx context.Context, tenantID, model string) (int, error) {
-	tenantID = normalizeTenantID(tenantID)
 	cfg, err := s.GetModelCreditConfig(ctx, tenantID)
 	if err != nil {
 		return 0, err
@@ -4832,7 +5222,7 @@ func (s *PostgresStore) GetModelCreditCost(ctx context.Context, tenantID, model 
 func (s *PostgresStore) modelCreditCostTx(ctx context.Context, tx pgx.Tx, tenantID, model string) (int, error) {
 	var raw []byte
 	err := tx.QueryRow(ctx, `SELECT value FROM openboard_state WHERE tenant_id=$1 AND key=$2`,
-		normalizeTenantID(tenantID), adminBillingStateKey).Scan(&raw)
+		DefaultTenantID, adminBillingStateKey).Scan(&raw)
 	cfg := ModelCreditConfig{ModelCosts: []ModelCreditCost{}, DefaultCredits: 1}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return 0, err
@@ -5202,6 +5592,9 @@ func (s *PostgresStore) UpsertLinuxDoUser(ctx context.Context, input LinuxDoUser
 		return AuthUser{}, "", err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockAccountBootstrap(ctx, tx); err != nil {
+		return AuthUser{}, "", err
+	}
 	var user AuthUser
 	err = tx.QueryRow(ctx, `
 SELECT id, tenant_id, email, display_name, role, COALESCE(credits,0), COALESCE(status,'active'), COALESCE(linux_do_id,'')
@@ -5215,6 +5608,12 @@ FROM openboard_users WHERE linux_do_id=$1`, linuxID).Scan(
 		var userCount int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM openboard_users`).Scan(&userCount); err != nil {
 			return AuthUser{}, "", err
+		}
+		if err := validateBootstrapClaim(userCount, input.BootstrapAuthorized); err != nil {
+			return AuthUser{}, "", err
+		}
+		if !input.CreateAllowed {
+			return AuthUser{}, "", ErrRegistrationDisabled
 		}
 		userID, err := newID()
 		if err != nil {
@@ -5268,7 +5667,7 @@ VALUES ($1,$2,$3,'',$4,$5,0,'active',$6)`, userID, tenantID, email, displayName,
 	} else {
 		return AuthUser{}, "", err
 	}
-	user.PlatformAdmin = IsConfiguredPlatformAdmin(user.Email)
+	user.PlatformAdmin = IsConfiguredPlatformAdminUserID(user.ID)
 	token, tokenHash, err := NewSessionToken()
 	if err != nil {
 		return AuthUser{}, "", err

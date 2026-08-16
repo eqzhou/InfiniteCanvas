@@ -54,7 +54,7 @@ describe("transaction contracts", () => {
     expect(fetcher.mock.calls[1]?.[0]).toBe("/api/projects/import");
   });
 
-  test("sends the complete workspace and strict Film media in one CAS transaction", async () => {
+  test("sends tenant workspace data and strict Film media without personal settings", async () => {
     const project = createProject("Film", "film");
     const document = createFilmDocument(project.id, "2026-08-09T00:00:00.000Z");
     document.timeline.tracks[0]!.clips = [{ id: "timeline-only", revision: 1, source: "media:timeline", order: 0, start: 0, end: 1, trimIn: 0, trimOut: 0, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, transition: "cut" }];
@@ -95,10 +95,8 @@ describe("transaction contracts", () => {
       projects: snapshot.projects,
       films: [film],
       assets: snapshot.assets,
-      config: snapshot.config,
       prompts: snapshot.prompts,
       generationJobs: snapshot.generationJobs,
-      workflowTemplates: { version: 1, templates: snapshot.workflowTemplates },
     };
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual(
       JSON.parse(JSON.stringify(expectedBody)),

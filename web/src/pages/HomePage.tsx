@@ -26,6 +26,7 @@ import type { BoardNode } from "@/types/board";
 import { CanvasAssetsPanel } from "@/components/canvas/CanvasAssetsPanel";
 import { CanvasPromptsPanel } from "@/components/canvas/CanvasPromptsPanel";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { hasTenantOwnerCapability } from "@/services/admin";
 import {
   directorCaptureStore,
   getDirectorCaptureOwnerScope,
@@ -62,7 +63,7 @@ export function HomePage() {
   const setViewport = useBoardStore((s) => s.setViewport);
   const createProject = useBoardStore((s) => s.createProject);
   const renameProject = useBoardStore((s) => s.renameProject);
-  const deleteProjects = useBoardStore((s) => s.deleteProjects);
+  const deleteProjectsDurably = useBoardStore((s) => s.deleteProjectsDurably);
   const exportActiveProject = useBoardStore((s) => s.exportActiveProject);
   const importProject = useBoardStore((s) => s.importProject);
   const config = useBoardStore((s) => s.config);
@@ -81,6 +82,7 @@ export function HomePage() {
   const [panelWidth, setPanelWidth] = useState(config.canvasPanelWidth ?? 256);
   const [confirmDeleteCount, setConfirmDeleteCount] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const tenantOwner = hasTenantOwnerCapability(auth);
   const panelCollapsed = config.canvasPanelCollapsed === true;
   const panelTab = config.canvasPanelTab ?? "projects";
   const panelActionClass = panelWidth < 300
@@ -351,19 +353,21 @@ export function HomePage() {
               >
                 <Archive size={16} />
               </button>
-              <button
-                type="button"
-                className={`${panelActionClass} !text-[var(--ob-danger)]`}
-                title={t("workspace.deleteSelected")}
-                aria-label={t("workspace.deleteSelected")}
-                disabled={!checked.length}
-                onClick={() => {
-                  if (!checked.length) return;
-                  setConfirmDeleteCount(checked.length);
-                }}
-              >
-                <Trash2 size={16} />
-              </button>
+              {tenantOwner ? (
+                <button
+                  type="button"
+                  className={`${panelActionClass} !text-[var(--ob-danger)]`}
+                  title={t("workspace.deleteSelected")}
+                  aria-label={t("workspace.deleteSelected")}
+                  disabled={!checked.length}
+                  onClick={() => {
+                    if (!checked.length) return;
+                    setConfirmDeleteCount(checked.length);
+                  }}
+                >
+                  <Trash2 size={16} />
+                </button>
+              ) : null}
             </>
           ) : null}
           {panelTab === "elements" ? (
@@ -398,7 +402,7 @@ export function HomePage() {
           <input
             ref={fileRef}
             type="file"
-            accept=".json,.openboard,application/json,application/zip"
+            accept={tenantOwner ? ".json,.openboard,application/json,application/zip" : ".json,application/json"}
             className="hidden"
             onChange={async (e) => {
               const input = e.currentTarget;
@@ -414,6 +418,7 @@ export function HomePage() {
                   if (data.projectKind === "film") throw new Error("影片项目必须使用包含制作数据的 .openboard 完整包");
                   importProject(data);
                 } else {
+                  if (!tenantOwner) throw new Error(t("admin.permissionRequired"));
                   await importCompleteProjectBundle(file);
                 }
               } catch (error) {
@@ -662,16 +667,18 @@ export function HomePage() {
           </section>
         </div>
       ) : null}
-      {confirmDeleteCount !== null ? (
+      {tenantOwner && confirmDeleteCount !== null ? (
         <ConfirmDialog
           title={t("workspace.confirmDeleteProjects", { count: confirmDeleteCount })}
           confirmLabel={t("common.delete")}
           tone="danger"
           onCancel={() => setConfirmDeleteCount(null)}
           onConfirm={() => {
-            deleteProjects(checked);
-            setChecked([]);
+            const projectIDs = [...checked];
             setConfirmDeleteCount(null);
+            void deleteProjectsDurably(projectIDs)
+              .then(() => setChecked([]))
+              .catch((cause) => setErrorMessage(cause instanceof Error ? cause.message : String(cause)));
           }}
         />
       ) : null}

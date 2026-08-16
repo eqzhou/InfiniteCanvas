@@ -159,6 +159,36 @@ func TestTenantStoragePoolAdminRoutesRejectMembersAndStayTenantScoped(t *testing
 	}
 }
 
+func TestTenantOwnerCannotAuthorizePrivateNetworkStorage(t *testing.T) {
+	t.Setenv(webDAVMediaFeatureEnv, "true")
+	backend := newMemoryStore()
+	owner := store.AuthUser{ID: "owner-private", TenantID: "tenant-private", Role: "owner", Status: "active"}
+	seedAdminUser(backend, owner)
+	handler := tenantAdminHandler(t, backend, owner)
+	config := []byte(`[{"id":"private-dav","kind":"webdav","endpoint":"https://10.0.0.8/dav","prefix":"media","weight":1,"healthy":true,"allowPrivate":true}]`)
+	got := putAdminConfigForTest(t, handler, "/api/tenant/storage-pool", config)
+	if got.Code != http.StatusForbidden {
+		t.Fatalf("owner private-network storage = %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestTenantOwnerCanPreservePlatformApprovedPrivateNetworkStorage(t *testing.T) {
+	t.Setenv(webDAVMediaFeatureEnv, "true")
+	backend := newMemoryStore()
+	approver := store.AuthUser{ID: "platform-owner", TenantID: "tenant-private", Role: "owner", Status: "active", PlatformAdmin: true}
+	owner := store.AuthUser{ID: "owner-private", TenantID: approver.TenantID, Role: "owner", Status: "active"}
+	seedAdminUser(backend, approver)
+	seedAdminUser(backend, owner)
+	initial := []byte(`[{"id":"private-dav","kind":"webdav","endpoint":"https://10.0.0.8/dav","prefix":"media","weight":1,"healthy":true,"allowPrivate":true}]`)
+	if got := putAdminConfigForTest(t, tenantAdminHandler(t, backend, approver), "/api/tenant/storage-pool", initial); got.Code != http.StatusOK {
+		t.Fatalf("platform approval = %d %s", got.Code, got.Body.String())
+	}
+	updated := []byte(`[{"id":"private-dav","kind":"webdav","endpoint":"https://10.0.0.8/dav","prefix":"media","weight":2,"healthy":false,"allowPrivate":true}]`)
+	if got := putAdminConfigForTest(t, tenantAdminHandler(t, backend, owner), "/api/tenant/storage-pool", updated); got.Code != http.StatusOK {
+		t.Fatalf("owner preserved approved private storage = %d %s", got.Code, got.Body.String())
+	}
+}
+
 func TestTenantWebDAVStoragePoolIsFeatureGatedEncryptedAndSelectable(t *testing.T) {
 	t.Setenv("OPENBOARD_AUTH_MODE", "off")
 	t.Setenv("OPENBOARD_TOKEN", "test-token")

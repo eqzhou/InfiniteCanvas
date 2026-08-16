@@ -682,7 +682,7 @@ type filmStageWaiverRevokeRequest struct {
 
 func filmWaiverActorAllowed(actor store.AuthUser) bool {
 	role := strings.ToLower(strings.TrimSpace(actor.Role))
-	return actor.ID != "" && strings.EqualFold(actor.Status, "active") && (role == "owner" || role == "admin")
+	return actor.ID != "" && strings.EqualFold(actor.Status, "active") && role == "owner"
 }
 
 func filmStageDownstream(stageID string) []string {
@@ -711,7 +711,7 @@ func activeFilmStageWaiver(document filmDocument, stage filmStage) (filmStageWai
 
 func createFilmStageWaiver(document filmDocument, stageID string, input filmStageWaiverRequest, actor store.AuthUser, now string) (filmDocument, error) {
 	if !filmWaiverActorAllowed(actor) {
-		return filmDocument{}, errors.New("film stage waiver requires an owner or admin")
+		return filmDocument{}, errors.New("film stage waiver requires an owner")
 	}
 	if document.Revision != input.Revision {
 		return filmDocument{}, errors.New("project revision conflict")
@@ -749,7 +749,7 @@ func createFilmStageWaiver(document filmDocument, stageID string, input filmStag
 
 func revokeFilmStageWaiver(document filmDocument, waiverID string, input filmStageWaiverRevokeRequest, actor store.AuthUser, now string) (filmDocument, error) {
 	if !filmWaiverActorAllowed(actor) {
-		return filmDocument{}, errors.New("film stage waiver requires an owner or admin")
+		return filmDocument{}, errors.New("film stage waiver requires an owner")
 	}
 	if document.Revision != input.Revision {
 		return filmDocument{}, errors.New("project revision conflict")

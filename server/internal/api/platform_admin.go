@@ -11,34 +11,6 @@ import (
 	"github.com/openboard/openboard/server/internal/store"
 )
 
-func (s *Server) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if s.store == nil {
-		http.Error(w, "platform administration unavailable", http.StatusServiceUnavailable)
-		return false
-	}
-	if authMode() == "off" {
-		if !s.authorizeProcessToken(r) {
-			http.Error(w, "invalid access token", http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-	user, ok := authUserFrom(r.Context())
-	if !ok {
-		http.Error(w, "login required", http.StatusUnauthorized)
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(user.Status), "ban") {
-		http.Error(w, "account disabled", http.StatusForbidden)
-		return false
-	}
-	if !user.PlatformAdmin && !store.IsConfiguredPlatformAdmin(user.Email) {
-		http.Error(w, "platform administrator required", http.StatusForbidden)
-		return false
-	}
-	return true
-}
-
 func platformStore(s *Server, w http.ResponseWriter) (store.PlatformAdminStore, bool) {
 	backend, ok := s.store.(store.PlatformAdminStore)
 	if !ok {
@@ -159,32 +131,26 @@ func (s *Server) patchPlatformUser(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	var patch store.UserPatch
-	if decoder.Decode(&patch) != nil || ensureJSONEOF(decoder) != nil || patch.CreditsDelta != nil || (patch.Role == nil && patch.Status == nil && patch.DisplayName == nil) {
+	var input struct {
+		Status *string `json:"status"`
+	}
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Status == nil {
 		http.Error(w, "invalid user update", http.StatusBadRequest)
 		return
 	}
-	if patch.Role != nil {
-		role := strings.ToLower(strings.TrimSpace(*patch.Role))
-		if role != "owner" && role != "admin" && role != "member" {
-			http.Error(w, "invalid role", http.StatusBadRequest)
-			return
-		}
-		*patch.Role = role
-	}
-	if patch.Status != nil {
-		status := strings.ToLower(strings.TrimSpace(*patch.Status))
+	patch := store.UserPatch{Status: input.Status, ActorRole: "owner"}
+	if input.Status != nil {
+		status := strings.ToLower(strings.TrimSpace(*input.Status))
 		if status != "active" && status != "ban" {
 			http.Error(w, "invalid status", http.StatusBadRequest)
 			return
 		}
-		*patch.Status = status
-		if status == "ban" && (target.PlatformAdmin || store.IsConfiguredPlatformAdmin(target.Email)) {
+		*input.Status = status
+		if status == "ban" && (target.PlatformAdmin || store.IsConfiguredPlatformAdminUserID(target.ID)) {
 			http.Error(w, "platform administrator must be removed from deployment allowlist before disabling", http.StatusConflict)
 			return
 		}
 	}
-	patch.ActorRole = "owner"
 	updated, err := s.store.UpdateUser(r.Context(), target.TenantID, target.ID, patch)
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)

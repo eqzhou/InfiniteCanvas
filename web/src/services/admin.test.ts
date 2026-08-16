@@ -2,13 +2,25 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   canManageAdmin,
   canAccessAdminPage,
+  hasPlatformAdminCapability,
+  hasTenantOwnerCapability,
   isCreditAdjustmentReady,
   parseTenantQuotaDraft,
   adjustAdminCredits,
+  bulkDeleteAdminPrompts,
   cleanAdminChannelModels,
+  createAdminPrompt,
+  createAdminPromptCategory,
+  createAdminPromptSource,
   fetchAdminChannelModels,
+  getAdminModelCosts,
+  getAdminPromptCatalog,
   getAdminStoragePoolStatus,
   getAdminTenantQuota,
+  listPlatformChannels,
+  listPlatformTenants,
+  listPlatformUsers,
+  listTenantInvitations,
   listAdminCreditLogs,
   listAdminChannels,
   listAdminUsers,
@@ -19,13 +31,29 @@ import {
   putAdminTenantQuota,
   putAdminStoragePool,
   putAdminStoragePoolSecret,
+  putPlatformChannels,
+  putPlatformChannelSecret,
+  putPlatformTenantQuota,
+  patchAdminUser,
+  patchPlatformUser,
+  adjustPlatformCredits,
+  createTenantInvitation,
+  deleteAdminChannel,
+  deleteAdminPromptCategory,
+  deleteAdminPromptSource,
+  deletePlatformChannel,
   deleteAdminStoragePoolProvider,
+  fetchPlatformChannelModels,
+  revokeTenantInvitation,
   AdminStoragePoolError,
   runDueAdminPromptSources,
+  syncAdminPromptSource,
+  syncAllAdminPromptSources,
   updateAdminPromptSource,
   updateAdminPromptCategory,
   updateAdminPrompt,
   testAdminChannel,
+  testPlatformChannel,
 } from "./admin";
 import { AuthHttpError, isAuthDisabledError } from "./auth-session";
 
@@ -43,12 +71,17 @@ describe("admin client", () => {
     }], ["video-main"])[0]?.sizes).toEqual(["16:9", "720p", "4K", "adaptive"]);
   });
   test("treats auth-off open mode as local admin without granting authenticated members", () => {
+    expect(hasTenantOwnerCapability({ status: "open", localAdmin: true, user: null })).toBe(true);
+    expect(hasPlatformAdminCapability({ status: "open", localAdmin: true, user: null })).toBe(true);
     expect(canManageAdmin({ status: "open", localAdmin: true, user: null })).toBe(true);
     expect(canManageAdmin({ status: "open", localAdmin: false, user: null })).toBe(false);
     expect(canManageAdmin({ status: "authenticated", user: { role: "owner" } })).toBe(true);
     expect(canManageAdmin({ status: "authenticated", user: { role: "admin" } })).toBe(true);
     expect(canManageAdmin({ status: "authenticated", user: { role: "member" } })).toBe(false);
     expect(canManageAdmin({ status: "authenticated", user: { role: "member", platformAdmin: true } })).toBe(false);
+    expect(hasTenantOwnerCapability({ status: "authenticated", user: { role: "member", platformAdmin: true } })).toBe(false);
+    expect(hasPlatformAdminCapability({ status: "authenticated", user: { role: "member", platformAdmin: true } })).toBe(true);
+    expect(hasPlatformAdminCapability({ status: "authenticated", user: { role: "owner" } })).toBe(false);
     expect(canAccessAdminPage({ status: "authenticated", user: { role: "member", platformAdmin: true } })).toBe(true);
     expect(canManageAdmin({ status: "login_required", user: null })).toBe(false);
     expect(isAuthDisabledError(new AuthHttpError(404, "auth disabled"))).toBe(true);
@@ -63,9 +96,102 @@ describe("admin client", () => {
     }) as typeof fetch;
     await listAdminUsers({ q: " a ", page: -2, pageSize: 999 });
     await listAdminCreditLogs({ userId: "user-1", reason: "manual", page: 0, pageSize: 500 });
+    expect(urls[0]).toContain("/api/tenant/members?");
     expect(urls[0]).toContain("q=a&page=1&pageSize=100");
+    expect(urls[1]).toContain("/api/tenant/credit-logs?");
     expect(urls[1]).toContain("userId=user-1");
     expect(urls[1]).toContain("page=1&pageSize=100");
+  });
+
+  test("keeps platform account operations on platform-scoped endpoints", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.includes("/platform/tenants?")) {
+        return new Response(JSON.stringify({ items: [], page: 1, pageSize: 100, total: 0 }));
+      }
+      if (url.includes("/platform/users?") ) {
+        return new Response(JSON.stringify({ items: [], page: 1, pageSize: 25, total: 0 }));
+      }
+      if (url.endsWith("/quota")) {
+        return new Response(JSON.stringify({ id: "tenant/1", generationQuotaMonthly: 25 }));
+      }
+      if (url.endsWith("/credit-adjustments")) {
+        return new Response(JSON.stringify({ user: {}, log: {}, replayed: false }));
+      }
+      return new Response(JSON.stringify({ id: "user/1", status: "ban" }));
+    }) as typeof fetch;
+
+    await listPlatformTenants({ q: " Acme ", page: -1, pageSize: 500 });
+    await listPlatformUsers({ q: " user ", tenantId: " tenant/1 " });
+    await putPlatformTenantQuota("tenant/1", 25);
+    await patchPlatformUser("user/1", { status: "ban" });
+    await adjustPlatformCredits("user/1", { delta: 3, reason: "repair", idempotencyKey: "adjust-1" });
+
+    expect(requests[0]?.url).toContain("platform/tenants?q=Acme&page=1&pageSize=100");
+    expect(requests[1]?.url).toContain("platform/users?q=user&tenantId=tenant%2F1&page=1&pageSize=25");
+    expect(requests.slice(2).map((request) => request.init?.method)).toEqual(["PUT", "PATCH", "POST"]);
+    expect(requests[2]?.url).toContain("tenant%2F1/quota");
+    expect(requests[3]?.url).toContain("user%2F1");
+    expect(() => putPlatformTenantQuota("", 1)).toThrow("租户额度无效");
+    expect(() => adjustPlatformCredits("user-1", { delta: 0, reason: "repair", idempotencyKey: "adjust-2" })).toThrow("算力调整参数无效");
+  });
+
+  test("keeps tenant invitations owner-scoped and constrains new roles to user", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (init?.method === "POST" && url.endsWith("/revoke")) return new Response(null, { status: 204 });
+      if (init?.method === "POST") return new Response(JSON.stringify({ id: "invite-1", token: "opaque" }));
+      return new Response(JSON.stringify([]));
+    }) as typeof fetch;
+
+    expect(await listTenantInvitations()).toEqual([]);
+    await createTenantInvitation({ email: "member@example.com", role: "member", expiresInHours: 24 });
+    await revokeTenantInvitation("invite/1");
+
+    expect(requests.map((request) => request.url)).toEqual([
+      expect.stringContaining("tenant/invitations"),
+      expect.stringContaining("tenant/invitations"),
+      expect.stringContaining("tenant/invitations/invite%2F1/revoke"),
+    ]);
+    expect(JSON.parse(String(requests[1]?.init?.body))).toMatchObject({ email: "member@example.com", role: "user" });
+    expect(() => createTenantInvitation({ email: "invalid", role: "user" })).toThrow("请输入有效邮箱");
+  });
+
+  test("publishes platform channels only through platform-scoped endpoints", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ models: ["gpt-image-2"] }));
+      if (url.endsWith("/test")) return new Response(JSON.stringify({ ok: true, modelCount: 1 }));
+      if (url.endsWith("/secret") || init?.method === "DELETE") return versionedResponse(null, { status: 204 });
+      if (init?.method === "PUT") return versionedResponse(String(init.body));
+      return versionedResponse(JSON.stringify([]));
+    }) as typeof fetch;
+    const channel = {
+      id: "gpt-imager2", name: "GPT Imager 2", baseUrl: "https://api.example.com/v1", protocol: "openai" as const,
+      enabled: true, allowUserUse: true, weight: 1, timeoutSeconds: 60,
+      models: ["gpt-image-2"], defaultTextModel: "", defaultImageModel: "gpt-image-2",
+      defaultVideoModel: "", defaultAudioModel: "", secretConfigured: true,
+      secretBindingId: "binding-1", publishToAll: false, tenantIds: [" tenant/1 ", "tenant/1", "tenant-2"],
+    };
+
+    expect(await listPlatformChannels()).toEqual({ items: [], revision: adminRevision });
+    const saved = await putPlatformChannels([channel], adminRevision);
+    await putPlatformChannelSecret(channel.id, "write-only-secret", "binding-1");
+    expect(await fetchPlatformChannelModels(channel.id)).toEqual(["gpt-image-2"]);
+    expect(await testPlatformChannel(channel.id)).toEqual({ ok: true, modelCount: 1 });
+    expect(await deletePlatformChannel(channel.id, adminRevision)).toBe(adminRevision);
+
+    expect(saved.items[0]?.tenantIds).toEqual(["tenant/1", "tenant-2"]);
+    expect(requests.every((request) => request.url.includes("/api/platform/channels"))).toBe(true);
+    expect(JSON.parse(String(requests[1]?.init?.body))[0]).toMatchObject({
+      id: "gpt-imager2", publishToAll: false, tenantIds: ["tenant/1", "tenant-2"],
+    });
   });
 
   test("sends idempotent adjustments and validated model costs", async () => {
@@ -132,8 +258,57 @@ describe("admin client", () => {
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => { requests.push({ url: String(input), init }); return new Response(JSON.stringify({})); }) as typeof fetch;
     await updateAdminPromptCategory({ id: "cat/1", name: "Updated", order: 2 });
     await updateAdminPrompt({ id: "prompt/1", title: "Updated", body: "Body", tags: ["tag"] });
-    expect(requests.map((item) => item.url)).toEqual(expect.arrayContaining([expect.stringContaining("prompt-categories/cat%2F1"), expect.stringContaining("admin/prompts/prompt%2F1")]));
+    expect(requests.map((item) => item.url)).toEqual(expect.arrayContaining([expect.stringContaining("tenant/prompt-categories/cat%2F1"), expect.stringContaining("tenant/prompts/prompt%2F1")]));
     expect(requests.every((item) => item.init?.method === "PUT")).toBe(true);
+  });
+
+  test("keeps every prompt-catalog mutation on tenant-scoped endpoints", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const catalog = { version: 1, revision: 1, categories: [], prompts: [], sources: [], syncRuns: [] };
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (String(input).endsWith("/sync") || String(input).endsWith("/sync-all")) {
+        return new Response(JSON.stringify([]));
+      }
+      return new Response(JSON.stringify(catalog));
+    }) as typeof fetch;
+
+    await getAdminPromptCatalog();
+    await createAdminPromptCategory({ id: "category-1", name: "Category", order: 1 });
+    await deleteAdminPromptCategory("category/1");
+    await createAdminPrompt({ id: "prompt-1", title: "Prompt", body: "Body", tags: [] });
+    await bulkDeleteAdminPrompts(["prompt-1"]);
+    await createAdminPromptSource({ id: "source-1", name: "Source", url: "https://example.com/prompts.json", format: "json", enabled: true });
+    await deleteAdminPromptSource("source/1");
+    await syncAdminPromptSource("source/1");
+    await syncAllAdminPromptSources();
+
+    expect(requests).toHaveLength(9);
+    expect(requests.every((request) => request.url.includes("/api/tenant/"))).toBe(true);
+    expect(requests[2]?.url).toContain("prompt-categories/category%2F1");
+    expect(requests[6]?.url).toContain("prompt-sources/source%2F1");
+    expect(requests[7]?.url).toContain("prompt-sources/source%2F1/sync");
+  });
+
+  test("uses tenant membership and deletion endpoints for legacy admin aliases", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      if (init?.method === "DELETE") return versionedResponse(null, { status: 204 });
+      if (String(input).endsWith("/model-costs")) {
+        return new Response(JSON.stringify({ modelCosts: [], defaultCredits: 1 }));
+      }
+      return new Response(JSON.stringify({ id: "user/1", role: "owner", status: "active" }));
+    }) as typeof fetch;
+
+    await patchAdminUser("user/1", { role: "owner" });
+    expect(await getAdminModelCosts()).toEqual({ modelCosts: [], defaultCredits: 1 });
+    expect(await deleteAdminChannel("channel/1", adminRevision)).toBe(adminRevision);
+
+    expect(requests[0]?.url).toContain("tenant/members/user%2F1");
+    expect(requests[1]?.url).toContain("platform/model-costs");
+    expect(requests[2]?.url).toContain("tenant/channels/channel%2F1");
   });
 
   test("keeps shared channel secrets write-only", async () => {
@@ -212,7 +387,7 @@ describe("admin client", () => {
 
   test("loads bounded read-only storage pool status", async () => {
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toContain("admin/storage-pool");
+      expect(String(input)).toContain("tenant/storage-pool");
       expect(init?.method).toBeUndefined();
       return versionedResponse(JSON.stringify([{
         id: "process-main", kind: "s3", weight: 3, configuredSelectable: true,

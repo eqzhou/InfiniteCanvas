@@ -315,6 +315,57 @@ func TestAdminSharedChannelsRejectUnsafeConfiguration(t *testing.T) {
 	}
 }
 
+func TestAccountTenantChannelsRejectLoopbackAtWriteAndRuntime(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	if err := server.SetSecretKey("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	MountServer(router, server)
+	owner := store.AuthUser{ID: "owner-loopback", TenantID: "tenant-loopback", Role: "owner", Status: "active"}
+	handler := withActor(router, owner)
+	listed := request(t, handler, http.MethodGet, "/api/tenant/channels", nil)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list tenant channels = %d %s", listed.Code, listed.Body.String())
+	}
+	body := []byte(`[{"id":"local-provider","name":"Local","baseUrl":"http://127.0.0.1:11434/v1","protocol":"openai","enabled":true,"allowUserUse":true,"weight":1,"timeoutSeconds":30,"defaultTextModel":"local"}]`)
+	got := requestWithHeaders(t, handler, http.MethodPut, "/api/tenant/channels", body, map[string]string{
+		adminRevisionHeader: listed.Header().Get(adminRevisionHeader),
+	})
+	if got.Code != http.StatusBadRequest {
+		t.Fatalf("account tenant loopback write = %d %s", got.Code, got.Body.String())
+	}
+
+	var channels []adminChannelPublic
+	if json.Unmarshal(body, &channels) != nil || backend.PutState(t.Context(), owner.TenantID, adminChannelsStateKey, body) != nil {
+		t.Fatal("failed to seed legacy unsafe tenant channel")
+	}
+	if _, _, err := server.resolveSharedChannel(t.Context(), owner.TenantID, channels[0].ID); err == nil {
+		t.Fatal("legacy tenant loopback channel remained executable in account mode")
+	}
+}
+
+func TestAccountPersonalAndLegacySnapshotChannelsRejectLoopback(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
+	config := []byte(`{"channels":[{"id":"local","baseUrl":"http://localhost:11434/v1","providers":{"text":{"baseUrl":"http://localhost:11434/v1","model":"local","protocol":"openai"}}}]}`)
+	if err := validatePersonalChannelDestinations(config); err == nil {
+		t.Fatal("account personal channel accepted a loopback destination")
+	}
+	if err := validateGenerationSnapshotDestination(generationChannelSnapshot{
+		BaseURL: "https://127.0.0.1:8443/v1",
+	}); err == nil {
+		t.Fatal("legacy tenant snapshot accepted a loopback destination")
+	}
+	if err := validateGenerationSnapshotDestination(generationChannelSnapshot{
+		BaseURL: "http://127.0.0.1:11434/v1", Source: "platform",
+	}); err == nil {
+		t.Fatal("account platform snapshot accepted a loopback destination")
+	}
+}
+
 func TestAdminSharedChannelDestinationChangeInvalidatesSecret(t *testing.T) {
 	server, _, router := sharedChannelHandler(t)
 	oldProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -707,8 +758,10 @@ func TestAzureAndKeylessEdgeSharedAudioChannels(t *testing.T) {
 	if err != nil || key != "" || resolved.ID != edge.ID {
 		t.Fatalf("resolve keyless Edge channel = %#v key=%q err=%v", resolved, key, err)
 	}
+	actor := store.AuthUser{ID: "edge-user", TenantID: store.DefaultTenantID, Role: "member", Status: "active"}
+	ctx := context.WithValue(context.Background(), authUserKey, actor)
 	providerID, snapshot, err := server.snapshotGenerationChannel(
-		context.Background(), store.DefaultTenantID, "audio", "job-edge-shared", edge.ID, "edge-tts")
+		ctx, store.DefaultTenantID, "audio", "job-edge-shared", edge.ID, "edge-tts")
 	if err != nil || providerID != edge.ID || snapshot == nil || snapshot.Secret != (secretEnvelope{}) {
 		t.Fatalf("snapshot keyless Edge channel = %q %#v err=%v", providerID, snapshot, err)
 	}

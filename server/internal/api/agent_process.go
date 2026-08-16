@@ -21,18 +21,27 @@ func requestAgentScope(r *http.Request) agentScope {
 	return agentScope{}
 }
 
-func accountAgentExecutionAllowed(scope agentScope) bool {
+func accountAgentExecutionAllowed(scope agentScope, platformAuthorized ...bool) bool {
 	if scope == (agentScope{}) {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("OPENBOARD_AGENT_ACCOUNT_EXECUTION")), "true")
+	return len(platformAuthorized) > 0 && platformAuthorized[0] &&
+		strings.EqualFold(strings.TrimSpace(os.Getenv("OPENBOARD_AGENT_ACCOUNT_EXECUTION")), "true")
+}
+
+func accountAgentExecutionAllowedForRequest(r *http.Request) bool {
+	user, authenticated := authUserFrom(r.Context())
+	return accountAgentExecutionAllowed(
+		requestAgentScope(r),
+		authenticated && userHasCapability(user, capabilityPlatformManage),
+	)
 }
 
 func authorizeAccountAgentExecution(w http.ResponseWriter, r *http.Request) bool {
-	if accountAgentExecutionAllowed(requestAgentScope(r)) {
+	if accountAgentExecutionAllowedForRequest(r) {
 		return true
 	}
-	http.Error(w, "local CLI execution is disabled for account sessions", http.StatusForbidden)
+	http.Error(w, "host execution requires a platform administrator and explicit deployment opt-in", http.StatusForbidden)
 	return false
 }
 

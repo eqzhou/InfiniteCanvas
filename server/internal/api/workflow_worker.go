@@ -41,7 +41,7 @@ func (s *Server) workflowWorkerLoop() {
 		now := time.Now().UTC()
 		owner := randomGenerationOwner()
 		claimed, err := s.store.ClaimServerGenerationJob(s.generationRoot,
-			store.GenerationClaim{Kind: "workflow", Executor: workflowExecutorMarker},
+			store.GenerationClaim{Kind: "workflow", Executor: workflowExecutorMarker, RequireUserID: authMode() != "off"},
 			owner, now, now.Add(generationLeaseDuration))
 		if err == nil {
 			s.workflowWG.Add(1)
@@ -213,6 +213,9 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 			if err != nil {
 				return
 			}
+			if authMode() != "off" && (job.UserID == "" || child.UserID != job.UserID) {
+				return
+			}
 			switch child.Status {
 			case "queued", "running":
 				if child.Status == "running" && !markedRunning {
@@ -264,6 +267,10 @@ func (s *Server) cancelWorkflowChildIfParentCancelled(tenantID, parentID, childI
 	if err != nil || parent.Status != "cancelled" {
 		return
 	}
+	child, err := s.store.GetGenerationJob(ctx, tenantID, childID)
+	if err != nil || authMode() != "off" && (parent.UserID == "" || child.UserID != parent.UserID) {
+		return
+	}
 	_, _ = s.cancelServerGenerationJobWithSideEffectLock(ctx, tenantID, childID, time.Now().UTC())
 	// Wake the local child worker immediately; cross-instance cancel still relies
 	// on lease/status watch, but same-process cancel should not wait a tick.
@@ -306,7 +313,7 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	if err != nil {
 		return store.GenerationJob{}, err
 	}
-	providerID, model, err := s.workflowStepProvider(ctx, tenantID, step)
+	providerID, model, err := s.workflowStepProvider(ctx, tenantID, parent.UserID, step)
 	if err != nil {
 		return store.GenerationJob{}, err
 	}
@@ -319,7 +326,8 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	}
 	requestHash, _ := hashImageJobRequest(request)
 	if existing, err := s.store.GetGenerationJob(ctx, tenantID, childID); err == nil {
-		if !isMatchingWorkflowChild(existing, requestHash, parent.ID, step.ID) {
+		if authMode() != "off" && (parent.UserID == "" || existing.UserID != parent.UserID) ||
+			!isMatchingWorkflowChild(existing, requestHash, parent.ID, step.ID) {
 			return store.GenerationJob{}, store.ErrConflict
 		}
 		return existing, nil
@@ -333,19 +341,19 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 		WorkflowRunID: parent.ID, WorkflowStepID: step.ID,
 	})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	billingUserID := strings.TrimSpace(parent.UserID)
+	if authMode() != "off" && (billingUserID == "" || (parameters.BillingUserID != "" && parameters.BillingUserID != billingUserID)) {
+		return store.GenerationJob{}, store.ErrUnauthorized
+	}
 	child := store.GenerationJob{
-		ID: childID, ProjectID: parent.ProjectID, Kind: "image", Status: "queued", Prompt: prompt,
+		ID: childID, UserID: billingUserID, ProjectID: parent.ProjectID, Kind: "image", Status: "queued", Prompt: prompt,
 		ProviderID: providerID, Model: model, Parameters: childParameters, Result: json.RawMessage(`{}`),
 		CreatedAt: now, UpdatedAt: now,
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": child.ID, "kind": child.Kind, "workflowRunId": parent.ID, "workflowStepId": step.ID})
-	billingUserID := strings.TrimSpace(parameters.BillingUserID)
-	if authMode() == "required" && billingUserID == "" {
-		return store.GenerationJob{}, store.ErrUnauthorized
-	}
 	if err := s.store.CreateServerGenerationJob(ctx, tenantID, billingUserID, child, step.Parameters.Count, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(ctx, tenantID, childID)
-		if getErr == nil && isMatchingWorkflowChild(existing, requestHash, parent.ID, step.ID) {
+		if getErr == nil && (authMode() == "off" || existing.UserID == billingUserID) && isMatchingWorkflowChild(existing, requestHash, parent.ID, step.ID) {
 			return existing, nil
 		}
 		return store.GenerationJob{}, store.ErrConflict
@@ -382,13 +390,12 @@ func workflowChildJobIDs(value json.RawMessage) []string {
 	return ids
 }
 
-func (s *Server) workflowStepProvider(ctx context.Context, tenantID string, step workflowStep) (string, string, error) {
-	value, err := s.store.GetState(ctx, tenantID, "config")
+func (s *Server) workflowStepProvider(ctx context.Context, tenantID, userID string, step workflowStep) (string, string, error) {
+	config, exists, err := s.loadGenerationConfig(ctx, tenantID, userID)
 	if err != nil {
 		return "", "", err
 	}
-	var config storedImageConfig
-	if json.Unmarshal(value, &config) != nil || len(config.Channels) == 0 {
+	if !exists || len(config.Channels) == 0 {
 		return "", "", errors.New("invalid image config")
 	}
 	providerID := step.ProviderID

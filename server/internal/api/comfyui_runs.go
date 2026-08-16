@@ -184,7 +184,7 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID); getErr == nil {
-		if matchingComfyUIRequest(existing, requestHash) {
+		if requestOwnsGenerationJob(r, existing) && matchingComfyUIRequest(existing, requestHash) {
 			writeJSON(w, publicGenerationJob(existing))
 			return
 		}
@@ -201,7 +201,7 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 	result, _ := json.Marshal(comfyUIJobResult{})
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	job := store.GenerationJob{
-		ID: input.ID, ProjectID: input.ProjectID, Kind: kind, Status: "queued", Prompt: strings.TrimSpace(input.Values.Prompt),
+		ID: input.ID, UserID: strings.TrimSpace(userIDFrom(r)), ProjectID: input.ProjectID, Kind: kind, Status: "queued", Prompt: strings.TrimSpace(input.Values.Prompt),
 		ProviderID: approved.ID, Model: approved.BillingModel, Parameters: parameters, Result: result, CreatedAt: now, UpdatedAt: now,
 	}
 	estimatedCredits, err := s.comfyUIBillingCredits(r.Context(), tenantID, approved.BillingModel)
@@ -219,7 +219,7 @@ func (s *Server) createComfyUIJob(w http.ResponseWriter, r *http.Request) {
 	meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": kind, "executor": comfyUIExecutorMarker, "manifestId": manifest.ID, "contractHash": manifest.ContractHash})
 	if err := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, estimatedCredits, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, job.ID)
-		if getErr == nil && matchingComfyUIRequest(existing, requestHash) {
+		if getErr == nil && requestOwnsGenerationJob(r, existing) && matchingComfyUIRequest(existing, requestHash) {
 			writeJSON(w, publicGenerationJob(existing))
 			return
 		}
@@ -424,7 +424,7 @@ func (s *Server) comfyUIWorkerLoop() {
 		claimed := false
 		for _, kind := range kinds {
 			now := time.Now().UTC()
-			job, err := s.store.ClaimServerGenerationJob(s.generationRoot, store.GenerationClaim{Kind: kind, Executor: comfyUIExecutorMarker}, randomGenerationOwner(), now, now.Add(generationLeaseDuration))
+			job, err := s.store.ClaimServerGenerationJob(s.generationRoot, store.GenerationClaim{Kind: kind, Executor: comfyUIExecutorMarker, RequireUserID: authMode() != "off"}, randomGenerationOwner(), now, now.Add(generationLeaseDuration))
 			if err != nil {
 				continue
 			}

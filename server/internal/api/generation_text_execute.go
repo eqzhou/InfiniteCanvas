@@ -104,11 +104,18 @@ func (s *Server) resolveTextGenerationRequest(
 	if err := validatePersistedTextJob(job, parameters); err != nil {
 		return providerModelConnection{}, providerTextRequest{}, err
 	}
+	_, secretKey, err := generationCredentialStorageKeys(job.UserID)
+	if err != nil {
+		return providerModelConnection{}, providerTextRequest{}, err
+	}
 	request := providerTextRequest{ChannelID: job.ProviderID, Model: job.Model, Prompt: job.Prompt}
 	var connection providerModelConnection
 	if snapshot := parameters.SharedChannel; snapshot != nil {
 		if snapshot.ProviderID != job.ProviderID || snapshot.Model != job.Model {
 			return providerModelConnection{}, providerTextRequest{}, errors.New("invalid generation channel snapshot")
+		}
+		if err := validateGenerationSnapshotDestination(*snapshot); err != nil {
+			return providerModelConnection{}, providerTextRequest{}, err
 		}
 		apiKey, err := s.openGenerationChannelSecret(tenantID, job.ID, job.Kind, *snapshot)
 		if err != nil {
@@ -124,13 +131,9 @@ func (s *Server) resolveTextGenerationRequest(
 		}
 		request.SystemPrompt = snapshot.SystemPrompt
 	} else {
-		configValue, err := s.store.GetState(ctx, tenantID, "config")
-		if err != nil || len(configValue) > 1<<20 {
+		config, exists, err := s.loadGenerationConfig(ctx, tenantID, job.UserID)
+		if err != nil || !exists {
 			return providerModelConnection{}, providerTextRequest{}, errors.New("provider configuration is unavailable")
-		}
-		var config storedImageConfig
-		if json.Unmarshal(configValue, &config) != nil || len(config.Channels) > 100 {
-			return providerModelConnection{}, providerTextRequest{}, errors.New("invalid provider configuration")
 		}
 		var selected *storedImageChannel
 		for index := range config.Channels {
@@ -146,7 +149,10 @@ func (s *Server) resolveTextGenerationRequest(
 		if !ok {
 			provider = storedImageProvider{BaseURL: selected.BaseURL, Model: selected.DefaultTextModel, Protocol: "openai"}
 		}
-		secretValue, err := s.decryptSecrets(ctx, tenantID)
+		if err := validateAccountManagedChannelURL(provider.BaseURL); err != nil {
+			return providerModelConnection{}, providerTextRequest{}, err
+		}
+		secretValue, err := s.decryptSecretsKey(ctx, tenantID, secretKey)
 		if err != nil {
 			return providerModelConnection{}, providerTextRequest{}, errors.New("provider API key is unavailable")
 		}

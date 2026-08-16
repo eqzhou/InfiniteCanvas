@@ -73,7 +73,7 @@ export function hasPersistedProjectChanges(before: BoardProject, after: BoardPro
 }
 
 export class TenantConfigAdminRequiredError extends Error {
-  constructor(message = "仅所有者或管理员可以修改租户配置") {
+  constructor(message = "仅租户 Owner 或部署管理员可以修改租户配置") {
     super(message);
     this.name = "TenantConfigAdminRequiredError";
   }
@@ -81,8 +81,8 @@ export class TenantConfigAdminRequiredError extends Error {
 
 export function configWriteForbiddenMessage(reason: string): string {
   return reason.trim() === "custom channels disabled by admin"
-    ? "管理员已禁止普通成员修改个人渠道或渠道密钥"
-    : "仅所有者或管理员可以修改租户配置";
+    ? "租户 Owner 已禁止普通用户修改个人渠道或渠道密钥"
+    : "仅租户 Owner 或部署管理员可以修改租户配置";
 }
 
 async function configWriteForbiddenError(response: Response): Promise<TenantConfigAdminRequiredError> {

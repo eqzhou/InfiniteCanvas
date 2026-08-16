@@ -21,7 +21,7 @@ func invitationStore(s *Server, w http.ResponseWriter) (store.InvitationStore, b
 }
 
 func (s *Server) createTenantInvitation(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "invitations unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant invitations unavailable") {
 		return
 	}
 	backend, ok := invitationStore(s, w)
@@ -43,12 +43,11 @@ func (s *Server) createTenantInvitation(w http.ResponseWriter, r *http.Request) 
 	}
 	email := strings.ToLower(strings.TrimSpace(input.Email))
 	role := strings.ToLower(strings.TrimSpace(input.Role))
-	if normalized, valid := store.NormalizeEmail(email); !valid || normalized != email || (role != "member" && role != "admin") {
-		http.Error(w, "invalid invitation", http.StatusBadRequest)
-		return
+	if role == "user" {
+		role = "member"
 	}
-	if role == "admin" && !strings.EqualFold(strings.TrimSpace(actor.Role), "owner") {
-		http.Error(w, "only an owner can invite an admin", http.StatusForbidden)
+	if normalized, valid := store.NormalizeEmail(email); !valid || normalized != email || role != "member" {
+		http.Error(w, "invalid invitation", http.StatusBadRequest)
 		return
 	}
 	hours := input.ExpiresInHours
@@ -89,7 +88,7 @@ func (s *Server) createTenantInvitation(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) listTenantInvitations(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "invitations unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant invitations unavailable") {
 		return
 	}
 	backend, ok := invitationStore(s, w)
@@ -105,7 +104,7 @@ func (s *Server) listTenantInvitations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revokeTenantInvitation(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "invitations unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant invitations unavailable") {
 		return
 	}
 	backend, ok := invitationStore(s, w)

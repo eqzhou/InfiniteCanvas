@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
-import { Building2, RefreshCw, Search, Users } from "lucide-react";
+import { Building2, RefreshCw, Search, ShieldCheck, Users } from "lucide-react";
 import { EmptyState, Notice, SectionHeader } from "@/components/admin/AdminSection";
+import { AdminChannelsPanel } from "@/components/admin/AdminChannelsPanel";
 import { useI18n } from "@/i18n/I18nProvider";
+import {
+  getPlatformPolicy,
+  updatePlatformPolicy,
+  type PlatformPolicy,
+} from "@/services/auth-session";
 import {
   adjustPlatformCredits,
   listPlatformTenants,
@@ -61,6 +67,8 @@ export function PlatformAdminPanel() {
 
   return (
     <div className="ob-admin-stack" aria-busy={loading || busy}>
+      <PlatformPolicySection />
+
       <div className="ob-toolbar-strip">
         <label className="min-w-0 flex-1">
           <span className="sr-only">{t("admin.platformSearch")}</span>
@@ -162,6 +170,8 @@ export function PlatformAdminPanel() {
           </div>
         )}
       </section>
+
+      <AdminChannelsPanel scope="platform" />
     </div>
   );
 }
@@ -173,10 +183,10 @@ function PlatformUserRow({ user, onChange, onError }: { user: AdminUser; onChang
   const [busy, setBusy] = useState(false);
   const deltaValue = Number(delta);
   const canAdjust = delta !== "" && Number.isSafeInteger(deltaValue) && deltaValue !== 0 && reason.trim().length > 0 && !busy;
-  const save = async (patch: Partial<Pick<AdminUser, "role" | "status">>) => {
+  const saveStatus = async (status: AdminUser["status"]) => {
     if (busy) return;
     setBusy(true);
-    try { onChange(await patchPlatformUser(user.id, patch)); }
+    try { onChange(await patchPlatformUser(user.id, { status })); }
     catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   };
@@ -197,18 +207,17 @@ function PlatformUserRow({ user, onChange, onError }: { user: AdminUser; onChang
       </td>
       <td className="font-mono text-xs text-[var(--ob-muted)]">{user.tenantId}</td>
       <td>
-        <select className="ob-field w-28 py-1 text-[0.8125rem]" aria-label={`${user.email} · ${t("admin.role")}`} value={user.role} disabled={busy} onChange={(event) => void save({ role: event.target.value as AdminUser["role"] })}>
-          <option value="owner">owner</option>
-          <option value="admin">admin</option>
-          <option value="member">member</option>
-        </select>
+        <div className="flex flex-wrap gap-1">
+          <span className="ob-chip text-xs">{user.role === "owner" ? t("admin.tenantOwner") : t("admin.tenantUser")}</span>
+          {user.platformAdmin ? <span className="ob-chip text-xs text-[var(--ob-accent)]">{t("admin.platformAdmin")}</span> : null}
+        </div>
       </td>
       <td>
         <span className="ob-status-chip" data-tone={user.status === "active" ? "success" : "warning"}>
           <span className="ob-status-dot" data-status={user.status === "active" ? "succeeded" : "pending"} aria-hidden />
           {user.status === "active" ? t("admin.active") : t("admin.disabled")}
         </span>
-        <select className="ob-field mt-1 w-24 py-1 text-[0.8125rem]" aria-label={`${user.email} · ${t("admin.status")}`} value={user.status} disabled={busy} onChange={(event) => void save({ status: event.target.value as AdminUser["status"] })}>
+        <select className="ob-field mt-1 w-24 py-1 text-[0.8125rem]" aria-label={`${user.email} · ${t("admin.status")}`} value={user.status} disabled={busy} onChange={(event) => void saveStatus(event.target.value as AdminUser["status"])}>
           <option value="active">{t("admin.active")}</option>
           <option value="ban">{t("admin.disabled")}</option>
         </select>
@@ -222,5 +231,66 @@ function PlatformUserRow({ user, onChange, onError }: { user: AdminUser; onChang
         </div>
       </td>
     </tr>
+  );
+}
+
+function PlatformPolicySection() {
+  const { t } = useI18n();
+  const [policy, setPolicy] = useState<PlatformPolicy | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void getPlatformPolicy()
+      .then((value) => { if (!cancelled) setPolicy(value); })
+      .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggleRegistration = async () => {
+    if (!policy || busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      setPolicy(await updatePlatformPolicy({ allowRegister: !policy.allowRegister }));
+      setNotice(t("admin.platformPolicySaved"));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="ob-admin-section" aria-busy={policy === null || busy}>
+      <SectionHeader
+        icon={<ShieldCheck size={16} />}
+        title={t("admin.platformPolicy")}
+        desc={t("admin.platformPolicyHint")}
+      />
+      {policy === null && !error ? <Notice tone="info">{t("settings.loadingPolicy")}</Notice> : null}
+      {policy ? (
+        <label className="ob-toggle-field max-w-xl">
+          <button
+            type="button"
+            role="switch"
+            className="ob-switch"
+            aria-label={t("settings.allowRegistration")}
+            aria-checked={policy.allowRegister}
+            data-checked={policy.allowRegister ? "true" : "false"}
+            disabled={busy}
+            onClick={() => void toggleRegistration()}
+          />
+          <span className="text-sm text-[var(--ob-ink)]">{t("settings.allowRegistration")}</span>
+        </label>
+      ) : null}
+      <div className="mt-3 space-y-2 empty:mt-0">
+        {notice ? <Notice tone="success">{notice}</Notice> : null}
+        {error ? <Notice tone="danger">{error}</Notice> : null}
+      </div>
+    </section>
   );
 }

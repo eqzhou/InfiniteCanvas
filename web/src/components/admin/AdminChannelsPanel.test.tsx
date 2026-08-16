@@ -6,6 +6,7 @@ import {
   AdminMediaCapabilityEditor,
   adminChannelCanTest,
   emptyAdminChannel,
+  emptyAdminChannelForScope,
 } from "./AdminChannelsPanel";
 
 describe("AdminChannelModelDiffReview", () => {
@@ -30,6 +31,11 @@ describe("AdminChannelModelDiffReview", () => {
     expect(adminChannelCanTest({ protocol: "edge", secretConfigured: false })).toBe(true);
     expect(adminChannelCanTest({ protocol: "azure", secretConfigured: false })).toBe(false);
     expect(adminChannelCanTest({ protocol: "openai", secretConfigured: true })).toBe(true);
+  });
+
+  test("keeps newly created platform channels unpublished until explicitly targeted", () => {
+    expect(emptyAdminChannelForScope(1, "Platform", "platform").publishToAll).toBe(false);
+    expect(emptyAdminChannelForScope(1, "Tenant", "tenant").publishToAll).toBe(false);
   });
 
   test("shows new, existing, and removed models as an explicit confirmation step", () => {

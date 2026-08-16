@@ -79,7 +79,7 @@ func (s *Server) filmExportWorkerLoop() {
 	for {
 		now := time.Now().UTC()
 		claimed, err := s.store.ClaimServerGenerationJob(s.generationRoot,
-			store.GenerationClaim{Kind: "export", Executor: filmExportExecutorMarker},
+			store.GenerationClaim{Kind: "export", Executor: filmExportExecutorMarker, RequireUserID: authMode() != "off"},
 			randomGenerationOwner(), now, now.Add(generationLeaseDuration))
 		if err == nil {
 			s.filmExportWG.Add(1)

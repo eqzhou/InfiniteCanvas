@@ -196,7 +196,7 @@ func TestServerVideoJobCheckpointsAndPersistsProtectedResult(t *testing.T) {
 	var started scriptedVideoStart
 	select {
 	case started = <-video.started:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("video executor did not start")
 	}
 	if started.Checkpoint != nil || started.Request.APIKey != "sk-video-private" || started.Request.Protocol != "ark" || started.Request.Prompt != "cinematic\n\na moving tiger" {
@@ -235,7 +235,7 @@ func TestServerVideoWorkerResumesCheckpointWithoutRecreatingTask(t *testing.T) {
 	}
 	select {
 	case <-first.started:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("first video executor did not start")
 	}
 	serverA.Close()

@@ -7,9 +7,46 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 )
 
-var errCustomChannelsDisabled = errors.New("custom channels disabled by admin")
+var errCustomChannelsDisabled = errors.New("custom channels disabled by tenant policy")
+
+func validateAccountManagedChannelURL(rawURL string) error {
+	parsed, err := validateGenerationURL(rawURL)
+	if err != nil {
+		return err
+	}
+	if authMode() != "off" && (parsed.Scheme != "https" || isExplicitLoopbackHost(parsed.Hostname())) {
+		return errors.New("account-managed provider URL must use public HTTPS")
+	}
+	return nil
+}
+
+func validatePersonalChannelDestinations(document []byte) error {
+	if authMode() == "off" {
+		return nil
+	}
+	var config storedImageConfig
+	if json.Unmarshal(document, &config) != nil || len(config.Channels) > 100 {
+		return errors.New("invalid personal channel configuration")
+	}
+	for _, channel := range config.Channels {
+		if baseURL := strings.TrimSpace(channel.BaseURL); baseURL != "" {
+			if err := validateAccountManagedChannelURL(baseURL); err != nil {
+				return err
+			}
+		}
+		for _, provider := range channel.Providers {
+			if baseURL := strings.TrimSpace(provider.BaseURL); baseURL != "" {
+				if err := validateAccountManagedChannelURL(baseURL); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
 
 func canonicalJSONObjectField(document []byte, field string, missing []byte) ([]byte, error) {
 	var object map[string]json.RawMessage
@@ -49,20 +86,20 @@ func sameJSONObjectFieldWithMissing(first, second []byte, field string, missing 
 
 func (s *Server) memberCustomChannelsLocked(ctx context.Context, r *http.Request) (bool, error) {
 	user, ok := authUserFrom(r.Context())
-	if !ok || isTenantAdmin(user) {
+	if !ok || isTenantOwner(user) {
 		return false, nil
 	}
-	policy, err := s.loadSitePolicy(ctx, tenantIDFrom(r))
+	policy, err := s.loadTenantPolicy(ctx, tenantIDFrom(r))
 	if err != nil {
 		return false, err
 	}
 	return !policy.AllowCustomChannel, nil
 }
 
-// enforceMemberCustomChannelPolicy prevents an ordinary member from changing
+// enforceMemberCustomChannelPolicy prevents an ordinary user from changing
 // personal channel definitions or API keys while the tenant policy disables
 // custom channels. Other preferences and unrelated secret fields remain
-// writable. Admin and auth-off process-token flows intentionally bypass it.
+// writable. Owner and auth-off process-token flows intentionally bypass it.
 func (s *Server) enforceMemberCustomChannelPolicy(
 	ctx context.Context,
 	r *http.Request,
@@ -110,4 +147,17 @@ func writeCustomChannelPolicyError(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, "failed to enforce site policy", http.StatusInternalServerError)
+}
+
+func (s *Server) authorizePersonalChannelRuntime(w http.ResponseWriter, r *http.Request) bool {
+	locked, err := s.memberCustomChannelsLocked(r.Context(), r)
+	if err != nil {
+		http.Error(w, "failed to enforce tenant channel policy", http.StatusInternalServerError)
+		return false
+	}
+	if locked {
+		http.Error(w, errCustomChannelsDisabled.Error(), http.StatusForbidden)
+		return false
+	}
+	return true
 }

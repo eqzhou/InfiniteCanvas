@@ -181,18 +181,20 @@ func (s *Server) executeClaimedVoiceCloneJob(claimed store.TenantGenerationJob) 
 }
 
 func (s *Server) resolveVoiceCloneProviderRequest(ctx context.Context, tenantID string, job store.GenerationJob, parameters voiceCloneJobParameters) (voiceCloneProviderRequest, time.Duration, error) {
-	configValue, err := s.store.GetState(ctx, tenantID, "config")
-	if err != nil || len(configValue) > 1<<20 {
-		return voiceCloneProviderRequest{}, 0, errors.New("generation config unavailable")
+	_, secretKey, err := generationCredentialStorageKeys(job.UserID)
+	if err != nil {
+		return voiceCloneProviderRequest{}, 0, err
 	}
-	var config storedImageConfig
-	if json.Unmarshal(configValue, &config) != nil || len(config.Channels) > 100 {
-		return voiceCloneProviderRequest{}, 0, errors.New("invalid generation config")
+	config, _, err := s.loadGenerationConfig(ctx, tenantID, job.UserID)
+	if err != nil {
+		return voiceCloneProviderRequest{}, 0, err
 	}
 	var channel *storedImageChannel
+	personalChannel := false
 	for index := range config.Channels {
 		if config.Channels[index].ID == job.ProviderID {
 			channel = &config.Channels[index]
+			personalChannel = true
 			break
 		}
 	}
@@ -205,7 +207,7 @@ func (s *Server) resolveVoiceCloneProviderRequest(ctx context.Context, tenantID 
 		value := sharedChannelStoredValue(shared)
 		channel, apiKey = &value, sharedSecret
 	} else {
-		secretValue, secretErr := s.decryptSecrets(ctx, tenantID)
+		secretValue, secretErr := s.decryptSecretsKey(ctx, tenantID, secretKey)
 		if secretErr != nil {
 			return voiceCloneProviderRequest{}, 0, secretErr
 		}
@@ -221,6 +223,11 @@ func (s *Server) resolveVoiceCloneProviderRequest(ctx context.Context, tenantID 
 	}
 	if protocol := strings.TrimSpace(provider.Protocol); protocol != "" && protocol != "openai" {
 		return voiceCloneProviderRequest{}, 0, errors.New("voice cloning requires an OpenAI-compatible audio provider")
+	}
+	if personalChannel {
+		if err := validateAccountManagedChannelURL(provider.BaseURL); err != nil {
+			return voiceCloneProviderRequest{}, 0, err
+		}
 	}
 	if _, err := validateGenerationURL(provider.BaseURL); err != nil || strings.TrimSpace(apiKey) == "" {
 		return voiceCloneProviderRequest{}, 0, errors.New("voice clone provider is unavailable")

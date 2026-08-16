@@ -476,6 +476,9 @@ func (s *Server) generateProviderText(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeSecrets(w, r) {
 		return
 	}
+	if !s.authorizePersonalChannelRuntime(w, r) {
+		return
+	}
 	tenantID := tenantIDFrom(r)
 	userID := "process"
 	if user, ok := authUserFrom(r.Context()); ok && strings.TrimSpace(user.ID) != "" {

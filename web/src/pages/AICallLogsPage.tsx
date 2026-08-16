@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
-import { canManageAdmin } from "@/services/admin";
+import { hasTenantOwnerCapability } from "@/services/admin";
 import {
   deleteAICallLogs,
   getAICallLog,
@@ -46,7 +46,7 @@ function prettyJSON(value: unknown): string {
 export function AICallLogsPage() {
   const { locale, t } = useI18n();
   const auth = useOptionalAuth();
-  const canManage = canManageAdmin(auth);
+  const canManage = hasTenantOwnerCapability(auth);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const [status, setStatus] = useState("all");

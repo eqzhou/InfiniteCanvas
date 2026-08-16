@@ -242,10 +242,24 @@ export type SitePolicy = {
   defaultAudioModel?: string;
 };
 
+export type TenantPolicy = Omit<SitePolicy, "allowRegister">;
+export type PlatformPolicy = {
+  allowRegister: boolean;
+  linuxDoEnabled?: boolean;
+};
+
 export const DEFAULT_SITE_POLICY: SitePolicy = {
-  allowRegister: true,
-  allowCustomChannel: true,
-  allowCloudChannel: true,
+  // Client-side fallback is deliberately closed. A successful server response
+  // supplies the deployment defaults; a network failure must not enable a
+  // control that the server may reject.
+  allowRegister: false,
+  allowCustomChannel: false,
+  allowCloudChannel: false,
+};
+
+export const DEFAULT_TENANT_POLICY: TenantPolicy = {
+  allowCustomChannel: false,
+  allowCloudChannel: false,
 };
 
 export async function getSitePolicy(): Promise<SitePolicy> {
@@ -271,4 +285,31 @@ export async function updateSitePolicy(policy: SitePolicy): Promise<SitePolicy> 
       body: JSON.stringify(policy),
     }),
   );
+}
+
+export async function getTenantPolicy(): Promise<TenantPolicy> {
+  const data = await parseJSON<Partial<TenantPolicy>>(await authFetch("tenant/policy"));
+  return {
+    allowCustomChannel: data.allowCustomChannel === true,
+    allowCloudChannel: data.allowCloudChannel === true,
+    ...normalizeModelCatalog(data),
+  };
+}
+
+export async function updateTenantPolicy(policy: TenantPolicy): Promise<TenantPolicy> {
+  return parseJSON<TenantPolicy>(await authFetch("tenant/policy", {
+    method: "PUT",
+    body: JSON.stringify(policy),
+  }));
+}
+
+export async function getPlatformPolicy(): Promise<PlatformPolicy> {
+  return parseJSON<PlatformPolicy>(await authFetch("platform/policy"));
+}
+
+export async function updatePlatformPolicy(policy: Pick<PlatformPolicy, "allowRegister">): Promise<PlatformPolicy> {
+  return parseJSON<PlatformPolicy>(await authFetch("platform/policy", {
+    method: "PUT",
+    body: JSON.stringify(policy),
+  }));
 }

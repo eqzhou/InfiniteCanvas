@@ -150,8 +150,7 @@ func (s *Server) filmCapabilityData(r *http.Request) map[string]any {
 	}
 	generation := map[string]bool{"storyboard": false, "first_frame": false, "audio": false, "video": false}
 	if available && s.secrets != nil {
-		var config storedImageConfig
-		if raw, err := s.store.GetState(r.Context(), tenantIDFrom(r), "config"); err == nil && len(raw) <= 1<<20 && json.Unmarshal(raw, &config) == nil {
+		if config, exists, err := s.loadGenerationConfig(r.Context(), tenantIDFrom(r), generationContextUserID(r.Context())); err == nil && exists {
 			for _, channel := range config.Channels {
 				if channel.ID != config.ActiveChannelID {
 					continue
@@ -546,7 +545,7 @@ func (s *Server) createFilmStageWaiver(w http.ResponseWriter, r *http.Request) {
 	}
 	actor, ok := authUserFrom(r.Context())
 	if !ok || !filmWaiverActorAllowed(actor) {
-		writeFilmError(w, http.StatusForbidden, "waiver_permission_denied", "Film stage waiver requires an owner or admin")
+		writeFilmError(w, http.StatusForbidden, "waiver_permission_denied", "Film stage waiver requires an owner")
 		return
 	}
 	var input filmStageWaiverRequest
@@ -565,7 +564,7 @@ func (s *Server) createFilmStageWaiver(w http.ResponseWriter, r *http.Request) {
 func (s *Server) revokeFilmStageWaiver(w http.ResponseWriter, r *http.Request) {
 	actor, ok := authUserFrom(r.Context())
 	if !ok || !filmWaiverActorAllowed(actor) {
-		writeFilmError(w, http.StatusForbidden, "waiver_permission_denied", "Film stage waiver requires an owner or admin")
+		writeFilmError(w, http.StatusForbidden, "waiver_permission_denied", "Film stage waiver requires an owner")
 		return
 	}
 	var input filmStageWaiverRevokeRequest

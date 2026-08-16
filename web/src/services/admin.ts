@@ -6,9 +6,10 @@ export type AdminUser = {
   tenantId: string;
   email: string;
   displayName: string;
-  role: "owner" | "admin" | "member";
+  role: "owner" | "admin" | "member" | "user";
   status: "active" | "ban";
   credits: number;
+  platformAdmin?: boolean;
 };
 
 export type PlatformTenant = {
@@ -25,7 +26,7 @@ export type TenantInvitation = {
   id: string;
   tenantId: string;
   email: string;
-  role: "admin" | "member";
+  role: "admin" | "member" | "user";
   expiresAt: string;
   acceptedAt?: string;
   acceptedUserId?: string;
@@ -195,6 +196,9 @@ export type AdminChannel = {
   defaultAudioModel: string;
   secretConfigured: boolean;
 	secretBindingId?: string;
+	/** Platform channels may be published to all tenants or an explicit list. */
+	publishToAll?: boolean;
+	tenantIds?: string[];
 };
 
 const channelIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -312,14 +316,30 @@ export type AdminPromptSource = {
 export type AdminPromptSyncRun = { id: string; sourceId: string; sourceUrl: string; status: "running" | "succeeded" | "failed"; startedAt: string; completedAt?: string; itemCount: number; error?: string };
 export type AdminPromptCatalog = { version: 1; revision: number; categories: AdminPromptCategory[]; prompts: AdminPromptEntry[]; sources: AdminPromptSource[]; syncRuns: AdminPromptSyncRun[] };
 
-export function canManageAdmin(auth: { status?: string; localAdmin?: boolean; user?: { role?: string; platformAdmin?: boolean } | null } | null | undefined): boolean {
+type AuthorizationSnapshot = {
+  status?: string;
+  localAdmin?: boolean;
+  user?: { role?: string; platformAdmin?: boolean } | null;
+};
+
+/** Tenant ownership and platform administration are independent capabilities. */
+export function hasTenantOwnerCapability(auth: AuthorizationSnapshot | null | undefined): boolean {
   if (auth?.localAdmin === true) return true;
   const role = auth?.user?.role?.toLowerCase() ?? "";
   return role === "owner" || role === "admin";
 }
 
-export function canAccessAdminPage(auth: { status?: string; localAdmin?: boolean; user?: { role?: string; platformAdmin?: boolean } | null } | null | undefined): boolean {
-  return canManageAdmin(auth) || auth?.user?.platformAdmin === true;
+export function hasPlatformAdminCapability(auth: AuthorizationSnapshot | null | undefined): boolean {
+  return auth?.localAdmin === true || auth?.user?.platformAdmin === true;
+}
+
+/** @deprecated Prefer hasTenantOwnerCapability for explicit scope naming. */
+export function canManageAdmin(auth: AuthorizationSnapshot | null | undefined): boolean {
+  return hasTenantOwnerCapability(auth);
+}
+
+export function canAccessAdminPage(auth: AuthorizationSnapshot | null | undefined): boolean {
+  return hasTenantOwnerCapability(auth) || hasPlatformAdminCapability(auth);
 }
 
 export async function listPlatformTenants(query: { q?: string; page?: number; pageSize?: number } = {}): Promise<Page<PlatformTenant>> {
@@ -337,7 +357,7 @@ export async function putPlatformTenantQuota(tenantId: string, quota: number): P
   return json(await authFetch(`platform/tenants/${encodeURIComponent(tenantId)}/quota`, { method: "PUT", body: JSON.stringify({ generationQuotaMonthly: quota }) }));
 }
 
-export async function patchPlatformUser(userId: string, patch: Partial<Pick<AdminUser, "displayName" | "role" | "status">>): Promise<AdminUser> {
+export async function patchPlatformUser(userId: string, patch: Partial<Pick<AdminUser, "status">>): Promise<AdminUser> {
   return json(await authFetch(`platform/users/${encodeURIComponent(userId)}`, { method: "PATCH", body: JSON.stringify(patch) }));
 }
 
@@ -350,9 +370,9 @@ export async function listTenantInvitations(): Promise<TenantInvitation[]> {
   return json(await authFetch("tenant/invitations"));
 }
 
-export async function createTenantInvitation(input: { email: string; role: "member" | "admin"; expiresInHours?: number }): Promise<TenantInvitation & { token: string }> {
+export async function createTenantInvitation(input: { email: string; role: "user" | "member"; expiresInHours?: number }): Promise<TenantInvitation & { token: string }> {
   if (!input.email.trim() || !input.email.includes("@")) throw new Error("请输入有效邮箱");
-  return json(await authFetch("tenant/invitations", { method: "POST", body: JSON.stringify(input) }));
+  return json(await authFetch("tenant/invitations", { method: "POST", body: JSON.stringify({ ...input, role: "user" }) }));
 }
 
 export async function revokeTenantInvitation(id: string): Promise<void> {
@@ -382,14 +402,14 @@ export async function listAdminUsers(query: { q?: string; page?: number; pageSiz
     page: String(pageValue(query.page)),
     pageSize: String(pageSizeValue(query.pageSize)),
   });
-  return json(await authFetch(`admin/users?${params}`));
+  return json(await authFetch(`tenant/members?${params}`));
 }
 
 export async function patchAdminUser(
   userId: string,
-  patch: Partial<Pick<AdminUser, "displayName" | "role" | "status">>,
+  patch: Partial<Pick<AdminUser, "role" | "status">>,
 ): Promise<AdminUser> {
-  return json(await authFetch(`admin/users/${encodeURIComponent(userId)}`, {
+  return json(await authFetch(`tenant/members/${encodeURIComponent(userId)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   }));
@@ -422,15 +442,15 @@ export async function listAdminCreditLogs(query: {
     page: String(pageValue(query.page)),
     pageSize: String(pageSizeValue(query.pageSize)),
   });
-  return json(await authFetch(`admin/credit-logs?${params}`));
+  return json(await authFetch(`tenant/credit-logs?${params}`));
 }
 
 export async function getAdminModelCosts(): Promise<AdminModelCosts> {
-  return json(await authFetch("admin/models"));
+  return json(await authFetch("platform/model-costs"));
 }
 
 export async function getAdminTenantQuota(): Promise<AdminTenantQuota> {
-  return json(await authFetch("admin/tenant-quota"));
+  return json(await authFetch("tenant/quota"));
 }
 
 export function putAdminTenantQuota(generationQuotaMonthly: number): Promise<AdminTenantQuota> {
@@ -459,7 +479,7 @@ export async function putAdminModelCosts(input: AdminModelCosts): Promise<AdminM
   });
   if (!Number.isSafeInteger(input.defaultCredits) || input.defaultCredits < 1 || input.defaultCredits > maxAdminQuotaValue) throw new Error("默认模型成本必须是 1 到 1000000000 的整数");
   if (!input.revision) throw new Error("请先重新加载模型算力成本再保存");
-  const response = await authFetch("admin/models", {
+  const response = await authFetch("platform/model-costs", {
     method: "PUT",
     body: JSON.stringify({ modelCosts, defaultCredits: input.defaultCredits, revision: input.revision }),
   });
@@ -468,7 +488,7 @@ export async function putAdminModelCosts(input: AdminModelCosts): Promise<AdminM
 }
 
 export async function getAdminStoragePoolStatus(): Promise<{ items: AdminStoragePoolProviderStatus[]; revision: string; webdavEnabled: boolean }> {
-  const response = await authFetch("admin/storage-pool");
+  const response = await authFetch("tenant/storage-pool");
   if (!response.ok) await storagePoolHttpError(response);
   const revision = storagePoolRevision(response);
   const webdavEnabled = response.headers.get("X-OpenBoard-WebDAV-Media-Enabled") === "true";
@@ -550,7 +570,7 @@ export async function putAdminStoragePool(items: AdminStoragePoolProviderInput[]
   const normalized = items.map(normalizeStorageProvider);
   if (new Set(normalized.map((item) => item.id)).size !== normalized.length) throw new AdminStoragePoolError("duplicate-provider-id");
   if (!adminRevisionPattern.test(revision)) throw new AdminStoragePoolError("invalid-revision");
-  const response = await authFetch("admin/storage-pool", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
+  const response = await authFetch("tenant/storage-pool", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
   if (!response.ok) await storagePoolHttpError(response);
   const nextRevision = storagePoolRevision(response);
   const values = await json<AdminStoragePoolProviderStatus[]>(response);
@@ -567,19 +587,19 @@ export async function putAdminStoragePoolSecret(id: string, credential: AdminSto
   } else if (!credential.accessKeyId.trim() || !credential.secretAccessKey.trim()) {
     throw new AdminStoragePoolError("empty-s3-credential");
   }
-  const response = await authFetch(`admin/storage-pool/${encodeURIComponent(id)}/secret`, { method: "PUT", body: JSON.stringify(credential) });
+  const response = await authFetch(`tenant/storage-pool/${encodeURIComponent(id)}/secret`, { method: "PUT", body: JSON.stringify(credential) });
   if (!response.ok) await storagePoolHttpError(response);
 }
 
 export async function deleteAdminStoragePoolProvider(id: string, revision: string): Promise<string> {
   if (!adminRevisionPattern.test(revision)) throw new AdminStoragePoolError("invalid-revision");
-  const response = await authFetch(`admin/storage-pool/${encodeURIComponent(id)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
+  const response = await authFetch(`tenant/storage-pool/${encodeURIComponent(id)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
   if (!response.ok) await storagePoolHttpError(response);
   return storagePoolRevision(response);
 }
 
 export async function listAdminChannels(): Promise<{ items: AdminChannel[]; revision: string }> {
-  const response = await authFetch("admin/channels");
+  const response = await authFetch("tenant/channels");
   const revision = readAdminRevision(response);
   const channels = await json<AdminChannel[]>(response);
   return { revision, items: channels.map((channel) => ({
@@ -597,7 +617,7 @@ export async function putAdminChannels(channels: AdminChannel[], revision: strin
   const normalized = channels.map(normalizeAdminChannel);
   if (new Set(normalized.map((channel) => channel.id)).size !== normalized.length) throw new Error("共享渠道 ID 不能重复");
   if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载共享渠道再保存");
-  const response = await authFetch("admin/channels", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
+  const response = await authFetch("tenant/channels", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
   if (response.status === 409) throw new Error("共享渠道已被其他管理员修改，请重新加载后重试");
   const nextRevision = readAdminRevision(response);
   return { items: await json<AdminChannel[]>(response), revision: nextRevision };
@@ -605,7 +625,7 @@ export async function putAdminChannels(channels: AdminChannel[], revision: strin
 
 export async function deleteAdminChannel(channelId: string, revision: string): Promise<string> {
   if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载共享渠道再删除");
-  const response = await authFetch(`admin/channels/${encodeURIComponent(channelId)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
+  const response = await authFetch(`tenant/channels/${encodeURIComponent(channelId)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
   if (!response.ok) await json(response);
   return readAdminRevision(response);
 }
@@ -613,35 +633,102 @@ export async function deleteAdminChannel(channelId: string, revision: string): P
 export async function putAdminChannelSecret(channelId: string, apiKey: string, secretBindingId: string): Promise<void> {
   if (!apiKey.trim() || apiKey.length > 64 * 1024) throw new Error("渠道密钥不能为空或过长");
 	if (!secretBindingId.trim()) throw new Error("渠道配置已过期，请刷新后重试");
-  const response = await authFetch(`admin/channels/${encodeURIComponent(channelId)}/secret`, {
+  const response = await authFetch(`tenant/channels/${encodeURIComponent(channelId)}/secret`, {
 	method: "PUT", body: JSON.stringify({ apiKey, secretBindingId }),
   });
   if (!response.ok) await json(response);
 }
 
 export async function fetchAdminChannelModels(channelId: string): Promise<string[]> {
-  const result = await json<{ models: string[] }>(await authFetch(`admin/channels/${encodeURIComponent(channelId)}/models`, { method: "POST" }));
+  const result = await json<{ models: string[] }>(await authFetch(`tenant/channels/${encodeURIComponent(channelId)}/models`, { method: "POST" }));
   return result.models;
 }
 
 export async function testAdminChannel(channelId: string): Promise<{ ok: boolean; modelCount: number }> {
-  return json(await authFetch(`admin/channels/${encodeURIComponent(channelId)}/test`, { method: "POST" }));
+  return json(await authFetch(`tenant/channels/${encodeURIComponent(channelId)}/test`, { method: "POST" }));
+}
+
+function normalizeLoadedAdminChannel(channel: AdminChannel): AdminChannel {
+  return {
+    ...channel,
+    mediaCapabilities: Array.isArray(channel.mediaCapabilities) ? channel.mediaCapabilities : [],
+    defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel : "",
+    defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel : "",
+    defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel : "",
+    defaultAudioModel: typeof channel.defaultAudioModel === "string" ? channel.defaultAudioModel : "",
+    tenantIds: Array.isArray(channel.tenantIds) ? channel.tenantIds : [],
+  };
+}
+
+function normalizePlatformChannel(channel: AdminChannel): Record<string, unknown> {
+  const base = normalizeAdminChannel(channel);
+  const tenantIds = [...new Set((channel.tenantIds ?? []).map((tenantId) => tenantId.trim()).filter(Boolean))];
+  if (tenantIds.length > 500) throw new Error("平台渠道租户数量不能超过 500");
+  return {
+    ...base,
+    publishToAll: channel.publishToAll === true,
+    ...(tenantIds.length ? { tenantIds } : {}),
+  };
+}
+
+export async function listPlatformChannels(): Promise<{ items: AdminChannel[]; revision: string }> {
+  const response = await authFetch("platform/channels");
+  const revision = readAdminRevision(response);
+  const channels = await json<AdminChannel[]>(response);
+  return { revision, items: channels.map(normalizeLoadedAdminChannel) };
+}
+
+export async function putPlatformChannels(channels: AdminChannel[], revision: string): Promise<{ items: AdminChannel[]; revision: string }> {
+  if (channels.length > 100) throw new Error("平台渠道数量不能超过 100");
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载平台渠道再保存");
+  const normalized = channels.map(normalizePlatformChannel);
+  if (new Set(normalized.map((channel) => String(channel.id))).size !== normalized.length) throw new Error("平台渠道 ID 不能重复");
+  const response = await authFetch("platform/channels", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
+  if (response.status === 409) throw new Error("平台渠道已被其他管理员修改，请重新加载后重试");
+  const nextRevision = readAdminRevision(response);
+  const saved = await json<AdminChannel[]>(response);
+  return { items: saved.map(normalizeLoadedAdminChannel), revision: nextRevision };
+}
+
+export async function deletePlatformChannel(channelId: string, revision: string): Promise<string> {
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载平台渠道再删除");
+  const response = await authFetch(`platform/channels/${encodeURIComponent(channelId)}`, { method: "DELETE", headers: { "X-OpenBoard-Revision": revision } });
+  if (!response.ok) await json(response);
+  return readAdminRevision(response);
+}
+
+export async function putPlatformChannelSecret(channelId: string, apiKey: string, secretBindingId: string): Promise<void> {
+  if (!apiKey.trim() || apiKey.length > 64 * 1024) throw new Error("渠道密钥不能为空或过长");
+  if (!secretBindingId.trim()) throw new Error("渠道配置已过期，请刷新后重试");
+  const response = await authFetch(`platform/channels/${encodeURIComponent(channelId)}/secret`, {
+    method: "PUT", body: JSON.stringify({ apiKey, secretBindingId }),
+  });
+  if (!response.ok) await json(response);
+}
+
+export async function fetchPlatformChannelModels(channelId: string): Promise<string[]> {
+  const result = await json<{ models: string[] }>(await authFetch(`platform/channels/${encodeURIComponent(channelId)}/models`, { method: "POST" }));
+  return result.models;
+}
+
+export async function testPlatformChannel(channelId: string): Promise<{ ok: boolean; modelCount: number }> {
+  return json(await authFetch(`platform/channels/${encodeURIComponent(channelId)}/test`, { method: "POST" }));
 }
 
 async function adminPromptRequest<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   return json(await authFetch(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
 }
 
-export const getAdminPromptCatalog = () => adminPromptRequest<AdminPromptCatalog>("admin/prompt-catalog");
-export const createAdminPromptCategory = (input: AdminPromptCategory) => adminPromptRequest<AdminPromptCatalog>("admin/prompt-categories", "POST", input);
-export const updateAdminPromptCategory = (input: AdminPromptCategory) => adminPromptRequest<AdminPromptCatalog>(`admin/prompt-categories/${encodeURIComponent(input.id)}`, "PUT", input);
-export const deleteAdminPromptCategory = async (id: string) => { const response = await authFetch(`admin/prompt-categories/${encodeURIComponent(id)}`, { method: "DELETE" }); if (!response.ok) throw new AuthHttpError(response.status, await response.text()); };
-export const createAdminPrompt = (input: AdminPromptEntry) => adminPromptRequest<AdminPromptCatalog>("admin/prompts", "POST", input);
-export const updateAdminPrompt = (input: AdminPromptEntry) => adminPromptRequest<AdminPromptCatalog>(`admin/prompts/${encodeURIComponent(input.id)}`, "PUT", input);
-export const bulkDeleteAdminPrompts = (ids: string[]) => adminPromptRequest<AdminPromptCatalog>("admin/prompts/bulk-delete", "POST", { ids });
-export const createAdminPromptSource = (input: AdminPromptSource) => adminPromptRequest<AdminPromptCatalog>("admin/prompt-sources", "POST", input);
-export const updateAdminPromptSource = (input: AdminPromptSource) => adminPromptRequest<AdminPromptCatalog>(`admin/prompt-sources/${encodeURIComponent(input.id)}`, "PUT", input);
-export const deleteAdminPromptSource = async (id: string) => { const response = await authFetch(`admin/prompt-sources/${encodeURIComponent(id)}`, { method: "DELETE" }); if (!response.ok) throw new AuthHttpError(response.status, await response.text()); };
-export const syncAdminPromptSource = (id: string) => adminPromptRequest<AdminPromptSyncRun>(`admin/prompt-sources/${encodeURIComponent(id)}/sync`, "POST");
-export const syncAllAdminPromptSources = () => adminPromptRequest<AdminPromptSyncRun[]>("admin/prompt-sources/sync-all", "POST");
-export const runDueAdminPromptSources = () => adminPromptRequest<AdminPromptSyncRun[]>("admin/prompt-sources/run-due", "POST");
+export const getAdminPromptCatalog = () => adminPromptRequest<AdminPromptCatalog>("tenant/prompt-catalog");
+export const createAdminPromptCategory = (input: AdminPromptCategory) => adminPromptRequest<AdminPromptCatalog>("tenant/prompt-categories", "POST", input);
+export const updateAdminPromptCategory = (input: AdminPromptCategory) => adminPromptRequest<AdminPromptCatalog>(`tenant/prompt-categories/${encodeURIComponent(input.id)}`, "PUT", input);
+export const deleteAdminPromptCategory = async (id: string) => { const response = await authFetch(`tenant/prompt-categories/${encodeURIComponent(id)}`, { method: "DELETE" }); if (!response.ok) throw new AuthHttpError(response.status, await response.text()); };
+export const createAdminPrompt = (input: AdminPromptEntry) => adminPromptRequest<AdminPromptCatalog>("tenant/prompts", "POST", input);
+export const updateAdminPrompt = (input: AdminPromptEntry) => adminPromptRequest<AdminPromptCatalog>(`tenant/prompts/${encodeURIComponent(input.id)}`, "PUT", input);
+export const bulkDeleteAdminPrompts = (ids: string[]) => adminPromptRequest<AdminPromptCatalog>("tenant/prompts/bulk-delete", "POST", { ids });
+export const createAdminPromptSource = (input: AdminPromptSource) => adminPromptRequest<AdminPromptCatalog>("tenant/prompt-sources", "POST", input);
+export const updateAdminPromptSource = (input: AdminPromptSource) => adminPromptRequest<AdminPromptCatalog>(`tenant/prompt-sources/${encodeURIComponent(input.id)}`, "PUT", input);
+export const deleteAdminPromptSource = async (id: string) => { const response = await authFetch(`tenant/prompt-sources/${encodeURIComponent(id)}`, { method: "DELETE" }); if (!response.ok) throw new AuthHttpError(response.status, await response.text()); };
+export const syncAdminPromptSource = (id: string) => adminPromptRequest<AdminPromptSyncRun>(`tenant/prompt-sources/${encodeURIComponent(id)}/sync`, "POST");
+export const syncAllAdminPromptSources = () => adminPromptRequest<AdminPromptSyncRun[]>("tenant/prompt-sources/sync-all", "POST");
+export const runDueAdminPromptSources = () => adminPromptRequest<AdminPromptSyncRun[]>("tenant/prompt-sources/run-due", "POST");

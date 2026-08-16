@@ -2,7 +2,6 @@ import type { BoardProject } from "@/types/board";
 import type { FilmDocument } from "@/types/film";
 import type { WorkspaceSnapshot } from "@/lib/workspace-bundle";
 import type { FilmRestoreMedia } from "@/services/film-client";
-import type { WorkflowTemplate } from "@/types/workflow";
 import { authFetch } from "@/services/auth-session";
 
 export type FilmRestoreTransactionInput = {
@@ -22,8 +21,13 @@ export type ProjectImportTransactionResult = {
   migratedStorageKeys: string[];
 };
 
+export type TenantWorkspaceSnapshot = Pick<
+  WorkspaceSnapshot,
+  "projects" | "assets" | "prompts" | "generationJobs"
+>;
+
 export type CompleteWorkspaceTransactionInput = {
-  snapshot: Omit<WorkspaceSnapshot, "films">;
+  snapshot: TenantWorkspaceSnapshot;
   films: FilmRestoreTransactionInput[];
 };
 
@@ -31,11 +35,6 @@ export type WorkspaceRestoreReceipt = {
   version: string;
   restoreToken: string;
   migratedStorageKeys: string[];
-};
-
-type WorkflowTemplatesTransactionPayload = {
-  version: 1;
-  templates: WorkflowTemplate[];
 };
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -89,10 +88,6 @@ export async function replaceCompleteWorkspace(
   input: CompleteWorkspaceTransactionInput,
 ): Promise<WorkspaceRestoreReceipt> {
   const expectedVersion = await workspaceVersion();
-  const workflowTemplates: WorkflowTemplatesTransactionPayload = {
-    version: 1,
-    templates: input.snapshot.workflowTemplates.map((template) => structuredClone(template)),
-  };
   const response = await authFetch("projects", {
     method: "PUT",
     body: JSON.stringify({
@@ -100,10 +95,8 @@ export async function replaceCompleteWorkspace(
       projects: input.snapshot.projects,
       films: input.films,
       assets: input.snapshot.assets,
-      config: input.snapshot.config,
       prompts: input.snapshot.prompts,
       generationJobs: input.snapshot.generationJobs,
-      workflowTemplates,
     }),
   });
   const data = await jsonData(response, "Workspace replacement");

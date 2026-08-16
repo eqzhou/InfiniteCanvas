@@ -31,7 +31,7 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
   onRefill: () => void;
   onRetry: () => void;
   onInsert: (item: WorkbenchResultItem) => Promise<void>;
-  onDelete: () => Promise<void>;
+  onDelete?: () => Promise<void>;
   onCancel?: () => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -89,9 +89,11 @@ export function WorkbenchHistoryRow({ job, selected = false, onSelectedChange, o
             <button type="button" className="ob-icon-btn h-8 w-8" title={t("history.retry")} onClick={onRetry}>
               <RefreshCw size={16} />
             </button>
-            <button type="button" className="ob-btn-danger rounded-lg p-1.5" title={t("history.delete")} onClick={() => void onDelete()}>
-              <Trash2 size={16} />
-            </button>
+            {onDelete ? (
+              <button type="button" className="ob-btn-danger rounded-lg p-1.5" title={t("history.delete")} onClick={() => void onDelete()}>
+                <Trash2 size={16} />
+              </button>
+            ) : null}
           </>
         )}
       </div>

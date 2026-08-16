@@ -35,6 +35,7 @@ type adminMediaCapability struct {
 }
 
 type adminChannelPublic struct {
+	Source         string `json:"-"`
 	ID             string `json:"id"`
 	Name           string `json:"name"`
 	BaseURL        string `json:"baseUrl"`
@@ -65,7 +66,7 @@ type adminTenantQuota struct {
 }
 
 func (s *Server) getAdminTenantQuota(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin tenant quota unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant quota unavailable") {
 		return
 	}
 	usage, err := s.store.GetUsage(r.Context(), tenantIDFrom(r))
@@ -80,7 +81,7 @@ func (s *Server) getAdminTenantQuota(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putAdminTenantQuota(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin tenant quota unavailable") {
+	if !s.requirePlatformAdmin(w, r) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
@@ -113,54 +114,8 @@ func (s *Server) putAdminTenantQuota(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// requireTenantAdmin gates tenant-admin mutations.
-// - auth off: require the local process token
-// - authenticated admin/owner: allow
-// - optional with zero registered users: allow bootstrap
-// - otherwise require login as admin
-func (s *Server) requireTenantAdmin(w http.ResponseWriter, r *http.Request, unavailable string) bool {
-	if s.store == nil {
-		http.Error(w, unavailable, http.StatusServiceUnavailable)
-		return false
-	}
-	if authMode() == "off" {
-		if !s.authorizeProcessToken(r) {
-			http.Error(w, "invalid access token", http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-	if user, ok := authUserFrom(r.Context()); ok {
-		if !isTenantAdmin(user) {
-			http.Error(w, "admin required", http.StatusForbidden)
-			return false
-		}
-		return true
-	}
-	if authMode() == "required" {
-		http.Error(w, "login required", http.StatusUnauthorized)
-		return false
-	}
-	// optional, no session: bootstrap only while the catalog has no users,
-	// and only with the process token so an unattended install is not world-admin.
-	count, err := s.store.CountUsers(r.Context())
-	if err != nil {
-		http.Error(w, "failed to verify admin access", http.StatusServiceUnavailable)
-		return false
-	}
-	if count == 0 {
-		if !s.authorizeProcessToken(r) {
-			http.Error(w, "login required", http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-	http.Error(w, "login required", http.StatusUnauthorized)
-	return false
-}
-
 func (s *Server) getAdminChannels(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin channels unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
 		return
 	}
 	if s.store == nil {
@@ -196,7 +151,7 @@ func (s *Server) getAdminChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putAdminChannels(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin channels unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -220,6 +175,10 @@ func (s *Server) putAdminChannels(w http.ResponseWriter, r *http.Request) {
 		item, message := normalizeAdminChannel(item)
 		if message != "" {
 			http.Error(w, message, http.StatusBadRequest)
+			return
+		}
+		if err := validateAccountManagedChannelURL(item.BaseURL); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		id := item.ID
@@ -255,7 +214,7 @@ func (s *Server) getAdminModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, adminModelCreditConfig{ModelCreditConfig: config, Revision: adminConfigRevision(config)})
 		return
 	}
-	raw, err := getOptionalState(r.Context(), s.store, tenantIDFrom(r), adminBillingStateKey)
+	raw, err := getOptionalState(r.Context(), s.store, store.DefaultTenantID, adminBillingStateKey)
 	if err != nil {
 		http.Error(w, "failed to load model costs", http.StatusInternalServerError)
 		return
@@ -266,6 +225,13 @@ func (s *Server) getAdminModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, adminModelCreditConfig{ModelCreditConfig: cfg, Revision: adminConfigRevision(cfg)})
+}
+
+func (s *Server) getPlatformModelCosts(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePlatformAdmin(w, r) {
+		return
+	}
+	s.getAdminModels(w, r)
 }
 
 type adminModelCreditConfig struct {
@@ -317,7 +283,7 @@ func normalizeModelCreditConfig(input store.ModelCreditConfig) (store.ModelCredi
 }
 
 func (s *Server) putAdminModels(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin model costs unavailable") {
+	if !s.requirePlatformAdmin(w, r) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -333,7 +299,7 @@ func (s *Server) putAdminModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, message, http.StatusBadRequest)
 		return
 	}
-	raw, err := getOptionalState(r.Context(), s.store, tenantIDFrom(r), adminBillingStateKey)
+	raw, err := getOptionalState(r.Context(), s.store, store.DefaultTenantID, adminBillingStateKey)
 	if err != nil {
 		http.Error(w, "failed to load model costs", http.StatusInternalServerError)
 		return
@@ -352,7 +318,7 @@ func (s *Server) putAdminModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save model costs", http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.CompareAndSwapState(r.Context(), tenantIDFrom(r), adminBillingStateKey, raw, next); errors.Is(err, store.ErrConflict) {
+	if err := s.store.CompareAndSwapState(r.Context(), store.DefaultTenantID, adminBillingStateKey, raw, next); errors.Is(err, store.ErrConflict) {
 		http.Error(w, "model costs changed concurrently", http.StatusConflict)
 		return
 	} else if err != nil {
@@ -363,7 +329,7 @@ func (s *Server) putAdminModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAdminCreditLogs(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin credit logs unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant credit logs unavailable") {
 		return
 	}
 	query := store.CreditLogQuery{
@@ -396,7 +362,7 @@ type adminCreditAdjustmentInput struct {
 }
 
 func (s *Server) createAdminCreditAdjustment(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin credit adjustments unavailable") {
+	if !s.requirePlatformAdmin(w, r) {
 		return
 	}
 	userID := strings.TrimSpace(chi.URLParam(r, "id"))
@@ -441,7 +407,7 @@ func (s *Server) createAdminCreditAdjustment(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) listAdminUsers(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin users unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant members unavailable") {
 		return
 	}
 	q := store.UserQuery{Q: strings.TrimSpace(r.URL.Query().Get("q"))}
@@ -460,7 +426,7 @@ func (s *Server) listAdminUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) patchAdminUser(w http.ResponseWriter, r *http.Request) {
-	if !s.requireTenantAdmin(w, r, "admin users unavailable") {
+	if !s.requireTenantOwner(w, r, "tenant members unavailable") {
 		return
 	}
 	userID := strings.TrimSpace(chi.URLParam(r, "id"))
@@ -471,61 +437,50 @@ func (s *Server) patchAdminUser(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	var patch store.UserPatch
-	if err := decoder.Decode(&patch); err != nil || ensureJSONEOF(decoder) != nil {
+	var input struct {
+		Role   *string `json:"role"`
+		Status *string `json:"status"`
+	}
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if patch.Role == nil && patch.Status == nil && patch.DisplayName == nil && patch.CreditsDelta == nil {
+	if input.Role == nil && input.Status == nil {
 		http.Error(w, "empty patch", http.StatusBadRequest)
 		return
 	}
-	if patch.CreditsDelta != nil {
-		http.Error(w, "use credit adjustments endpoint", http.StatusBadRequest)
-		return
-	}
+	patch := store.UserPatch{Role: input.Role, Status: input.Status, ActorRole: "owner"}
 	if patch.Role != nil {
 		role := strings.ToLower(strings.TrimSpace(*patch.Role))
-		if role != "owner" && role != "admin" && role != "member" {
+		if role == "user" {
+			role = "member"
+		}
+		if role != "owner" && role != "member" {
 			http.Error(w, "invalid role", http.StatusBadRequest)
 			return
 		}
 		*patch.Role = role
 	}
 	if patch.Status != nil {
+		target, err := s.store.GetUser(r.Context(), tenantIDFrom(r), userID)
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "failed to update user", http.StatusInternalServerError)
+			return
+		}
+		if target.PlatformAdmin || store.IsConfiguredPlatformAdminUserID(target.ID) {
+			http.Error(w, "platform account status is managed by a platform administrator", http.StatusForbidden)
+			return
+		}
 		status := strings.ToLower(strings.TrimSpace(*patch.Status))
 		if status != "active" && status != "ban" {
 			http.Error(w, "invalid status", http.StatusBadRequest)
 			return
 		}
 		*patch.Status = status
-	}
-	patch.ActorRole = "owner"
-	if actor, ok := authUserFrom(r.Context()); ok {
-		patch.ActorRole = actor.Role
-	}
-	// Prevent non-owner admins from promoting to owner or demoting owners silently:
-	// store.UpdateUser enforces last-owner protection; reject owner role changes unless actor is owner.
-	if actor, ok := authUserFrom(r.Context()); ok && (patch.Role != nil || patch.Status != nil) {
-		if patch.Role != nil && strings.EqualFold(*patch.Role, "owner") && !strings.EqualFold(actor.Role, "owner") {
-			http.Error(w, "only an owner can assign the owner role", http.StatusForbidden)
-			return
-		}
-		if !strings.EqualFold(actor.Role, "owner") {
-			target, err := s.store.GetUser(r.Context(), tenantIDFrom(r), userID)
-			if errors.Is(err, store.ErrNotFound) {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			if err != nil {
-				http.Error(w, "failed to update user", http.StatusInternalServerError)
-				return
-			}
-			if strings.EqualFold(target.Role, "owner") {
-				http.Error(w, "only an owner can modify an owner", http.StatusForbidden)
-				return
-			}
-		}
 	}
 	updated, err := s.store.UpdateUser(r.Context(), tenantIDFrom(r), userID, patch)
 	if errors.Is(err, store.ErrNotFound) {

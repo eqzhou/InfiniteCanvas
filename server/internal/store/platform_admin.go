@@ -5,17 +5,17 @@ import (
 	"strings"
 )
 
-// IsConfiguredPlatformAdmin is deliberately an exact, deployment-controlled
-// allowlist. It is evaluated when an authenticated user is loaded, so an
-// operator can grant or revoke platform access by changing the process
-// configuration without exposing a self-service elevation endpoint.
-func IsConfiguredPlatformAdmin(email string) bool {
-	target := strings.ToLower(strings.TrimSpace(email))
+// IsConfiguredPlatformAdminUserID is an exact, deployment-controlled grant
+// keyed by the immutable server-generated user ID. Email addresses are not an
+// authorization primitive because password registration does not prove email
+// ownership.
+func IsConfiguredPlatformAdminUserID(userID string) bool {
+	target := strings.TrimSpace(userID)
 	if target == "" {
 		return false
 	}
-	for _, raw := range strings.Split(os.Getenv("OPENBOARD_PLATFORM_ADMIN_EMAILS"), ",") {
-		if strings.EqualFold(target, strings.TrimSpace(raw)) {
+	for _, raw := range strings.Split(os.Getenv("OPENBOARD_PLATFORM_ADMIN_USER_IDS"), ",") {
+		if target == strings.TrimSpace(raw) {
 			return true
 		}
 	}

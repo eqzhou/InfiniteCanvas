@@ -92,9 +92,13 @@ import {
   mergeReferenceFiles,
 } from "@/lib/reference-files";
 import { useI18n } from "@/i18n/I18nProvider";
+import { useOptionalAuth } from "@/components/auth/AuthGate";
+import { hasTenantOwnerCapability } from "@/services/admin";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	const { t } = useI18n();
+	const auth = useOptionalAuth();
+	const tenantOwner = hasTenantOwnerCapability(auth);
 	const [searchParams] = useSearchParams();
 	const filmAssetTarget = kind === "image" ? {
 		projectId: searchParams.get("filmProjectId") ?? "",
@@ -427,6 +431,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   }, [allVisibleSelected, visibleJobs]);
 
   const deleteSelectedHistory = useCallback(async () => {
+    if (!tenantOwner) return;
     const targets = visibleJobs.filter((job) => selectedJobIds.includes(job.id));
     if (!targets.length) return;
     try {
@@ -452,7 +457,25 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [refresh, selectedJobIds, t, visibleJobs]);
+  }, [refresh, selectedJobIds, t, tenantOwner, visibleJobs]);
+
+  const deleteHistoryJob = useCallback(async (job: GenerationJob) => {
+    try {
+      // Soft-delete hides the card while retaining a sync tombstone and media ownership.
+      // Abort any in-flight waiters for this job so waitForGenerationJob does not spin.
+      for (const [token, jobId] of activeServerJobIdsRef.current.entries()) {
+        if (jobId === job.id) {
+          controllersRef.current.get(token)?.abort();
+          activeServerJobIdsRef.current.delete(token);
+        }
+      }
+      await deleteGenerationJob(job.id);
+      setSelectedJobIds((current) => current.filter((id) => id !== job.id));
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [refresh]);
 
 
 
@@ -1358,28 +1381,32 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   {categories.map((value) => <option key={value} value={value}>{value}</option>)}
                 </select>
               ) : null}
-              <label className="flex items-center gap-1 text-xs text-[var(--ob-muted)]">
-                <input
-                  type="checkbox"
-                  aria-label={t("workbench.selectCurrentHistory")}
-                  checked={allVisibleSelected}
-                  disabled={!visibleJobs.length}
-                  onChange={() => toggleSelectAllVisible()}
-                />
-                {t("workbench.selectAll")}
-              </label>
-              <button
-                type="button"
-                title={t("workbench.deleteBatch")}
-                className="ob-btn-danger rounded-lg p-1.5"
-                disabled={!selectedVisibleIds.length}
-                onClick={() => void deleteSelectedHistory()}
-              >
-                <Trash2 size={16} />
-                <span className="sr-only">{t("workbench.deleteBatch")}</span>
-              </button>
-              {selectedVisibleIds.length ? (
-                <span className="text-xs text-[var(--ob-muted)]">{t("workbench.selectedCount", { count: selectedVisibleIds.length })}</span>
+              {tenantOwner ? (
+                <>
+                  <label className="flex items-center gap-1 text-xs text-[var(--ob-muted)]">
+                    <input
+                      type="checkbox"
+                      aria-label={t("workbench.selectCurrentHistory")}
+                      checked={allVisibleSelected}
+                      disabled={!visibleJobs.length}
+                      onChange={() => toggleSelectAllVisible()}
+                    />
+                    {t("workbench.selectAll")}
+                  </label>
+                  <button
+                    type="button"
+                    title={t("workbench.deleteBatch")}
+                    className="ob-btn-danger rounded-lg p-1.5"
+                    disabled={!selectedVisibleIds.length}
+                    onClick={() => void deleteSelectedHistory()}
+                  >
+                    <Trash2 size={16} />
+                    <span className="sr-only">{t("workbench.deleteBatch")}</span>
+                  </button>
+                  {selectedVisibleIds.length ? (
+                    <span className="text-xs text-[var(--ob-muted)]">{t("workbench.selectedCount", { count: selectedVisibleIds.length })}</span>
+                  ) : null}
+                </>
               ) : null}
               <button type="button" title={t("common.refresh")} className="ob-icon-btn" onClick={() => void refresh()}>
                 <RefreshCw size={18} />
@@ -1391,8 +1418,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               <WorkbenchHistoryRow
                 key={job.id}
                 job={job}
-                selected={selectedJobIds.includes(job.id)}
-                onSelectedChange={(selected) => toggleJobSelected(job.id, selected)}
+                selected={tenantOwner && selectedJobIds.includes(job.id)}
+                onSelectedChange={tenantOwner ? (selected) => toggleJobSelected(job.id, selected) : undefined}
                 onRefill={() => refill(job)}
                 onRetry={() => void run(job)}
                 onInsert={(item) => insert(item, job)}
@@ -1406,19 +1433,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 						}
 					}
 					: undefined}
-                onDelete={async () => {
-                  // Soft-delete hides the card while retaining a sync tombstone and media ownership.
-                  // Abort any in-flight waiters for this job so waitForGenerationJob does not spin.
-                  for (const [token, jobId] of activeServerJobIdsRef.current.entries()) {
-                    if (jobId === job.id) {
-                      controllersRef.current.get(token)?.abort();
-                      activeServerJobIdsRef.current.delete(token);
-                    }
-                  }
-                  await deleteGenerationJob(job.id);
-                  setSelectedJobIds((current) => current.filter((id) => id !== job.id));
-                  await refresh();
-                }}
+                onDelete={tenantOwner ? () => deleteHistoryJob(job) : undefined}
               />
             ))}
           </div>

@@ -125,7 +125,7 @@ func (s *Server) putConfigBundle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read config bundle", http.StatusInternalServerError)
 		return
 	}
-	if tenantWide && !s.requireTenantAdmin(w, r, "state unavailable") {
+	if tenantWide && !s.requireTenantOwner(w, r, "tenant state unavailable") {
 		return
 	}
 	if createOnly {
@@ -138,6 +138,10 @@ func (s *Server) putConfigBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !tenantWide {
+		if err := validatePersonalChannelDestinations(body.Config); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := s.enforceMemberCustomChannelPolicy(
 			r.Context(), r, currentConfig, body.Config, currentSecrets, body.Secrets,
 		); err != nil {

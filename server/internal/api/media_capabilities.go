@@ -88,29 +88,38 @@ func (s *Server) buildMediaCapabilityCatalog(ctx context.Context, tenantID strin
 	if err != nil {
 		return mediaCapabilityCatalog{}, err
 	}
+	platformChannels, err := s.loadPlatformChannels(ctx)
+	if err != nil {
+		return mediaCapabilityCatalog{}, err
+	}
+	platformPresence, err := s.platformChannelSecretPresence(ctx)
+	if err != nil {
+		return mediaCapabilityCatalog{}, err
+	}
 	models := make([]mediaModelCapability, 0, len(channels)*3)
+	seen := make(map[string]struct{}, len(channels)+len(platformChannels))
 	for _, raw := range channels {
 		channel, message := normalizeAdminChannel(raw)
-		if message != "" || !channel.Enabled || !channel.AllowUserUse || (adminChannelRequiresSecret(channel) && !presence[channel.ID]) {
+		if message != "" {
 			continue
 		}
-		explicit := make(map[string]struct{}, len(channel.MediaCapabilities))
-		for _, configured := range channel.MediaCapabilities {
-			explicit[configured.Kind+"\x00"+strings.ToLower(configured.Model)] = struct{}{}
-			models = append(models, capabilityForExplicitChannelModel(channel, configured))
+		seen[channel.ID] = struct{}{}
+		if validateAccountManagedChannelURL(channel.BaseURL) != nil || !channel.Enabled || !channel.AllowUserUse || (adminChannelRequiresSecret(channel) && !presence[channel.ID]) {
+			continue
 		}
-		defaults := []struct{ kind, model string }{{"image", channel.DefaultImageModel}, {"video", channel.DefaultVideoModel}, {"audio", channel.DefaultAudioModel}}
-		for _, item := range defaults {
-			if item.model == "" || !channelModelsAllow(channel.Models, item.model) {
-				continue
-			}
-			if _, configured := explicit[item.kind+"\x00"+strings.ToLower(item.model)]; configured {
-				continue
-			}
-			if _, registered := resolveProviderModelCapability(channel.Protocol, item.kind, item.model); registered {
-				models = append(models, capabilityForChannelDefault(channel, item.kind, item.model))
-			}
+		models = appendMediaCapabilityModels(models, channel)
+	}
+	for _, raw := range platformChannels {
+		_, duplicate := seen[raw.ID]
+		if !platformChannelVisibleToTenant(raw, tenantID) || duplicate {
+			continue
 		}
+		channel, message := normalizeAdminChannel(raw.adminChannel())
+		if message != "" || !channel.Enabled || !channel.AllowUserUse || (adminChannelRequiresSecret(channel) && !platformPresence[channel.ID]) {
+			continue
+		}
+		seen[channel.ID] = struct{}{}
+		models = appendMediaCapabilityModels(models, channel)
 	}
 	sort.Slice(models, func(i, j int) bool {
 		if models[i].ChannelID != models[j].ChannelID {
@@ -122,6 +131,27 @@ func (s *Server) buildMediaCapabilityCatalog(ctx context.Context, tenantID strin
 		return models[i].Model < models[j].Model
 	})
 	return mediaCapabilityCatalog{Version: adminConfigRevision(models), Models: models}, nil
+}
+
+func appendMediaCapabilityModels(models []mediaModelCapability, channel adminChannelPublic) []mediaModelCapability {
+	explicit := make(map[string]struct{}, len(channel.MediaCapabilities))
+	for _, configured := range channel.MediaCapabilities {
+		explicit[configured.Kind+"\x00"+strings.ToLower(configured.Model)] = struct{}{}
+		models = append(models, capabilityForExplicitChannelModel(channel, configured))
+	}
+	defaults := []struct{ kind, model string }{{"image", channel.DefaultImageModel}, {"video", channel.DefaultVideoModel}, {"audio", channel.DefaultAudioModel}}
+	for _, item := range defaults {
+		if item.model == "" || !channelModelsAllow(channel.Models, item.model) {
+			continue
+		}
+		if _, configured := explicit[item.kind+"\x00"+strings.ToLower(item.model)]; configured {
+			continue
+		}
+		if _, registered := resolveProviderModelCapability(channel.Protocol, item.kind, item.model); registered {
+			models = append(models, capabilityForChannelDefault(channel, item.kind, item.model))
+		}
+	}
+	return models
 }
 
 func (s *Server) verifySharedMediaCapability(ctx context.Context, tenantID, channelID, kind, model, mode string) (string, error) {

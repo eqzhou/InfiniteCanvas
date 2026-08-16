@@ -74,7 +74,7 @@ describe("admin storage pool error presentation", () => {
     expect(storagePoolErrorMessage(new AdminStoragePoolError("invalid-endpoint"), "en-US"))
       .toBe("Enter a valid storage endpoint.");
     expect(storagePoolErrorMessage(new AdminStoragePoolError("conflict", 409), "en-US"))
-      .toBe("This storage pool was changed by another administrator. Reload and try again.");
+      .toBe("This storage pool was changed by another Owner. Reload and try again.");
     expect(storagePoolErrorMessage(new Error("internal details must not reach the UI"), "en-US"))
       .toBe("The storage pool request could not be completed. Try again.");
   });

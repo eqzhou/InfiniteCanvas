@@ -11,9 +11,9 @@ afterEach(() => {
 
 test("config write refusal maps the custom-channel policy to a useful message", () => {
   expect(configWriteForbiddenMessage("custom channels disabled by admin\n"))
-    .toBe("管理员已禁止普通成员修改个人渠道或渠道密钥");
+    .toBe("租户 Owner 已禁止普通用户修改个人渠道或渠道密钥");
   expect(configWriteForbiddenMessage("unrecognized refusal"))
-    .toBe("仅所有者或管理员可以修改租户配置");
+    .toBe("仅租户 Owner 或部署管理员可以修改租户配置");
 });
 
 function project(id: string): BoardProject {

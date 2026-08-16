@@ -25,10 +25,10 @@ func workspaceActorHandler(t *testing.T, backend *filmMemoryStore, actor store.A
 	return withActor(router, actor)
 }
 
-func TestWorkspaceReplaceTenantConfigAuthorizationAndBinding(t *testing.T) {
+func TestWorkspaceReplaceIsOwnerOnlyAndExcludesPersonalSettings(t *testing.T) {
 	project := json.RawMessage(`{"schemaVersion":3,"projectKind":"canvas","id":"workspace-config","title":"Workspace config","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
 	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
-	admin := store.AuthUser{ID: "admin-1", TenantID: member.TenantID, Role: "admin", Status: "active"}
+	owner := store.AuthUser{ID: "owner-1", TenantID: member.TenantID, Role: "owner", Status: "active"}
 
 	t.Run("member rejected", func(t *testing.T) {
 		backend := newFilmMemoryStore()
@@ -39,11 +39,10 @@ func TestWorkspaceReplaceTenantConfigAuthorizationAndBinding(t *testing.T) {
 		handler := workspaceActorHandler(t, backend, member)
 		version := strings.Trim(request(t, handler, http.MethodGet, "/api/projects", nil).Header().Get("ETag"), `"`)
 		input := completeWorkspaceRequest(version, []json.RawMessage{project}, []any{})
-		input["config"] = map[string]any{"theme": "new"}
 		body, _ := json.Marshal(input)
 		response := request(t, handler, http.MethodPut, "/api/projects", body)
 		if response.Code != http.StatusForbidden {
-			t.Fatalf("member workspace config replace = %d %s", response.Code, response.Body.String())
+			t.Fatalf("member workspace replace = %d %s", response.Code, response.Body.String())
 		}
 		stored, err := backend.GetState(t.Context(), member.TenantID, "config")
 		if err != nil || !jsonEqual(stored, current) {
@@ -51,92 +50,92 @@ func TestWorkspaceReplaceTenantConfigAuthorizationAndBinding(t *testing.T) {
 		}
 	})
 
-	t.Run("admin succeeds", func(t *testing.T) {
+	t.Run("owner restores tenant data without replacing personal settings", func(t *testing.T) {
 		backend := newFilmMemoryStore()
-		if err := backend.PutState(t.Context(), admin.TenantID, "config", []byte(`{"theme":"old"}`)); err != nil {
-			t.Fatal(err)
+		configKey := userConfigStateKeyPrefix + owner.ID
+		secretKey := userSecretStateKeyPrefix + owner.ID
+		templateKey := workflowTemplateUserStateKeyPrefix + owner.ID
+		for key, value := range map[string][]byte{
+			configKey: []byte(`{"theme":"old"}`), secretKey: []byte(`{"nonce":"existing","ciphertext":"existing"}`),
+			templateKey: []byte(`{"version":1,"templates":[]}`),
+		} {
+			if err := backend.PutState(t.Context(), owner.TenantID, key, value); err != nil {
+				t.Fatal(err)
+			}
 		}
-		handler := workspaceActorHandler(t, backend, admin)
+		handler := workspaceActorHandler(t, backend, owner)
 		version := strings.Trim(request(t, handler, http.MethodGet, "/api/projects", nil).Header().Get("ETag"), `"`)
 		input := completeWorkspaceRequest(version, []json.RawMessage{project}, []any{})
+		// Legacy clients may still send these fields. They are intentionally
+		// outside the tenant workspace transaction and must be ignored.
 		input["config"] = map[string]any{"theme": "new"}
+		input["workflowTemplates"] = map[string]any{"version": 1, "templates": []any{map[string]any{"id": "untrusted"}}}
 		body, _ := json.Marshal(input)
 		response := request(t, handler, http.MethodPut, "/api/projects", body)
 		if response.Code != http.StatusOK {
-			t.Fatalf("admin workspace config replace = %d %s", response.Code, response.Body.String())
+			t.Fatalf("owner workspace replace = %d %s", response.Code, response.Body.String())
 		}
-		stored, err := backend.GetState(t.Context(), admin.TenantID, "config")
-		if err != nil || !jsonEqual(stored, []byte(`{"theme":"new"}`)) {
-			t.Fatalf("admin config not stored: %s, %v", stored, err)
-		}
-	})
-
-	t.Run("object storage rebind rejected", func(t *testing.T) {
-		backend := newFilmMemoryStore()
-		current := []byte(`{"objectStorage":{"enabled":true,"endpoint":"https://storage.example.com","bucket":"tenant-old","region":"us-east-1","prefix":"media"}}`)
-		if err := backend.PutState(t.Context(), admin.TenantID, "config", current); err != nil {
-			t.Fatal(err)
-		}
-		handler := workspaceActorHandler(t, backend, admin)
-		version := strings.Trim(request(t, handler, http.MethodGet, "/api/projects", nil).Header().Get("ETag"), `"`)
-		input := completeWorkspaceRequest(version, []json.RawMessage{project}, []any{})
-		input["config"] = map[string]any{"objectStorage": map[string]any{"enabled": true, "endpoint": "https://storage.example.com", "bucket": "tenant-new", "region": "us-east-1", "prefix": "media"}}
-		body, _ := json.Marshal(input)
-		response := request(t, handler, http.MethodPut, "/api/projects", body)
-		if response.Code != http.StatusConflict {
-			t.Fatalf("workspace object storage rebind = %d %s", response.Code, response.Body.String())
-		}
-		stored, err := backend.GetState(t.Context(), admin.TenantID, "config")
-		if err != nil || !jsonEqual(stored, current) {
-			t.Fatalf("rebind changed tenant config: %s, %v", stored, err)
-		}
-	})
-
-	t.Run("config with secrets requires paired endpoint", func(t *testing.T) {
-		backend := newFilmMemoryStore()
-		current := []byte(`{"theme":"old"}`)
-		if err := backend.PutState(t.Context(), admin.TenantID, "config", current); err != nil {
-			t.Fatal(err)
-		}
-		if err := backend.PutState(t.Context(), admin.TenantID, secretStateKey, []byte(`{"nonce":"existing","ciphertext":"existing"}`)); err != nil {
-			t.Fatal(err)
-		}
-		handler := workspaceActorHandler(t, backend, admin)
-		version := strings.Trim(request(t, handler, http.MethodGet, "/api/projects", nil).Header().Get("ETag"), `"`)
-		input := completeWorkspaceRequest(version, []json.RawMessage{project}, []any{})
-		input["config"] = map[string]any{"theme": "new"}
-		body, _ := json.Marshal(input)
-		response := request(t, handler, http.MethodPut, "/api/projects", body)
-		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "config and secrets must be saved together") {
-			t.Fatalf("unpaired workspace config replace = %d %s", response.Code, response.Body.String())
+		for key, expected := range map[string]string{
+			configKey: `{"theme":"old"}`, secretKey: `{"nonce":"existing","ciphertext":"existing"}`,
+			templateKey: `{"version":1,"templates":[]}`,
+		} {
+			stored, err := backend.GetState(t.Context(), owner.TenantID, key)
+			if err != nil || !jsonEqual(stored, []byte(expected)) {
+				t.Fatalf("personal state %s changed: %s, %v", key, stored, err)
+			}
 		}
 	})
 }
 
-func TestWorkspaceReplaceAcceptsReserializedSemanticConfigWithExistingSecrets(t *testing.T) {
+func TestWorkspaceReplaceLeavesLegacyTenantSettingsUntouched(t *testing.T) {
 	backend := newFilmMemoryStore()
-	member := store.AuthUser{ID: "member-1", TenantID: "tenant-a", Role: "member", Status: "active"}
-	prettyConfig := []byte("{\n  \"theme\": \"dark\",\n  \"limits\": {\n    \"ratio\": 1.0,\n    \"count\": 1e0\n  }\n}")
-	secret := []byte(`{"nonce":"existing","ciphertext":"existing"}`)
-	if err := backend.PutState(t.Context(), member.TenantID, "config", prettyConfig); err != nil {
-		t.Fatal(err)
+	owner := store.AuthUser{ID: "owner-1", TenantID: "tenant-a", Role: "owner", Status: "active"}
+	for key, value := range map[string][]byte{
+		"config": []byte(`{"theme":"old"}`), secretStateKey: []byte(`{"nonce":"existing","ciphertext":"existing"}`),
+		workflowTemplateStateKey: []byte(`{"version":1,"templates":[]}`),
+	} {
+		if err := backend.PutState(t.Context(), owner.TenantID, key, value); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := backend.PutState(t.Context(), member.TenantID, secretStateKey, secret); err != nil {
-		t.Fatal(err)
-	}
-	handler := workspaceActorHandler(t, backend, member)
+	handler := workspaceActorHandler(t, backend, owner)
 	version := strings.Trim(request(t, handler, http.MethodGet, "/api/projects", nil).Header().Get("ETag"), `"`)
-	project := json.RawMessage(`{"schemaVersion":3,"projectKind":"canvas","id":"semantic-config","title":"Semantic config","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
-	input := completeWorkspaceRequest(version, []json.RawMessage{project}, []any{})
-	input["config"] = json.RawMessage(`{"limits":{"count":1,"ratio":1},"theme":"dark"}`)
+	body, _ := json.Marshal(completeWorkspaceRequest(version, []json.RawMessage{}, []any{}))
+	response := request(t, handler, http.MethodPut, "/api/projects", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("workspace replacement = %d %s", response.Code, response.Body.String())
+	}
+	for key, expected := range map[string]string{
+		"config": `{"theme":"old"}`, secretStateKey: `{"nonce":"existing","ciphertext":"existing"}`,
+		workflowTemplateStateKey: `{"version":1,"templates":[]}`,
+	} {
+		stored, err := backend.GetState(t.Context(), owner.TenantID, key)
+		if err != nil || !jsonEqual(stored, []byte(expected)) {
+			t.Fatalf("legacy state %s changed: %s, %v", key, stored, err)
+		}
+	}
+}
+
+func TestWorkspaceRestoreBindsImportedGenerationHistoryToOwner(t *testing.T) {
+	backend := newFilmMemoryStore()
+	owner := store.AuthUser{ID: "owner-history", TenantID: "tenant-history", Role: "owner", Status: "active"}
+	handler := workspaceActorHandler(t, backend, owner)
+	version := strings.Trim(request(t, handler, http.MethodGet, "/api/projects", nil).Header().Get("ETag"), `"`)
+	job := store.GenerationJob{
+		ID: "restored-history", Kind: "image", Status: "failed", Prompt: "restored",
+		Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`), Error: "failed",
+		CreatedAt: "2026-08-09T00:00:00Z", UpdatedAt: "2026-08-09T00:00:01Z",
+	}
+	input := completeWorkspaceRequest(version, []json.RawMessage{}, []any{})
+	input["generationJobs"] = []store.GenerationJob{job}
 	body, _ := json.Marshal(input)
 	response := request(t, handler, http.MethodPut, "/api/projects", body)
 	if response.Code != http.StatusOK {
-		t.Fatalf("semantic config replacement = %d %s", response.Code, response.Body.String())
+		t.Fatalf("workspace restore = %d %s", response.Code, response.Body.String())
 	}
-	storedSecret, err := backend.GetState(t.Context(), member.TenantID, secretStateKey)
-	if err != nil || string(storedSecret) != string(secret) {
-		t.Fatalf("semantic config replacement changed secrets: %s, %v", storedSecret, err)
+	stored, err := backend.GetGenerationJob(t.Context(), owner.TenantID, job.ID)
+	if err != nil || stored.UserID != owner.ID {
+		t.Fatalf("restored job owner = %q err=%v", stored.UserID, err)
 	}
 }
 
@@ -213,13 +212,20 @@ func TestWorkspaceReplaceIsAtomicCASBoundAndRollbackResurrectsTombstones(t *test
 func completeWorkspaceRequest(version string, projects []json.RawMessage, films any) map[string]any {
 	return map[string]any{
 		"expectedVersion": version, "projects": projects, "films": films, "generationJobs": []any{},
-		"assets": []any{}, "config": map[string]any{}, "prompts": []any{},
-		"workflowTemplates": map[string]any{"version": 1, "templates": []any{}},
+		"assets": []any{}, "prompts": []any{},
 	}
 }
 
 func TestSingleProjectAggregateReplacePreservesOtherServerProjects(t *testing.T) {
-	_, handler := filmAPIHandler(t)
+	backend, handler := filmAPIHandler(t)
+	ownedJob := store.GenerationJob{
+		ID: "other-user-history", UserID: "other-user", Kind: "image", Status: "succeeded", Prompt: "private",
+		Parameters: json.RawMessage(`{}`), Result: json.RawMessage(`{}`),
+		CreatedAt: "2026-08-08T00:00:00Z", UpdatedAt: "2026-08-08T00:00:01Z",
+	}
+	if err := backend.CreateGenerationJob(t.Context(), store.DefaultTenantID, ownedJob); err != nil {
+		t.Fatal(err)
+	}
 	other := json.RawMessage(`{"schemaVersion":3,"projectKind":"canvas","id":"untouched","title":"Untouched","createdAt":"2026-08-08T00:00:00Z","updatedAt":"2026-08-08T00:00:00Z","nodes":[],"edges":[],"chatSessions":[],"activeChatId":null,"backgroundMode":"dots","viewport":{"x":0,"y":0,"k":1}}`)
 	if response := request(t, handler, http.MethodPut, "/api/projects/untouched", other); response.Code != http.StatusNoContent {
 		t.Fatal(response.Body.String())
@@ -234,6 +240,10 @@ func TestSingleProjectAggregateReplacePreservesOtherServerProjects(t *testing.T)
 	if untouched := request(t, handler, http.MethodGet, "/api/projects/untouched", nil); untouched.Code != http.StatusOK {
 		t.Fatalf("single project import overwrote another project: %d", untouched.Code)
 	}
+	storedJob, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, ownedJob.ID)
+	if err != nil || storedJob.UserID != ownedJob.UserID || storedJob.Prompt != ownedJob.Prompt {
+		t.Fatalf("single project import rewrote generation history: %#v %v", storedJob, err)
+	}
 	var payload struct {
 		Data struct {
 			MigratedStorageKeys []string `json:"migratedStorageKeys"`
@@ -247,7 +257,7 @@ func TestSingleProjectAggregateReplacePreservesOtherServerProjects(t *testing.T)
 func TestWorkspaceReplaceRequiresEveryTransactionalMetadataField(t *testing.T) {
 	_, handler := filmAPIHandler(t)
 	version := strings.Trim(request(t, handler, http.MethodGet, "/api/projects", nil).Header().Get("ETag"), `"`)
-	for _, field := range []string{"projects", "films", "generationJobs", "assets", "config", "prompts", "workflowTemplates"} {
+	for _, field := range []string{"projects", "films", "generationJobs", "assets", "prompts"} {
 		t.Run(field, func(t *testing.T) {
 			input := completeWorkspaceRequest(version, []json.RawMessage{}, []any{})
 			delete(input, field)

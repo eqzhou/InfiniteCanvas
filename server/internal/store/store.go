@@ -7,21 +7,24 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 )
 
 var (
-	ErrNotFound            = errors.New("not found")
-	ErrConflict            = errors.New("conflict")
-	ErrGone                = errors.New("deleted")
-	ErrQuotaExceeded       = errors.New("quota exceeded")
-	ErrInvalidCredentials  = errors.New("invalid credentials")
-	ErrUnauthorized        = errors.New("unauthorized")
-	ErrInsufficientCredits = errors.New("insufficient credits")
-	ErrBanned              = errors.New("user banned")
-	ErrLastOwner           = errors.New("last active owner must be preserved")
-	ErrInvalidInput        = errors.New("invalid input")
-	ErrInvitationInvalid   = errors.New("invalid invitation")
+	ErrNotFound             = errors.New("not found")
+	ErrConflict             = errors.New("conflict")
+	ErrGone                 = errors.New("deleted")
+	ErrQuotaExceeded        = errors.New("quota exceeded")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrUnauthorized         = errors.New("unauthorized")
+	ErrInsufficientCredits  = errors.New("insufficient credits")
+	ErrBanned               = errors.New("user banned")
+	ErrLastOwner            = errors.New("last active owner must be preserved")
+	ErrInvalidInput         = errors.New("invalid input")
+	ErrInvitationInvalid    = errors.New("invalid invitation")
+	ErrBootstrapRequired    = errors.New("bootstrap authorization required")
+	ErrRegistrationDisabled = errors.New("registration disabled")
 )
 
 const DefaultTenantID = "local"
@@ -34,6 +37,7 @@ type ProjectSummary struct {
 
 type GenerationJob struct {
 	ID             string          `json:"id"`
+	UserID         string          `json:"-"`
 	ProjectID      string          `json:"projectId,omitempty"`
 	Kind           string          `json:"kind"`
 	Status         string          `json:"status"`
@@ -55,6 +59,9 @@ type TenantGenerationJob struct {
 }
 
 type GenerationJobQuery struct {
+	// UserID narrows history to one account. Empty means tenant-wide and is
+	// reserved for tenant owners, local auth-off mode, and internal workers.
+	UserID         string
 	ProjectID      string
 	Kind           string
 	Page           int
@@ -70,8 +77,9 @@ type GenerationJobPage struct {
 }
 
 type GenerationClaim struct {
-	Kind     string
-	Executor string
+	Kind          string
+	Executor      string
+	RequireUserID bool
 }
 
 type AuthUser struct {
@@ -84,6 +92,21 @@ type AuthUser struct {
 	Status        string `json:"status,omitempty"`
 	LinuxDoID     string `json:"linuxDoId,omitempty"`
 	PlatformAdmin bool   `json:"platformAdmin,omitempty"`
+}
+
+// CanonicalTenantRole collapses persisted compatibility values into the two
+// business roles. Legacy administrators keep their former tenant-management
+// authority and therefore become Owners; `member` remains the storage value
+// for an ordinary tenant user.
+func CanonicalTenantRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "owner", "admin":
+		return "owner"
+	case "member", "user":
+		return "member"
+	default:
+		return ""
+	}
 }
 
 type Tenant struct {
@@ -106,10 +129,11 @@ type UsageSummary struct {
 }
 
 type RegisterInput struct {
-	Email       string
-	Password    string
-	DisplayName string
-	InviteToken string
+	Email               string
+	Password            string
+	DisplayName         string
+	InviteToken         string
+	BootstrapAuthorized bool
 }
 
 func PaginateGenerationJobs(items []GenerationJob, page, pageSize int) GenerationJobPage {
@@ -271,10 +295,12 @@ type UserPatch struct {
 }
 
 type LinuxDoUserInput struct {
-	LinuxDoID   string
-	Email       string
-	DisplayName string
-	Username    string
+	LinuxDoID           string
+	Email               string
+	DisplayName         string
+	Username            string
+	CreateAllowed       bool
+	BootstrapAuthorized bool
 }
 
 type MediaReference struct {
@@ -485,6 +511,10 @@ type WorkspaceFilm struct {
 }
 
 type WorkspaceGenerationJob struct {
+	// UserID is internal rollback metadata. Public workspace imports never
+	// accept it from GenerationJob, and the API rebinds imported history to the
+	// authenticated Owner before this snapshot reaches storage.
+	UserID    string        `json:"userId,omitempty"`
 	Job       GenerationJob `json:"job"`
 	DeletedAt string        `json:"deletedAt,omitempty"`
 }

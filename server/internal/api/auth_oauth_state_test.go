@@ -35,6 +35,15 @@ func oauthStateCount() int {
 	return len(oauthStates)
 }
 
+func linuxDoOAuthTestServer(t *testing.T, users int) *Server {
+	t.Helper()
+	backend := newMemoryStore()
+	backend.users = users
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	return server
+}
+
 func TestRememberOAuthStateSweepsExpiredEntriesBeforeEviction(t *testing.T) {
 	resetOAuthStates(t)
 	now := time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC)
@@ -67,8 +76,7 @@ func TestRememberOAuthStateSweepsExpiredEntriesBeforeEviction(t *testing.T) {
 func TestLinuxDoOAuthCallbackRejectsAndConsumesExpiredState(t *testing.T) {
 	configureLinuxDoOAuth(t)
 	resetOAuthStates(t)
-	server := NewServerWithStore(t.TempDir(), newMemoryStore())
-	t.Cleanup(server.Close)
+	server := linuxDoOAuthTestServer(t, 1)
 	oauthStateMu.Lock()
 	oauthStates["expired-state"] = time.Now().Add(-time.Second)
 	oauthStateMu.Unlock()
@@ -94,8 +102,7 @@ func TestLinuxDoOAuthCallbackRejectsAndConsumesExpiredState(t *testing.T) {
 func TestLinuxDoOAuthStartBoundsPendingStates(t *testing.T) {
 	configureLinuxDoOAuth(t)
 	resetOAuthStates(t)
-	server := NewServerWithStore(t.TempDir(), newMemoryStore())
-	t.Cleanup(server.Close)
+	server := linuxDoOAuthTestServer(t, 1)
 
 	const attempts = maxPendingOAuthStates + 500
 	for i := 0; i < attempts; i++ {
@@ -115,8 +122,7 @@ func TestLinuxDoOAuthStartBoundsPendingStates(t *testing.T) {
 func TestLinuxDoOAuthStartKeepsNewestStateRedeemableWhenFull(t *testing.T) {
 	configureLinuxDoOAuth(t)
 	resetOAuthStates(t)
-	server := NewServerWithStore(t.TempDir(), newMemoryStore())
-	t.Cleanup(server.Close)
+	server := linuxDoOAuthTestServer(t, 1)
 
 	for i := 0; i < maxPendingOAuthStates+50; i++ {
 		recorder := httptest.NewRecorder()
@@ -141,5 +147,16 @@ func TestLinuxDoOAuthStartKeepsNewestStateRedeemableWhenFull(t *testing.T) {
 	oauthStateMu.Unlock()
 	if !ok {
 		t.Fatal("the freshly issued state was evicted, so the user cannot complete login")
+	}
+}
+
+func TestLinuxDoOAuthStartCannotBootstrapFirstAccount(t *testing.T) {
+	configureLinuxDoOAuth(t)
+	resetOAuthStates(t)
+	server := linuxDoOAuthTestServer(t, 0)
+	recorder := httptest.NewRecorder()
+	server.linuxDoOAuthStart(recorder, httptest.NewRequest(http.MethodGet, "/api/auth/oauth/linuxdo/start", nil))
+	if recorder.Code != http.StatusForbidden || oauthStateCount() != 0 {
+		t.Fatalf("first-account OAuth start = %d states=%d, want 403 and no pending state", recorder.Code, oauthStateCount())
 	}
 }

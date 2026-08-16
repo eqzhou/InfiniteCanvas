@@ -148,6 +148,9 @@ test("PM2 rejects group-readable or world-readable secret files on POSIX", () =>
 
 test("the PM2 allowlist includes bounded media and PDF executables", () => {
   assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_FFMPEG_PATH"));
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_BOOTSTRAP_TOKEN"));
+  assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PLATFORM_ADMIN_USER_IDS"));
+  assert.ok(!DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PLATFORM_ADMIN_EMAILS"));
   assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_FFPROBE_PATH"));
   assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PDFTOTEXT_PATH"));
   assert.ok(DEPLOYMENT_ENV_KEYS.includes("OPENBOARD_PDFTOTEXT_TIMEOUT"));
