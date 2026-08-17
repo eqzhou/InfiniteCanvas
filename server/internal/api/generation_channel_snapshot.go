@@ -170,9 +170,38 @@ func stripGenerationChannelSecret(parameters json.RawMessage) json.RawMessage {
 	return cleanParameters
 }
 
+func redactPublicGenerationChannel(parameters json.RawMessage) json.RawMessage {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(parameters, &root) != nil {
+		return append(json.RawMessage(nil), parameters...)
+	}
+	rawSnapshot, ok := root["sharedChannel"]
+	if !ok {
+		return append(json.RawMessage(nil), parameters...)
+	}
+	var snapshot map[string]json.RawMessage
+	if json.Unmarshal(rawSnapshot, &snapshot) != nil {
+		return append(json.RawMessage(nil), parameters...)
+	}
+	if _, hasDest := snapshot["baseUrl"]; !hasDest {
+		return append(json.RawMessage(nil), parameters...)
+	}
+	delete(snapshot, "baseUrl")
+	cleanSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		return append(json.RawMessage(nil), parameters...)
+	}
+	root["sharedChannel"] = cleanSnapshot
+	cleanParameters, err := json.Marshal(root)
+	if err != nil {
+		return append(json.RawMessage(nil), parameters...)
+	}
+	return cleanParameters
+}
+
 func publicGenerationJob(job store.GenerationJob) store.GenerationJob {
 	rawParameters := append(json.RawMessage(nil), job.Parameters...)
-	job.Parameters = stripPublicGenerationParameters(stripGenerationChannelSecret(rawParameters))
+	job.Parameters = stripPublicGenerationParameters(redactPublicGenerationChannel(stripGenerationChannelSecret(rawParameters)))
 	job.Result = stripPublicGenerationResult(rawParameters, job.Result)
 	return job
 }

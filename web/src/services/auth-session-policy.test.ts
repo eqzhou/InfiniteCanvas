@@ -71,6 +71,15 @@ describe("scoped policy transport", () => {
     expect(requests.slice(3).every((request) => request.init?.method === "PUT")).toBe(true);
   });
 
+  test("fails closed when the public compatibility policy omits privilege fields", async () => {
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({}))) as typeof fetch;
+    expect(await getSitePolicy()).toMatchObject({
+      allowRegister: false,
+      allowCustomChannel: false,
+      allowCloudChannel: false,
+    });
+  });
+
   test("fails closed when the public compatibility policy cannot be loaded", async () => {
     globalThis.fetch = mock(async () => { throw new TypeError("offline"); }) as typeof fetch;
     expect(await getSitePolicy()).toEqual({

@@ -268,9 +268,9 @@ export async function getSitePolicy(): Promise<SitePolicy> {
     if (!response.ok) return { ...DEFAULT_SITE_POLICY };
     const data = (await response.json()) as Partial<SitePolicy>;
     return {
-      allowRegister: data.allowRegister !== false,
-      allowCustomChannel: data.allowCustomChannel !== false,
-      allowCloudChannel: data.allowCloudChannel !== false,
+      allowRegister: data.allowRegister === true,
+      allowCustomChannel: data.allowCustomChannel === true,
+      allowCloudChannel: data.allowCloudChannel === true,
       ...normalizeModelCatalog(data),
     };
   } catch {

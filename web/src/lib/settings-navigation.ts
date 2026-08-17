@@ -69,7 +69,7 @@ export function settingsChannelImportLockedFor(
 ): boolean {
   if (tenantOwner) return false;
   if (policyLoad === "ready") return !allowCustomChannel;
-  return policyLoad === "unavailable";
+  return true;
 }
 
 export function settingsScrollTarget(

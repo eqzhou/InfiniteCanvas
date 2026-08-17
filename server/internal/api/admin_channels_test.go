@@ -273,6 +273,9 @@ func TestSharedJobCreationPersistsResolvedDefaultModels(t *testing.T) {
 			if bytes.Contains(job.Parameters, []byte(`"secret"`)) || bytes.Contains(got.Body.Bytes(), []byte(`"ciphertext"`)) {
 				t.Fatalf("public job exposed shared-channel secret: %s", got.Body.String())
 			}
+			if bytes.Contains(got.Body.Bytes(), []byte("shared.example")) {
+				t.Fatalf("public job exposed shared-channel destination: %s", got.Body.String())
+			}
 			backend.mu.Lock()
 			storedJob := backend.jobs[tenantKey(store.DefaultTenantID, "shared-"+tc.kind)]
 			backend.mu.Unlock()
@@ -285,6 +288,9 @@ func TestSharedJobCreationPersistsResolvedDefaultModels(t *testing.T) {
 			}
 			if persisted.SharedChannel.Secret.Ciphertext == "" {
 				t.Fatal("internal queued job did not retain its encrypted execution credential")
+			}
+			if !strings.Contains(persisted.SharedChannel.BaseURL, "shared.example") {
+				t.Fatalf("stored snapshot dropped destination: %#v", persisted.SharedChannel)
 			}
 			if tc.kind == "image" {
 				resolved, err := server.resolveImageGenerationRequest(context.Background(), store.DefaultTenantID, storedJob)

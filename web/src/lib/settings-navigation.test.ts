@@ -52,6 +52,7 @@ describe("settings navigation", () => {
     expect(settingsImportEnabledFor(false, "loading")).toBe(false);
     expect(settingsImportEnabledFor(false, "unavailable")).toBe(true);
     expect(settingsImportEnabledFor(false, "ready")).toBe(true);
+    expect(settingsChannelImportLockedFor(false, "loading", true)).toBe(true);
     expect(settingsChannelImportLockedFor(false, "unavailable", false)).toBe(true);
     expect(settingsChannelImportLockedFor(false, "ready", false)).toBe(true);
     expect(settingsChannelImportLockedFor(false, "ready", true)).toBe(false);

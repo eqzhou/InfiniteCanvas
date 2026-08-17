@@ -53,25 +53,31 @@ export function SettingsDataSection({
   const setConfig = useBoardStore((state) => state.setConfig);
   const workspacePermissions = settingsWorkspacePermissions(tenantOwner);
   const [restoreWorkspacePending, setRestoreWorkspacePending] = useState(false);
+  const [dataBusy, setDataBusy] = useState(false);
   const importEnabled = settingsImportEnabledFor(tenantOwner, policyLoad);
   const storage = normalizeObjectStorage(objectStorage);
   const storageValidation = validateObjectStorageConfig(storage);
 
   const restoreWorkspace = () => {
-    setRestoreWorkspacePending(false);
+    if (dataBusy) return;
     notices.setFeedback(null);
     if (!workspacePermissions.restoreCompleteWorkspace) {
+      setRestoreWorkspacePending(false);
       notices.setFeedback({ tone: "danger", message: t("admin.permissionRequired") });
       return;
     }
+    setDataBusy(true);
     void (async () => {
       try {
         const state = useBoardStore.getState();
         const blob = await webdavGetBlob(state.config, "openboard-workspace.obundle");
         await importCompleteWorkspaceBundle(blob, state.config);
         notices.setFeedback({ tone: "success", message: t("settings.restoreWorkspaceSuccess") });
+        setRestoreWorkspacePending(false);
       } catch (cause) {
         notices.setFeedback({ tone: "danger", message: cause instanceof Error ? cause.message : String(cause) });
+      } finally {
+        setDataBusy(false);
       }
     })();
   };
@@ -89,7 +95,17 @@ export function SettingsDataSection({
       <div className="mb-6">
         <h3 className="mb-1 text-sm font-medium">{t("settings.objectStorageTitle")}</h3>
         <p className="mb-3 text-xs text-[var(--ob-muted)]">{t("settings.objectStorageHint")}</p>
-        <label className="ob-toggle-field mb-3">
+        <div
+          className="ob-toggle-field mb-3"
+          onClick={(event) => {
+            if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
+            const current = normalizeObjectStorage(useBoardStore.getState().config.objectStorage);
+            setConfig({
+              ...useBoardStore.getState().config,
+              objectStorage: { ...current, enabled: !current.enabled },
+            });
+          }}
+        >
           <button
             type="button"
             role="switch"
@@ -106,7 +122,7 @@ export function SettingsDataSection({
             }}
           />
           <span>{t("settings.enableObjectStorage")}</span>
-        </label>
+        </div>
         <div className="grid gap-3 lg:grid-cols-2">
           <SettingsField label={t("settings.endpoint")}>
             <input
@@ -224,19 +240,23 @@ export function SettingsDataSection({
           >
             <CloudDownload size={15} /> {t("settings.exportConfig")}
           </button>
-          <label className="ob-btn cursor-pointer">
+          <label className={`ob-btn cursor-pointer ${importEnabled ? "" : "pointer-events-none opacity-50"}`}>
             <CloudUpload size={15} /> {t("settings.importConfig")}
             <input
               type="file"
               aria-label={t("settings.importConfigLabel")}
               accept="application/json,.json"
               className="hidden"
-              disabled={!importEnabled}
+              disabled={!importEnabled || dataBusy}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 event.currentTarget.value = "";
                 if (!file) return;
                 notices.setFeedback(null);
+                if (!importEnabled) {
+                  notices.setFeedback({ tone: "danger", message: t("admin.permissionRequired") });
+                  return;
+                }
                 void file.text().then(async (raw) => {
                   const state = useBoardStore.getState();
                   const previous = structuredClone(state.config);
@@ -288,8 +308,11 @@ export function SettingsDataSection({
           <button
             type="button"
             className="ob-btn"
+            disabled={dataBusy}
             onClick={() => {
               notices.setFeedback(null);
+              if (dataBusy) return;
+              setDataBusy(true);
               void (async () => {
                 try {
                   const state = useBoardStore.getState();
@@ -300,6 +323,8 @@ export function SettingsDataSection({
                   notices.setFeedback({ tone: "success", message: t("settings.uploadCanvasSuccess") });
                 } catch (cause) {
                   notices.setFeedback({ tone: "danger", message: cause instanceof Error ? cause.message : String(cause) });
+                } finally {
+                  setDataBusy(false);
                 }
               })();
             }}
@@ -309,8 +334,15 @@ export function SettingsDataSection({
           {workspacePermissions.exportCompleteWorkspace ? <button
             type="button"
             className="ob-btn"
+            disabled={dataBusy}
             onClick={() => {
               notices.setFeedback(null);
+              if (!workspacePermissions.exportCompleteWorkspace) {
+                notices.setFeedback({ tone: "danger", message: t("admin.permissionRequired") });
+                return;
+              }
+              if (dataBusy) return;
+              setDataBusy(true);
               void (async () => {
                 try {
                   const store = useBoardStore.getState();
@@ -335,6 +367,8 @@ export function SettingsDataSection({
                   notices.setFeedback({ tone: "success", message: t("settings.uploadWorkspaceSuccess") });
                 } catch (cause) {
                   notices.setFeedback({ tone: "danger", message: cause instanceof Error ? cause.message : String(cause) });
+                } finally {
+                  setDataBusy(false);
                 }
               })();
             }}
@@ -344,8 +378,15 @@ export function SettingsDataSection({
           {workspacePermissions.importCompleteProject ? <button
             type="button"
             className="ob-btn"
+            disabled={dataBusy}
             onClick={() => {
               notices.setFeedback(null);
+              if (!workspacePermissions.importCompleteProject) {
+                notices.setFeedback({ tone: "danger", message: t("admin.permissionRequired") });
+                return;
+              }
+              if (dataBusy) return;
+              setDataBusy(true);
               void (async () => {
                 try {
                   const state = useBoardStore.getState();
@@ -354,6 +395,8 @@ export function SettingsDataSection({
                   notices.setFeedback({ tone: "success", message: t("settings.importCanvasSuccess") });
                 } catch (cause) {
                   notices.setFeedback({ tone: "danger", message: cause instanceof Error ? cause.message : String(cause) });
+                } finally {
+                  setDataBusy(false);
                 }
               })();
             }}
@@ -363,6 +406,7 @@ export function SettingsDataSection({
           {workspacePermissions.restoreCompleteWorkspace ? <button
             type="button"
             className="ob-btn"
+            disabled={dataBusy}
             onClick={() => setRestoreWorkspacePending(true)}
           >
             <RotateCcw size={15} /> {t("settings.restoreWorkspace")}
@@ -375,7 +419,8 @@ export function SettingsDataSection({
           title={t("settings.restoreWorkspace")}
           message={t("settings.confirmRestoreWorkspace")}
           confirmLabel={t("settings.restoreWorkspace")}
-          onCancel={() => setRestoreWorkspacePending(false)}
+          busy={dataBusy}
+          onCancel={() => { if (!dataBusy) setRestoreWorkspacePending(false); }}
           onConfirm={restoreWorkspace}
         />
       ) : null}
