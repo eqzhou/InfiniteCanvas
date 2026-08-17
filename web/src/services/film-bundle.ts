@@ -240,7 +240,12 @@ function defaultImportDependencies(): FilmBundleImportDependencies {
     commitImport: importProjectAtomically,
     adoptProject: adoptCommittedProject,
     retainedStorageKeys: async (project) => {
+      const store = useBoardStore.getState();
+      await Promise.all([store.loadProjectsOnDemand(), store.loadAssetsOnDemand()]);
       const state = useBoardStore.getState();
+      if (state.projectsState !== "loaded" || state.assetsState !== "loaded") {
+        throw new Error("工作区数据尚未加载完成");
+      }
       return collectNonFilmStorageKeys({
         projects: [project, ...state.projects],
         assets: state.assets,

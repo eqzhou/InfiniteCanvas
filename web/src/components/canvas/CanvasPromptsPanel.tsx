@@ -4,6 +4,9 @@ import type { PromptItem } from "@/types/board";
 import { writeTextWithFallback } from "@/lib/clipboard";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useI18n } from "@/i18n/I18nProvider";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
+import { useLazyPrompts } from "@/hooks/use-lazy-workspace";
 
 function sourceLabel(prompt: PromptItem, mine = "我的", ungrouped = "未分组"): string {
   const source = prompt.source?.trim();
@@ -63,6 +66,7 @@ export function selectCanvasPrompts(
 export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
   const { t } = useI18n();
   const prompts = useBoardStore(selectCanvasPrompts);
+  const { promptsState, promptsError, loadPromptsOnDemand } = useLazyPrompts();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterCanvasPrompts(prompts, query), [prompts, query]);
@@ -83,6 +87,19 @@ export const CanvasPromptsPanel = memo(function CanvasPromptsPanel() {
     // Formal storage: flush so reloads / E2E see the node immediately.
     void state.persistNow();
   };
+
+  if (promptsState === "error" && !prompts.length) {
+    return (
+      <WorkspaceLoadError
+        compact
+        message={t("workspace.loadFailed", { message: promptsError ?? "" })}
+        onRetry={() => { void loadPromptsOnDemand().catch(() => undefined); }}
+      />
+    );
+  }
+  if (promptsState !== "loaded" && !prompts.length) {
+    return <PageSkeleton compact />;
+  }
 
   return (
     <div className="space-y-2">

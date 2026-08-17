@@ -222,7 +222,11 @@ export async function loadAssets(): Promise<AssetItem[]> {
 }
 
 export async function saveAssets(assets: AssetItem[]): Promise<void> {
-  return saveServerState("assets", assets);
+  return saveServerState("assets", assets.map((asset) => {
+    if (asset.thumbnailUrl === undefined) return asset;
+    const { thumbnailUrl: _thumbnailUrl, ...persisted } = asset;
+    return persisted;
+  }));
 }
 
 export async function loadPrompts(): Promise<PromptItem[]> {
@@ -670,6 +674,15 @@ export async function rehydrateProjects(
           // Other embedded data URLs remain usable when persistence fails.
         }
       }
+      if (metadata.thumbnailStorageKey) {
+        const thumbnailUrl = await resolveHydratedStoredMediaUrl(
+          displayUrls,
+          mediaKindFromKey(metadata.thumbnailStorageKey),
+          metadata.thumbnailStorageKey,
+          metadata.thumbnailUrl,
+        );
+        if (thumbnailUrl) metadata = { ...metadata, thumbnailUrl };
+      }
       nodes.push({ ...node, metadata });
     }
 
@@ -733,14 +746,24 @@ export async function rehydrateProjects(
 export async function rehydrateAssets(assets: AssetItem[]): Promise<AssetItem[]> {
   const out: AssetItem[] = [];
   const displayUrls = await createServerBlobDisplayUrls(
-    assets.map((asset) => asset.storageKey).filter((key): key is string => Boolean(key)),
+    assets.flatMap((asset) => [asset.storageKey, asset.thumbnailStorageKey]).filter((key): key is string => Boolean(key)),
   ).catch(() => new Map<string, string>());
   for (const asset of assets) {
     if (asset.storageKey) {
       const kind = mediaKindFromKey(asset.storageKey);
       const url = await resolveHydratedStoredMediaUrl(
         displayUrls, kind, asset.storageKey, asset.coverUrl);
-      out.push({ ...asset, coverUrl: url ?? asset.coverUrl });
+      let next = { ...asset, coverUrl: url ?? asset.coverUrl };
+      if (asset.thumbnailStorageKey) {
+        const thumbnailUrl = await resolveHydratedStoredMediaUrl(
+          displayUrls,
+          mediaKindFromKey(asset.thumbnailStorageKey),
+          asset.thumbnailStorageKey,
+          asset.thumbnailUrl,
+        );
+        if (thumbnailUrl) next = { ...next, thumbnailUrl };
+      }
+      out.push(next);
     } else if (asset.coverUrl?.startsWith("data:")) {
       try {
         const uploaded = await uploadMedia(asset.coverUrl, "image");
@@ -833,6 +856,7 @@ export function collectStorageKeys(
   for (const p of projects) {
     for (const n of p.nodes) {
       if (n.metadata.storageKey) keys.add(n.metadata.storageKey);
+      if (n.metadata.thumbnailStorageKey) keys.add(n.metadata.thumbnailStorageKey);
       for (const storageKey of n.metadata.referenceStorageKeys ?? []) keys.add(storageKey);
     }
     for (const s of p.chatSessions) {
@@ -848,6 +872,7 @@ export function collectStorageKeys(
   }
   for (const a of assets) {
     if (a.storageKey) keys.add(a.storageKey);
+    if (a.thumbnailStorageKey) keys.add(a.thumbnailStorageKey);
   }
   return keys;
 }
@@ -859,6 +884,7 @@ export function collectBoardContentStorageKeys(
   const keys = new Set<string>();
   for (const node of nodes) {
     if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
+    if (node.metadata.thumbnailStorageKey) keys.add(node.metadata.thumbnailStorageKey);
     for (const storageKey of node.metadata.referenceStorageKeys ?? []) keys.add(storageKey);
   }
   for (const session of chatSessions) {

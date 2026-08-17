@@ -181,8 +181,10 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
             })()
           : { ...base, kind: "text" as const, content: input.content };
         const store = useBoardStore.getState();
-        store.setAssets([asset, ...store.assets]);
-        await store.flushAssets();
+        await store.loadAssetsOnDemand();
+        const latest = useBoardStore.getState();
+        latest.setAssets([asset, ...latest.assets]);
+        await latest.flushAssets();
         return {
           id: asset.id,
           kind: asset.kind,

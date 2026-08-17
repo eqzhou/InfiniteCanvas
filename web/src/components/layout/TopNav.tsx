@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { toast } from "@/components/common/toast";
 import { cn } from "@/lib/cn";
-import { exportCompleteProjectBundle } from "@/services/film-bundle";
+
 import { VersionReleaseModal } from "@/components/layout/VersionReleaseModal";
 import { isGuestIdentity, useOptionalAuth } from "@/components/auth/AuthGate";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
@@ -42,6 +42,7 @@ import type { UsageSnapshot } from "@/services/auth-session";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
 import { applyTheme } from "@/lib/theme";
+import { prefetchRoutePath } from "@/routes/route-registry";
 
 function UsageSummary({ snapshot, label, t }: {
   snapshot: UsageSnapshot | null;
@@ -154,7 +155,8 @@ export function TopNav({
 
   const downloadActiveProject = useCallback(() => {
     if (!activeProject) return;
-    void exportCompleteProjectBundle(activeProject)
+    void import("@/services/film-bundle")
+      .then(({ exportCompleteProjectBundle }) => exportCompleteProjectBundle(activeProject))
       .then((blob) => {
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
@@ -230,6 +232,9 @@ export function TopNav({
                 data-active={active}
                 aria-label={"ariaLabel" in l ? l.ariaLabel : t("nav.page", { label: l.label })}
                 aria-current={active ? "page" : undefined}
+                onPointerEnter={() => { void prefetchRoutePath(l.to); }}
+                onFocus={() => { void prefetchRoutePath(l.to); }}
+                onTouchStart={() => { void prefetchRoutePath(l.to); }}
               >
                 <Icon size={18} />
                 {l.label}
@@ -385,6 +390,9 @@ export function TopNav({
                 to={l.to}
                 aria-label={"ariaLabel" in l ? l.ariaLabel : t("nav.page", { label: l.label })}
                 aria-current={active ? "page" : undefined}
+                onPointerEnter={() => { void prefetchRoutePath(l.to); }}
+                onFocus={() => { void prefetchRoutePath(l.to); }}
+                onTouchStart={() => { void prefetchRoutePath(l.to); }}
                 className={cn(
                   "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium transition-all duration-150 xl:px-3",
                   active
@@ -410,6 +418,7 @@ export function TopNav({
                 title={t("nav.exportCanvasBundle")}
                 aria-label={t("nav.exportCanvasBundle")}
                 disabled={!activeProject}
+                onPointerEnter={() => { void import("@/services/film-bundle"); }}
                 onClick={downloadActiveProject}
               >
                 <Archive size={18} />
@@ -422,6 +431,7 @@ export function TopNav({
               aria-label={t("nav.canvasAgent")}
               aria-controls="canvas-agent"
               aria-expanded={showLocalAgent}
+              onPointerEnter={() => { void import("@/components/agent/LocalAgentPanel"); }}
               onClick={() => setShowLocalAgent(!showLocalAgent)}
             >
               <Bot size={18} />
@@ -431,6 +441,7 @@ export function TopNav({
               className="ob-icon-btn"
               title={t("nav.shortcuts")}
               aria-label={t("nav.shortcuts")}
+              onPointerEnter={() => { void import("@/components/layout/ShortcutsModal"); }}
               onClick={() => setShowShortcuts(true)}
             >
               <HelpCircle size={18} />
@@ -626,6 +637,8 @@ export function TopNav({
               className="ob-icon-btn"
               title={t("nav.settings")}
               aria-label={t("nav.openSettings")}
+              onPointerEnter={() => { void import("@/components/layout/SettingsModal"); }}
+              onFocus={() => { void import("@/components/layout/SettingsModal"); }}
               onClick={onOpenSettings}
             >
               <Settings size={18} />

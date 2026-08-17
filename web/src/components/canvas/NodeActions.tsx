@@ -11,6 +11,7 @@ import {
   resolveNodeImageDataUrls,
 } from "@/services/ai-client";
 import { downloadStorageKey, uploadMedia } from "@/services/storage";
+import { displayMediaNodeFields, uploadDisplayMedia } from "@/services/media-preview";
 import {
   cancelServerGenerationJob,
   createServerAudioGenerationJob,
@@ -437,7 +438,7 @@ export function NodeActions({
         });
         const created: BoardNode[] = [];
         for (const [i, url] of urls.entries()) {
-          const uploaded = await uploadMedia(url, "image");
+          const uploaded = await uploadDisplayMedia(url, "image");
           const display = fitMediaDisplaySize(uploaded.width, uploaded.height, 120, 360);
           created.push(
             createNode(
@@ -448,12 +449,7 @@ export function NodeActions({
               },
               {
                 metadata: {
-                  content: uploaded.url,
-                  storageKey: uploaded.storageKey,
-                  naturalWidth: uploaded.width,
-                  naturalHeight: uploaded.height,
-                  bytes: uploaded.bytes,
-                  mimeType: uploaded.mimeType,
+                  ...displayMediaNodeFields(uploaded),
                   status: "success",
                   cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
                   ...normalizedGeneration,
@@ -527,15 +523,21 @@ export function NodeActions({
         });
         let content = result.url;
         let storageKey: string | undefined;
+        let thumbnailStorageKey: string | undefined;
+        let thumbnailUrl: string | undefined;
         if (content?.startsWith("blob:") || content?.startsWith("data:")) {
-          const uploaded = await uploadMedia(content, "media");
+          const uploaded = await uploadDisplayMedia(content, "media", { previewKind: "video" });
           content = uploaded.url;
           storageKey = uploaded.storageKey;
+          thumbnailStorageKey = uploaded.thumbnailStorageKey;
+          thumbnailUrl = uploaded.thumbnailUrl;
         } else if (content && /^https?:\/\//i.test(content)) {
           try {
-            const uploaded = await uploadMedia(content, "media");
+            const uploaded = await uploadDisplayMedia(content, "media", { previewKind: "video" });
             content = uploaded.url;
             storageKey = uploaded.storageKey;
+            thumbnailStorageKey = uploaded.thumbnailStorageKey;
+            thumbnailUrl = uploaded.thumbnailUrl;
           } catch {
             // keep remote URL if download blocked by CORS
           }
@@ -547,6 +549,8 @@ export function NodeActions({
             metadata: {
               content,
               storageKey,
+              thumbnailStorageKey,
+              thumbnailUrl,
               status: "success",
               prompt,
               cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
@@ -671,7 +675,7 @@ export function NodeActions({
       });
       const created: BoardNode[] = [];
       for (const [index, url] of urls.entries()) {
-        const uploaded = await uploadMedia(url, "image");
+        const uploaded = await uploadDisplayMedia(url, "image");
         const display = fitMediaDisplaySize(uploaded.width, uploaded.height, 120, 360);
         created.push(createNode("image", {
           x: node.position.x + node.width + 60,
@@ -679,12 +683,7 @@ export function NodeActions({
         }, {
           title: t("canvasNodes.resultTitle", { index: index + 1 }),
           metadata: {
-            content: uploaded.url,
-            storageKey: uploaded.storageKey,
-            naturalWidth: uploaded.width,
-            naturalHeight: uploaded.height,
-            bytes: uploaded.bytes,
-            mimeType: uploaded.mimeType,
+            ...displayMediaNodeFields(uploaded),
             status: "success",
             ...normalizedGeneration,
           },
@@ -761,14 +760,9 @@ export function NodeActions({
         systemPrompt: config.systemPrompt,
       });
       if (!url) throw new Error(t("canvasNodes.imageResultMissing"));
-      const uploaded = await uploadMedia(url, "image");
+      const uploaded = await uploadDisplayMedia(url, "image");
       updateNode(node.id, { metadata: {
-        content: uploaded.url,
-        storageKey: uploaded.storageKey,
-        naturalWidth: uploaded.width,
-        naturalHeight: uploaded.height,
-        bytes: uploaded.bytes,
-        mimeType: uploaded.mimeType,
+        ...displayMediaNodeFields(uploaded),
         status: "success",
         errorDetails: undefined,
         ...normalizedGeneration,
@@ -919,15 +913,21 @@ export function NodeActions({
       });
       let content = result.url;
       let storageKey: string | undefined;
+      let thumbnailStorageKey: string | undefined;
+      let thumbnailUrl: string | undefined;
       if (content?.startsWith("blob:") || content?.startsWith("data:")) {
-        const uploaded = await uploadMedia(content, "media");
+        const uploaded = await uploadDisplayMedia(content, "media", { previewKind: "video" });
         content = uploaded.url;
         storageKey = uploaded.storageKey;
+        thumbnailStorageKey = uploaded.thumbnailStorageKey;
+        thumbnailUrl = uploaded.thumbnailUrl;
       } else if (content && /^https?:\/\//i.test(content)) {
         try {
-          const uploaded = await uploadMedia(content, "media");
+          const uploaded = await uploadDisplayMedia(content, "media", { previewKind: "video" });
           content = uploaded.url;
           storageKey = uploaded.storageKey;
+          thumbnailStorageKey = uploaded.thumbnailStorageKey;
+          thumbnailUrl = uploaded.thumbnailUrl;
         } catch {
           // keep remote
         }
@@ -937,6 +937,8 @@ export function NodeActions({
           metadata: {
             content,
             storageKey,
+            thumbnailStorageKey,
+            thumbnailUrl,
             status: "success",
             prompt,
             cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
@@ -950,6 +952,8 @@ export function NodeActions({
             metadata: {
               content,
               storageKey,
+              thumbnailStorageKey,
+              thumbnailUrl,
               status: "success",
               prompt,
               cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined,
@@ -1453,7 +1457,7 @@ export function NodeActions({
                   height: source.height,
                 }, context);
             if (!result) throw new Error(t("canvasNodes.operationUnsupported"));
-            const uploaded = await uploadMedia(result.blob, "image");
+            const uploaded = await uploadDisplayMedia(result.blob, "image");
             const display = fitMediaDisplaySize(
               uploaded.width || node.width,
               uploaded.height || node.height,
@@ -1467,12 +1471,7 @@ export function NodeActions({
                 {
                   title: `${node.title} · ${isCloud ? t("canvasNodes.inpaint") : t("canvasNodes.mask")}`,
                   metadata: {
-                    content: uploaded.url,
-                    storageKey: uploaded.storageKey,
-                    naturalWidth: uploaded.width,
-                    naturalHeight: uploaded.height,
-                    bytes: uploaded.bytes,
-                    mimeType: uploaded.mimeType,
+                    ...displayMediaNodeFields(uploaded),
                     status: "success",
                     ...createTransformLineage(node.id, isCloud ? "inpaint" : "mask", result, {
                       x: mask.x,
@@ -1500,7 +1499,7 @@ export function NodeActions({
               width: source.width,
               height: source.height,
             }, context);
-            const uploaded = await uploadMedia(result.blob, "image");
+            const uploaded = await uploadDisplayMedia(result.blob, "image");
             const display = fitMediaDisplaySize(
               uploaded.width || node.width,
               uploaded.height || node.height,
@@ -1512,12 +1511,7 @@ export function NodeActions({
                 {
                   title: `${node.title} · ${operation === "ai-upscale" ? t("canvasNodes.aiUpscale") : t("canvasNodes.localUpscale")} ${scale}x`,
                   metadata: {
-                    content: uploaded.url,
-                    storageKey: uploaded.storageKey,
-                    naturalWidth: uploaded.width,
-                    naturalHeight: uploaded.height,
-                    bytes: uploaded.bytes,
-                    mimeType: uploaded.mimeType,
+                    ...displayMediaNodeFields(uploaded),
                     status: "success",
                     ...createTransformLineage(node.id, operation, result, { scale }),
                   },

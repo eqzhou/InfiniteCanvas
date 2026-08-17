@@ -43,7 +43,9 @@ describe("server project persistence isolation", () => {
       height: 240,
       metadata: {
         storageKey: "image:large",
+        thumbnailStorageKey: "image:large-thumb",
         content: `/api/media/references/${"a".repeat(64)}`,
+        thumbnailUrl: `/api/media/references/${"b".repeat(64)}`,
       },
     }],
   });
@@ -60,7 +62,9 @@ describe("server project persistence isolation", () => {
     const [loaded] = await loadServerProjects();
 
     expect(loaded?.nodes[0]?.metadata.storageKey).toBe("image:large");
+    expect(loaded?.nodes[0]?.metadata.thumbnailStorageKey).toBe("image:large-thumb");
     expect(loaded?.nodes[0]?.metadata.content).toBeUndefined();
+    expect(loaded?.nodes[0]?.metadata.thumbnailUrl).toBeUndefined();
   });
 
   test("never persists a temporary display URL with the project document", async () => {
@@ -74,7 +78,9 @@ describe("server project persistence isolation", () => {
     await saveServerProjects([projectWithTransientImage()]);
 
     expect(saved?.nodes[0]?.metadata.storageKey).toBe("image:large");
+    expect(saved?.nodes[0]?.metadata.thumbnailStorageKey).toBe("image:large-thumb");
     expect(saved?.nodes[0]?.metadata.content).toBeUndefined();
+    expect(saved?.nodes[0]?.metadata.thumbnailUrl).toBeUndefined();
   });
 
   test("does not mark display-only URL hydration as a project change", async () => {

@@ -183,10 +183,13 @@ async function executeRuntimeCommand(
       }
     }
     case "asset.search": {
+      await useBoardStore.getState().loadAssetsOnDemand();
+      const assets = useBoardStore.getState().assets;
       const query = typeof command.data.query === "string" ? command.data.query.trim().toLocaleLowerCase() : "";
-      return state.assets.filter((asset) => !query || `${asset.title} ${asset.tags.join(" ")}`.toLocaleLowerCase().includes(query)).slice(0, 100);
+      return assets.filter((asset) => !query || `${asset.title} ${asset.tags.join(" ")}`.toLocaleLowerCase().includes(query)).slice(0, 100);
     }
     case "asset.insert": {
+      await useBoardStore.getState().loadAssetsOnDemand();
       const id = stringValue(command.data.id, "asset id", 128);
       const before = new Set(project?.nodes.map((node) => node.id) ?? []);
       await state.insertAsset(id, runtimePosition(command.data));
@@ -195,12 +198,15 @@ async function executeRuntimeCommand(
       return { nodes: inserted };
     }
     case "prompt.search": {
+      await useBoardStore.getState().loadPromptsOnDemand();
+      const prompts = useBoardStore.getState().prompts;
       const query = typeof command.data.query === "string" ? command.data.query.trim().toLocaleLowerCase() : "";
-      return state.prompts.filter((prompt) => !query || `${prompt.title} ${prompt.body} ${prompt.tags.join(" ")}`.toLocaleLowerCase().includes(query)).slice(0, 100);
+      return prompts.filter((prompt) => !query || `${prompt.title} ${prompt.body} ${prompt.tags.join(" ")}`.toLocaleLowerCase().includes(query)).slice(0, 100);
     }
     case "prompt.insert": {
+      await useBoardStore.getState().loadPromptsOnDemand();
       const id = stringValue(command.data.id, "prompt id", 128);
-      const prompt = state.prompts.find((item) => item.id === id);
+      const prompt = useBoardStore.getState().prompts.find((item) => item.id === id);
       if (!prompt) throw new Error("prompt was not found");
       const nodeId = state.addNode("text", runtimePosition(command.data), {
         title: prompt.title,

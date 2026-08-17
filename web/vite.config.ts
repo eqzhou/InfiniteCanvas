@@ -50,14 +50,48 @@ export default defineConfig({
   },
   build: {
     outDir: process.env.OPENBOARD_WEB_OUT_DIR || "dist",
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/react-dom") || id.includes("node_modules/react/") || id.includes("node_modules/scheduler")) {
+            return "react";
+          }
+          if (id.includes("node_modules/three")) return "three";
+          if (id.includes("node_modules/lucide-react")) return "icons";
+          if (
+            id.includes("node_modules/react-markdown") ||
+            id.includes("node_modules/remark-gfm") ||
+            id.includes("node_modules/mdast") ||
+            id.includes("node_modules/micromark") ||
+            id.includes("node_modules/unified") ||
+            id.includes("node_modules/hast") ||
+            id.includes("node_modules/unist")
+          ) {
+            return "markdown";
+          }
+          return undefined;
+        },
+      },
+    },
   },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
     },
   },
+  optimizeDeps: {
+    include: ["react", "react-dom", "react-router", "zustand"],
+  },
   server: {
     port: 5173,
+    warmup: {
+      clientFiles: [
+        "./src/main.tsx",
+        "./src/App.tsx",
+        "./src/pages/HomePage.tsx",
+        "./src/components/canvas/BoardCanvas.tsx",
+      ],
+    },
     proxy: {
       "/api": apiProxy,
     },

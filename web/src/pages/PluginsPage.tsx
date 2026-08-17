@@ -13,6 +13,7 @@ import {
 import { saveConfig } from "@/services/storage";
 import { BUILTIN_PLUGINS } from "@/plugins/builtins";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useLazyProjects } from "@/hooks/use-lazy-workspace";
 import type { PluginManifest, PluginPermission, PluginRegistryEntry } from "@/types/board";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -109,6 +110,7 @@ function PluginCard({
 export function PluginsPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
+  useLazyProjects();
   const active = useBoardStore((state) => state.getActive());
   const addNode = useBoardStore((state) => state.addNode);
   const config = useBoardStore((state) => state.config);

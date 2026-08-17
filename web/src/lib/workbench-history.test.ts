@@ -8,6 +8,7 @@ import {
   workbenchCategories,
   workbenchImageAssets,
   workbenchReferenceKeys,
+  workbenchCardMedia,
   workbenchRefillAssetIds,
   workbenchRefillForm,
 } from "./workbench-history";
@@ -154,5 +155,35 @@ describe("creative workbench refill references", () => {
 
   test("ignores assets that are not reusable images", () => {
     expect(workbenchRefillAssetIds(["text:ref-c"], assets)).toEqual({ assetIds: [], unresolved: 1 });
+  });
+});
+
+describe("workbench history card media", () => {
+  test("uses the thumbnail for the card and keeps the original for lightbox", () => {
+    expect(workbenchCardMedia({
+      url: "blob:full",
+      thumbnailUrl: "blob:thumb",
+      storageKey: "image:full",
+      thumbnailStorageKey: "image:thumb",
+    })).toEqual({
+      cardUrl: "blob:thumb",
+      fullUrl: "blob:full",
+      hasPreview: true,
+      cardKey: "image:thumb",
+      fullKey: "image:full",
+    });
+  });
+
+  test("falls back to the original when no preview was stored", () => {
+    expect(workbenchCardMedia({
+      url: "blob:full",
+      storageKey: "media:video",
+    })).toEqual({
+      cardUrl: "",
+      fullUrl: "blob:full",
+      hasPreview: false,
+      cardKey: undefined,
+      fullKey: "media:video",
+    });
   });
 });

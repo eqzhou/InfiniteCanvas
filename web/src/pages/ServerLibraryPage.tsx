@@ -19,6 +19,7 @@ import { nowIso, uid } from "@/lib/id";
 import { writeTextWithFallback } from "@/lib/clipboard";
 import type { AssetItem } from "@/types/board";
 import { useI18n } from "@/i18n/I18nProvider";
+import { useLazyAssets, useLazyProjects } from "@/hooks/use-lazy-workspace";
 import {
   Copy,
   Edit3,
@@ -52,6 +53,8 @@ export function ServerLibraryPage() {
   const getActive = useBoardStore((s) => s.getActive);
   const setAssets = useBoardStore((s) => s.setAssets);
   const flushAssets = useBoardStore((s) => s.flushAssets);
+  const { loadAssetsOnDemand } = useLazyAssets();
+  useLazyProjects();
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | LibraryAssetKind>("all");
   const [tag, setTag] = useState("");
@@ -204,6 +207,7 @@ export function ServerLibraryPage() {
         createdAt: timestamp,
         updatedAt: timestamp,
       };
+      await loadAssetsOnDemand();
       setAssets([item, ...useBoardStore.getState().assets]);
       await flushAssets();
     } catch (cause) {

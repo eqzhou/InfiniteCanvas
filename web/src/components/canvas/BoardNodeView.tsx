@@ -13,6 +13,8 @@ import { createNode } from "@/lib/defaults";
 import { NODE_RESIZE_CORNERS, type NodeResizeCorner } from "@/lib/node-resize";
 import { findPluginManifest } from "@/plugins/builtins";
 import { deleteBlob, uploadMedia } from "@/services/storage";
+import { uploadDisplayMedia } from "@/services/media-preview";
+import { MediaView } from "@/components/common/MediaView";
 import {
   getDirectorCaptureOwnerScope,
   type DirectorCapture,
@@ -117,6 +119,8 @@ export function BoardNodeView({
   const directorEditStartedRef = useRef(false);
   const updateNode = useBoardStore((s) => s.updateNode);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
+  const [playingSource, setPlayingSource] = useState<string | null>(null);
+  const videoPlaying = playingSource === node.metadata.content;
   const [directorOpen, setDirectorOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(node.title);
@@ -268,12 +272,14 @@ export function BoardNodeView({
             : Settings2;
   const importImageIntoNode = (file: File) => {
     void (async () => {
-      const uploaded = await uploadMedia(file, "image", { validateLargeImage: true });
+      const uploaded = await uploadDisplayMedia(file, "image", { validateLargeImage: true });
       const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
       updateNode(node.id, {
         metadata: {
           content: uploaded.url,
           storageKey: uploaded.storageKey,
+          thumbnailStorageKey: uploaded.thumbnailStorageKey,
+          thumbnailUrl: uploaded.thumbnailUrl,
           naturalWidth: uploaded.width,
           naturalHeight: uploaded.height,
           bytes: uploaded.bytes,
@@ -452,6 +458,7 @@ export function BoardNodeView({
                 alt={node.title}
                 className="h-full w-full object-contain"
                 draggable={false}
+                decoding="async"
                 onDoubleClick={(event) => {
                   event.stopPropagation();
                   setImagePreviewOpen(true);
@@ -521,11 +528,40 @@ export function BoardNodeView({
         {node.type === "video" ? (
           <div className="flex h-full flex-col gap-2" onPointerDown={(e) => e.stopPropagation()}>
             {node.metadata.content ? (
-              <video
-                src={node.metadata.content}
-                className="min-h-0 flex-1 w-full object-contain"
-                controls
-              />
+              videoPlaying ? (
+                <MediaView
+                  kind="video"
+                  src={node.metadata.content}
+                  previewSrc={node.metadata.thumbnailUrl}
+                  alt={node.title}
+                  fit="contain"
+                  controls
+                  autoPlay
+                  className="min-h-0 flex-1 w-full object-contain"
+                />
+              ) : (
+                <button
+                  type="button"
+                  data-canvas-control
+                  className="relative min-h-0 flex-1 overflow-hidden"
+                  aria-label={t("canvasNodes.playVideo")}
+                  onClick={() => setPlayingSource(node.metadata.content ?? null)}
+                >
+                  <MediaView
+                    kind="video"
+                    src={node.metadata.content}
+                    previewSrc={node.metadata.thumbnailUrl}
+                    alt={node.title}
+                    fit="contain"
+                    className="h-full w-full object-contain"
+                  />
+                  <span className="pointer-events-none absolute inset-0 grid place-items-center">
+                    <span className="rounded-full bg-black/65 px-3 py-1 text-xs text-white">
+                      {t("canvasNodes.playVideo")}
+                    </span>
+                  </span>
+                </button>
+              )
             ) : (
               <div className="grid min-h-0 flex-1 place-items-center text-sm text-[var(--ob-muted)]">
                 {node.metadata.status === "loading"
@@ -1036,19 +1072,23 @@ export function BoardNodeView({
                                 {n.metadata.content}
                               </p>
                             ) : null}
-                            {n.type === "image" && n.metadata.content ? (
-                              <img
+                            {n.type === "image" && (n.metadata.thumbnailUrl || n.metadata.content) ? (
+                              <MediaView
+                                kind="image"
                                 src={n.metadata.content}
+                                previewSrc={n.metadata.thumbnailUrl}
                                 alt={t("canvasNodes.referenceImage")}
+                                fit="contain"
                                 className="mt-1 h-12 w-16 rounded object-contain bg-[var(--ob-canvas)]"
                               />
                             ) : null}
-                            {n.type === "video" && n.metadata.content ? (
-                              <video
+                            {n.type === "video" && (n.metadata.thumbnailUrl || n.metadata.content) ? (
+                              <MediaView
+                                kind="video"
                                 src={n.metadata.content}
-                                aria-label={t("canvasNodes.referenceVideo")}
-                                muted
-                                preload="metadata"
+                                previewSrc={n.metadata.thumbnailUrl}
+                                alt={t("canvasNodes.referenceVideo")}
+                                fit="contain"
                                 className="mt-1 h-12 w-20 rounded bg-black object-contain"
                               />
                             ) : null}

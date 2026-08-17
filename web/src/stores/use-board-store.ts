@@ -46,6 +46,7 @@ import {
   uploadMedia,
   resolveObjectUrl,
 } from "@/services/storage";
+import { uploadDisplayMedia } from "@/services/media-preview";
 import { replaceCompleteWorkspace, type TenantWorkspaceSnapshot } from "@/services/workspace-transactions";
 import { ConfigPreconditionError, hasPersistedProjectChanges, SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { resetSharedChannelCatalog } from "@/services/shared-channels";
@@ -74,6 +75,13 @@ import {
 } from "@/lib/panorama-generation";
 import { migrateLegacyAudioRoles } from "@/lib/project-audio-roles";
 import { parseBoardProject } from "@/lib/board-document";
+import {
+  canPersistLazySlice,
+  keepLazyLoadPromise,
+  resolveActiveProjectId,
+  WorkspaceScopeChangedError,
+  type LazyDataState,
+} from "@/lib/lazy-workspace";
 import {
   expandDirectorShotDeletion,
   generationCleanupNodeIdsAfterDeletion,
@@ -113,6 +121,12 @@ export function removeDirectorShotPlan(
 
 type BoardState = {
   ready: boolean;
+  projectsState: LazyDataState;
+  assetsState: LazyDataState;
+  promptsState: LazyDataState;
+  projectsError: string | null;
+  assetsError: string | null;
+  promptsError: string | null;
   projects: BoardProject[];
   activeProjectId: string | null;
   selectedIds: string[];
@@ -125,6 +139,9 @@ type BoardState = {
   showShortcuts: boolean;
   showLocalAgent: boolean;
   hydrate: (promptCatalogScope?: string) => Promise<void>;
+  loadProjectsOnDemand: () => Promise<void>;
+  loadAssetsOnDemand: () => Promise<void>;
+  loadPromptsOnDemand: () => Promise<void>;
   prepareWorkspaceScopeChange: () => Promise<void>;
   resetWorkspaceScopeRuntime: () => void;
   setActiveProject: (id: string | null) => void;
@@ -256,6 +273,16 @@ function applySnap(project: BoardProject, s: Snapshot): BoardProject {
 
 let hydratePromise: { scope: string; promise: Promise<void> } | undefined;
 let activeWorkspaceScope: string | undefined;
+let workspaceGeneration = 0;
+const lazyLoadPromises = new Map<string, Promise<void>>();
+
+function lazyLoadKey(kind: "projects" | "assets" | "prompts", scope: string): string {
+  return `${scope}:${kind}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Forget projects the server reported as deleted. Another device removed them,
@@ -338,6 +365,12 @@ export function applyGenerationDefaultsToNode(
 
 export const useBoardStore = create<BoardState>((set, get) => ({
   ready: false,
+  projectsState: "idle",
+  assetsState: "idle",
+  promptsState: "idle",
+  projectsError: null,
+  assetsError: null,
+  promptsError: null,
   projects: [],
   activeProjectId: null,
   selectedIds: [],
@@ -355,9 +388,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     if (activeWorkspaceScope === promptCatalogScope && get().ready) return Promise.resolve();
 
     histories.clear();
+    lazyLoadPromises.clear();
+    workspaceGeneration += 1;
     activeWorkspaceScope = promptCatalogScope;
     set({
       ready: false,
+      projectsState: "idle",
+      assetsState: "idle",
+      promptsState: "idle",
+      projectsError: null,
+      assetsError: null,
+      promptsError: null,
       projects: [],
       activeProjectId: null,
       selectedIds: [],
@@ -370,25 +411,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
     const promise = (async () => {
       try {
-        const [rawProjects, config, rawAssets, personalPrompts, publicCatalog] = await Promise.all([
-          loadProjects(),
-          loadConfig(),
-          loadAssets(),
-          loadPrompts(),
-          loadPublicPromptCatalog(promptCatalogScope),
-        ]);
-        const prompts = mergePublicPromptCatalog(personalPrompts, publicCatalog.catalog);
-        const [projects, assets] = await Promise.all([
-          rehydrateProjects(rawProjects),
-          rehydrateAssets(rawAssets),
-        ]);
-        let nextProjects = projects;
-        let activeProjectId = projects[0]?.id ?? null;
-        if (!nextProjects.length) {
-          const first = createProject("我的第一个画布");
-          nextProjects = [first];
-          activeProjectId = first.id;
-        }
+        const config = await loadConfig();
         const defaults = createDefaultConfig();
         const hydratedConfig = config
           ? normalizeAppConfig({
@@ -400,70 +423,146 @@ export const useBoardStore = create<BoardState>((set, get) => ({
                 : [],
             })
           : defaults;
-        const legacyAudioRoleMigration = migrateLegacyAudioRoles(
-          nextProjects,
-          hydratedConfig.audioRoles,
-        );
-        nextProjects = legacyAudioRoleMigration.projects;
-        const nextConfig = hydratedConfig.audioRoles === undefined
-          ? hydratedConfig
-          : { ...hydratedConfig, audioRoles: undefined };
+        set({ ready: true, config: hydratedConfig });
+      } catch (err) {
+        console.error("OpenBoard hydrate failed", err);
+        set({ ready: true, config: createDefaultConfig() });
+      }
+    })().finally(() => {
+      if (hydratePromise?.promise === promise) hydratePromise = undefined;
+    });
+    hydratePromise = { scope: promptCatalogScope, promise };
+    return promise;
+  },
+
+  loadProjectsOnDemand: () => {
+    if (get().projectsState === "loaded") return Promise.resolve();
+    const scope = activeWorkspaceScope ?? "open";
+    const key = lazyLoadKey("projects", scope);
+    const existing = lazyLoadPromises.get(key);
+    if (existing) return existing;
+    const generation = workspaceGeneration;
+    set({ projectsState: "loading", projectsError: null });
+    const promise = (async () => {
+      try {
+        if (hydratePromise) await hydratePromise.promise;
+        if (workspaceGeneration !== generation) throw new WorkspaceScopeChangedError();
+        const rawProjects = await loadProjects();
+        let projects = await rehydrateProjects(rawProjects);
+        if (workspaceGeneration !== generation || activeWorkspaceScope !== scope) {
+          throw new WorkspaceScopeChangedError();
+        }
+        const hydratedConfig = get().config;
+        const hadLegacyAudioRoles = hydratedConfig.audioRoles !== undefined;
+        const migration = migrateLegacyAudioRoles(projects, hydratedConfig.audioRoles);
+        projects = migration.projects;
+        if (!projects.length) projects = [createProject("我的第一个画布")];
+        const nextConfig = hadLegacyAudioRoles
+          ? { ...hydratedConfig, audioRoles: undefined }
+          : hydratedConfig;
         set({
-          ready: true,
-          projects: nextProjects,
+          projects,
+          activeProjectId: resolveActiveProjectId(get().activeProjectId, projects),
+          projectsState: "loaded",
+          projectsError: null,
           config: nextConfig,
-          assets,
-          prompts,
-          activeProjectId,
+        });
+        const rawByID = new Map(rawProjects.map((project) => [project.id, project]));
+        const migratedProjects = projects.filter((project) => {
+          const raw = rawByID.get(project.id);
+          return !raw || hasPersistedProjectChanges(raw, project);
+        });
+        try {
+          if (migratedProjects.length) {
+            await projectWrites.writeExact(structuredClone(migratedProjects));
+          }
+          if (hadLegacyAudioRoles) {
+            await saveWorkspaceReplacementConfig(() => saveConfig(nextConfig));
+          }
+        } catch (error) {
+          console.error("OpenBoard project migration persistence failed", error);
+        }
+      } catch (error) {
+        if (workspaceGeneration === generation && activeWorkspaceScope === scope) {
+          set({ projectsState: "error", projectsError: errorMessage(error) });
+        }
+        throw error;
+      }
+    })().finally(() => keepLazyLoadPromise(lazyLoadPromises, key, promise));
+    lazyLoadPromises.set(key, promise);
+    return promise;
+  },
+
+  loadAssetsOnDemand: () => {
+    if (get().assetsState === "loaded") return Promise.resolve();
+    const scope = activeWorkspaceScope ?? "open";
+    const key = lazyLoadKey("assets", scope);
+    const existing = lazyLoadPromises.get(key);
+    if (existing) return existing;
+    const generation = workspaceGeneration;
+    set({ assetsState: "loading", assetsError: null });
+    const promise = (async () => {
+      try {
+        if (hydratePromise) await hydratePromise.promise;
+        if (workspaceGeneration !== generation) throw new WorkspaceScopeChangedError();
+        const rawAssets = await loadAssets();
+        const assets = await rehydrateAssets(rawAssets);
+        if (workspaceGeneration !== generation || activeWorkspaceScope !== scope) {
+          throw new WorkspaceScopeChangedError();
+        }
+        set({ assets, assetsState: "loaded", assetsError: null });
+        const rawByID = new Map(rawAssets.map((asset) => [asset.id, asset]));
+        if (assets.some((asset) => rawByID.get(asset.id)?.storageKey !== asset.storageKey)) {
+          await assetWrites.writeExact(structuredClone(assets));
+        }
+      } catch (error) {
+        if (workspaceGeneration === generation && activeWorkspaceScope === scope) {
+          set({ assetsState: "error", assetsError: errorMessage(error) });
+        }
+        throw error;
+      }
+    })().finally(() => keepLazyLoadPromise(lazyLoadPromises, key, promise));
+    lazyLoadPromises.set(key, promise);
+    return promise;
+  },
+
+  loadPromptsOnDemand: () => {
+    if (get().promptsState === "loaded") return Promise.resolve();
+    const scope = activeWorkspaceScope ?? "open";
+    const key = lazyLoadKey("prompts", scope);
+    const existing = lazyLoadPromises.get(key);
+    if (existing) return existing;
+    const generation = workspaceGeneration;
+    set({ promptsState: "loading", promptsError: null });
+    const promise = (async () => {
+      try {
+        if (hydratePromise) await hydratePromise.promise;
+        if (workspaceGeneration !== generation) throw new WorkspaceScopeChangedError();
+        const [personal, publicCatalog] = await Promise.all([
+          loadPrompts(),
+          loadPublicPromptCatalog(scope),
+        ]);
+        if (workspaceGeneration !== generation || activeWorkspaceScope !== scope) {
+          throw new WorkspaceScopeChangedError();
+        }
+        set({
+          prompts: mergePublicPromptCatalog(personal, publicCatalog.catalog),
+          promptsState: "loaded",
+          promptsError: null,
         });
         if (publicCatalog.stale && publicCatalog.error && typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("openboard:prompt-source-error", {
             detail: { message: `公共提示词库：${publicCatalog.error}` },
           }));
         }
-
-        // Rehydration mostly creates temporary display URLs and must not rewrite
-        // every project on every page load. Persist only actual migrations, and
-        // do it after publishing the loaded workspace so failure cannot blank UI.
-        const rawByID = new Map(rawProjects.map((project) => [project.id, project]));
-        const migratedProjects = nextProjects.filter((project) => {
-          const raw = rawByID.get(project.id);
-          return !raw || hasPersistedProjectChanges(raw, project);
-        });
-        const rawAssetsByID = new Map(rawAssets.map((asset) => [asset.id, asset]));
-        const migratedAssets = assets.some((asset) =>
-          rawAssetsByID.get(asset.id)?.storageKey !== asset.storageKey);
-        try {
-          await Promise.all([
-            migratedProjects.length
-              ? projectWrites.writeExact(structuredClone(migratedProjects))
-              : Promise.resolve(),
-            migratedAssets
-              ? assetWrites.writeExact(structuredClone(assets))
-              : Promise.resolve(),
-          ]);
-          // Retire the legacy copy only after its project snapshots are durable.
-          if (hydratedConfig.audioRoles !== undefined) {
-            await saveWorkspaceReplacementConfig(() => saveConfig(nextConfig));
-          }
-        } catch (error) {
-          console.error("OpenBoard startup migration persistence failed", error);
+      } catch (error) {
+        if (workspaceGeneration === generation && activeWorkspaceScope === scope) {
+          set({ promptsState: "error", promptsError: errorMessage(error) });
         }
-      } catch (err) {
-        console.error("OpenBoard hydrate failed", err);
-        set({
-          ready: true,
-          projects: [],
-          config: createDefaultConfig(),
-          assets: [],
-          prompts: [],
-          activeProjectId: null,
-        });
+        throw error;
       }
-    })().finally(() => {
-      if (hydratePromise?.promise === promise) hydratePromise = undefined;
-    });
-    hydratePromise = { scope: promptCatalogScope, promise };
+    })().finally(() => keepLazyLoadPromise(lazyLoadPromises, key, promise));
+    lazyLoadPromises.set(key, promise);
     return promise;
   },
 
@@ -488,6 +587,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setActiveProject: (id) => set({ activeProjectId: id, selectedIds: [] }),
 
   createProject: (title, projectKind = "canvas") => {
+    if (!canPersistLazySlice(get().projectsState)) {
+      throw new Error("项目尚未加载完成");
+    }
     const project = createProject(title, projectKind);
     set((s) => ({
       projects: [project, ...s.projects],
@@ -530,6 +632,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   importProject: (project) => {
+    if (!canPersistLazySlice(get().projectsState)) {
+      throw new Error("项目尚未加载完成");
+    }
     const imported: BoardProject = {
       ...project,
       id: uid("proj"),
@@ -791,6 +896,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     const run = async () => {
     const cleanup = async () => {
       if (!cleanupStorageKeys) return;
+      if (get().assetsState !== "loaded") {
+        await get().loadAssetsOnDemand();
+      }
+      if (get().assetsState !== "loaded") return;
       const latest = get();
       const retained = collectStorageKeys(latest.projects, latest.assets);
       for (const history of histories.values()) {
@@ -1104,6 +1213,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   flushConfig: () => configWrites.flush(),
 
   setAssets: (assets) => {
+    if (!canPersistLazySlice(get().assetsState)) {
+      console.error("OpenBoard refused to persist assets before the catalog loaded");
+      return;
+    }
     const next = structuredClone(assets);
     set({ assets: next });
     assetWrites.enqueue(next);
@@ -1112,6 +1225,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   flushAssets: () => assetWrites.flush(),
 
   commitAssetUpdate: async (update) => {
+    if (!canPersistLazySlice(get().assetsState)) {
+      await get().loadAssetsOnDemand();
+    }
+    if (!canPersistLazySlice(get().assetsState)) {
+      throw new Error("素材列表尚未加载完成");
+    }
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const baseline = get().assets;
       const next = structuredClone(update(structuredClone(baseline)));
@@ -1124,6 +1243,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   setPrompts: (prompts) => {
+    if (!canPersistLazySlice(get().promptsState)) {
+      console.error("OpenBoard refused to persist prompts before the catalog loaded");
+      return;
+    }
     const next = structuredClone(prompts);
     set({ prompts: next });
     promptWrites.enqueue(stripPublicPromptCatalog(next));
@@ -1132,6 +1255,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   flushPrompts: () => promptWrites.flush(),
 
   addAssetFromNode: async (nodeId) => {
+    if (!canPersistLazySlice(get().assetsState)) {
+      await get().loadAssetsOnDemand();
+    }
+    if (!canPersistLazySlice(get().assetsState)) return;
     const project = get().getActive();
     const node = project?.nodes.find((n) => n.id === nodeId);
     if (!node) return;
@@ -1160,6 +1287,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         tags: [],
         coverUrl: node.metadata.content,
         storageKey: node.metadata.storageKey,
+        thumbnailStorageKey: node.metadata.thumbnailStorageKey,
+        thumbnailUrl: node.metadata.thumbnailUrl,
         mimeType: node.metadata.mimeType,
         createdAt: t,
         updatedAt: t,
@@ -1228,6 +1357,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         metadata: {
           content: asset.coverUrl,
           storageKey: asset.storageKey,
+          thumbnailStorageKey: asset.thumbnailStorageKey,
+          thumbnailUrl: asset.thumbnailUrl,
           mimeType: asset.mimeType,
           ...(naturalWidth ? { naturalWidth } : {}),
           ...(naturalHeight ? { naturalHeight } : {}),
@@ -1241,6 +1372,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         metadata: {
           content: asset.coverUrl,
           storageKey: asset.storageKey,
+          thumbnailStorageKey: asset.thumbnailStorageKey,
+          thumbnailUrl: asset.thumbnailUrl,
           mimeType: asset.mimeType,
           status: "success",
         },
@@ -1352,10 +1485,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
 
   persist: async () => {
+    if (!canPersistLazySlice(get().projectsState)) return;
     projectWrites.enqueue(structuredClone(get().projects));
   },
 
   persistNow: async () => {
+    if (!canPersistLazySlice(get().projectsState)) {
+      await get().loadProjectsOnDemand();
+    }
+    if (!canPersistLazySlice(get().projectsState)) return;
     projectWrites.enqueue(structuredClone(get().projects));
     await projectWrites.flush();
   },
@@ -1397,11 +1535,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 export function adoptCommittedProject(project: BoardProject): void {
   const committed = structuredClone(project);
   histories.delete(committed.id);
-  useBoardStore.setState((state) => ({
-    projects: [committed, ...state.projects.filter((item) => item.id !== committed.id)],
-    activeProjectId: committed.id,
-    selectedIds: [],
-  }));
+  useBoardStore.setState((state) => {
+    const loaded = state.projectsState === "loaded";
+    return {
+      projects: [committed, ...(loaded ? state.projects.filter((item) => item.id !== committed.id) : [])],
+      activeProjectId: committed.id,
+      selectedIds: [],
+    };
+  });
 }
 
 /** Updates browser state after the backend has atomically committed a workspace restore. */
@@ -1410,7 +1551,10 @@ export function adoptCommittedWorkspace(snapshot: WorkspaceSnapshot): void {
   const importedAudioRoles = migrateLegacyAudioRoles(raw.projects, raw.config.audioRoles);
   const config = structuredClone(useBoardStore.getState().config);
   histories.clear();
+  lazyLoadPromises.clear();
+  workspaceGeneration += 1;
   useBoardStore.setState({
+    ready: true,
     projects: importedAudioRoles.projects,
     activeProjectId: importedAudioRoles.projects[0]?.id ?? null,
     selectedIds: [],
@@ -1419,6 +1563,12 @@ export function adoptCommittedWorkspace(snapshot: WorkspaceSnapshot): void {
     assets: raw.assets,
     prompts: raw.prompts,
     connectingFrom: null,
+    projectsState: "loaded",
+    assetsState: "loaded",
+    promptsState: "loaded",
+    projectsError: null,
+    assetsError: null,
+    promptsError: null,
   });
 }
 
@@ -1461,9 +1611,9 @@ export async function attachUploadedImage(
   if (mode === "panorama") {
     const project = useBoardStore.getState().getActive();
     if (!project) throw new Error("请先创建一个画布项目");
-    let uploaded: Awaited<ReturnType<typeof uploadMedia>> | undefined;
+    let uploaded: Awaited<ReturnType<typeof uploadDisplayMedia>> | undefined;
     try {
-      uploaded = await uploadMedia(file, "image", {
+      uploaded = await uploadDisplayMedia(file, "image", {
         preflightImage: readPanoramaBlobDimensions,
       });
       const display = fitMediaDisplaySize(
@@ -1482,6 +1632,8 @@ export async function attachUploadedImage(
         metadata: {
           content: uploaded.url,
           storageKey: uploaded.storageKey,
+          thumbnailStorageKey: uploaded.thumbnailStorageKey,
+          thumbnailUrl: uploaded.thumbnailUrl,
           naturalWidth: uploaded.width,
           naturalHeight: uploaded.height,
           bytes: uploaded.bytes,
@@ -1495,6 +1647,8 @@ export async function attachUploadedImage(
         metadata: {
           content: uploaded.url,
           storageKey: uploaded.storageKey,
+          thumbnailStorageKey: uploaded.thumbnailStorageKey,
+          thumbnailUrl: uploaded.thumbnailUrl,
           naturalWidth: uploaded.width,
           naturalHeight: uploaded.height,
           bytes: uploaded.bytes,
@@ -1509,16 +1663,21 @@ export async function attachUploadedImage(
       if (uploaded?.storageKey) {
         await deleteStorageKey(uploaded.storageKey).catch(() => undefined);
       }
+      if (uploaded?.thumbnailStorageKey) {
+        await deleteStorageKey(uploaded.thumbnailStorageKey).catch(() => undefined);
+      }
       throw error;
     }
   }
 
-  const uploaded = await uploadMedia(file, "image", { validateLargeImage: true });
+  const uploaded = await uploadDisplayMedia(file, "image", { validateLargeImage: true });
   const display = fitMediaDisplaySize(uploaded.width, uploaded.height);
   return useBoardStore.getState().addNode("image", position, {
     metadata: {
       content: uploaded.url,
       storageKey: uploaded.storageKey,
+      thumbnailStorageKey: uploaded.thumbnailStorageKey,
+      thumbnailUrl: uploaded.thumbnailUrl,
       naturalWidth: uploaded.width,
       naturalHeight: uploaded.height,
       bytes: uploaded.bytes,
@@ -1534,11 +1693,13 @@ export async function attachUploadedVideo(
   file: File | Blob,
   position: Point,
 ): Promise<string> {
-  const uploaded = await uploadMedia(file, "media");
+  const uploaded = await uploadDisplayMedia(file, "media", { previewKind: "video" });
   return useBoardStore.getState().addNode("video", position, {
     metadata: {
       content: uploaded.url,
       storageKey: uploaded.storageKey,
+      thumbnailStorageKey: uploaded.thumbnailStorageKey,
+      thumbnailUrl: uploaded.thumbnailUrl,
       bytes: uploaded.bytes,
       mimeType: uploaded.mimeType,
       status: "success",

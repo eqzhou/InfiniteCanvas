@@ -1,9 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { useBoardStore } from "@/stores/use-board-store";
 import type { Point } from "@/types/board";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { useI18n } from "@/i18n/I18nProvider";
+import { shouldAutoloadLazySlice } from "@/lib/lazy-workspace";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { MediaView } from "@/components/common/MediaView";
 
 export function AssetPickerModal({
   open,
@@ -16,10 +19,18 @@ export function AssetPickerModal({
 }) {
   const { t } = useI18n();
   const assets = useBoardStore((s) => s.assets);
+  const ready = useBoardStore((s) => s.ready);
+  const assetsState = useBoardStore((s) => s.assetsState);
+  const loadAssetsOnDemand = useBoardStore((s) => s.loadAssetsOnDemand);
   const insertAsset = useBoardStore((s) => s.insertAsset);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | "text" | "image">("all");
   useEscapeDismiss(open, onClose);
+
+  useEffect(() => {
+    if (!open || !shouldAutoloadLazySlice(ready, assetsState)) return;
+    void loadAssetsOnDemand().catch(() => undefined);
+  }, [assetsState, loadAssetsOnDemand, open, ready]);
 
   const filtered = useMemo(
     () =>
@@ -76,6 +87,7 @@ export function AssetPickerModal({
           </div>
         </header>
         <div className="ob-dialog-body min-h-0 flex-1 overflow-auto !pt-3">
+          {assetsState !== "loaded" && !assets.length ? <PageSkeleton compact /> : null}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {filtered.map((a) => (
               <button
@@ -87,9 +99,11 @@ export function AssetPickerModal({
                   onClose();
                 }}
               >
-                {a.kind === "image" && a.coverUrl ? (
-                  <img
+                {(a.kind === "image" || a.kind === "video") && (a.thumbnailUrl || a.coverUrl) ? (
+                  <MediaView
+                    kind={a.kind}
                     src={a.coverUrl}
+                    previewSrc={a.thumbnailUrl}
                     alt=""
                     className="mb-2 h-24 w-full rounded-lg object-cover"
                   />
@@ -101,7 +115,7 @@ export function AssetPickerModal({
               </button>
             ))}
           </div>
-          {!filtered.length ? (
+          {assetsState === "loaded" && !filtered.length ? (
             <div className="ob-empty border-0 bg-transparent py-10">
               <p className="ob-empty-title">{t("canvas.noAssets")}</p>
               <p className="ob-empty-desc">{t("canvas.noAssetsHint")}</p>

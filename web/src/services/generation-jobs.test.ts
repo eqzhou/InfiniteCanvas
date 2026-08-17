@@ -123,6 +123,23 @@ describe("generation job media lifecycle", () => {
     expect(input).toEqual(snapshot);
   });
 
+  test("collects stored preview thumbnails from generation results", () => {
+    const input = job("with-preview", "2026-07-04T00:00:00Z");
+    input.result = {
+      items: [
+        { storageKey: "image:result", thumbnailStorageKey: "image:result-thumb" },
+        { storageKey: "media:video", thumbnailStorageKey: "image:video-poster" },
+      ],
+    };
+
+    expect(collectGenerationStorageKeysFromJobs([input])).toEqual(new Set([
+      "image:result",
+      "image:result-thumb",
+      "media:video",
+      "image:video-poster",
+    ]));
+  });
+
   test("only returns deleted-job media that has no remaining owner", () => {
     const removed = job("removed", "2026-07-04T00:00:00Z");
     removed.parameters = { referenceStorageKeys: ["image:orphan-ref", "image:shared"] };

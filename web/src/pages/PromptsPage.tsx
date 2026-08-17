@@ -45,6 +45,9 @@ import {
 import { PromptSourceManagerDialog } from "@/components/prompts/PromptSourceManagerDialog";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
+import { useLazyPrompts } from "@/hooks/use-lazy-workspace";
 
 const BUILTIN: PromptItem[] = [
   {
@@ -81,6 +84,8 @@ export function PromptsPage() {
   const { locale, t } = useI18n();
   const navigate = useNavigate();
   const prompts = useBoardStore((s) => s.prompts);
+  const { promptsState, promptsError, loadPromptsOnDemand } = useLazyPrompts();
+  const loadAssetsOnDemand = useBoardStore((s) => s.loadAssetsOnDemand);
   const setPrompts = useBoardStore((s) => s.setPrompts);
   const flushPrompts = useBoardStore((s) => s.flushPrompts);
   const setAssets = useBoardStore((s) => s.setAssets);
@@ -369,6 +374,7 @@ export function PromptsPage() {
   }, [t]);
 
   const addPromptAsset = async (prompt: PromptItem) => {
+    await loadAssetsOnDemand();
     const t = nowIso();
     const latestAssets = useBoardStore.getState().assets;
     setAssets([
@@ -387,10 +393,11 @@ export function PromptsPage() {
     await flushAssets();
   };
 
-  const insertPrompt = (prompt: PromptItem) => {
+  const insertPrompt = async (prompt: PromptItem) => {
+    await useBoardStore.getState().loadProjectsOnDemand();
     const state = useBoardStore.getState();
     const active = state.getActive();
-    if (!active) return;
+    if (!active) throw new Error(t("assets.openCanvasFirst"));
     state.addNode("text", {
       x: (window.innerWidth / 2 - active.viewport.x) / active.viewport.k - 140,
       y: (window.innerHeight / 2 - active.viewport.y) / active.viewport.k - 90,
@@ -443,8 +450,9 @@ export function PromptsPage() {
   };
 
   const usePrompt = (prompt: PromptItem) => {
-    insertPrompt(prompt);
-    navigate("/");
+    void insertPrompt(prompt)
+      .then(() => navigate("/"))
+      .catch((cause) => setErr(cause instanceof Error ? cause.message : String(cause)));
   };
 
   const restoreBuiltinPrompts = () => {
@@ -465,6 +473,16 @@ export function PromptsPage() {
 
   const failedSources = savedSources.filter((item) => Boolean(item.lastError)).length;
   const enabledSources = savedSources.filter((item) => item.enabled).length;
+
+  if (promptsState === "error" && !prompts.length) {
+    return (
+      <WorkspaceLoadError
+        message={t("workspace.loadFailed", { message: promptsError ?? err ?? "" })}
+        onRetry={() => { setErr(null); void loadPromptsOnDemand().catch((cause) => setErr(cause instanceof Error ? cause.message : String(cause))); }}
+      />
+    );
+  }
+  if (promptsState !== "loaded" && !prompts.length) return <PageSkeleton />;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--ob-canvas)]">
@@ -976,9 +994,12 @@ export function PromptsPage() {
         }}
         onInsert={() => {
           if (!selectedPrompt) return;
-          insertPrompt(selectedPrompt);
-          setSelectedPrompt(null);
-          navigate("/");
+          void insertPrompt(selectedPrompt)
+            .then(() => {
+              setSelectedPrompt(null);
+              navigate("/");
+            })
+            .catch((cause) => setErr(cause instanceof Error ? cause.message : String(cause)));
         }}
       />
       <ImagePreviewDialog

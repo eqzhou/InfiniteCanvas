@@ -1098,7 +1098,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
                     setFeedback(null);
                     void (async () => {
                       try {
+                        const store = useBoardStore.getState();
+                        await Promise.all([
+                          store.loadProjectsOnDemand(),
+                          store.loadAssetsOnDemand(),
+                          store.loadPromptsOnDemand(),
+                        ]);
                         const state = useBoardStore.getState();
+                        if (state.projectsState !== "loaded" || state.assetsState !== "loaded" || state.promptsState !== "loaded") {
+                          throw new Error(t("workspace.loadFailed", { message: state.projectsError ?? state.assetsError ?? state.promptsError ?? "" }));
+                        }
                         const bundle = await exportCompleteWorkspaceBundle({
                           projects: state.projects,
                           assets: state.assets,

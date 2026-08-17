@@ -11,6 +11,8 @@ type GenerationResultItem = {
   bytes?: number;
   width?: number;
   height?: number;
+  thumbnailStorageKey?: string;
+  thumbnailUrl?: string;
 };
 
 const MISSING_JOB_GRACE_MS = 30_000;
@@ -36,10 +38,20 @@ function resultItem(job: GenerationJob, index = 0): GenerationResultItem | undef
     height: typeof candidate.height === "number" && Number.isSafeInteger(candidate.height) && candidate.height > 0
       ? candidate.height
       : undefined,
+    thumbnailStorageKey: typeof candidate.thumbnailStorageKey === "string"
+      && candidate.thumbnailStorageKey.length > 0
+      && candidate.thumbnailStorageKey.length <= 512
+      ? candidate.thumbnailStorageKey
+      : undefined,
   };
 }
 
-export function canvasGenerationPatch(job: GenerationJob, content?: string, resultIndex = 0): Partial<NodeMetadata> {
+export function canvasGenerationPatch(
+  job: GenerationJob,
+  content?: string,
+  resultIndex = 0,
+  thumbnailUrl?: string,
+): Partial<NodeMetadata> {
   if (job.status === "failed" || job.status === "cancelled") {
     return {
       status: "error",
@@ -62,6 +74,8 @@ export function canvasGenerationPatch(job: GenerationJob, content?: string, resu
     bytes: item.bytes,
     ...(item.width ? { naturalWidth: item.width } : {}),
     ...(item.height ? { naturalHeight: item.height } : {}),
+    ...(item.thumbnailStorageKey ? { thumbnailStorageKey: item.thumbnailStorageKey } : {}),
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
     status: "success",
     errorDetails: undefined,
     generationJobId: job.id,
@@ -71,7 +85,7 @@ export function canvasGenerationPatch(job: GenerationJob, content?: string, resu
 export function batchPreviewPatch(
   children: ReadonlyArray<Pick<NodeMetadata,
     "status" | "errorDetails" | "content" | "storageKey" | "mimeType" | "bytes" |
-    "naturalWidth" | "naturalHeight">>,
+    "naturalWidth" | "naturalHeight" | "thumbnailStorageKey" | "thumbnailUrl">>,
 ): Partial<NodeMetadata> | undefined {
   if (children.length === 0 || children.some((child) => child.status === "loading")) return undefined;
   const successful = children.find((child) =>
@@ -89,6 +103,8 @@ export function batchPreviewPatch(
     bytes: successful.bytes,
     naturalWidth: successful.naturalWidth,
     naturalHeight: successful.naturalHeight,
+    thumbnailStorageKey: successful.thumbnailStorageKey,
+    thumbnailUrl: successful.thumbnailUrl,
     status: "success",
     errorDetails: undefined,
   };
@@ -192,8 +208,11 @@ export function useCanvasGenerationRecovery(): void {
               return;
             }
             const content = await loadMediaUrl(item.storageKey);
+            const thumbnailUrl = item.thumbnailStorageKey
+              ? await loadMediaUrl(item.thumbnailStorageKey)
+              : undefined;
             if (disposed) return;
-            updateNode(nodeId, { metadata: canvasGenerationPatch(job, content, resultIndex) });
+            updateNode(nodeId, { metadata: canvasGenerationPatch(job, content, resultIndex, thumbnailUrl) });
           }));
         } catch {
           // A transient API/media read failure remains loading and is retried.

@@ -18,12 +18,19 @@ function job(status: GenerationJob["status"]): GenerationJob {
 describe("canvas durable generation recovery", () => {
   test("maps a protected terminal result onto its placeholder", () => {
     const succeeded = job("succeeded");
-    succeeded.result = { items: [{ storageKey: "media:video", mimeType: "video/mp4", bytes: 24 }] };
-    expect(canvasGenerationPatch(succeeded, "blob:resolved")).toEqual({
+    succeeded.result = { items: [{
+      storageKey: "media:video",
+      mimeType: "video/mp4",
+      bytes: 24,
+      thumbnailStorageKey: "image:video-poster",
+    }] };
+    expect(canvasGenerationPatch(succeeded, "blob:resolved", 0, "blob:poster")).toEqual({
       content: "blob:resolved",
       storageKey: "media:video",
       mimeType: "video/mp4",
       bytes: 24,
+      thumbnailStorageKey: "image:video-poster",
+      thumbnailUrl: "blob:poster",
       status: "success",
       errorDetails: undefined,
       generationJobId: "job-video",

@@ -8,6 +8,7 @@ build/
 !.env.example
 web/dist/
 web/dist-local/
+web/dist-perf/
 server/bin/
 server/data/
 *.db

@@ -99,6 +99,7 @@ function collectProjectKeys(project: BoardProject, film?: FilmDocument): string[
   const keys = new Set<string>();
   for (const node of project.nodes) {
     if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
+    if (node.metadata.thumbnailStorageKey) keys.add(node.metadata.thumbnailStorageKey);
     for (const storageKey of node.metadata.referenceStorageKeys ?? []) keys.add(storageKey);
   }
   for (const session of project.chatSessions) {
@@ -121,6 +122,11 @@ function canonicalProject(project: BoardProject, mediaByKey: Map<string, BundleM
   for (const node of copy.nodes) {
     const key = node.metadata.storageKey;
     if (key) node.metadata.content = `obundle://${mediaByKey.get(key)?.id}`;
+    if (node.metadata.thumbnailStorageKey) {
+      const previewId = mediaByKey.get(node.metadata.thumbnailStorageKey)?.id;
+      if (!previewId) throw new Error(`Referenced media is missing: ${node.metadata.thumbnailStorageKey}`);
+      node.metadata.thumbnailUrl = `obundle://${previewId}`;
+    }
   }
   for (const session of copy.chatSessions) {
     for (const message of session.messages) {
@@ -489,6 +495,11 @@ function remapProject(
         node.metadata.bytes = result.bytes;
         node.metadata.mimeType = result.mimeType;
       }
+    }
+    const thumbnail = replace(node.metadata.thumbnailStorageKey);
+    if (thumbnail) {
+      node.metadata.thumbnailStorageKey = thumbnail.storageKey;
+      node.metadata.thumbnailUrl = thumbnail.url;
     }
     node.metadata.referenceStorageKeys = node.metadata.referenceStorageKeys?.map((storageKey) =>
       replace(storageKey)!.storageKey);

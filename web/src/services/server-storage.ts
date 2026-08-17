@@ -25,8 +25,16 @@ function stripTransientProjectMedia(value: unknown): unknown {
         const node = rawNode as Record<string, unknown>;
         if (!node.metadata || typeof node.metadata !== "object" || Array.isArray(node.metadata)) return rawNode;
         const metadata = node.metadata as Record<string, unknown>;
-        if (typeof metadata.storageKey !== "string" || !isTransientMediaUrl(metadata.content)) return rawNode;
-        const { content: _content, ...persistedMetadata } = metadata;
+        let persistedMetadata = metadata;
+        if (typeof persistedMetadata.storageKey === "string" && isTransientMediaUrl(persistedMetadata.content)) {
+          const { content: _content, ...withoutContent } = persistedMetadata;
+          persistedMetadata = withoutContent;
+        }
+        if ("thumbnailUrl" in persistedMetadata) {
+          const { thumbnailUrl: _thumbnailUrl, ...withoutThumbnail } = persistedMetadata;
+          persistedMetadata = withoutThumbnail;
+        }
+        if (persistedMetadata === metadata) return rawNode;
         return { ...node, metadata: persistedMetadata };
       })
     : project.nodes;

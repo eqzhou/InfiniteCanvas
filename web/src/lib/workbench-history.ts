@@ -150,6 +150,28 @@ export function workbenchRefillAssetIds(
   return { assetIds, unresolved };
 }
 
+export function workbenchCardMedia(item: {
+  url?: string;
+  thumbnailUrl?: string;
+  storageKey?: string;
+  thumbnailStorageKey?: string;
+}): {
+  cardUrl: string;
+  fullUrl: string;
+  hasPreview: boolean;
+  cardKey?: string;
+  fullKey?: string;
+} {
+  const hasPreview = Boolean(item.thumbnailStorageKey?.trim() || item.thumbnailUrl?.trim());
+  return {
+    cardUrl: hasPreview ? (item.thumbnailUrl?.trim() || "") : "",
+    fullUrl: item.url?.trim() || "",
+    hasPreview,
+    cardKey: item.thumbnailStorageKey?.trim() || undefined,
+    fullKey: item.storageKey?.trim() || undefined,
+  };
+}
+
 export function workbenchImageAssets(assets: readonly AssetItem[]): AssetItem[] {
   return assets.filter((asset) =>
     asset.kind === "image" && Boolean(asset.storageKey || asset.coverUrl || asset.content));

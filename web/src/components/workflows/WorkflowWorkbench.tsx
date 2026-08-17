@@ -27,6 +27,7 @@ import {
   retryWorkflowRun,
 } from "@/services/workflow-runs";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useLazyProjects } from "@/hooks/use-lazy-workspace";
 import type { GenerationJob } from "@/types/board";
 import type { WorkflowTemplate } from "@/types/workflow";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
@@ -69,6 +70,7 @@ function extractJSONObject(value: string, invalidMessage: string): unknown {
 export function WorkflowWorkbench() {
   const { t } = useI18n();
   const config = useBoardStore((state) => state.config);
+  useLazyProjects();
   const project = useBoardStore((state) => state.getActive());
   const commitWorkflowResultNodes = useBoardStore((state) => state.commitWorkflowResultNodes);
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);

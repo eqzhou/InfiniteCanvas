@@ -191,6 +191,45 @@ describe("workspace media bundle", () => {
     expect(target.blobs.has("image:restored-1")).toBe(true);
   });
 
+  test("round trips preview thumbnails independently of the original media", async () => {
+    const source = fakeStorage({
+      "image:full": new Blob(["full-bytes"], { type: "image/png" }),
+      "image:thumb": new Blob(["thumb-bytes"], { type: "image/jpeg" }),
+    });
+    const sourceSnapshot = snapshot();
+    sourceSnapshot.projects[0]!.nodes[0]!.metadata = {
+      ...sourceSnapshot.projects[0]!.nodes[0]!.metadata,
+      storageKey: "image:full",
+      thumbnailStorageKey: "image:thumb",
+      content: "/api/blobs/image%3Afull",
+    };
+    sourceSnapshot.assets[0] = {
+      ...sourceSnapshot.assets[0]!,
+      storageKey: "image:full",
+      thumbnailStorageKey: "image:thumb",
+      coverUrl: "/api/blobs/image%3Afull",
+    };
+    sourceSnapshot.generationJobs[0]!.parameters = { referenceStorageKeys: ["image:full"] };
+    sourceSnapshot.generationJobs[0]!.result = {
+      items: [{ storageKey: "image:full", thumbnailStorageKey: "image:thumb" }],
+    };
+
+    const target = fakeStorage();
+    const restored = await importWorkspaceBundle(
+      await exportWorkspaceBundle(sourceSnapshot, source.storage),
+      createDefaultConfig(),
+      target.storage,
+    );
+    const originalKey = restored.projects[0]!.nodes[0]!.metadata.storageKey;
+    const previewKey = restored.projects[0]!.nodes[0]!.metadata.thumbnailStorageKey;
+    expect(originalKey).toStartWith("image:restored-");
+    expect(previewKey).toStartWith("image:restored-");
+    expect(previewKey).not.toBe(originalKey);
+    expect(restored.assets[0]?.thumbnailStorageKey).toBe(previewKey);
+    expect((restored.generationJobs[0]?.result.items as Array<{ thumbnailStorageKey?: string }>)[0]?.thumbnailStorageKey)
+      .toBe(previewKey);
+  });
+
   test("deduplicates media and restores every reference without exporting credentials", async () => {
     const source = fakeStorage({
       "image:shared": new Blob(["image-bytes"], { type: "image/png" }),

@@ -5,6 +5,7 @@ import type { GenerationKind, GenerationStatus } from "@/types/board";
 import { cancelServerGenerationJob, listAllGenerationJobs } from "@/services/generation-jobs";
 import { buildTaskCenterItems, filterTaskCenterItems, type TaskCenterItem } from "@/services/task-center";
 import { useBoardStore } from "@/stores/use-board-store";
+import { useLazyProjects } from "@/hooks/use-lazy-workspace";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
@@ -154,6 +155,7 @@ export function TaskCenterTable({ items, onCancel }: {
 
 export function TaskCenterPage() {
   const { t } = useI18n();
+  useLazyProjects();
   const projects = useBoardStore((state) => state.projects);
   const [items, setItems] = useState<TaskCenterItem[]>([]);
   const [status, setStatus] = useState<GenerationStatus | "">("");

@@ -3,7 +3,8 @@ import { Boxes, Image as ImageIcon, Trash2, Upload } from "lucide-react";
 import type { AssetItem } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
 import { useBoardStore } from "@/stores/use-board-store";
-import { uploadMedia } from "@/services/storage";
+import { uploadDisplayMedia } from "@/services/media-preview";
+import { MediaView } from "@/components/common/MediaView";
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 import { writeOpenBoardAssetDrag } from "@/lib/asset-drag";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -14,10 +15,14 @@ import {
 } from "@/lib/panorama";
 
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
+import { useLazyAssets } from "@/hooks/use-lazy-workspace";
 
 export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
   const { t } = useI18n();
   const assets = useBoardStore((state) => state.assets);
+  const { assetsState, assetsError, loadAssetsOnDemand } = useLazyAssets();
   const commitAssetUpdate = useBoardStore((state) => state.commitAssetUpdate);
   const insertAsset = useBoardStore((state) => state.insertAsset);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -33,6 +38,11 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
     await commitAssetUpdate((current) => current.filter((item) => item.id !== assetId));
     await deleteAssetBlobIfUnreferenced(
       asset.storageKey,
+      useBoardStore.getState().projects,
+      useBoardStore.getState().assets,
+    );
+    await deleteAssetBlobIfUnreferenced(
+      asset.thumbnailStorageKey,
       useBoardStore.getState().projects,
       useBoardStore.getState().assets,
     );
@@ -62,8 +72,9 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
           // Non-panorama or unreadable headers: ordinary image asset.
         }
       }
-      const uploaded = await uploadMedia(file, kind === "image" ? "image" : "media", {
+      const uploaded = await uploadDisplayMedia(file, kind === "image" ? "image" : "media", {
         validateLargeImage: kind === "image",
+        previewKind: kind,
       });
       const t = nowIso();
       const item: AssetItem = {
@@ -72,6 +83,8 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
         title: file.name,
         coverUrl: uploaded.url,
         storageKey: uploaded.storageKey,
+        thumbnailStorageKey: uploaded.thumbnailStorageKey,
+        thumbnailUrl: uploaded.thumbnailUrl,
         mimeType: uploaded.mimeType,
         tags: notes === "panoramaProjection:equirectangular" ? ["panorama"] : [],
         notes,
@@ -85,6 +98,19 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
       setBusy(false);
     }
   };
+
+  if (assetsState === "error" && !assets.length) {
+    return (
+      <WorkspaceLoadError
+        compact
+        message={t("workspace.loadFailed", { message: assetsError ?? error ?? "" })}
+        onRetry={() => { setError(null); void loadAssetsOnDemand().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }}
+      />
+    );
+  }
+  if (assetsState !== "loaded" && !assets.length) {
+    return <PageSkeleton compact />;
+  }
 
   return (
     <div className="space-y-2">
@@ -159,10 +185,10 @@ export const CanvasAssetsPanel = memo(function CanvasAssetsPanel() {
                 event.currentTarget.setAttribute('aria-grabbed', 'false');
               }}
             >
-              {asset.kind === "image" && asset.coverUrl ? (
-                <img src={asset.coverUrl} alt={asset.title} draggable={false} className="pointer-events-none h-24 w-full object-cover" />
-              ) : asset.kind === "video" && asset.coverUrl ? (
-                <video src={asset.coverUrl} aria-label={asset.title} muted preload="metadata" draggable={false} className="pointer-events-none h-24 w-full bg-black object-contain" />
+              {asset.kind === "image" && (asset.thumbnailUrl || asset.coverUrl) ? (
+                <MediaView kind="image" src={asset.coverUrl} previewSrc={asset.thumbnailUrl} alt={asset.title} className="pointer-events-none h-24 w-full object-cover" />
+              ) : asset.kind === "video" && (asset.thumbnailUrl || asset.coverUrl) ? (
+                <MediaView kind="video" src={asset.coverUrl} previewSrc={asset.thumbnailUrl} alt={asset.title} fit="contain" className="pointer-events-none h-24 w-full bg-black object-contain" />
               ) : asset.kind === "audio" && asset.coverUrl ? (
                 <div className="grid h-24 place-items-center px-2 text-xs text-[var(--ob-muted)]">{t("canvas.audio")}</div>
               ) : (

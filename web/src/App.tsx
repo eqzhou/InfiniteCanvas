@@ -6,17 +6,11 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ComponentType,
 } from "react";
 import { Navigate, Route, Routes } from "react-router";
 import { useBoardStore } from "@/stores/use-board-store";
 import { TopNav } from "@/components/layout/TopNav";
-import { SettingsModal } from "@/components/layout/SettingsModal";
-import { ShortcutsModal } from "@/components/layout/ShortcutsModal";
-import { LocalAgentPanel } from "@/components/agent/LocalAgentPanel";
-import { BrowserRuntime } from "@/components/agent/BrowserRuntime";
 import { PromptSourceScheduler } from "@/components/prompts/PromptSourceScheduler";
-import { HomePage } from "@/pages/HomePage";
 import { applyChannelUrlCredentials, consumeUrlCredentials } from "@/lib/url-credentials";
 import { initAnalytics } from "@/lib/analytics";
 import { applyTheme, setupCrossTabThemeListener, setupSystemThemeListener } from "@/lib/theme";
@@ -24,34 +18,38 @@ import { AnalyticsTracker } from "@/components/layout/AnalyticsTracker";
 import { AuthGate } from "@/components/auth/AuthGate";
 import { ToastContainer } from "@/components/common/ToastContainer";
 import { useI18n } from "@/i18n/I18nProvider";
+import { lazyRoute, preloadRouteChunk } from "@/routes/route-registry";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
 
-// Landing route (HomePage) stays eager so the most common entry avoids a
-// Suspense flash. Every other route is code-split out of the initial bundle.
-function lazyNamed<M extends Record<string, unknown>, K extends keyof M>(
-  loader: () => Promise<M>,
-  name: K,
-) {
-  return lazy(async () => {
-    const module = await loader();
-    return { default: module[name] as ComponentType };
-  });
-}
-
-const AssetsPage = lazyNamed(() => import("@/pages/AssetsPage"), "AssetsPage");
-const ServerLibraryPage = lazyNamed(() => import("@/pages/ServerLibraryPage"), "ServerLibraryPage");
-const AICallLogsPage = lazyNamed(() => import("@/pages/AICallLogsPage"), "AICallLogsPage");
-const PromptsPage = lazyNamed(() => import("@/pages/PromptsPage"), "PromptsPage");
-const PluginsPage = lazyNamed(() => import("@/pages/PluginsPage"), "PluginsPage");
-const ImageWorkbenchPage = lazyNamed(() => import("@/pages/ImageWorkbenchPage"), "ImageWorkbenchPage");
-const VideoWorkbenchPage = lazyNamed(() => import("@/pages/VideoWorkbenchPage"), "VideoWorkbenchPage");
-const AdminPage = lazyNamed(() => import("@/pages/AdminPage"), "AdminPage");
-const HelpPage = lazyNamed(() => import("@/pages/HelpPage"), "HelpPage");
-const WorkflowWorkbenchPage = lazyNamed(
-  () => import("@/pages/WorkflowWorkbenchPage"),
-  "WorkflowWorkbenchPage",
-);
-const FilmWorkbenchPage = lazyNamed(() => import("@/pages/FilmWorkbenchPage"), "FilmWorkbenchPage");
-const TaskCenterPage = lazyNamed(() => import("@/pages/TaskCenterPage"), "TaskCenterPage");
+const HomePage = lazyRoute("home");
+const AssetsPage = lazyRoute("assets");
+const ServerLibraryPage = lazyRoute("library");
+const AICallLogsPage = lazyRoute("aiLogs");
+const PromptsPage = lazyRoute("prompts");
+const PluginsPage = lazyRoute("plugins");
+const ImageWorkbenchPage = lazyRoute("imageWorkbench");
+const VideoWorkbenchPage = lazyRoute("videoWorkbench");
+const AdminPage = lazyRoute("admin");
+const HelpPage = lazyRoute("help");
+const WorkflowWorkbenchPage = lazyRoute("workflowWorkbench");
+const FilmWorkbenchPage = lazyRoute("filmWorkbench");
+const TaskCenterPage = lazyRoute("tasks");
+const SettingsModal = lazy(async () => {
+  const module = await import("@/components/layout/SettingsModal");
+  return { default: module.SettingsModal };
+});
+const ShortcutsModal = lazy(async () => {
+  const module = await import("@/components/layout/ShortcutsModal");
+  return { default: module.ShortcutsModal };
+});
+const LocalAgentPanel = lazy(async () => {
+  const module = await import("@/components/agent/LocalAgentPanel");
+  return { default: module.LocalAgentPanel };
+});
+const BrowserRuntime = lazy(async () => {
+  const module = await import("@/components/agent/BrowserRuntime");
+  return { default: module.BrowserRuntime };
+});
 
 export function App() {
   const { t } = useI18n();
@@ -60,6 +58,8 @@ export function App() {
   const resetWorkspaceScopeRuntime = useBoardStore((s) => s.resetWorkspaceScopeRuntime);
   const ready = useBoardStore((s) => s.ready);
   const theme = useBoardStore((s) => s.config.theme);
+  const showShortcuts = useBoardStore((s) => s.showShortcuts);
+  const showLocalAgent = useBoardStore((s) => s.showLocalAgent);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [urlCredentialError, setUrlCredentialError] = useState<string | null>(null);
   const [promptSourceError, setPromptSourceError] = useState<string | null>(null);
@@ -146,6 +146,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (ready) void preloadRouteChunk("home");
+  }, [ready]);
+
+  useEffect(() => {
     if (!ready) return;
     applyTheme(theme);
     const unsubs: (() => void)[] = [];
@@ -196,7 +200,7 @@ export function App() {
         ) : null}
         <div className="flex min-h-0 flex-1">
           <main className="min-h-0 min-w-0 flex-1">
-            <Suspense fallback={<div className="p-6 text-sm text-[var(--ob-muted)]">{t("common.loading")}</div>}>
+            <Suspense fallback={<PageSkeleton />}>
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/assets" element={<AssetsPage />} />
@@ -215,11 +219,25 @@ export function App() {
               </Routes>
             </Suspense>
           </main>
-          <LocalAgentPanel />
+          {showLocalAgent ? (
+            <Suspense fallback={null}>
+              <LocalAgentPanel />
+            </Suspense>
+          ) : null}
         </div>
-        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-        <ShortcutsModal />
-        <BrowserRuntime />
+        {settingsOpen ? (
+          <Suspense fallback={null}>
+            <SettingsModal open onClose={() => setSettingsOpen(false)} />
+          </Suspense>
+        ) : null}
+        {showShortcuts ? (
+          <Suspense fallback={null}>
+            <ShortcutsModal />
+          </Suspense>
+        ) : null}
+        <Suspense fallback={null}>
+          <BrowserRuntime />
+        </Suspense>
         <PromptSourceScheduler />
         <AnalyticsTracker />
         <ToastContainer />

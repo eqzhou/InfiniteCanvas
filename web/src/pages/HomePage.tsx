@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { parseBoardProject } from "@/lib/board-document";
 import { assertPlainProjectImportSafe } from "@/lib/plain-project-import";
-import { exportCompleteProjectBundle, importCompleteProjectBundle } from "@/services/film-bundle";
 import { loadFilmCapabilities } from "@/services/film-client";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
 import { exportNodeSelection } from "@/lib/node-export";
@@ -36,6 +35,9 @@ import { ProjectAudioRolesDialog } from "@/components/canvas/ProjectAudioRolesDi
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/core";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
+import { useLazyProjects } from "@/hooks/use-lazy-workspace";
 
 const NODE_TYPE_KEYS: Record<BoardNode["type"], MessageKey> = {
   text: "common.text",
@@ -53,7 +55,7 @@ export function HomePage() {
   const { locale, t } = useI18n();
   const navigate = useNavigate();
   const auth = useOptionalAuth();
-  const ready = useBoardStore((s) => s.ready);
+  const { ready, projectsState, projectsError, loadProjectsOnDemand } = useLazyProjects();
   const projects = useBoardStore((s) => s.projects);
   const activeProjectId = useBoardStore((s) => s.activeProjectId);
   const activeProject = useBoardStore((s) => s.projects.find((project) => project.id === s.activeProjectId) ?? null);
@@ -123,10 +125,10 @@ export function HomePage() {
   };
 
   useEffect(() => {
-    if (!ready) return;
+    if (projectsState !== "loaded") return;
     void directorCaptureStore.prune(captureOwnerScope, captureDirectory).catch(() => undefined);
     void directorModelStore.prune(captureOwnerScope, modelDirectory).catch(() => undefined);
-  }, [captureDirectorySignature, captureOwnerScope, modelDirectorySignature, ready]);
+  }, [captureDirectory, captureDirectorySignature, captureOwnerScope, modelDirectory, modelDirectorySignature, projectsState]);
 
   useEffect(() => {
     if (!ready) return;
@@ -218,12 +220,15 @@ export function HomePage() {
     [projects],
   );
 
-  if (!ready) {
+  if (!ready || projectsState === "idle" || projectsState === "loading") {
+    return <PageSkeleton />;
+  }
+  if (projectsState === "error" && !projects.length) {
     return (
-      <div className="ob-loading" role="status" aria-live="polite">
-        <span className="ob-loading-dot" aria-hidden />
-        <span>{t("workspace.loadingLocal")}</span>
-      </div>
+      <WorkspaceLoadError
+        message={t("workspace.loadFailed", { message: projectsError ?? "" })}
+        onRetry={() => loadProjectsOnDemand()}
+      />
     );
   }
 
@@ -338,6 +343,7 @@ export function HomePage() {
                     const project = exportActiveProject();
                     if (!project) return;
                     try {
+                      const { exportCompleteProjectBundle } = await import("@/services/film-bundle");
                       const blob = await exportCompleteProjectBundle(project);
                       const url = URL.createObjectURL(blob);
                       const anchor = document.createElement("a");
@@ -419,6 +425,7 @@ export function HomePage() {
                   importProject(data);
                 } else {
                   if (!tenantOwner) throw new Error(t("admin.permissionRequired"));
+                  const { importCompleteProjectBundle } = await import("@/services/film-bundle");
                   await importCompleteProjectBundle(file);
                 }
               } catch (error) {

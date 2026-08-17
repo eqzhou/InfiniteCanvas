@@ -16,15 +16,19 @@ import { downloadStorageKey, getBlob } from "@/services/storage";
 import {
   formatWorkbenchBytes,
   normalizeWorkbenchCategory,
+  workbenchCardMedia,
   workbenchReferenceKeys,
 } from "@/lib/workbench-history";
 import { useI18n } from "@/i18n/I18nProvider";
 import { ImagePreviewDialog } from "@/components/canvas/ImagePreviewDialog";
 import { createServerBlobDisplayUrls } from "@/services/server-storage";
+import { MediaView } from "@/components/common/MediaView";
 
 export type WorkbenchResultItem = {
   url?: string;
   storageKey?: string;
+  thumbnailUrl?: string;
+  thumbnailStorageKey?: string;
   mimeType?: string;
   width?: number;
   height?: number;
@@ -90,20 +94,47 @@ export function WorkbenchHistoryRow({
   const [previewOpen, setPreviewOpen] = useState(false);
 
   const activeItem = items[activeIndex] ?? items[0];
-  const [activeMediaUrl, setActiveMediaUrl] = useState(activeItem?.url ?? "");
+  const cardMedia = workbenchCardMedia(activeItem ?? {});
+  const [activeMediaUrl, setActiveMediaUrl] = useState(cardMedia.fullUrl);
+  const [activePreviewUrl, setActivePreviewUrl] = useState(cardMedia.cardUrl);
 
   useEffect(() => {
     let cancelled = false;
     let objectURL = "";
-    const fallback = activeItem?.url ?? "";
-    setActiveMediaUrl(fallback);
-    if (!activeItem?.storageKey) {
-      return;
-    }
+    const media = workbenchCardMedia(activeItem ?? {});
+    setActiveMediaUrl(media.fullUrl);
+    setActivePreviewUrl(media.cardUrl);
+    const cardKey = media.cardKey ?? (media.hasPreview ? undefined : media.fullKey);
+    if (!cardKey) return;
     void resolveHistoryMediaUrl(
-      activeItem.storageKey.startsWith("media:") ? "media" : "image",
-      activeItem.storageKey,
-      fallback,
+      cardKey.startsWith("media:") ? "media" : "image",
+      cardKey,
+      media.hasPreview ? media.cardUrl : media.fullUrl,
+    ).then((resolved) => {
+      if (cancelled) {
+        if (resolved.objectUrl) URL.revokeObjectURL(resolved.objectUrl);
+        return;
+      }
+      objectURL = resolved.objectUrl ?? "";
+      if (media.hasPreview) setActivePreviewUrl(resolved.url);
+      else setActiveMediaUrl(resolved.url);
+    });
+    return () => {
+      cancelled = true;
+      if (objectURL) URL.revokeObjectURL(objectURL);
+    };
+  }, [activeItem?.storageKey, activeItem?.thumbnailStorageKey, activeItem?.thumbnailUrl, activeItem?.url]);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    const fullKey = activeItem?.storageKey;
+    if (!fullKey) return;
+    let cancelled = false;
+    let objectURL = "";
+    void resolveHistoryMediaUrl(
+      fullKey.startsWith("media:") ? "media" : "image",
+      fullKey,
+      activeItem?.url ?? "",
     ).then((resolved) => {
       if (cancelled) {
         if (resolved.objectUrl) URL.revokeObjectURL(resolved.objectUrl);
@@ -116,7 +147,7 @@ export function WorkbenchHistoryRow({
       cancelled = true;
       if (objectURL) URL.revokeObjectURL(objectURL);
     };
-  }, [activeItem?.storageKey, activeItem?.url]);
+  }, [activeItem?.storageKey, activeItem?.url, previewOpen]);
 
   const statusLabel =
     job.status === "succeeded"
@@ -137,15 +168,25 @@ export function WorkbenchHistoryRow({
     >
       {/* Top Hero Thumbnail Media Container */}
       <div
-        className={`relative w-full overflow-hidden bg-[var(--ob-canvas)] cursor-pointer ${
+        className={`relative w-full overflow-hidden bg-[var(--ob-canvas)] ${
           job.kind === "video" ? "aspect-video" : "aspect-square"
         }`}
-        onClick={() => {
-          if (activeMediaUrl) setPreviewOpen(true);
-        }}
       >
-        {items.length > 0 && activeMediaUrl ? (
-          <MediaPreview url={activeMediaUrl} video={job.kind === "video"} />
+        {items.length > 0 && (activePreviewUrl || activeMediaUrl) ? (
+          <button
+            type="button"
+            className="h-full w-full"
+            aria-label={t("history.openPreview")}
+            onClick={() => setPreviewOpen(true)}
+          >
+            <MediaView
+              kind={job.kind === "video" ? "video" : "image"}
+              src={cardMedia.hasPreview ? undefined : activeMediaUrl}
+              previewSrc={cardMedia.hasPreview ? activePreviewUrl : undefined}
+              alt=""
+              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+            />
+          </button>
         ) : job.status === "running" || job.status === "queued" ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-center text-[var(--ob-accent)]">
             <Loader2 size={24} className="animate-spin" />
@@ -386,16 +427,6 @@ function StoredReferencePreview({ storageKey }: { storageKey: string }) {
     <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-[var(--ob-line)] text-[8px] text-[var(--ob-muted)]">
       {t("history.media")}
     </span>
-  );
-}
-
-function MediaPreview({ url, video }: { url: string; video: boolean }) {
-  const { t } = useI18n();
-  if (!url) return <div className="grid aspect-square place-items-center text-xs font-medium text-[var(--ob-muted)]">{t("history.unavailable")}</div>;
-  return video ? (
-    <video src={url} preload="metadata" className="h-full w-full object-cover pointer-events-none" />
-  ) : (
-    <img src={url} alt={t("history.result")} loading="lazy" decoding="async" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
   );
 }
 

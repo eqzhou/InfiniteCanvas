@@ -10,6 +10,7 @@ import {
   resolveMediaRefs,
 } from "@/services/ai-client";
 import { uploadMedia } from "@/services/storage";
+import { displayMediaNodeFields, uploadDisplayMedia } from "@/services/media-preview";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import { Maximize2, Send } from "lucide-react";
@@ -439,25 +440,29 @@ export function NodePromptBar({
         });
         let content = result.url;
         let storageKey: string | undefined;
+        let thumbnailStorageKey: string | undefined;
+        let thumbnailUrl: string | undefined;
         if (content && (content.startsWith("blob:") || content.startsWith("data:") || /^https?:/i.test(content))) {
           try {
-            const uploaded = await uploadMedia(content, "media");
+            const uploaded = await uploadDisplayMedia(content, "media", { previewKind: "video" });
             content = uploaded.url;
             storageKey = uploaded.storageKey;
+            thumbnailStorageKey = uploaded.thumbnailStorageKey;
+            thumbnailUrl = uploaded.thumbnailUrl;
           } catch {
             // keep remote url
           }
         }
         if (!node.metadata.content) {
           updateNode(node.id, {
-            metadata: { content, storageKey, status: "success", prompt: rawPrompt, cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined },
+            metadata: { content, storageKey, thumbnailStorageKey, thumbnailUrl, status: "success", prompt: rawPrompt, cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined },
           });
         } else {
           placeRight([
             createNode(
               "video",
               { x: node.position.x + node.width + 60, y: node.position.y },
-              { metadata: { content, storageKey, status: "success", prompt: rawPrompt, cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined } },
+              { metadata: { content, storageKey, thumbnailStorageKey, thumbnailUrl, status: "success", prompt: rawPrompt, cameraPrompt: node.metadata.cameraPrompt ? { ...node.metadata.cameraPrompt } : undefined } },
             ),
           ]);
           updateNode(node.id, { metadata: { status: "success" } });
@@ -728,7 +733,7 @@ async function placeImageResults(
   if (options.replaceExisting) {
     const url = urls[0];
     if (!url) throw new Error(options.missingResultMessage);
-    const uploaded = await uploadMedia(url, "image");
+    const uploaded = await uploadDisplayMedia(url, "image");
     updateActive((project) => ({
       ...project,
       nodes: project.nodes.map((candidate) => candidate.id === node.id ? {
@@ -736,12 +741,7 @@ async function placeImageResults(
         metadata: {
           ...candidate.metadata,
           ...generation,
-          content: uploaded.url,
-          storageKey: uploaded.storageKey,
-          naturalWidth: uploaded.width,
-          naturalHeight: uploaded.height,
-          bytes: uploaded.bytes,
-          mimeType: uploaded.mimeType,
+          ...displayMediaNodeFields(uploaded),
           status: "success",
           errorDetails: undefined,
           generationJobId: undefined,
@@ -754,7 +754,7 @@ async function placeImageResults(
 
   const created: BoardNode[] = [];
   for (const [i, url] of urls.entries()) {
-    const uploaded = await uploadMedia(url, "image");
+    const uploaded = await uploadDisplayMedia(url, "image");
     created.push(
       createNode(
         "image",
@@ -765,12 +765,7 @@ async function placeImageResults(
         {
           title: options.resultTitle(i + 1),
           metadata: {
-            content: uploaded.url,
-            storageKey: uploaded.storageKey,
-            naturalWidth: uploaded.width,
-            naturalHeight: uploaded.height,
-            bytes: uploaded.bytes,
-            mimeType: uploaded.mimeType,
+            ...displayMediaNodeFields(uploaded),
             status: "success",
             ...generation,
           },

@@ -445,9 +445,10 @@ export function collectGenerationStorageKeysFromJobs(
     for (const key of references) if (typeof key === "string") keys.add(key);
     const items = Array.isArray(job.result.items) ? job.result.items : [];
     for (const item of items) {
-      if (item && typeof item === "object" && typeof (item as { storageKey?: unknown }).storageKey === "string") {
-        keys.add((item as { storageKey: string }).storageKey);
-      }
+      if (!item || typeof item !== "object") continue;
+      const record = item as { storageKey?: unknown; thumbnailStorageKey?: unknown };
+      if (typeof record.storageKey === "string") keys.add(record.storageKey);
+      if (typeof record.thumbnailStorageKey === "string") keys.add(record.thumbnailStorageKey);
     }
   }
   return keys;

@@ -28,6 +28,7 @@ import {
   getBlob,
   uploadMedia,
 } from "@/services/storage";
+import { enrichResultItemsWithPreviews, uploadDisplayMedia } from "@/services/media-preview";
 import { completeGenerationActivity, getGenerationActivities } from "@/services/generation-activity";
 import { getRuntimeOwnerId } from "@/services/runtime-identity";
 import { uid } from "@/lib/id";
@@ -102,6 +103,9 @@ import {
 import { useI18n } from "@/i18n/I18nProvider";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { hasTenantOwnerCapability } from "@/services/admin";
+import { useLazyAssets, useLazyProjects } from "@/hooks/use-lazy-workspace";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	const { t } = useI18n();
@@ -115,6 +119,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	} : null;
   const config = useBoardStore((state) => state.config);
   const assets = useBoardStore((state) => state.assets);
+  const { ready, projectsState, projectsError, loadProjectsOnDemand } = useLazyProjects();
+  const { assetsState, assetsError, loadAssetsOnDemand } = useLazyAssets();
   const project = useBoardStore((state) => state.getActive());
   const addNode = useBoardStore((state) => state.addNode);
   const persistNow = useBoardStore((state) => state.persistNow);
@@ -826,7 +832,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				if (completed.status === "failed") throw new Error(completed.error || t("creative.generationFailed", { kind: t(kind === "image" ? "common.image" : "common.video") }));
 			if (completed.status === "cancelled" || completed.status === "deleted") return;
 			const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
-			await adoptAssetResult(completed, completedItems);
+			const previewItems = await enrichResultItemsWithPreviews(completedItems);
+			if (previewItems.some((item, index) => item.thumbnailStorageKey !== completedItems[index]?.thumbnailStorageKey)) {
+				await updateGenerationJob(completed.id, { result: { ...completed.result, items: previewItems } });
+			}
+			await adoptAssetResult(completed, previewItems);
 			await refresh();
 			return;
 		}
@@ -859,10 +869,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
           deferActivitySuccess: true,
         });
         for (const url of urls) {
-          const media = await uploadMedia(url, "image");
+          const media = await uploadDisplayMedia(url, "image");
           items.push({
             url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
             bytes: media.bytes, mimeType: media.mimeType,
+            thumbnailUrl: media.thumbnailUrl, thumbnailStorageKey: media.thumbnailStorageKey,
           });
         }
       } else {
@@ -893,10 +904,11 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         });
         if (!output.url) throw new Error(t("creative.videoUrlMissing"));
         try {
-          const media = await uploadMedia(output.url, "media");
+          const media = await uploadDisplayMedia(output.url, "media", { previewKind: "video" });
           items.push({
             url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
             bytes: media.bytes, mimeType: media.mimeType,
+            thumbnailUrl: media.thumbnailUrl, thumbnailStorageKey: media.thumbnailStorageKey,
           });
         } catch {
           items.push({ url: output.url, mimeType: "video/mp4" });
@@ -946,8 +958,21 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		activeServerJobIdsRef.current.clear();
 	};
 
+  if (!ready || projectsState === "idle" || projectsState === "loading") {
+    return <PageSkeleton />;
+  }
+  if (projectsState === "error") {
+    return (
+      <WorkspaceLoadError
+        message={t("workspace.loadFailed", { message: projectsError ?? "" })}
+        onRetry={() => { void loadProjectsOnDemand(); }}
+      />
+    );
+  }
+
   const insert = async (item: WorkbenchResultItem, job: GenerationJob) => {
-    const viewport = project?.viewport ?? { x: 0, y: 0, k: 1 };
+    if (!project) throw new Error(t("assets.openCanvasFirst"));
+    const viewport = project.viewport;
     let content = item.url;
     if (item.storageKey) {
       const blob = await getBlob(item.storageKey.startsWith("media:") ? "media" : "image", item.storageKey);
@@ -961,6 +986,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         mimeType: item.mimeType,
         naturalWidth: item.width,
         naturalHeight: item.height,
+        thumbnailStorageKey: item.thumbnailStorageKey,
+        thumbnailUrl: item.thumbnailUrl,
         prompt: job.prompt,
         model: job.model,
         status: "success",
@@ -971,6 +998,14 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--ob-canvas)]">
+      {assetsState === "error" ? (
+        <div role="alert" className="ob-banner rounded-none" data-tone="warning">
+          <span className="min-w-0 flex-1">{t("workspace.loadFailed", { message: assetsError ?? "" })}</span>
+          <button type="button" className="ob-btn" onClick={() => { void loadAssetsOnDemand(); }}>
+            {t("workspace.retry")}
+          </button>
+        </div>
+      ) : null}
       <header className="flex items-center gap-3 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 shadow-[var(--ob-elev-1)] backdrop-blur-md">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-[var(--ob-accent-soft)] to-[var(--ob-canvas)] text-[var(--ob-accent)] ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_20%,transparent)] shadow-xs shrink-0">

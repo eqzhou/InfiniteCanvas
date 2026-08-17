@@ -4,6 +4,8 @@ import { Film, Image, Music2, Save, Scissors, ScrollText } from "lucide-react";
 import { filmEditorKey } from "@/lib/film-drafts";
 import { useI18n } from "@/i18n/I18nProvider";
 import { resolveObjectUrl } from "@/services/storage";
+import { createServerBlobDisplayUrls } from "@/services/server-storage";
+import { MediaView } from "@/components/common/MediaView";
 import type { FilmStatus } from "@/services/film-client";
 import type { FilmDialogue, FilmDocument, FilmShot, FilmTimelineClip, FilmTimelineTrack } from "@/types/film";
 import { WorkbenchSection } from "./WorkbenchSection";
@@ -52,13 +54,17 @@ function StoredMedia({ active, kind, storageKey, label }: { active: boolean; kin
   useEffect(() => {
     let mounted = true;
     if (!active || !storageKey) { setUrl(undefined); return; }
-    void resolveObjectUrl(kind === "image" ? "image" : "media", storageKey).then((value) => { if (mounted) setUrl(value); }).catch(() => { if (mounted) setUrl(undefined); });
+    void createServerBlobDisplayUrls([storageKey]).catch(() => new Map<string, string>()).then((urls) => {
+      const minted = urls.get(storageKey);
+      if (minted) return minted;
+      return resolveObjectUrl(kind === "image" ? "image" : "media", storageKey);
+    }).then((value) => { if (mounted) setUrl(value); }).catch(() => { if (mounted) setUrl(undefined); });
     return () => { mounted = false; };
   }, [active, kind, storageKey]);
   if (!storageKey) return <div className="grid min-h-32 place-items-center rounded-lg border border-dashed border-[var(--ob-line)] text-xs text-[var(--ob-muted)]">{t("film.common.pendingGeneration")}</div>;
-  if (kind === "image" && url) return <img src={url} alt={label} className="aspect-video w-full rounded-lg object-cover" />;
+  if (kind === "image" && url) return <MediaView kind="image" src={url} alt={label} className="aspect-video w-full rounded-lg object-cover" />;
   if (kind === "audio" && url) return <audio controls preload="metadata" aria-label={label} className="w-full" src={url} />;
-  if (kind === "video" && url) return <video controls preload="metadata" aria-label={label} className="aspect-video w-full rounded-lg bg-black object-contain" src={url} />;
+  if (kind === "video" && url) return <MediaView kind="video" src={url} alt={label} fit="contain" controls className="aspect-video w-full rounded-lg bg-black object-contain" />;
   return <div className="grid min-h-32 place-items-center rounded-lg border border-[var(--ob-line)] p-3 text-center text-xs text-[var(--ob-muted)]"><span>{label}</span><code className="mt-1 break-all">{storageKey}</code></div>;
 }
 

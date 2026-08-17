@@ -147,6 +147,7 @@ function kindForKey(storageKey: string): MediaKind {
 function collectProjectKeys(project: BoardProject, keys: Set<string>): void {
   for (const node of project.nodes) {
     if (node.metadata.storageKey) keys.add(node.metadata.storageKey);
+    if (node.metadata.thumbnailStorageKey) keys.add(node.metadata.thumbnailStorageKey);
     for (const key of node.metadata.referenceStorageKeys ?? []) keys.add(key);
   }
   for (const session of project.chatSessions) {
@@ -162,7 +163,10 @@ function collectProjectKeys(project: BoardProject, keys: Set<string>): void {
 function collectKeys(snapshot: WorkspaceSnapshot): string[] {
   const keys = new Set<string>();
   for (const project of snapshot.projects) collectProjectKeys(project, keys);
-  for (const asset of snapshot.assets) if (asset.storageKey) keys.add(asset.storageKey);
+  for (const asset of snapshot.assets) {
+    if (asset.storageKey) keys.add(asset.storageKey);
+    if (asset.thumbnailStorageKey) keys.add(asset.thumbnailStorageKey);
+  }
   for (const key of collectGenerationStorageKeysFromJobs(snapshot.generationJobs)) keys.add(key);
   for (const film of snapshot.films ?? []) {
     for (const key of collectFilmStorageKeys(film)) keys.add(key);
@@ -182,6 +186,9 @@ function canonicalize(snapshot: WorkspaceSnapshot, mediaByKey: Map<string, Bundl
   for (const project of copy.projects) {
     for (const node of project.nodes) {
       if (node.metadata.storageKey) node.metadata.content = placeholder(node.metadata.storageKey, mediaByKey);
+      if (node.metadata.thumbnailStorageKey) {
+        node.metadata.thumbnailUrl = placeholder(node.metadata.thumbnailStorageKey, mediaByKey);
+      }
     }
     for (const session of project.chatSessions) {
       for (const message of session.messages) {
@@ -196,15 +203,19 @@ function canonicalize(snapshot: WorkspaceSnapshot, mediaByKey: Map<string, Bundl
   }
   for (const asset of copy.assets) {
     if (asset.storageKey) asset.coverUrl = placeholder(asset.storageKey, mediaByKey);
+    if (asset.thumbnailStorageKey) asset.thumbnailUrl = placeholder(asset.thumbnailStorageKey, mediaByKey);
   }
   for (const job of copy.generationJobs) {
     const items = job.result.items;
     if (!Array.isArray(items)) continue;
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
-      const result = item as { storageKey?: unknown; url?: unknown };
+      const result = item as { storageKey?: unknown; url?: unknown; thumbnailStorageKey?: unknown; thumbnailUrl?: unknown };
       if (typeof result.storageKey === "string") {
         result.url = placeholder(result.storageKey, mediaByKey);
+      }
+      if (typeof result.thumbnailStorageKey === "string") {
+        result.thumbnailUrl = placeholder(result.thumbnailStorageKey, mediaByKey);
       }
     }
   }
@@ -311,7 +322,7 @@ function parseAsset(value: unknown, index: number): AssetItem {
   boundedString(input.createdAt, `Workspace asset ${index} createdAt`, 64);
   boundedString(input.updatedAt, `Workspace asset ${index} updatedAt`, 64);
   for (const [key, max] of [["notes", 100_000], ["source", 1_000], ["content", 1_000_000],
-    ["coverUrl", 2_000], ["storageKey", 512], ["mimeType", 256]] as const) {
+    ["coverUrl", 2_000], ["storageKey", 512], ["thumbnailStorageKey", 512], ["thumbnailUrl", 2_000], ["mimeType", 256]] as const) {
     if (input[key] !== undefined) boundedString(input[key], `Workspace asset ${index} ${key}`, max);
   }
   return structuredClone(input) as AssetItem;
@@ -449,6 +460,11 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, StoredWork
           node.metadata.mimeType = replacement.mimeType;
         }
       }
+      const thumbnail = replace(node.metadata.thumbnailStorageKey);
+      if (thumbnail) {
+        node.metadata.thumbnailStorageKey = thumbnail.storageKey;
+        node.metadata.thumbnailUrl = thumbnail.url;
+      }
       node.metadata.referenceStorageKeys = node.metadata.referenceStorageKeys?.map((key) =>
         replace(key)!.storageKey);
     }
@@ -476,6 +492,11 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, StoredWork
     if (replacement) {
       asset.storageKey = replacement.storageKey;
       asset.coverUrl = replacement.url;
+    }
+    const thumbnail = replace(asset.thumbnailStorageKey);
+    if (thumbnail) {
+      asset.thumbnailStorageKey = thumbnail.storageKey;
+      asset.thumbnailUrl = thumbnail.url;
     }
   }
   for (const job of copy.generationJobs) {
@@ -509,11 +530,17 @@ function remap(snapshot: WorkspaceSnapshot, replacements: Map<string, StoredWork
     if (!Array.isArray(items)) continue;
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
-      const result = item as { storageKey?: unknown; url?: unknown };
-      if (typeof result.storageKey !== "string") continue;
-      const replacement = replace(result.storageKey)!;
-      result.storageKey = replacement.storageKey;
-      result.url = replacement.url;
+      const result = item as { storageKey?: unknown; url?: unknown; thumbnailStorageKey?: unknown; thumbnailUrl?: unknown };
+      if (typeof result.storageKey === "string") {
+        const replacement = replace(result.storageKey)!;
+        result.storageKey = replacement.storageKey;
+        result.url = replacement.url;
+      }
+      if (typeof result.thumbnailStorageKey === "string") {
+        const thumbnail = replace(result.thumbnailStorageKey)!;
+        result.thumbnailStorageKey = thumbnail.storageKey;
+        result.thumbnailUrl = thumbnail.url;
+      }
     }
   }
   copy.films = (copy.films ?? []).map((film) => remapFilmStorageKeys(film, (key) => replace(key)!.storageKey));

@@ -3,12 +3,17 @@ import { useBoardStore } from "@/stores/use-board-store";
 import type { AssetItem } from "@/types/board";
 import { nowIso, uid } from "@/lib/id";
 import { writeTextWithFallback } from "@/lib/clipboard";
-import { downloadStorageKey, uploadMedia } from "@/services/storage";
+import { downloadStorageKey } from "@/services/storage";
+import { uploadDisplayMedia } from "@/services/media-preview";
+import { MediaView } from "@/components/common/MediaView";
 import { filenameForMimeType } from "@/lib/download-filename";
 import { AssetEditorDialog, type AssetEditorValues } from "@/components/assets/AssetEditorDialog";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { deleteAssetBlobIfUnreferenced } from "@/services/asset-lifecycle";
 import { useI18n } from "@/i18n/I18nProvider";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
+import { useLazyAssets } from "@/hooks/use-lazy-workspace";
 import {
   Copy,
   Download,
@@ -26,6 +31,7 @@ import {
 export function AssetsPage() {
   const { t } = useI18n();
   const assets = useBoardStore((s) => s.assets);
+  const { assetsState, assetsError, loadAssetsOnDemand } = useLazyAssets();
   const setAssets = useBoardStore((s) => s.setAssets);
   const flushAssets = useBoardStore((s) => s.flushAssets);
   const insertAsset = useBoardStore((s) => s.insertAsset);
@@ -79,8 +85,9 @@ export function AssetsPage() {
   const addMedia = async (file: File, assetKind: "image" | "video" | "audio") => {
     try {
       setError(null);
-      const uploaded = await uploadMedia(file, assetKind === "image" ? "image" : "media", {
+      const uploaded = await uploadDisplayMedia(file, assetKind === "image" ? "image" : "media", {
         validateLargeImage: assetKind === "image",
+        previewKind: assetKind === "audio" ? undefined : assetKind,
       });
       const t = nowIso();
       const item: AssetItem = {
@@ -89,6 +96,8 @@ export function AssetsPage() {
         title: file.name,
         coverUrl: uploaded.url,
         storageKey: uploaded.storageKey,
+        thumbnailStorageKey: uploaded.thumbnailStorageKey,
+        thumbnailUrl: uploaded.thumbnailUrl,
         mimeType: uploaded.mimeType,
         tags: [],
         createdAt: t,
@@ -130,8 +139,9 @@ export function AssetsPage() {
         return;
       }
       const replacement = values.replacement
-        ? await uploadMedia(values.replacement, editing.kind === "image" ? "image" : "media", {
+        ? await uploadDisplayMedia(values.replacement, editing.kind === "image" ? "image" : "media", {
             validateLargeImage: editing.kind === "image",
+            previewKind: editing.kind === "audio" ? undefined : editing.kind === "video" ? "video" : editing.kind === "image" ? "image" : undefined,
           })
         : null;
       const latestAssets = useBoardStore.getState().assets;
@@ -149,6 +159,8 @@ export function AssetsPage() {
                 ? {
                     coverUrl: replacement.url,
                     storageKey: replacement.storageKey,
+                    thumbnailStorageKey: replacement.thumbnailStorageKey,
+                    thumbnailUrl: replacement.thumbnailUrl,
                     mimeType: replacement.mimeType,
                   }
                 : {}),
@@ -159,6 +171,7 @@ export function AssetsPage() {
       await flushAssets();
       if (replacement) {
         await removeOrphanedBlob(editing.storageKey, nextAssets);
+        await removeOrphanedBlob(editing.thumbnailStorageKey, nextAssets);
       }
       setEditing(null);
     } catch (cause) {
@@ -176,6 +189,7 @@ export function AssetsPage() {
       setAssets(nextAssets);
       await flushAssets();
       await removeOrphanedBlob(a.storageKey, nextAssets);
+      await removeOrphanedBlob(a.thumbnailStorageKey, nextAssets);
       setPage((current) => {
         const total = Math.max(1, Math.ceil(nextAssets.length / pageSize));
         return Math.min(current, total);
@@ -187,6 +201,16 @@ export function AssetsPage() {
       setDeletingId(null);
     }
   };
+
+  if (assetsState === "error" && !assets.length) {
+    return (
+      <WorkspaceLoadError
+        message={t("workspace.loadFailed", { message: assetsError ?? error ?? "" })}
+        onRetry={() => { setError(null); void loadAssetsOnDemand().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }}
+      />
+    );
+  }
+  if (assetsState !== "loaded" && !assets.length) return <PageSkeleton />;
 
   return (
     <div className="ob-page ob-view-fade-in pb-12">
@@ -285,21 +309,24 @@ export function AssetsPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {pageItems.map((a) => (
           <article key={a.id} className="ob-card group flex flex-col overflow-hidden p-4 transition-all hover:shadow-[var(--ob-elev-2)]">
-            {a.kind === "image" && a.coverUrl ? (
+            {a.kind === "image" && (a.thumbnailUrl || a.coverUrl) ? (
               <div className="mb-3 overflow-hidden rounded-xl bg-[var(--ob-surface-2)]">
-                <img
+                <MediaView
+                  kind="image"
                   src={a.coverUrl}
+                  previewSrc={a.thumbnailUrl}
                   alt={a.title}
                   className="h-40 w-full object-cover transition-transform duration-300 group-hover:scale-105"
                 />
               </div>
             ) : null}
-            {a.kind === "video" && a.coverUrl ? (
-              <video
+            {a.kind === "video" && (a.thumbnailUrl || a.coverUrl) ? (
+              <MediaView
+                kind="video"
                 src={a.coverUrl}
-                aria-label={a.title}
-                muted
-                preload="metadata"
+                previewSrc={a.thumbnailUrl}
+                alt={a.title}
+                fit="contain"
                 className="mb-3 h-40 w-full rounded-xl bg-black object-contain"
               />
             ) : null}

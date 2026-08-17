@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   collectBoardContentStorageKeys,
+  collectStorageKeys,
   hasConfigSecrets,
   MEDIA_UPLOAD_LIMITS,
   mergeConfigSecrets,
@@ -13,11 +14,13 @@ import {
 } from "./storage";
 import type { AppConfig } from "@/types/board";
 import { createEmptySession, createNode } from "@/lib/defaults";
+import { loadServerConfigBundle, resetServerStateVersions, SecretAuthRequiredError } from "./server-storage";
 
 const originalFetch = globalThis.fetch;
 const testCredential = (label: string) => `${label}-test-credential`;
 
 afterEach(() => {
+  resetServerStateVersions();
   globalThis.fetch = originalFetch;
 });
 
@@ -131,6 +134,45 @@ describe("retained board media", () => {
       "image:chat",
       "image:panorama-old",
       "image:reference",
+    ]);
+  });
+
+  test("collects preview thumbnails with the durable media they belong to", () => {
+    const node = createNode("video", { x: 0, y: 0 }, { metadata: {
+      storageKey: "media:clip",
+      thumbnailStorageKey: "image:clip-poster",
+    } });
+    const session = createEmptySession("History");
+
+    expect([...collectBoardContentStorageKeys([node], [session])].sort()).toEqual([
+      "image:clip-poster",
+      "media:clip",
+    ]);
+    expect([...collectStorageKeys([{
+      id: "board",
+      title: "board",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+      nodes: [node],
+      edges: [],
+      chatSessions: [session],
+      activeChatId: session.id,
+      backgroundMode: "dots" as const,
+      viewport: { x: 0, y: 0, k: 1 },
+    }], [{
+      id: "asset-1",
+      kind: "image",
+      title: "asset",
+      tags: [],
+      storageKey: "image:asset",
+      thumbnailStorageKey: "image:asset-thumb",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+    }])].sort()).toEqual([
+      "image:asset",
+      "image:asset-thumb",
+      "image:clip-poster",
+      "media:clip",
     ]);
   });
 
@@ -300,8 +342,18 @@ describe("guest capability model for config secrets", () => {
   test("empty secret bag 401 does not block non-secret config persistence contract", async () => {
     // Product rule: guests may save prompt-source config. Secrets require login.
     // Empty bags + 401 must soft-fail; real credentials must fail closed.
-    globalThis.fetch = mock(async () => new Response("login required", { status: 401 })) as typeof fetch;
-    const { SecretAuthRequiredError, saveServerSecrets } = await import("./server-storage");
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "GET" && String(input).includes("config")) {
+        return Response.json({
+          config: { channels: [] },
+          secrets: { apiKeys: {}, webdavPass: "" },
+        }, { headers: { ETag: '"cfg-1"' } });
+      }
+      return new Response("login required", { status: 401 });
+    }) as typeof fetch;
+    const { saveServerSecrets } = await import("./server-storage");
+    await loadServerConfigBundle();
     await expect(saveServerSecrets({ apiKeys: {}, webdavPass: "" })).rejects.toBeInstanceOf(SecretAuthRequiredError);
     await expect(saveServerSecrets({
       apiKeys: { main: { image: "sk-test" } },

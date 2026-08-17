@@ -120,6 +120,7 @@ const canvasNodeMessages = {
   "canvasNodes.generationFailed": ["生成失败", "Generation failed"],
   "canvasNodes.uploadImage": ["上传图片", "Upload image"],
   "canvasNodes.emptyVideo": ["空视频节点", "Empty video node"],
+  "canvasNodes.playVideo": ["播放视频", "Play video"],
   "canvasNodes.generateAudio": ["生成声音", "Generate audio"],
   "canvasNodes.watermark": ["水印", "Watermark"],
   "canvasNodes.referenceMode": ["图片参考模式", "Image reference mode"],

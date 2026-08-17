@@ -165,6 +165,10 @@ export type NodeMetadata = {
   naturalHeight?: number;
   freeResize?: boolean;
   storageKey?: string;
+  /** Downscaled still used by lists and video posters. */
+  thumbnailStorageKey?: string;
+  /** Session display URL for thumbnailStorageKey; stripped on persist. */
+  thumbnailUrl?: string;
   mimeType?: string;
   bytes?: number;
   inputOrder?: string[];
@@ -319,6 +323,8 @@ export type AssetItem = {
   content?: string;
   coverUrl?: string;
   storageKey?: string;
+  thumbnailStorageKey?: string;
+  thumbnailUrl?: string;
   mimeType?: string;
   createdAt: string;
   updatedAt: string;

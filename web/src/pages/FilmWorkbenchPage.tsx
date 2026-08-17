@@ -18,6 +18,9 @@ import { estimateCredits, type CreditEstimate } from "@/services/auth-session";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useBoardStore } from "@/stores/use-board-store";
 import { useI18n } from "@/i18n/I18nProvider";
+import { PageSkeleton } from "@/components/layout/PageSkeleton";
+import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
+import { useLazyProjects } from "@/hooks/use-lazy-workspace";
 import type { MessageKey } from "@/i18n/core";
 import {
   applyFilmAICandidate,
@@ -140,6 +143,7 @@ export function FilmWorkbenchPage() {
   const { t } = useI18n();
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
+  const { projectsState, projectsError, loadProjectsOnDemand } = useLazyProjects();
   const project = useBoardStore((state) => state.projects.find((candidate) => candidate.id === projectId));
   const config = useBoardStore((state) => state.config);
   const sharedChannels = useSharedChannels();
@@ -229,10 +233,11 @@ export function FilmWorkbenchPage() {
   };
 
   useEffect(() => {
+    if (projectsState !== "loaded" || project?.projectKind !== "film") return;
     let active = true; setBusy(t("film.loading"));
     loadFilmStatus(projectId).catch((cause) => cause instanceof FilmAPIError && cause.status === 404 ? createFilmProduction(projectId) : Promise.reject(cause)).then((next) => { if (active) applyStatus(next, {}); }).catch((cause) => { if (active) setError(friendlyError(cause, t)); }).finally(() => { if (active) setBusy(null); });
     return () => { active = false; };
-  }, [projectId]);
+  }, [project?.projectKind, projectId, projectsState, t]);
 
   useEffect(() => {
     const importStatus = status?.document.source.importStatus;
@@ -284,6 +289,15 @@ export function FilmWorkbenchPage() {
     };
   }, [manuscriptDirty, timelineDirty]);
 
+  if (projectsState === "error") {
+    return (
+      <WorkspaceLoadError
+        message={t("workspace.loadFailed", { message: projectsError ?? "" })}
+        onRetry={() => { void loadProjectsOnDemand(); }}
+      />
+    );
+  }
+  if (projectsState !== "loaded") return <PageSkeleton />;
   if (!project || project.projectKind !== "film") return <Navigate to="/" replace />;
 
   const persistProjection = async (nextStatus: FilmStatus) => {

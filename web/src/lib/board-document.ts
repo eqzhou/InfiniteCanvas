@@ -110,6 +110,9 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   optionalString(input.size, `${path}.size`, 100);
   optionalString(input.quality, `${path}.quality`, 100);
   optionalString(input.storageKey, `${path}.storageKey`, 512);
+  optionalString(input.thumbnailStorageKey, `${path}.thumbnailStorageKey`, 512);
+  optionalString(input.thumbnailUrl, `${path}.thumbnailUrl`, 20_000_000);
+  if (typeof input.thumbnailUrl === "string") mediaURL(input.thumbnailUrl, `${path}.thumbnailUrl`);
   optionalString(input.voice, `${path}.voice`, 100);
   optionalString(input.resolvedVoice, `${path}.resolvedVoice`, 100);
   if (input.audioRoleId !== undefined) id(input.audioRoleId, `${path}.audioRoleId`);

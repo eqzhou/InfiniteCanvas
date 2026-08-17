@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { TenantConfigAdminRequiredError } from "@/services/server-storage";
-import { applyGenerationDefaultsToNode, removeDirectorShotPlan, saveWorkspaceReplacementConfig, useBoardStore } from "./use-board-store";
+import { applyGenerationDefaultsToNode, adoptCommittedWorkspace, removeDirectorShotPlan, saveWorkspaceReplacementConfig, useBoardStore } from "./use-board-store";
 import { DEFAULT_GENERATION_DEFAULTS } from "@/lib/generation-defaults";
 import { createNode, createProject } from "@/lib/defaults";
 
@@ -187,5 +187,47 @@ describe("undo scope for the viewport", () => {
 		expect(useBoardStore.getState().projects[0]!.backgroundMode).toBe("grid");
 		useBoardStore.getState().undo();
 		expect(useBoardStore.getState().projects[0]!.nodes.some((n) => n.id === id)).toBe(false);
+	});
+});
+
+describe("lazy workspace writes", () => {
+	test("does not create or import a project before the catalog is loaded", () => {
+		useBoardStore.setState({ projects: [], activeProjectId: null, projectsState: "idle" });
+		expect(() => useBoardStore.getState().createProject("too soon")).toThrow("项目尚未加载完成");
+		expect(() => useBoardStore.getState().importProject(createProject("imported"))).toThrow("项目尚未加载完成");
+	});
+
+	test("does not keep an in-memory catalog when persist is refused", () => {
+		useBoardStore.setState({ assets: [], assetsState: "idle", prompts: [], promptsState: "idle" });
+		useBoardStore.getState().setAssets([{
+			id: "asset-1", kind: "text", title: "ghost", tags: [], createdAt: "t", updatedAt: "t",
+		}]);
+		useBoardStore.getState().setPrompts([{ id: "p1", title: "ghost", body: "x", tags: [], source: "local" }]);
+		expect(useBoardStore.getState().assets).toEqual([]);
+		expect(useBoardStore.getState().prompts).toEqual([]);
+	});
+
+	test("marks restored workspace catalogs as loaded", () => {
+		useBoardStore.setState({
+			projectsState: "idle",
+			assetsState: "idle",
+			promptsState: "idle",
+			projects: [],
+			assets: [],
+			prompts: [],
+		});
+		const project = createProject("restored");
+		adoptCommittedWorkspace({
+			projects: [project],
+			assets: [],
+			prompts: [],
+			config: useBoardStore.getState().config,
+			generationJobs: [],
+			workflowTemplates: [],
+		});
+		expect(useBoardStore.getState().projectsState).toBe("loaded");
+		expect(useBoardStore.getState().assetsState).toBe("loaded");
+		expect(useBoardStore.getState().promptsState).toBe("loaded");
+		expect(useBoardStore.getState().projects[0]?.id).toBe(project.id);
 	});
 });
