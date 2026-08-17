@@ -51,7 +51,11 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const notices = useMemo(() => ({ setError, setFeedback }), []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPolicyLoad("loading");
+      setTenantPolicy(DEFAULT_TENANT_POLICY);
+      return;
+    }
     let cancelled = false;
     setPolicyLoad("loading");
     void getTenantPolicy()

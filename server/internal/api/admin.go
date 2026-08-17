@@ -124,7 +124,7 @@ func (s *Server) getAdminChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw, err := s.store.GetState(r.Context(), tenantIDFrom(r), adminChannelsStateKey)
-	if errors.Is(err, store.ErrNotFound) || len(raw) == 0 {
+	if errors.Is(err, store.ErrNotFound) {
 		w.Header().Set(adminRevisionHeader, adminConfigRevision([]adminChannelPublic{}))
 		writeJSON(w, []adminChannelPublic{})
 		return
@@ -133,17 +133,25 @@ func (s *Server) getAdminChannels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load admin channels", http.StatusInternalServerError)
 		return
 	}
+	if len(raw) == 0 {
+		w.Header().Set(adminRevisionHeader, adminConfigRevision([]adminChannelPublic{}))
+		writeJSON(w, []adminChannelPublic{})
+		return
+	}
 	var channels []adminChannelPublic
 	if err := json.Unmarshal(raw, &channels); err != nil {
-		// Tolerate legacy shapes by returning empty rather than 500.
-		writeJSON(w, []adminChannelPublic{})
+		http.Error(w, "invalid shared channel configuration", http.StatusInternalServerError)
 		return
 	}
 	if channels == nil {
 		channels = []adminChannelPublic{}
 	}
 	w.Header().Set(adminRevisionHeader, adminConfigRevision(channels))
-	configured, _ := s.adminChannelSecretPresence(r.Context(), tenantIDFrom(r))
+	configured, err := s.adminChannelSecretPresence(r.Context(), tenantIDFrom(r))
+	if err != nil {
+		http.Error(w, "failed to load admin channels", http.StatusInternalServerError)
+		return
+	}
 	for index := range channels {
 		channels[index].SecretConfigured = configured[channels[index].ID]
 	}

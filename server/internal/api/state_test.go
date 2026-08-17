@@ -32,6 +32,7 @@ type memoryStore struct {
 	releases                 map[string]struct{}
 	reservations             map[string]struct{}
 	compareAndSwapStateErr   error
+	getStateErr              error
 	compareAndSwapStatesHook func(tenantID string, mutations []store.StateMutation)
 	generationJobCreateErr   error
 	generationJobPutErr      error
@@ -131,6 +132,9 @@ func (m *memoryStore) DeleteProject(_ context.Context, tenantID, id string) erro
 func (m *memoryStore) GetState(_ context.Context, tenantID, key string) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.getStateErr != nil {
+		return nil, m.getStateErr
+	}
 	value, ok := m.state[tenantKey(tenantID, key)]
 	if !ok {
 		return nil, store.ErrNotFound

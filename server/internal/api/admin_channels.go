@@ -665,10 +665,16 @@ func (s *Server) decryptAdminChannelSecretsRaw(tenantID string, channels []admin
 		return map[string]string{}, nil
 	}
 	var envelope adminChannelSecretsEnvelope
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Version != 2 || len(envelope.Entries) > 100 {
+	if json.Unmarshal(raw, &envelope) != nil {
+		return nil, errors.New("invalid shared channel secrets")
+	}
+	if envelope.Version == 1 {
 		// Version 1 was only tenant-bound. It cannot safely survive a channel
 		// destination or lifecycle change, so require administrators to re-enter it.
 		return map[string]string{}, nil
+	}
+	if envelope.Version != 2 || len(envelope.Entries) > 100 {
+		return nil, errors.New("invalid shared channel secrets")
 	}
 	if s.secrets == nil {
 		return nil, errors.New("encrypted secret storage unavailable")
@@ -976,7 +982,10 @@ func (s *Server) fetchAdminChannelModels(ctx context.Context, tenantID, id strin
 		return nil, errors.New("model discovery is unsupported for this protocol")
 	}
 	secrets, err := s.decryptAdminChannelSecrets(ctx, tenantID)
-	if err != nil || strings.TrimSpace(secrets[id]) == "" {
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(secrets[id]) == "" {
 		return nil, errors.New("channel secret is not configured")
 	}
 	return s.fetchChannelModels(ctx, channel, secrets[id])
@@ -1044,7 +1053,10 @@ func (s *Server) resolveAdminChannelPreview(ctx context.Context, tenantID string
 		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
 	}
 	secrets, err := s.decryptAdminChannelSecrets(ctx, tenantID)
-	if err != nil || strings.TrimSpace(secrets[channel.ID]) == "" {
+	if err != nil {
+		return adminChannelPublic{}, "", err
+	}
+	if strings.TrimSpace(secrets[channel.ID]) == "" {
 		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
 	}
 	return channel, secrets[channel.ID], nil
@@ -1216,7 +1228,9 @@ func (s *Server) checkChannelConnection(ctx context.Context, channel adminChanne
 	if readErr != nil || len(body) > maxAdminModelsResponseBytes {
 		return 0, errors.New("channel response exceeds limits")
 	}
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode >= 500 || response.StatusCode < 200 && response.StatusCode != http.StatusBadRequest && response.StatusCode != http.StatusNotFound {
+	status := response.StatusCode
+	ok := (status >= 200 && status < 300) || status == http.StatusBadRequest || status == http.StatusNotFound
+	if !ok {
 		return 0, errors.New("channel returned an unsuccessful status")
 	}
 	return 0, nil

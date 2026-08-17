@@ -5,6 +5,7 @@ import {
   adminChannelCanPreviewModels,
   adminChannelSecretBindingIsCurrent,
   applySavedAdminChannel,
+  adminChannelIsDirty,
   buildAdminChannelModelDiff,
   mergeSavedAdminChannels,
   nextSelectedChannelId,
@@ -34,6 +35,20 @@ describe("admin channel persistence state", () => {
       ...draft, secretConfigured: true,
     })).toBe(false);
     expect(adminChannelCanPreviewModels({ ...draft, protocol: "gemini" }, "sk-preview")).toBe(false);
+  });
+
+  test("treats never-saved drafts and local edits as dirty", () => {
+    const saved = { ...channel("a", true), name: "Saved", secretBindingId: "bind-a" };
+    expect(adminChannelIsDirty(saved, undefined)).toBe(true);
+    expect(adminChannelIsDirty(saved, saved)).toBe(false);
+    expect(adminChannelIsDirty({ ...saved, name: "Renamed" }, saved)).toBe(true);
+    expect(adminChannelIsDirty(saved, saved, "sk-new")).toBe(true);
+    expect(adminChannelIsDirty({ ...saved, mediaCapabilities: [{
+      model: "gpt-image-1", kind: "image", modes: ["text_to_image"], sizes: [], durations: [], maxReferences: 0,
+    }] }, saved)).toBe(true);
+    expect(adminChannelIsDirty({ ...saved, tenantIds: ["tenant-b"], publishToAll: false }, {
+      ...saved, tenantIds: ["tenant-a"], publishToAll: false,
+    })).toBe(true);
   });
 
   test("applies one saved channel without replacing sibling drafts", () => {

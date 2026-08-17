@@ -600,9 +600,8 @@ export async function deleteAdminStoragePoolProvider(id: string, revision: strin
 
 export async function listAdminChannels(): Promise<{ items: AdminChannel[]; revision: string }> {
   const response = await authFetch("tenant/channels");
-  const revision = readAdminRevision(response);
   const channels = await json<AdminChannel[]>(response);
-  return { revision, items: channels.map((channel) => ({
+  return { revision: readAdminRevision(response), items: channels.map((channel) => ({
     ...channel,
     mediaCapabilities: Array.isArray(channel.mediaCapabilities) ? channel.mediaCapabilities : [],
     defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel : "",
@@ -659,8 +658,8 @@ export async function putAdminChannels(channels: AdminChannel[], revision: strin
   if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载共享渠道再保存");
   const response = await authFetch("tenant/channels", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
   if (response.status === 409) throw new Error("共享渠道已被其他管理员修改，请重新加载后重试");
-  const nextRevision = readAdminRevision(response);
-  return { items: await json<AdminChannel[]>(response), revision: nextRevision };
+  const items = await json<AdminChannel[]>(response);
+  return { items, revision: readAdminRevision(response) };
 }
 
 export async function deleteAdminChannel(channelId: string, revision: string): Promise<string> {
@@ -713,9 +712,8 @@ function normalizePlatformChannel(channel: AdminChannel): Record<string, unknown
 
 export async function listPlatformChannels(): Promise<{ items: AdminChannel[]; revision: string }> {
   const response = await authFetch("platform/channels");
-  const revision = readAdminRevision(response);
   const channels = await json<AdminChannel[]>(response);
-  return { revision, items: channels.map(normalizeLoadedAdminChannel) };
+  return { revision: readAdminRevision(response), items: channels.map(normalizeLoadedAdminChannel) };
 }
 
 export async function putPlatformChannel(channel: AdminChannel, revision: string): Promise<{ items: AdminChannel[]; revision: string }> {
@@ -750,9 +748,8 @@ export async function putPlatformChannels(channels: AdminChannel[], revision: st
   if (new Set(normalized.map((channel) => String(channel.id))).size !== normalized.length) throw new Error("平台渠道 ID 不能重复");
   const response = await authFetch("platform/channels", { method: "PUT", headers: { "X-OpenBoard-Revision": revision }, body: JSON.stringify(normalized) });
   if (response.status === 409) throw new Error("平台渠道已被其他管理员修改，请重新加载后重试");
-  const nextRevision = readAdminRevision(response);
   const saved = await json<AdminChannel[]>(response);
-  return { items: saved.map(normalizeLoadedAdminChannel), revision: nextRevision };
+  return { items: saved.map(normalizeLoadedAdminChannel), revision: readAdminRevision(response) };
 }
 
 export async function deletePlatformChannel(channelId: string, revision: string): Promise<string> {

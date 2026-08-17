@@ -89,12 +89,40 @@ export function applySavedAdminChannel(
   channels: readonly AdminChannel[],
   saved: AdminChannel,
 ): AdminChannel[] {
-  const next = channels.some((channel) => channel.id === saved.id)
-    ? channels.map((channel) => channel.id === saved.id ? saved : channel)
-    : [...channels, saved];
-  return next.map((channel) => channel.id === saved.id
-    ? { ...saved, models: saved.models ? [...saved.models] : undefined }
-    : channel);
+  const nextSaved = { ...saved, models: saved.models ? [...saved.models] : undefined };
+  if (channels.some((channel) => channel.id === saved.id)) {
+    return channels.map((channel) => channel.id === saved.id ? nextSaved : channel);
+  }
+  return [...channels, nextSaved];
+}
+
+function adminChannelFingerprint(channel: AdminChannel): string {
+  return JSON.stringify({
+    name: channel.name,
+    protocol: channel.protocol,
+    baseUrl: channel.baseUrl,
+    enabled: channel.enabled,
+    allowUserUse: channel.allowUserUse,
+    weight: channel.weight,
+    timeoutSeconds: channel.timeoutSeconds,
+    models: channel.models ?? [],
+    defaultTextModel: channel.defaultTextModel,
+    defaultImageModel: channel.defaultImageModel,
+    defaultVideoModel: channel.defaultVideoModel,
+    defaultAudioModel: channel.defaultAudioModel,
+    mediaCapabilities: channel.mediaCapabilities ?? [],
+    publishToAll: channel.publishToAll === true,
+    tenantIds: [...(channel.tenantIds ?? [])],
+  });
+}
+
+export function adminChannelIsDirty(
+  channel: AdminChannel,
+  persisted: AdminChannel | undefined,
+  secret = "",
+): boolean {
+  if (!persisted || secret.trim()) return true;
+  return adminChannelFingerprint(channel) !== adminChannelFingerprint(persisted);
 }
 
 export function adminChannelSecretBindingIsCurrent(

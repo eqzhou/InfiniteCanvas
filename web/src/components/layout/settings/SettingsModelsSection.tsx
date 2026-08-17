@@ -97,7 +97,7 @@ export function SettingsModelsSection({
   };
 
   const updateProvider = (kind: AiProviderKind, patch: Partial<ReturnType<typeof getProvider>>) => {
-    if (!channel || !personalChannelEditable) return;
+    if (!channel || sharedChannelSelected || !personalChannelEditable) return;
     const config = useBoardStore.getState().config;
     const normalized = normalizeChannel(channel);
     const providers = { ...normalized.providers!, [kind]: { ...normalized.providers![kind], ...patch } };
@@ -119,7 +119,7 @@ export function SettingsModelsSection({
   };
 
   const pullModels = async (kind: AiProviderKind) => {
-    if (!channel) return;
+    if (!channel || sharedChannelSelected || !personalChannelEditable) return;
     setBusyKind(kind);
     notices.setError(null);
     try {

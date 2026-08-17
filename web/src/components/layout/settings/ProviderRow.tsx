@@ -89,7 +89,9 @@ export function ProviderRow({
           <RefreshCw size={16} className={busy ? "animate-spin" : ""} />
         </button>
       </div>
-      {provider.protocol === "template" ? <TemplateEditor value={provider.template} onChange={(template) => onChange({ template })} /> : null}
+      {provider.protocol === "template" ? (
+        <TemplateEditor disabled={disabled} value={provider.template} onChange={(template) => onChange({ template })} />
+      ) : null}
       {models.length ? (
         <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-auto pl-0 md:pl-[250px]">
           {models.map((model) => (
@@ -111,9 +113,11 @@ export function ProviderRow({
 
 function TemplateEditor({
   value,
+  disabled,
   onChange,
 }: {
   value?: AiTemplateConfig;
+  disabled: boolean;
   onChange: (value: AiTemplateConfig) => void;
 }) {
   const { t } = useI18n();
@@ -137,12 +141,14 @@ function TemplateEditor({
         aria-label={t("settings.templateJson")}
         className="ob-field min-h-40 resize-y font-mono text-xs"
         value={source}
+        disabled={disabled}
         onChange={(event) => setSource(event.target.value)}
       />
       <div className="mt-1 flex items-center gap-2">
         <button
           type="button"
           className="ob-btn"
+          disabled={disabled}
           onClick={() => {
             try {
               const parsed = JSON.parse(source) as AiTemplateConfig;

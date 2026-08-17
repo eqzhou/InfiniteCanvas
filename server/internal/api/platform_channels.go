@@ -813,7 +813,10 @@ func (s *Server) fetchPlatformChannelModels(ctx context.Context, id string) ([]s
 	}
 	channel := item.adminChannel()
 	secrets, err := s.decryptPlatformChannelSecrets(ctx)
-	if err != nil || strings.TrimSpace(secrets[id]) == "" {
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(secrets[id]) == "" {
 		return nil, errors.New("channel secret is not configured")
 	}
 	return s.fetchChannelModels(ctx, channel, secrets[id])
@@ -861,7 +864,10 @@ func (s *Server) resolvePlatformChannelPreview(ctx context.Context, input adminC
 		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
 	}
 	secrets, err := s.decryptPlatformChannelSecrets(ctx)
-	if err != nil || strings.TrimSpace(secrets[channel.ID]) == "" {
+	if err != nil {
+		return adminChannelPublic{}, "", err
+	}
+	if strings.TrimSpace(secrets[channel.ID]) == "" {
 		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
 	}
 	return channel, secrets[channel.ID], nil

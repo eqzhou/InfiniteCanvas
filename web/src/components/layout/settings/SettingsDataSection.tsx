@@ -252,7 +252,11 @@ export function SettingsDataSection({
                   } catch (cause) {
                     if (useBoardStore.getState().config === applied) {
                       useBoardStore.getState().setConfig(previous);
-                      await useBoardStore.getState().flushConfig().catch(() => undefined);
+                      try {
+                        await useBoardStore.getState().flushConfig();
+                      } catch {
+                        throw new Error(t("settings.importRollbackFailed"));
+                      }
                     }
                     throw cause;
                   }

@@ -25,6 +25,7 @@ import { uid } from "@/lib/id";
 import {
   adminChannelCanPreviewModels,
   adminChannelDestinationMatches,
+  adminChannelIsDirty,
   applyAdminChannelModelSelection,
   applySavedAdminChannel,
   buildAdminChannelModelDiff,
@@ -135,7 +136,13 @@ function FieldGroup({ label, children, className }: { label: string; children: R
 
 function ToggleField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
-    <label className="ob-toggle-field">
+    <div
+      className="ob-toggle-field"
+      onClick={(event) => {
+        if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
+        onChange(!checked);
+      }}
+    >
       <button
         type="button"
         role="switch"
@@ -146,7 +153,7 @@ function ToggleField({ label, checked, onChange }: { label: string; checked: boo
         onClick={() => onChange(!checked)}
       />
       <span>{label}</span>
-    </label>
+    </div>
   );
 }
 
@@ -207,6 +214,20 @@ function defaultCapability(model: string, kind: AdminMediaKind = "image"): Admin
 
 function parseCsv(value: string): string[] {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function clampChannelInt(value: string, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function parseCapabilityDurations(value: string): number[] {
+  return value.split(",").flatMap((item) => {
+    const duration = Number(item.trim());
+    if (!Number.isInteger(duration) || duration < 1 || duration > 900) return [];
+    return [duration];
+  });
 }
 
 function CapabilityRow({
@@ -303,7 +324,7 @@ function CapabilityRow({
               className="ob-field"
               placeholder={t("admin.channels.durationPlaceholder")}
               value={capability.durations.join(",")}
-              onChange={(event) => onChange({ durations: event.target.value.split(",").map(Number).filter(Number.isFinite) })}
+              onChange={(event) => onChange({ durations: parseCapabilityDurations(event.target.value) })}
             />
           </Field>
         )}
@@ -315,7 +336,7 @@ function CapabilityRow({
             min={0}
             max={MAX_REFERENCE_IMAGES}
             value={capability.maxReferences}
-            onChange={(event) => onChange({ maxReferences: Number(event.target.value) })}
+            onChange={(event) => onChange({ maxReferences: clampChannelInt(event.target.value, 0, MAX_REFERENCE_IMAGES) })}
           />
         </Field>
       </div>
@@ -455,7 +476,13 @@ function ConnectionGroup({ channel, handlers }: { channel: AdminChannel; handler
         <select
           className="ob-field"
           value={channel.protocol}
-          onChange={(event) => handlers.update({ protocol: event.target.value as AdminChannelProtocol })}
+          onChange={(event) => {
+            const protocol = event.target.value as AdminChannelProtocol;
+            handlers.update({
+              protocol,
+              ...(AUDIO_PROTOCOLS.includes(protocol) ? {} : { defaultAudioModel: "" }),
+            });
+          }}
         >
           {protocols.map((protocol) => <option key={protocol}>{protocol}</option>)}
         </select>
@@ -501,7 +528,7 @@ function RoutingGroup({ channel, handlers, modelsBusy }: { channel: AdminChannel
             min={WEIGHT_MIN}
             max={WEIGHT_MAX}
             value={channel.weight}
-            onChange={(event) => handlers.update({ weight: Number(event.target.value) })}
+            onChange={(event) => handlers.update({ weight: clampChannelInt(event.target.value, WEIGHT_MIN, WEIGHT_MAX) })}
           />
         </Field>
         <Field label={t("admin.channels.timeout")}>
@@ -511,7 +538,7 @@ function RoutingGroup({ channel, handlers, modelsBusy }: { channel: AdminChannel
             min={TIMEOUT_MIN_SECONDS}
             max={TIMEOUT_MAX_SECONDS}
             value={channel.timeoutSeconds}
-            onChange={(event) => handlers.update({ timeoutSeconds: Number(event.target.value) })}
+            onChange={(event) => handlers.update({ timeoutSeconds: clampChannelInt(event.target.value, TIMEOUT_MIN_SECONDS, TIMEOUT_MAX_SECONDS) })}
           />
         </Field>
       </div>
@@ -621,7 +648,7 @@ function ChannelActions({
   return (
     <div className="space-y-2">
       <div className="ob-record-actions">
-        <button type="button" className="ob-btn ob-btn-sm" disabled={busy || !adminChannelCanTest(channel, secret, persisted)} onClick={handlers.test}>
+        <button type="button" className="ob-btn ob-btn-sm" disabled={busy || !adminChannelCanTest(channel, secret, persisted) || ((channel.protocol === "azure" || channel.protocol === "edge") && !(channel.defaultAudioModel ?? "").trim())} onClick={handlers.test}>
           <PlugZap size={14} aria-hidden />
           {t("admin.channels.test")}
         </button>
@@ -776,7 +803,7 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
     baseUrl: channel.baseUrl,
     protocol: channel.protocol,
     timeoutSeconds: channel.timeoutSeconds,
-    ...(channel.defaultAudioModel.trim() ? { defaultAudioModel: channel.defaultAudioModel } : {}),
+    ...((channel.defaultAudioModel ?? "").trim() ? { defaultAudioModel: channel.defaultAudioModel } : {}),
     ...(secrets[channel.id]?.trim() ? { apiKey: secrets[channel.id] } : {}),
   });
 
@@ -927,7 +954,7 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
                       key={channel.id}
                       channel={channel}
                       selected={channel.id === selectedChannel?.id}
-                      persisted={persistedIdsRef.current.has(channel.id)}
+                      persisted={!adminChannelIsDirty(channel, persistedChannelsRef.current.get(channel.id), secrets[channel.id])}
                       onSelect={() => setSelectedId(channel.id)}
                     />
                   ))}
@@ -938,7 +965,7 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
                       key={selectedChannel.id}
                       channel={selectedChannel}
                       secret={secrets[selectedChannel.id] ?? ""}
-                      persisted={persistedIdsRef.current.has(selectedChannel.id)}
+                      persisted={!adminChannelIsDirty(selectedChannel, persistedChannelsRef.current.get(selectedChannel.id), secrets[selectedChannel.id])}
                       persistedChannel={persistedChannelsRef.current.get(selectedChannel.id)}
                       modelsBusy={busy === `models:${selectedChannel.id}`}
                       review={modelReviews[selectedChannel.id]}

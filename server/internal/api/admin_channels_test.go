@@ -949,6 +949,46 @@ func TestPreviewAdminChannelModelsReusesStoredSecretOnlyForMatchingDestination(t
 	}
 }
 
+func TestGetAdminChannelsDoesNotHideStoreErrors(t *testing.T) {
+	_, backend, router := sharedChannelHandler(t)
+	backend.getStateErr = errors.New("database unavailable")
+	got := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	if got.Code != http.StatusInternalServerError {
+		t.Fatalf("store error = %d %s", got.Code, got.Body.String())
+	}
+	if strings.Contains(got.Body.String(), "[]") && got.Code == http.StatusOK {
+		t.Fatal("store error was presented as an empty catalog")
+	}
+}
+
+func TestDecryptAdminChannelSecretsRawRejectsCorruptEnvelope(t *testing.T) {
+	server, _, _ := sharedChannelHandler(t)
+	channel := adminChannelPublic{ID: "shared-main", BaseURL: "https://api.example/v1", Protocol: "openai", SecretBindingID: "bind"}
+	_, err := server.decryptAdminChannelSecretsRaw(store.DefaultTenantID, []adminChannelPublic{channel}, []byte(`{"not":"a-secret-envelope"`))
+	if err == nil {
+		t.Fatal("corrupt envelope was treated as an empty secret map")
+	}
+	legacy, err := server.decryptAdminChannelSecretsRaw(store.DefaultTenantID, []adminChannelPublic{channel}, []byte(`{"version":1,"entries":{}}`))
+	if err != nil || len(legacy) != 0 {
+		t.Fatalf("version-1 envelope = %#v err=%v", legacy, err)
+	}
+}
+
+func TestPreviewAdminChannelTestRejectsRateLimitedGemini(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer upstream.Close()
+	body, _ := json.Marshal(adminChannelPreviewInput{
+		BaseURL: upstream.URL + "/v1", Protocol: "gemini", TimeoutSeconds: 15, APIKey: "sk-preview",
+	})
+	got := request(t, router, http.MethodPost, "/api/admin/channels/preview-test", body)
+	if got.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("rate-limited preview test = %d %s", got.Code, got.Body.String())
+	}
+}
+
 func TestPreviewAdminChannelTestUsesDraftAudioModel(t *testing.T) {
 	_, _, router := sharedChannelHandler(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
