@@ -48,7 +48,7 @@ jobs:
       OPENBOARD_TEST_DATABASE_URL: postgres://openboard_go:openboard_go@127.0.0.1:5432/openboard_go?sslmode=disable
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: openboard_go
           POSTGRES_USER: openboard_go
@@ -133,7 +133,7 @@ jobs:
       OPENBOARD_MASTER_KEY: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: openboard_e2e
           POSTGRES_USER: openboard_e2e
@@ -146,7 +146,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: redis:7-alpine
+        image: redis:8-alpine
         ports:
           - 6379:6379
         options: >-
