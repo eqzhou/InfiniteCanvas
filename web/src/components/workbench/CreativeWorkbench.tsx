@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { ImagePlus, PanelBottom, PanelLeft, RefreshCw, Square, Trash2, Video } from "lucide-react";
+import { ImagePlus, PanelBottom, PanelLeft, RefreshCw, Sparkles, Square, Trash2, Video } from "lucide-react";
 import type { GenerationJob } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import { getProvider } from "@/lib/ai-config";
@@ -152,6 +152,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [category, setCategory] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(WORKBENCH_ALL_CATEGORIES);
+  const [statusFilter, setStatusFilter] = useState("succeeded");
+  const [page, setPage] = useState(1);
+  const [totalJobs, setTotalJobs] = useState(0);
+  const PAGE_SIZE = 24;
   const [layout, setLayout] = useState<WorkbenchLayout>(() => {
     try {
       return normalizeWorkbenchLayout(window.localStorage.getItem("openboard.workbench.layout"));
@@ -168,7 +172,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const activeServerJobIdsRef = useRef(new Map<string, string>());
   const reusableAssets = useMemo(() => workbenchImageAssets(assets), [assets]);
   const categories = useMemo(() => workbenchCategories(jobs), [jobs]);
-  const visibleJobs = useMemo(() => filterWorkbenchJobs(jobs, categoryFilter), [categoryFilter, jobs]);
+  const visibleJobs = useMemo(
+    () => filterWorkbenchJobs(jobs, categoryFilter, statusFilter),
+    [categoryFilter, jobs, statusFilter],
+  );
   const qualityOptions = useMemo(
     () => imageQualityOptionsFor(provider?.protocol, model),
     [model, provider?.protocol],
@@ -429,10 +436,16 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setError(unresolved ? t("creative.refillWarning", { count: unresolved }) : "");
   }, [category, channelChoices, channelId, count, frameMode, generateAudio, kind, model, prompt, quality, ratio, reusableAssets, resolution, seconds, setConfig, size, smartDuration, t, transparent, watermark]);
 
-  const refresh = useCallback(async () => {
-    const page = await listGenerationJobs({ projectId: project?.id, kind, page: 1, pageSize: 50 });
+  const refresh = useCallback(async (targetPage = page, targetStatus = statusFilter) => {
+    const res = await listGenerationJobs({
+      projectId: project?.id,
+      kind,
+      status: targetStatus,
+      page: targetPage,
+      pageSize: PAGE_SIZE,
+    });
     const interrupted = findInterruptedGenerationJobs(
-      page.items,
+      res.items,
       getRuntimeOwnerId(),
       new Set(getGenerationActivities().filter((item) => item.status === "running").map((item) => item.id)),
     );
@@ -441,8 +454,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         status: "failed",
         error: t("creative.interrupted"),
       })))).map((job) => [job.id, job]));
-    setJobs(page.items.map((job) => recovered.get(job.id) ?? job));
-  }, [kind, project?.id, t]);
+    setJobs(res.items.map((job) => recovered.get(job.id) ?? job));
+    setTotalJobs(res.total);
+    setPage(res.page);
+  }, [kind, page, project?.id, statusFilter, t]);
 
   const selectedVisibleIds = useMemo(
     () => visibleJobs.map((job) => job.id).filter((id) => selectedJobIds.includes(id)),
@@ -956,62 +971,69 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--ob-canvas)]">
-      <header className="flex flex-wrap items-center gap-3 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 shadow-[var(--ob-elev-1)] backdrop-blur-md">
-        <div className="min-w-0">
-          <p className="ob-page-kicker">{kind === "image" ? "Image" : "Video"}</p>
-          <h1 className="text-base font-semibold tracking-tight">
-            {kind === "image" ? t("workbench.imageTitle") : t("workbench.videoTitle")}
-          </h1>
+      <header className="flex items-center gap-3 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 shadow-[var(--ob-elev-1)] backdrop-blur-md">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-[var(--ob-accent-soft)] to-[var(--ob-canvas)] text-[var(--ob-accent)] ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_20%,transparent)] shadow-xs shrink-0">
+            {kind === "image" ? <ImagePlus size={16} /> : <Video size={16} />}
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-sm font-bold tracking-tight text-[var(--ob-ink)] sm:text-base">
+              {kind === "image" ? t("workbench.imageTitle") : t("workbench.videoTitle")}
+            </h1>
+          </div>
         </div>
-        <div className="ob-segment" role="tablist" aria-label={t("workbench.kind")}>
+        <div className="ob-segment rounded-xl p-0.5 bg-[var(--ob-canvas)] border border-[var(--ob-line)]/50" role="tablist" aria-label={t("workbench.kind")}>
           <Link
             role="tab"
             aria-selected={kind === "image"}
-            className="ob-segment-item no-underline"
+            className="ob-segment-item no-underline rounded-lg px-3 py-1.5 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
             to="/workbench/image"
           >
+            <ImagePlus size={14} />
             {t("common.image")}
           </Link>
           <Link
             role="tab"
             aria-selected={kind === "video"}
-            className="ob-segment-item no-underline"
+            className="ob-segment-item no-underline rounded-lg px-3 py-1.5 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
             to="/workbench/video"
           >
+            <Video size={14} />
             {t("common.video")}
           </Link>
           <Link
             role="tab"
             aria-selected={false}
-            className="ob-segment-item no-underline"
+            className="ob-segment-item no-underline rounded-lg px-3 py-1.5 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
             to="/workbench/workflows"
           >
+            <Sparkles size={14} />
             {t("workbench.workflow")}
           </Link>
         </div>
-        <div className="ob-segment ml-auto" role="group" aria-label={t("workbench.layout")}>
+        <div className="ob-segment ml-auto rounded-xl p-0.5 bg-[var(--ob-canvas)] border border-[var(--ob-line)]/50" role="group" aria-label={t("workbench.layout")}>
           <button
             type="button"
-            className="ob-segment-item inline-flex items-center gap-1.5"
+            className="ob-segment-item inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold"
             aria-pressed={layout === "side"}
             onClick={() => setLayout("side")}
           >
-            <PanelLeft size={15} /> {t("workbench.side")}
+            <PanelLeft size={14} /> {t("workbench.side")}
           </button>
           <button
             type="button"
-            className="ob-segment-item inline-flex items-center gap-1.5"
+            className="ob-segment-item inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold"
             aria-pressed={layout === "bottom"}
             onClick={() => setLayout("bottom")}
           >
-            <PanelBottom size={15} /> {t("workbench.bottom")}
+            <PanelBottom size={14} /> {t("workbench.bottom")}
           </button>
         </div>
       </header>
       <div
         data-workbench-layout={layout}
         className={layout === "side"
-          ? "grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[380px_1fr]"
+          ? "grid min-h-0 flex-1 grid-cols-1 overflow-auto lg:grid-cols-[380px_minmax(0,1fr)]"
           : "flex min-h-0 flex-1 flex-col-reverse overflow-auto"}
       >
         <section className={layout === "side"
@@ -1407,12 +1429,12 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 <p className="mt-2 text-xs text-[var(--ob-muted)]">{t("workbench.selectedAssets", { count: selectedAssetIds.length })}</p>
               </fieldset>
             ) : null}
-            <div className="space-y-2 pt-1">
+            <div className="space-y-2 pt-2">
               <div className="flex gap-2">
                 <button
                   type="button"
                   aria-label={t("workbench.generate")}
-                  className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold"
+                  className="ob-btn-primary flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold text-sm shadow-md shadow-[var(--ob-accent)]/20 transition-all hover:shadow-lg hover:shadow-[var(--ob-accent)]/30 active:scale-[0.99]"
                   disabled={!prompt.trim() && !allowsEmptyKlingPrompt && !allowsEmptySeedancePrompt}
                   onClick={() => void run()}
                 >
@@ -1424,7 +1446,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 <button
                   type="button"
                   title={t("workbench.stop")}
-                  className="ob-btn-danger rounded-xl p-3"
+                  className="ob-btn-danger rounded-xl p-3 shadow-xs"
                   disabled={!activeRuns}
                   onClick={() => void stopActiveJobs()}
                 >
@@ -1432,7 +1454,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 </button>
               </div>
               {creditEstimate && !creditEstimate.sufficient ? (
-                <p role="status" className="text-xs text-[var(--ob-danger)]">
+                <p role="status" className="rounded-lg bg-[color-mix(in_srgb,var(--ob-danger)_10%,transparent)] border border-[color-mix(in_srgb,var(--ob-danger)_25%,transparent)] px-3 py-2 text-xs font-medium text-[var(--ob-danger)]">
                   {t("workbench.insufficientCredits", { balance: creditEstimate.balance, credits: creditEstimate.totalCredits })}
                 </p>
               ) : null}
@@ -1444,17 +1466,32 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
             ) : null}
           </div>
         </section>
-        <section className="min-w-0 p-5 sm:p-6">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <h2 className="text-base font-semibold text-[var(--ob-ink)]">{t("workbench.history")}</h2>
-              <p className="text-xs text-[var(--ob-muted)]">{t("workbench.historyDescription")}</p>
+        <section className="min-w-0 p-4 sm:p-5">
+          <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--ob-line)]/50 pb-3">
+            <div className="flex items-center gap-2 min-w-0 shrink">
+              <h2 className="text-base font-semibold text-[var(--ob-ink)] whitespace-nowrap">{t("workbench.history")}</h2>
+              <p className="hidden text-xs text-[var(--ob-muted)] truncate 2xl:inline">{t("workbench.historyDescription")}</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+              <select
+                aria-label={t("tasks.statusFilter")}
+                className="ob-field w-auto shrink-0 cursor-pointer py-1 px-2.5 text-xs font-medium"
+                value={statusFilter}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setStatusFilter(next);
+                  setPage(1);
+                  void refresh(1, next);
+                }}
+              >
+                <option value="succeeded">{t("tasks.succeeded")}</option>
+                <option value="failed">{t("tasks.failed")}</option>
+                <option value="all">{t("tasks.allStatuses")}</option>
+              </select>
               {kind === "image" ? (
                 <select
                   aria-label={t("workbench.historyCategory")}
-                  className="ob-field min-w-28 py-1.5 text-xs"
+                  className="ob-field w-auto shrink-0 cursor-pointer py-1 px-2.5 text-xs"
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
                 >
@@ -1462,38 +1499,41 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                 </select>
               ) : null}
               {tenantOwner ? (
-                <>
-                  <label className="flex items-center gap-1 text-xs text-[var(--ob-muted)]">
+                <div className="flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+                  <label className="flex items-center gap-1 text-xs font-medium text-[var(--ob-muted)] cursor-pointer select-none whitespace-nowrap hover:text-[var(--ob-ink)]">
                     <input
                       type="checkbox"
                       aria-label={t("workbench.selectCurrentHistory")}
                       checked={allVisibleSelected}
                       disabled={!visibleJobs.length}
+                      className="rounded text-[var(--ob-accent)] focus:ring-0 cursor-pointer"
                       onChange={() => toggleSelectAllVisible()}
                     />
-                    {t("workbench.selectAll")}
+                    <span>{t("workbench.selectAll")}</span>
                   </label>
                   <button
                     type="button"
                     title={t("workbench.deleteBatch")}
-                    className="ob-btn-danger rounded-lg p-1.5"
+                    className="ob-btn-danger inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs shadow-xs cursor-pointer disabled:opacity-40"
                     disabled={!selectedVisibleIds.length}
                     onClick={() => void deleteSelectedHistory()}
                   >
-                    <Trash2 size={16} />
-                    <span className="sr-only">{t("workbench.deleteBatch")}</span>
+                    <Trash2 size={13} />
+                    <span>{t("common.delete")}</span>
                   </button>
                   {selectedVisibleIds.length ? (
-                    <span className="text-xs text-[var(--ob-muted)]">{t("workbench.selectedCount", { count: selectedVisibleIds.length })}</span>
+                    <span className="text-xs font-medium text-[var(--ob-muted)] whitespace-nowrap">
+                      {t("workbench.selectedCount", { count: selectedVisibleIds.length })}
+                    </span>
                   ) : null}
-                </>
+                </div>
               ) : null}
-              <button type="button" title={t("common.refresh")} className="ob-icon-btn" onClick={() => void refresh()}>
-                <RefreshCw size={18} />
+              <button type="button" title={t("common.refresh")} className="ob-icon-btn shrink-0" onClick={() => void refresh()}>
+                <RefreshCw size={15} />
               </button>
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
             {visibleJobs.map((job) => (
               <WorkbenchHistoryRow
                 key={job.id}
@@ -1524,6 +1564,46 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
               </span>
               <p className="ob-empty-title">{t("workbench.empty")}</p>
               <p className="ob-empty-desc">{t("workbench.emptyDescription")}</p>
+            </div>
+          ) : null}
+          {totalJobs > 0 ? (
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ob-line)]/70 pt-4 text-xs">
+              <span className="text-[var(--ob-muted)] font-medium">
+                {t("common.pageTotal", {
+                  page,
+                  pages: Math.max(1, Math.ceil(totalJobs / PAGE_SIZE)),
+                  total: totalJobs,
+                })}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  className="ob-btn ob-btn-secondary rounded-lg px-3 py-1.5 font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={() => {
+                    const prev = Math.max(1, page - 1);
+                    setPage(prev);
+                    void refresh(prev, statusFilter);
+                  }}
+                >
+                  {t("common.previousPage")}
+                </button>
+                <span className="grid h-7 min-w-7 place-items-center rounded-md bg-[var(--ob-canvas)] border border-[var(--ob-line)] px-2 font-semibold text-[var(--ob-ink)] shadow-xs">
+                  {page}
+                </span>
+                <button
+                  type="button"
+                  disabled={page * PAGE_SIZE >= totalJobs}
+                  className="ob-btn ob-btn-secondary rounded-lg px-3 py-1.5 font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={() => {
+                    const next = page + 1;
+                    setPage(next);
+                    void refresh(next, statusFilter);
+                  }}
+                >
+                  {t("common.nextPage")}
+                </button>
+              </div>
             </div>
           ) : null}
         </section>

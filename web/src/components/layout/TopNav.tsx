@@ -367,15 +367,15 @@ export function TopNav({
             <Menu size={20} />
           </button>
           <div className="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
-            <span className="inline-grid h-8 w-8 place-items-center rounded-lg bg-[var(--ob-accent)] text-sm font-bold tracking-tight text-white shadow-[0_2px_8px_color-mix(in_srgb,var(--ob-accent)_40%,transparent)]">
+            <span className="inline-grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-[var(--ob-accent)] to-[var(--ob-accent-hover)] text-sm font-bold tracking-tight text-white shadow-[0_3px_10px_color-mix(in_srgb,var(--ob-accent)_35%,transparent)]">
               OB
             </span>
-            <span className="hidden text-[var(--ob-ink)] xl:inline">OpenBoard</span>
+            <span className="hidden font-bold tracking-tight text-[var(--ob-ink)] xl:inline">OpenBoard</span>
           </div>
         </div>
 
         {/* Center: Desktop navigation — hidden below md (768px) */}
-        <nav className="ob-desktop-nav ob-toolbar-scroll min-w-0 flex-1 items-center gap-0.5 overflow-x-auto sm:ml-2 xl:ml-4">
+        <nav className="ob-desktop-nav ob-toolbar-scroll min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:ml-2 xl:ml-4">
           {links.map((l) => {
             const Icon = l.icon;
             const active = isLinkActive(l.to);
@@ -386,10 +386,10 @@ export function TopNav({
                 aria-label={"ariaLabel" in l ? l.ariaLabel : t("nav.page", { label: l.label })}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors duration-150 xl:px-3",
+                  "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium transition-all duration-150 xl:px-3",
                   active
-                    ? "bg-[var(--ob-accent-soft)] text-[var(--ob-accent)] shadow-sm ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_18%,transparent)]"
-                    : "text-[var(--ob-muted)] hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-ink)]",
+                    ? "bg-[var(--ob-accent-soft)] font-semibold text-[var(--ob-accent)] shadow-xs ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_22%,transparent)]"
+                    : "text-[var(--ob-muted)] hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)]",
                 )}
               >
                 <Icon size={16} />

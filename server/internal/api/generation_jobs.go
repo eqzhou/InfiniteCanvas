@@ -55,8 +55,15 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login required", http.StatusUnauthorized)
 		return
 	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status == "all" {
+		status = ""
+	} else if status != "" && !generationStatuses[status] {
+		http.Error(w, "invalid generation status", http.StatusBadRequest)
+		return
+	}
 	result, err := s.store.ListGenerationJobs(r.Context(), tenantIDFrom(r), store.GenerationJobQuery{
-		UserID: userID, ProjectID: projectID, Kind: kind, Page: page, PageSize: pageSize, IncludeDeleted: includeDeleted,
+		UserID: userID, ProjectID: projectID, Kind: kind, Status: status, Page: page, PageSize: pageSize, IncludeDeleted: includeDeleted,
 	})
 	if err != nil {
 		http.Error(w, "failed to list generation jobs", http.StatusInternalServerError)

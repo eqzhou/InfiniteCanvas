@@ -120,6 +120,17 @@ export function AICallLogsPage() {
     [items, selected],
   );
 
+  const stats = useMemo(() => {
+    if (!items.length) return null;
+    const successCount = items.filter((i) => i.status === "succeeded").length;
+    const failCount = items.filter((i) => i.status === "failed").length;
+    const avgDuration = Math.round(
+      items.reduce((acc, curr) => acc + (curr.durationMs || 0), 0) / items.length,
+    );
+    const successRate = items.length > 0 ? Math.round((successCount / items.length) * 100) : 100;
+    return { successCount, failCount, avgDuration, successRate };
+  }, [items]);
+
   const toggleAll = () => {
     if (allSelected) {
       setSelected(new Set());
@@ -192,7 +203,7 @@ export function AICallLogsPage() {
     <div className="ob-page ob-view-fade-in pb-12">
       <header className="ob-page-header">
         <div className="min-w-0">
-          <span className="ob-page-kicker"><Activity size={13} aria-hidden />{t("nav.logs")}</span>
+          <span className="ob-page-kicker"><Activity size={13} aria-hidden />{t("nav.aiLogs")}</span>
           <h1 className="ob-page-title">{t("logs.title")}</h1>
           <p className="ob-page-desc">{t("logs.description")}</p>
         </div>
@@ -214,6 +225,34 @@ export function AICallLogsPage() {
           </button>
         </div>
       </header>
+
+      {/* KPI Stats Overview */}
+      {stats ? (
+        <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="ob-stat-card">
+            <div className="text-xs font-medium text-[var(--ob-muted)]">{t("logs.totalCalls")}</div>
+            <div className="mt-1 text-2xl font-bold tracking-tight text-[var(--ob-ink)]">{total}</div>
+            <div className="mt-1 text-[11px] text-[var(--ob-muted)]">{t("common.pageTotal", { page, pages: totalPages, total })}</div>
+          </div>
+          <div className="ob-stat-card">
+            <div className="text-xs font-medium text-[var(--ob-muted)]">{t("logs.successRate")}</div>
+            <div className="mt-1 text-2xl font-bold tracking-tight text-[var(--ob-success)]">{stats.successRate}%</div>
+            <div className="mt-1 text-[11px] text-[var(--ob-muted)]">{t("logs.successCount", { count: stats.successCount })}</div>
+          </div>
+          <div className="ob-stat-card">
+            <div className="text-xs font-medium text-[var(--ob-muted)]">{t("logs.averageLatency")}</div>
+            <div className="mt-1 text-2xl font-bold tracking-tight text-[var(--ob-ink)]">{formatDuration(stats.avgDuration)}</div>
+            <div className="mt-1 text-[11px] text-[var(--ob-muted)]">{t("logs.duration")}</div>
+          </div>
+          <div className="ob-stat-card">
+            <div className="text-xs font-medium text-[var(--ob-muted)]">{t("logs.failureCount")}</div>
+            <div className={`mt-1 text-2xl font-bold tracking-tight ${stats.failCount > 0 ? "text-[var(--ob-danger)]" : "text-[var(--ob-muted)]"}`}>
+              {stats.failCount}
+            </div>
+            <div className="mt-1 text-[11px] text-[var(--ob-muted)]">{stats.failCount > 0 ? t("logs.failedRequests") : t("logs.healthy")}</div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Policies Bar */}
       <section className="ob-card mb-4 p-4">

@@ -93,18 +93,18 @@ export function HelpPage() {
   const sections = getHelpSections(t);
 
   return (
-    <div className="h-full overflow-y-auto bg-[var(--ob-bg)] ob-view-fade-in" aria-labelledby="help-title">
+    <div className="h-full overflow-y-auto bg-[var(--ob-bg)] ob-view-fade-in pb-16" aria-labelledby="help-title">
       <div className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-6 sm:px-6 sm:py-9 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-10 lg:px-8">
         <aside className="lg:sticky lg:top-6 lg:self-start">
           <p className="ob-page-kicker">{t("help.guide")}</p>
           <h1 id="help-title" className="mt-1.5 text-2xl font-bold tracking-tight text-[var(--ob-ink)]">{t("help.title")}</h1>
           <p className="mt-2 text-xs leading-relaxed text-[var(--ob-muted)]">{t("help.description")}</p>
-          <nav aria-label={t("help.topics")} className="ob-card mt-5 flex gap-1 overflow-x-auto p-1.5 lg:flex-col lg:overflow-visible">
+          <nav aria-label={t("help.topics")} className="ob-card mt-5 flex gap-1 overflow-x-auto p-1.5 rounded-2xl shadow-xs lg:flex-col lg:overflow-visible">
             {sections.map(({ id, title }) => (
               <a
                 key={id}
                 href={`#${id}`}
-                className="shrink-0 rounded-lg px-3 py-2 text-xs font-medium text-[var(--ob-muted)] transition-colors hover:bg-[var(--ob-surface-2)] hover:text-[var(--ob-ink)] active:bg-[var(--ob-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ob-accent)]"
+                className="shrink-0 rounded-xl px-3 py-2 text-xs font-medium text-[var(--ob-muted)] transition-all hover:bg-[var(--ob-accent-soft)] hover:text-[var(--ob-accent)] active:bg-[var(--ob-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ob-accent)]"
               >
                 {title}
               </a>
@@ -113,37 +113,41 @@ export function HelpPage() {
         </aside>
 
         <div className="min-w-0 space-y-5">
-          <section aria-label={t("help.quickStart")} className="ob-card overflow-hidden p-5 sm:p-7">
+          <section aria-label={t("help.quickStart")} className="ob-card overflow-hidden p-5 sm:p-7 rounded-2xl border-[var(--ob-line)]/80 shadow-sm">
             <div className="grid gap-5 sm:grid-cols-[1fr_auto] sm:items-center">
               <div>
-                <h2 className="text-lg font-semibold text-[var(--ob-ink)]">{t("help.firstTime")}</h2>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--ob-muted)]">{t("help.firstTimeDescription")}</p>
+                <h2 className="text-lg font-bold text-[var(--ob-ink)] tracking-tight">{t("help.firstTime")}</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--ob-muted)]">{t("help.firstTimeDescription")}</p>
               </div>
-              <Link to="/" className="ob-btn-primary justify-center whitespace-nowrap px-4 py-2 text-sm font-medium">{t("help.enterCanvas")}</Link>
+              <Link to="/" className="ob-btn-primary justify-center whitespace-nowrap px-5 py-2.5 text-sm font-semibold rounded-xl shadow-sm">{t("help.enterCanvas")}</Link>
             </div>
           </section>
 
           {sections.map(({ id, title, summary, steps, note, links, icon: Icon }) => (
-            <section key={id} id={id} aria-labelledby={`${id}-title`} className="ob-card scroll-mt-6 p-5 sm:p-7">
-              <div className="flex items-start gap-3">
-                <span aria-hidden="true" className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--ob-accent-soft)] text-[var(--ob-accent)]"><Icon size={18} /></span>
+            <section key={id} id={id} aria-labelledby={`${id}-title`} className="ob-card scroll-mt-6 p-5 sm:p-7 rounded-2xl border-[var(--ob-line)]/80 shadow-sm transition-all hover:border-[color-mix(in_srgb,var(--ob-accent)_30%,var(--ob-line))]">
+              <div className="flex items-start gap-3.5">
+                <span aria-hidden="true" className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[var(--ob-accent-soft)] to-[var(--ob-canvas)] text-[var(--ob-accent)] ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_20%,transparent)] shadow-xs"><Icon size={19} /></span>
                 <div className="min-w-0">
-                  <h2 id={`${id}-title`} className="text-lg font-semibold text-[var(--ob-ink)]">{title}</h2>
-                  <p className="mt-1.5 text-sm leading-6 text-[var(--ob-muted)]">{summary}</p>
+                  <h2 id={`${id}-title`} className="text-lg font-bold text-[var(--ob-ink)] tracking-tight">{title}</h2>
+                  <p className="mt-1.5 text-sm leading-relaxed text-[var(--ob-muted)]">{summary}</p>
                 </div>
               </div>
               <ol className="mt-5 space-y-3 pl-1">
                 {steps.map((step, index) => (
-                  <li key={step} className="flex gap-3 text-sm leading-6 text-[var(--ob-ink)]">
-                    <span aria-hidden="true" className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[var(--ob-accent-soft)] text-xs font-semibold text-[var(--ob-accent)]">{index + 1}</span>
+                  <li key={step} className="flex gap-3 text-sm leading-relaxed text-[var(--ob-ink)]">
+                    <span aria-hidden="true" className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[var(--ob-accent-soft)] text-xs font-bold text-[var(--ob-accent)] ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_25%,transparent)]">{index + 1}</span>
                     <span>{step}</span>
                   </li>
                 ))}
               </ol>
-              {note ? <p className="mt-5 rounded-lg border border-[var(--ob-line)] bg-[var(--ob-panel)] px-3.5 py-3 text-sm leading-6 text-[var(--ob-muted)]"><strong className="font-semibold text-[var(--ob-ink)]">{t("help.note")}</strong>{note}</p> : null}
+              {note ? (
+                <div className="mt-5 rounded-xl border border-[var(--ob-line)] bg-[var(--ob-surface-2)]/60 px-4 py-3 text-xs leading-relaxed text-[var(--ob-muted)]">
+                  <strong className="font-semibold text-[var(--ob-ink)] mr-1.5">{t("help.note")}</strong>{note}
+                </div>
+              ) : null}
               {links?.length ? (
                 <div className="mt-5 flex flex-wrap gap-2" aria-label={t("help.relatedPages", { title })}>
-                  {links.map((link) => <Link key={link.href} to={link.href} className="ob-btn px-3 py-1.5 text-sm">{link.label}</Link>)}
+                  {links.map((link) => <Link key={link.href} to={link.href} className="ob-btn ob-btn-sm rounded-lg px-3 py-1.5 text-xs font-medium">{link.label}</Link>)}
                 </div>
               ) : null}
             </section>

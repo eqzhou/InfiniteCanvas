@@ -64,6 +64,7 @@ type GenerationJobQuery struct {
 	UserID         string
 	ProjectID      string
 	Kind           string
+	Status         string
 	Page           int
 	PageSize       int
 	IncludeDeleted bool

@@ -16,11 +16,13 @@ export function ImagePreviewDialog({
   open,
   src,
   alt,
+  video = false,
   onClose,
 }: {
   open: boolean;
   src: string;
   alt: string;
+  video?: boolean;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -50,7 +52,7 @@ export function ImagePreviewDialog({
   }, [open, src]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || video) return;
     const node = dialogRef.current;
     if (!node) return;
     const onWheel = (event: WheelEvent) => {
@@ -61,7 +63,7 @@ export function ImagePreviewDialog({
     };
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
-  }, [open]);
+  }, [open, video]);
 
   if (!open) return null;
 
@@ -79,7 +81,7 @@ export function ImagePreviewDialog({
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
-      aria-label={t("canvas.imagePreview")}
+      aria-label={video ? t("common.video") : t("canvas.imagePreview")}
       tabIndex={-1}
       className="ob-overlay z-[140] bg-black/85 p-3 sm:p-6"
       onPointerDown={(event) => {
@@ -87,40 +89,42 @@ export function ImagePreviewDialog({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-white/15 bg-black/65 p-1 text-white shadow-lg backdrop-blur-sm sm:top-5">
-        <button
-          type="button"
-          className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10 disabled:opacity-40"
-          title={t("canvas.zoomOut")}
-          aria-label={t("canvas.zoomOutImage")}
-          disabled={zoom <= MIN_ZOOM}
-          onClick={() => zoomBy(-ZOOM_STEP)}
-        >
-          <Minus size={16} />
-        </button>
-        <span className="min-w-14 px-1 text-center text-xs tabular-nums" aria-live="polite">
-          {Math.round(zoom * 100)}%
-        </span>
-        <button
-          type="button"
-          className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10 disabled:opacity-40"
-          title={t("canvas.zoomIn")}
-          aria-label={t("canvas.zoomInImage")}
-          disabled={zoom >= MAX_ZOOM}
-          onClick={() => zoomBy(ZOOM_STEP)}
-        >
-          <Plus size={16} />
-        </button>
-        <button
-          type="button"
-          className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10"
-          title={t("canvas.resetZoom")}
-          aria-label={t("canvas.resetZoom")}
-          onClick={resetView}
-        >
-          <RotateCcw size={15} />
-        </button>
-      </div>
+      {!video ? (
+        <div className="absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-white/15 bg-black/65 p-1 text-white shadow-lg backdrop-blur-sm sm:top-5">
+          <button
+            type="button"
+            className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10 disabled:opacity-40"
+            title={t("canvas.zoomOut")}
+            aria-label={t("canvas.zoomOutImage")}
+            disabled={zoom <= MIN_ZOOM}
+            onClick={() => zoomBy(-ZOOM_STEP)}
+          >
+            <Minus size={16} />
+          </button>
+          <span className="min-w-14 px-1 text-center text-xs tabular-nums" aria-live="polite">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10 disabled:opacity-40"
+            title={t("canvas.zoomIn")}
+            aria-label={t("canvas.zoomInImage")}
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => zoomBy(ZOOM_STEP)}
+          >
+            <Plus size={16} />
+          </button>
+          <button
+            type="button"
+            className="grid h-9 w-9 place-items-center rounded-lg hover:bg-white/10"
+            title={t("canvas.resetZoom")}
+            aria-label={t("canvas.resetZoom")}
+            onClick={resetView}
+          >
+            <RotateCcw size={15} />
+          </button>
+        </div>
+      ) : null}
 
       <button
         type="button"
@@ -135,7 +139,7 @@ export function ImagePreviewDialog({
       <div
         className="relative grid h-full w-full place-items-center overflow-hidden"
         onPointerDown={(event) => {
-          if (event.button !== 0) return;
+          if (video || event.button !== 0) return;
           event.preventDefault();
           event.stopPropagation();
           dragRef.current = {
@@ -148,6 +152,7 @@ export function ImagePreviewDialog({
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
         onPointerMove={(event) => {
+          if (video) return;
           const drag = dragRef.current;
           if (!drag || drag.pointerId !== event.pointerId) return;
           setOffset({
@@ -162,6 +167,7 @@ export function ImagePreviewDialog({
           dragRef.current = null;
         }}
         onDoubleClick={(event) => {
+          if (video) return;
           event.preventDefault();
           event.stopPropagation();
           if (zoom > 1.01) resetView();
@@ -170,26 +176,38 @@ export function ImagePreviewDialog({
             setOffset({ x: 0, y: 0 });
           }
         }}
-        style={{ cursor: zoom > 1 ? "grab" : "default" }}
+        style={{ cursor: !video && zoom > 1 ? "grab" : "default" }}
       >
-        <img
-          src={src}
-          alt={alt}
-          draggable={false}
-          crossOrigin="anonymous"
-          referrerPolicy="no-referrer"
-          className="max-h-[calc(100vh-5.5rem)] max-w-[calc(100vw-2rem)] select-none object-contain transition-transform duration-75 will-change-transform"
-          style={{
-            transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
-            transformOrigin: "center center",
-          }}
-        />
+        {video ? (
+          <video
+            src={src}
+            controls
+            autoPlay
+            playsInline
+            className="max-h-[calc(100vh-5.5rem)] max-w-[calc(100vw-2rem)] select-none rounded-xl shadow-2xl object-contain"
+          />
+        ) : (
+          <img
+            src={src}
+            alt={alt}
+            draggable={false}
+            crossOrigin="anonymous"
+            referrerPolicy="no-referrer"
+            className="max-h-[calc(100vh-5.5rem)] max-w-[calc(100vw-2rem)] select-none object-contain transition-transform duration-75 will-change-transform"
+            style={{
+              transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
+              transformOrigin: "center center",
+            }}
+          />
+        )}
       </div>
 
-      <p className="pointer-events-none absolute bottom-3 left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/80 sm:flex">
-        <ZoomIn size={12} />
-        {t("canvas.previewHint")}
-      </p>
+      {!video ? (
+        <p className="pointer-events-none absolute bottom-3 left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/80 sm:flex">
+          <ZoomIn size={12} />
+          {t("canvas.previewHint")}
+        </p>
+      ) : null}
     </div>,
     document.body,
   );

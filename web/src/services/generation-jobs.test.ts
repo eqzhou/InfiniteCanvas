@@ -69,14 +69,29 @@ describe("generation job pagination", () => {
   test("filters, sorts newest first, paginates, and leaves input immutable", () => {
     const input = [
       job("old", "2026-07-01T00:00:00Z"),
-	  job("video", "2026-07-03T00:00:00Z", "video"),
-	  job("audio", "2026-07-03T01:00:00Z", "audio"),
+      job("video", "2026-07-03T00:00:00Z", "video"),
+      job("audio", "2026-07-03T01:00:00Z", "audio"),
       job("new", "2026-07-02T00:00:00Z"),
     ];
     const page = paginateGenerationJobs(input, { kind: "image", page: 1, pageSize: 1 });
     expect(page.items.map((item) => item.id)).toEqual(["new"]);
     expect(page.total).toBe(2);
-	expect(input.map((item) => item.id)).toEqual(["old", "video", "audio", "new"]);
+    expect(input.map((item) => item.id)).toEqual(["old", "video", "audio", "new"]);
+  });
+
+  test("applies the same grouped status filters as the server", () => {
+    const input = [
+      { ...job("succeeded", "2026-07-01T00:00:00Z"), status: "succeeded" as const },
+      { ...job("running", "2026-07-02T00:00:00Z"), status: "running" as const },
+      { ...job("queued", "2026-07-03T00:00:00Z"), status: "queued" as const },
+      { ...job("failed", "2026-07-04T00:00:00Z"), status: "failed" as const },
+      { ...job("cancelled", "2026-07-05T00:00:00Z"), status: "cancelled" as const },
+    ];
+    expect(paginateGenerationJobs(input, { status: "succeeded", page: 1, pageSize: 20 }).items.map(({ id }) => id))
+      .toEqual(["queued", "running", "succeeded"]);
+    expect(paginateGenerationJobs(input, { status: "failed", page: 1, pageSize: 20 }).items.map(({ id }) => id))
+      .toEqual(["cancelled", "failed"]);
+    expect(paginateGenerationJobs(input, { status: "all", page: 1, pageSize: 20 }).total).toBe(5);
   });
 
   test("rejects invalid pagination", () => {

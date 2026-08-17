@@ -235,6 +235,15 @@ func (m *memoryStore) ListGenerationJobs(_ context.Context, tenantID string, que
 		if query.Kind != "" && job.Kind != query.Kind {
 			continue
 		}
+		if query.Status != "" && query.Status != "all" {
+			if query.Status == "succeeded" && !(job.Status == "succeeded" || job.Status == "running" || job.Status == "queued") {
+				continue
+			} else if query.Status == "failed" && !(job.Status == "failed" || job.Status == "cancelled") {
+				continue
+			} else if query.Status != "succeeded" && query.Status != "failed" && job.Status != query.Status {
+				continue
+			}
+		}
 		items = append(items, job)
 	}
 	return store.PaginateGenerationJobs(items, query.Page, query.PageSize), nil
@@ -1948,6 +1957,33 @@ func TestGenerationJobPaginatedCRUD(t *testing.T) {
 	}
 	if got := request(t, handler, http.MethodDelete, "/api/generation-jobs/job-1", nil); got.Code != http.StatusNoContent {
 		t.Fatalf("delete job: %d", got.Code)
+	}
+}
+
+func TestGenerationJobStatusFilter(t *testing.T) {
+	handler := persistentHandler(t)
+	for _, status := range []string{"succeeded", "running", "queued", "failed", "cancelled"} {
+		body := fmt.Sprintf(`{"id":"job-status-%s","projectId":"board-status","kind":"image","status":%q,"prompt":"%s","providerId":"image-main","model":"mock","parameters":{},"result":{}}`, status, status, status)
+		if got := request(t, handler, http.MethodPost, "/api/generation-jobs", []byte(body)); got.Code != http.StatusCreated {
+			t.Fatalf("create %s job: %d %s", status, got.Code, got.Body.String())
+		}
+	}
+	for _, tc := range []struct {
+		status string
+		total  string
+	}{
+		{status: "succeeded", total: `"total": 3`},
+		{status: "failed", total: `"total": 2`},
+		{status: "all", total: `"total": 5`},
+		{status: "cancelled", total: `"total": 1`},
+	} {
+		path := "/api/generation-jobs?projectId=board-status&page=1&pageSize=20&status=" + tc.status
+		if got := request(t, handler, http.MethodGet, path, nil); got.Code != http.StatusOK || !bytes.Contains(got.Body.Bytes(), []byte(tc.total)) {
+			t.Fatalf("list status %s: %d %s", tc.status, got.Code, got.Body.String())
+		}
+	}
+	if got := request(t, handler, http.MethodGet, "/api/generation-jobs?projectId=board-status&status=unknown", nil); got.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status should be rejected: %d %s", got.Code, got.Body.String())
 	}
 }
 

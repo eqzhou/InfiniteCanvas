@@ -15,6 +15,7 @@ export const LEGACY_GENERATION_GRACE_MS = 30 * 60_000;
 export type GenerationJobQuery = {
   projectId?: string;
   kind?: GenerationKind;
+  status?: string;
   page?: number;
   pageSize?: number;
   /** When true, include soft-deleted tombstones (ownership/cleanup only). */
@@ -111,6 +112,15 @@ function validatePagination(page: number, pageSize: number): void {
   }
 }
 
+function matchesGenerationStatus(job: GenerationJob, status: string): boolean {
+  if (status === "" || status === "all") return true;
+  if (status === "succeeded") {
+    return job.status === "succeeded" || job.status === "running" || job.status === "queued";
+  }
+  if (status === "failed") return job.status === "failed" || job.status === "cancelled";
+  return job.status === status;
+}
+
 export function paginateGenerationJobs(
   jobs: GenerationJob[],
   query: GenerationJobQuery,
@@ -121,6 +131,7 @@ export function paginateGenerationJobs(
   const filtered = jobs
     .filter((job) => !query.projectId || job.projectId === query.projectId)
     .filter((job) => !query.kind || job.kind === query.kind)
+    .filter((job) => matchesGenerationStatus(job, query.status ?? ""))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
   const start = (page - 1) * pageSize;
   return {
@@ -200,6 +211,7 @@ export async function listGenerationJobs(query: GenerationJobQuery = {}): Promis
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
   if (query.projectId) params.set("projectId", query.projectId);
   if (query.kind) params.set("kind", query.kind);
+  if (query.status) params.set("status", query.status);
   if (query.includeDeleted) params.set("includeDeleted", "1");
   const result = await api<GenerationJobPage>(`generation-jobs?${params}`);
   return { ...result, items: result.items.map(validateGenerationJob) };

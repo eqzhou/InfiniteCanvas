@@ -2976,20 +2976,41 @@ func (s *PostgresStore) CompareAndSwapStates(ctx context.Context, tenantID strin
 func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string, query GenerationJobQuery) (GenerationJobPage, error) {
 	tenantID = normalizeTenantID(tenantID)
 	query.UserID = strings.TrimSpace(query.UserID)
+	query.Status = strings.TrimSpace(query.Status)
+	if query.Page < 1 {
+		query.Page = 1
+	}
+	if query.PageSize < 1 {
+		query.PageSize = 20
+	}
 	var total int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND ($2='' OR user_id=$2) AND ($3='' OR project_id=$3)
-		  AND ($4='' OR kind=$4) AND ($5 OR status <> 'deleted')`,
-		tenantID, query.UserID, query.ProjectID, query.Kind, query.IncludeDeleted).Scan(&total); err != nil {
+		  AND ($4='' OR kind=$4)
+		  AND (
+		    $5='' OR $5='all'
+		    OR ($5='succeeded' AND status IN ('succeeded', 'running', 'queued'))
+		    OR ($5='failed' AND status IN ('failed', 'cancelled'))
+		    OR status=$5
+		  )
+		  AND ($6 OR status <> 'deleted')`,
+		tenantID, query.UserID, query.ProjectID, query.Kind, query.Status, query.IncludeDeleted).Scan(&total); err != nil {
 		return GenerationJobPage{}, err
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id, user_id, COALESCE(project_id,''), kind, status, prompt,
 		provider_id, model, parameters, result, error, created_at, updated_at
 		FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND ($2='' OR user_id=$2) AND ($3='' OR project_id=$3)
-		  AND ($4='' OR kind=$4) AND ($5 OR status <> 'deleted')
-		ORDER BY created_at DESC, id DESC LIMIT $6 OFFSET $7`,
-		tenantID, query.UserID, query.ProjectID, query.Kind, query.IncludeDeleted, query.PageSize, (query.Page-1)*query.PageSize)
+		  AND ($4='' OR kind=$4)
+		  AND (
+		    $5='' OR $5='all'
+		    OR ($5='succeeded' AND status IN ('succeeded', 'running', 'queued'))
+		    OR ($5='failed' AND status IN ('failed', 'cancelled'))
+		    OR status=$5
+		  )
+		  AND ($6 OR status <> 'deleted')
+		ORDER BY created_at DESC, id DESC LIMIT $7 OFFSET $8`,
+		tenantID, query.UserID, query.ProjectID, query.Kind, query.Status, query.IncludeDeleted, query.PageSize, (query.Page-1)*query.PageSize)
 	if err != nil {
 		return GenerationJobPage{}, err
 	}

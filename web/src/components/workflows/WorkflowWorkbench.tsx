@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { Plus, RefreshCw, Sparkles } from "lucide-react";
+import { ImagePlus, Plus, RefreshCw, Sparkles, Video } from "lucide-react";
 
 import { WorkflowRunCard } from "@/components/workflows/WorkflowRunCard";
 import { WorkflowTemplateEditor } from "@/components/workflows/WorkflowTemplateEditor";
@@ -315,12 +315,43 @@ export function WorkflowWorkbench() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--ob-canvas)]">
-      <header className="flex flex-wrap items-center gap-3 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3">
-        <div className="mr-auto"><p className="ob-page-kicker">Workflow</p><h1 className="text-base font-semibold">{t("workflow.title")}</h1></div>
-        <div className="ob-segment" role="tablist" aria-label={t("workbench.kind")}>
-          <Link role="tab" aria-selected={false} className="ob-segment-item no-underline" to="/workbench/image">{t("common.image")}</Link>
-          <Link role="tab" aria-selected={false} className="ob-segment-item no-underline" to="/workbench/video">{t("common.video")}</Link>
-          <Link role="tab" aria-selected className="ob-segment-item no-underline" to="/workbench/workflows">{t("workbench.workflow")}</Link>
+      <header className="flex items-center gap-3 border-b border-[var(--ob-line)] bg-[var(--ob-panel-glass)] px-4 py-3 shadow-[var(--ob-elev-1)] backdrop-blur-md">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-[var(--ob-accent-soft)] to-[var(--ob-canvas)] text-[var(--ob-accent)] ring-1 ring-[color-mix(in_srgb,var(--ob-accent)_20%,transparent)] shadow-xs shrink-0">
+            <Sparkles size={16} />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-sm font-bold tracking-tight text-[var(--ob-ink)] sm:text-base">{t("workflow.title")}</h1>
+          </div>
+        </div>
+        <div className="ob-segment rounded-xl p-0.5 bg-[var(--ob-canvas)] border border-[var(--ob-line)]/50" role="tablist" aria-label={t("workbench.kind")}>
+          <Link
+            role="tab"
+            aria-selected={false}
+            className="ob-segment-item no-underline rounded-lg px-3 py-1.5 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 hover:text-[var(--ob-ink)]"
+            to="/workbench/image"
+          >
+            <ImagePlus size={14} />
+            {t("common.image")}
+          </Link>
+          <Link
+            role="tab"
+            aria-selected={false}
+            className="ob-segment-item no-underline rounded-lg px-3 py-1.5 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 hover:text-[var(--ob-ink)]"
+            to="/workbench/video"
+          >
+            <Video size={14} />
+            {t("common.video")}
+          </Link>
+          <Link
+            role="tab"
+            aria-selected={true}
+            className="ob-segment-item no-underline rounded-lg px-3 py-1.5 text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
+            to="/workbench/workflows"
+          >
+            <Sparkles size={14} />
+            {t("workbench.workflow")}
+          </Link>
         </div>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto xl:grid-cols-[260px_minmax(420px,1fr)_360px]">

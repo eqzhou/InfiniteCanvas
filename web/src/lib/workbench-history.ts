@@ -25,9 +25,26 @@ export function workbenchCategories(jobs: readonly GenerationJob[]): string[] {
   return [WORKBENCH_ALL_CATEGORIES, ...categories, ...(uncategorized ? [WORKBENCH_UNCATEGORIZED] : [])];
 }
 
-export function filterWorkbenchJobs(jobs: readonly GenerationJob[], category: string): GenerationJob[] {
-  if (category === WORKBENCH_ALL_CATEGORIES) return [...jobs];
-  return jobs.filter((job) => normalizeWorkbenchCategory(job.parameters.category) === category);
+export type WorkbenchStatusFilter = "all" | "succeeded" | "failed" | string;
+
+export function filterWorkbenchJobs(
+  jobs: readonly GenerationJob[],
+  category: string,
+  status: WorkbenchStatusFilter = "succeeded",
+): GenerationJob[] {
+  return jobs.filter((job) => {
+    if (category !== WORKBENCH_ALL_CATEGORIES && normalizeWorkbenchCategory(job.parameters.category) !== category) {
+      return false;
+    }
+    if (status === "all" || status === "") return true;
+    if (status === "succeeded") {
+      return job.status === "succeeded" || job.status === "running" || job.status === "queued";
+    }
+    if (status === "failed") {
+      return job.status === "failed" || job.status === "cancelled";
+    }
+    return job.status === status;
+  });
 }
 
 export function formatWorkbenchBytes(value: unknown): string {

@@ -28,6 +28,17 @@ describe("creative workbench history presentation", () => {
     expect(filterWorkbenchJobs(jobs, "海报").map(({ id }) => id)).toEqual(["a", "d"]);
     expect(filterWorkbenchJobs(jobs, "全部")).toEqual(jobs);
     expect(jobs[0]?.parameters.category).toBe("  海报  ");
+
+    const mixedJobs: GenerationJob[] = [
+      { ...job("s1"), status: "succeeded" },
+      { ...job("r1"), status: "running" },
+      { ...job("q1"), status: "queued" },
+      { ...job("f1"), status: "failed" },
+      { ...job("c1"), status: "cancelled" },
+    ];
+    expect(filterWorkbenchJobs(mixedJobs, "全部", "succeeded").map(({ id }) => id)).toEqual(["s1", "r1", "q1"]);
+    expect(filterWorkbenchJobs(mixedJobs, "全部", "failed").map(({ id }) => id)).toEqual(["f1", "c1"]);
+    expect(filterWorkbenchJobs(mixedJobs, "全部", "all").map(({ id }) => id)).toEqual(["s1", "r1", "q1", "f1", "c1"]);
   });
 
   test("formats media sizes and extracts only bounded durable references", () => {

@@ -246,6 +246,12 @@ select:focus-visible,
     box-shadow var(--ob-duration) var(--ob-ease);
 }
 
+/* Inline filters and compact controls should size to their content. */
+.ob-field.w-auto {
+  width: auto;
+  max-width: 100%;
+}
+
 /* Compact variant for dense inline grids (film panels, storage credentials) */
 .ob-input {
   border-radius: 0.5rem;
@@ -309,30 +315,99 @@ select:focus-visible,
   gap: 0.4rem;
   border: 1px solid transparent;
   border-radius: 0.625rem;
-  padding: 0.45rem 0.9rem;
+  padding: 0.45rem 0.95rem;
   font-size: 0.875rem;
-  font-weight: 500;
-  border-color: transparent;
+  font-weight: 600;
   background: var(--ob-accent);
   color: #fff;
   white-space: nowrap;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--ob-accent) 35%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--ob-accent) 28%, transparent);
   transition:
     background-color var(--ob-duration) var(--ob-ease),
     box-shadow var(--ob-duration) var(--ob-ease),
+    transform var(--ob-duration) var(--ob-ease),
     opacity var(--ob-duration) var(--ob-ease);
 }
 
 .ob-btn-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ob-accent) 86%, #000);
+  background: var(--ob-accent-hover);
   color: #fff;
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--ob-accent) 40%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--ob-accent) 40%, transparent);
+  transform: translateY(-1px);
 }
 
 .ob-btn-primary:disabled,
 .ob-btn-danger:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.ob-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  padding: 0.12rem 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ob-muted);
+  background: var(--ob-surface-2);
+  border: 1px solid var(--ob-line-strong);
+  border-radius: 0.375rem;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+}
+
+.ob-stat-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--ob-line);
+  background: var(--ob-panel);
+  border-radius: var(--ob-radius-lg);
+  padding: 1rem 1.25rem;
+  box-shadow: var(--ob-shadow);
+  transition:
+    border-color var(--ob-duration) var(--ob-ease),
+    box-shadow var(--ob-duration) var(--ob-ease),
+    transform var(--ob-duration) var(--ob-ease);
+}
+
+.ob-stat-card:hover {
+  border-color: color-mix(in srgb, var(--ob-accent) 35%, var(--ob-line));
+  box-shadow: var(--ob-elev-2);
+  transform: translateY(-1px);
+}
+
+.ob-stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ob-accent), transparent);
+  opacity: 0.75;
+}
+
+.ob-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--ob-line) 80%, transparent);
+  background: color-mix(in srgb, var(--ob-surface-2) 60%, transparent);
+  color: var(--ob-muted);
+  transition: all var(--ob-duration) var(--ob-ease);
+}
+
+.ob-tag-badge:hover {
+  border-color: var(--ob-accent);
+  color: var(--ob-accent);
+  background: var(--ob-accent-soft);
 }
 
 .ob-btn-ghost {
@@ -587,6 +662,8 @@ html.dark .ob-mobile-nav-overlay {
 @media (min-width: 768px) {
   .ob-desktop-nav {
     display: flex;
+    flex-wrap: nowrap;
+    white-space: nowrap;
   }
 }
 
@@ -1176,6 +1253,7 @@ html.dark .ob-overlay-canvas {
   color: var(--ob-muted);
   font-size: 0.8rem;
   font-weight: 500;
+  cursor: pointer;
   transition:
     background-color var(--ob-duration) var(--ob-ease),
     color var(--ob-duration) var(--ob-ease),
