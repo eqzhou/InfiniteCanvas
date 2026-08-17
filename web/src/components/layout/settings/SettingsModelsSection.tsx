@@ -109,12 +109,16 @@ export function SettingsModelsSection({
           audioFormat: audioFormatOptions(nextProtocol)[0] ?? "mp3",
         }
       : config.generationDefaults;
+    const previousImage = normalized.providers!.image;
     const image = providers.image;
+    const imageDestinationChanged = previousImage.protocol !== image.protocol || previousImage.model !== image.model;
     setConfig({
       ...config,
       channels: config.channels.map((item) => item.id === channel.id ? { ...item, providers } : item),
       generationDefaults,
-      imageCount: clampImageCountForProvider(config.imageCount, image.protocol, image.model),
+      ...(imageDestinationChanged
+        ? { imageCount: clampImageCountForProvider(config.imageCount, image.protocol, image.model) }
+        : {}),
     });
   };
 

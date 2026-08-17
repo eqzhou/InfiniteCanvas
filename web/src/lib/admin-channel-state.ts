@@ -116,6 +116,14 @@ function adminChannelFingerprint(channel: AdminChannel): string {
   });
 }
 
+export function adminChannelAudienceReady(
+  channel: Pick<AdminChannel, "publishToAll" | "tenantIds">,
+  scope: "tenant" | "platform",
+): boolean {
+  if (scope !== "platform") return true;
+  return channel.publishToAll === true || (channel.tenantIds ?? []).some((tenantId) => tenantId.trim() !== "");
+}
+
 export function adminChannelIsDirty(
   channel: AdminChannel,
   persisted: AdminChannel | undefined,

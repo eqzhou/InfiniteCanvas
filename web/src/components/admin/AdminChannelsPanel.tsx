@@ -23,6 +23,7 @@ import {
 import { invalidateSharedChannelCatalog } from "@/services/shared-channels";
 import { uid } from "@/lib/id";
 import {
+  adminChannelAudienceReady,
   adminChannelCanPreviewModels,
   adminChannelDestinationMatches,
   adminChannelIsDirty,
@@ -634,6 +635,7 @@ function ChannelActions({
   persisted,
   reviewing,
   busy,
+  scope,
   handlers,
 }: {
   channel: AdminChannel;
@@ -641,10 +643,17 @@ function ChannelActions({
   persisted?: AdminChannel;
   reviewing: boolean;
   busy: boolean;
+  scope: ChannelScope;
   handlers: ChannelHandlers;
 }) {
   const { t } = useI18n();
   const canFetchModels = adminChannelCanPreviewModels(channel, secret, persisted);
+  const audienceReady = adminChannelAudienceReady(channel, scope);
+  const saveBlockedReason = reviewing
+    ? t("admin.channels.confirmModelsFirst")
+    : audienceReady
+      ? undefined
+      : t("admin.channels.audienceRequired");
   return (
     <div className="space-y-2">
       <div className="ob-record-actions">
@@ -659,8 +668,8 @@ function ChannelActions({
         <button
           type="button"
           className="ob-btn ob-btn-primary ob-btn-sm"
-          disabled={busy || reviewing}
-          title={reviewing ? t("admin.channels.confirmModelsFirst") : undefined}
+          disabled={busy || reviewing || !audienceReady}
+          title={saveBlockedReason}
           onClick={handlers.save}
         >
           <Save size={14} aria-hidden />
@@ -731,6 +740,7 @@ function ChannelRecord({
         persisted={persistedChannel}
         reviewing={Boolean(review)}
         busy={busy}
+        scope={scope}
         handlers={handlers}
       />
     </article>
@@ -757,6 +767,7 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
   const loadGenerationRef = useRef(0);
 
   const load = async () => {
+    if (busyRef.current) return;
     const generation = ++loadGenerationRef.current;
     setLoading(true);
     setLoaded(false);

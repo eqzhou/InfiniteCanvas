@@ -5,6 +5,7 @@ import {
   adminChannelCanPreviewModels,
   adminChannelSecretBindingIsCurrent,
   applySavedAdminChannel,
+  adminChannelAudienceReady,
   adminChannelIsDirty,
   buildAdminChannelModelDiff,
   mergeSavedAdminChannels,
@@ -35,6 +36,15 @@ describe("admin channel persistence state", () => {
       ...draft, secretConfigured: true,
     })).toBe(false);
     expect(adminChannelCanPreviewModels({ ...draft, protocol: "gemini" }, "sk-preview")).toBe(false);
+  });
+
+  test("requires a platform channel to name an audience before save", () => {
+    const draft = channel("platform", false);
+    expect(adminChannelAudienceReady(draft, "tenant")).toBe(true);
+    expect(adminChannelAudienceReady(draft, "platform")).toBe(false);
+    expect(adminChannelAudienceReady({ ...draft, publishToAll: true }, "platform")).toBe(true);
+    expect(adminChannelAudienceReady({ ...draft, tenantIds: ["tenant-a"] }, "platform")).toBe(true);
+    expect(adminChannelAudienceReady({ ...draft, tenantIds: [" "] }, "platform")).toBe(false);
   });
 
   test("treats never-saved drafts and local edits as dirty", () => {
