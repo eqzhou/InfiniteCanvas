@@ -1,4 +1,11 @@
 export const settingsZhCN = {
+  "settings.account": "账号",
+  "settings.accountDescription": "修改当前账号的登录密码",
+  "settings.changePassword": "更新密码",
+  "settings.passwordChanged": "密码已更新，其他设备上的登录已失效",
+  "settings.currentPasswordIncorrect": "当前密码不正确",
+  "settings.passwordChangeFailed": "修改密码失败",
+  "settings.passwordSignInRequired": "登录后才能修改密码",
   "settings.close": "关闭设置",
   "settings.autoSave": "已自动保存",
   "settings.saving": "正在保存…",
@@ -177,6 +184,13 @@ export const settingsZhCN = {
 } as const;
 
 export const settingsEnUS: Record<keyof typeof settingsZhCN, string> = {
+  "settings.account": "Account",
+  "settings.accountDescription": "Change the password for this account",
+  "settings.changePassword": "Update password",
+  "settings.passwordChanged": "Password updated. Other signed-in sessions have been signed out",
+  "settings.currentPasswordIncorrect": "Current password is incorrect",
+  "settings.passwordChangeFailed": "Could not change the password",
+  "settings.passwordSignInRequired": "Sign in to change your password",
   "settings.close": "Close settings",
   "settings.autoSave": "Saved automatically",
   "settings.saving": "Saving…",

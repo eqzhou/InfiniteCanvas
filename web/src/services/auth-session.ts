@@ -1,4 +1,5 @@
 import { normalizeModelCatalog } from "@/lib/model-catalog";
+import { passwordPolicyError } from "@/lib/password-policy";
 
 export type AuthUser = {
   id: string;
@@ -144,6 +145,16 @@ export async function login(
   );
   setSessionToken(result.sessionToken);
   return result;
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  if (passwordPolicyError(newPassword)) {
+    throw new AuthHttpError(400, "invalid password");
+  }
+  await parseJSON(await authFetch("auth/password", {
+    method: "PUT",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  }));
 }
 
 export async function logout(): Promise<void> {

@@ -4,6 +4,8 @@ import type { AuthUser, SitePolicy } from "@/services/auth-session";
 import { DEFAULT_SITE_POLICY, getSitePolicy, login, register } from "@/services/auth-session";
 import { useI18n } from "@/i18n/I18nProvider";
 import { createAgentHelpTranslator } from "@/i18n/messages/agent-help";
+import { PASSWORD_MIN_LENGTH, passwordPolicyError, passwordsMatch } from "@/lib/password-policy";
+import { PasswordField } from "./PasswordField";
 
 type AuthTab = "login" | "register";
 
@@ -18,6 +20,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
   const [tab, setTab] = useState<AuthTab>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +56,19 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
     if (busy) return;
     if (tab === "register" && !canRegister) {
       setError(t("auth.registerClosed"));
+      return;
+    }
+    const policyError = passwordPolicyError(password);
+    if (policyError === "too-short") {
+      setError(t("auth.passwordTooShort"));
+      return;
+    }
+    if (policyError === "too-long") {
+      setError(t("auth.passwordTooLong"));
+      return;
+    }
+    if (tab === "register" && !passwordsMatch(password, confirmPassword)) {
+      setError(t("auth.passwordMismatch"));
       return;
     }
     setError(null);
@@ -121,6 +137,7 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
                 onClick={() => {
                   setTab(item.id);
                   setError(null);
+                  setConfirmPassword("");
                 }}
               >
                 {item.label}
@@ -165,21 +182,30 @@ export function AuthPanel({ onSuccess, beforeAuthenticate }: AuthPanelProps) {
             />
           </label>
 
-          <label className="block space-y-1.5">
-            <span className="text-sm text-[var(--ob-muted)]">{t("auth.password")}</span>
-            <input
-              className="ob-field"
-              type="password"
-              name="password"
-              autoComplete={tab === "login" ? "current-password" : "new-password"}
+          <PasswordField
+            label={t("auth.password")}
+            value={password}
+            onChange={setPassword}
+            autoComplete={tab === "login" ? "current-password" : "new-password"}
+            required
+            minLength={PASSWORD_MIN_LENGTH}
+            placeholder={t("auth.passwordPlaceholder")}
+            disabled={busy}
+          />
+
+          {tab === "register" ? (
+            <PasswordField
+              name="confirmPassword"
+              label={t("auth.confirmPassword")}
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+              autoComplete="new-password"
               required
-              minLength={6}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              minLength={PASSWORD_MIN_LENGTH}
               placeholder={t("auth.passwordPlaceholder")}
               disabled={busy}
             />
-          </label>
+          ) : null}
 
           {error ? (
             <div

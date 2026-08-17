@@ -16,6 +16,7 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-navigation";
 import { SettingsFeedbackBar } from "./settings/SettingsFeedbackBar";
+import { SettingsAccountSection } from "./settings/SettingsAccountSection";
 import { SettingsInterfaceSection } from "./settings/SettingsInterfaceSection";
 import { SettingsModelsSection, SharedChannelManagedNotice } from "./settings/SettingsModelsSection";
 import { SettingsGenerationSection } from "./settings/SettingsGenerationSection";
@@ -44,7 +45,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [tenantPolicy, setTenantPolicy] = useState<TenantPolicy>(DEFAULT_TENANT_POLICY);
   const [policyLoad, setPolicyLoad] = useState<SettingsPolicyLoad>("loading");
   const settingsSections = useMemo(() => settingsSectionsFor(tenantOwner), [tenantOwner]);
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>("interface");
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>("account");
   const scrollRef = useRef<HTMLDivElement>(null);
   const mobileNavigationRef = useRef<HTMLElement>(null);
   const scrollFrame = useRef(0);
@@ -77,7 +78,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   useEffect(() => {
     if (!open) return;
     setActiveSection((current) => (
-      settingsSections.some((section) => section.id === current) ? current : "interface"
+      settingsSections.some((section) => section.id === current) ? current : "account"
     ));
   }, [open, settingsSections]);
 
@@ -251,6 +252,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             onScroll={handleScroll}
             className="min-h-0 flex-1 overflow-y-auto px-4 py-5 text-sm sm:px-6"
           >
+            <SettingsAccountSection />
             <SettingsInterfaceSection />
             <SettingsModelsSection
               tenantOwner={tenantOwner}

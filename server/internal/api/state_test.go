@@ -47,6 +47,8 @@ type memoryStore struct {
 	updateUserErr            error
 	mediaRefs                map[string]store.MediaReference
 	tenants                  map[string]store.Tenant
+	passwordHashes           map[string]string
+	sessions                 map[string]string
 }
 
 func tenantKey(tenantID, key string) string {
@@ -73,6 +75,8 @@ func newMemoryStore() *memoryStore {
 		creditAdjustments:    map[string]string{},
 		mediaRefs:            map[string]store.MediaReference{},
 		tenants:              map[string]store.Tenant{},
+		passwordHashes:       map[string]string{},
+		sessions:             map[string]string{},
 	}
 }
 
@@ -928,6 +932,57 @@ func (*memoryStore) RegisterUser(context.Context, store.RegisterInput) (store.Au
 }
 func (*memoryStore) LoginUser(context.Context, string, string) (store.AuthUser, string, error) {
 	return store.AuthUser{}, "", store.ErrInvalidCredentials
+}
+func (m *memoryStore) ChangeUserPassword(_ context.Context, userID, currentPassword, newPassword, keepSessionToken string) error {
+	return m.updateUserPassword(userID, currentPassword, newPassword, keepSessionToken, true)
+}
+func (m *memoryStore) ResetUserPassword(_ context.Context, userID, newPassword string) error {
+	return m.updateUserPassword(userID, "", newPassword, "", false)
+}
+func (m *memoryStore) updateUserPassword(userID, currentPassword, newPassword, keepSessionToken string, verifyCurrent bool) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return store.ErrInvalidInput
+	}
+	if err := store.ValidateNewPassword(newPassword); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for _, user := range m.authUsers {
+		if user.ID == userID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return store.ErrNotFound
+	}
+	hash := m.passwordHashes[userID]
+	if verifyCurrent {
+		if err := store.VerifyCurrentPassword(hash, currentPassword); err != nil {
+			return err
+		}
+		if hash != "" && currentPassword == newPassword {
+			return store.ErrPasswordUnchanged
+		}
+	}
+	nextHash, err := store.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	m.passwordHashes[userID] = nextHash
+	keepHash := ""
+	if keepSessionToken != "" {
+		keepHash = store.HashSessionToken(keepSessionToken)
+	}
+	for tokenHash, sessionUser := range m.sessions {
+		if sessionUser == userID && tokenHash != keepHash {
+			delete(m.sessions, tokenHash)
+		}
+	}
+	return nil
 }
 func (*memoryStore) LogoutSession(context.Context, string) error { return nil }
 func (*memoryStore) LookupSession(context.Context, string) (store.AuthUser, error) {

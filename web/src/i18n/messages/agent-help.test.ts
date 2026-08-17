@@ -40,6 +40,8 @@ describe("agent, help, and authentication localization", () => {
       "components/agent/agent-markdown.tsx",
       "components/auth/AuthGate.tsx",
       "components/auth/AuthPanel.tsx",
+      "components/auth/PasswordField.tsx",
+      "components/layout/settings/SettingsAccountSection.tsx",
       "pages/HelpPage.tsx",
     ];
     const sources = Object.fromEntries(await Promise.all(files.map(async (file) => [

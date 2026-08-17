@@ -15,6 +15,7 @@ describe("settings navigation", () => {
     const ownerSections = settingsSectionsFor(true);
 
     expect(memberSections.map((section) => section.id)).toEqual([
+      "account",
       "interface",
       "models",
       "generation",

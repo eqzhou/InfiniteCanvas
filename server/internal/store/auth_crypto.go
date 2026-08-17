@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -14,12 +14,32 @@ const (
 	sessionTokenBytes = 32
 )
 
-func HashPassword(password string) (string, error) {
-	if len(password) < 8 {
-		return "", fmt.Errorf("password must be at least 8 characters")
+func ValidateNewPassword(password string) error {
+	if strings.TrimSpace(password) == "" || len(password) < 8 {
+		return ErrPasswordTooShort
 	}
-	if len(password) > 128 {
-		return "", fmt.Errorf("password is too long")
+	if len(password) > 72 {
+		return ErrPasswordTooLong
+	}
+	return nil
+}
+
+func VerifyCurrentPassword(hash, current string) error {
+	if hash == "" {
+		if current != "" {
+			return ErrInvalidCredentials
+		}
+		return nil
+	}
+	if !CheckPassword(hash, current) {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
+func HashPassword(password string) (string, error) {
+	if err := ValidateNewPassword(password); err != nil {
+		return "", err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {

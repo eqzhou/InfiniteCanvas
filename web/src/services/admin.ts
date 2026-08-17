@@ -1,5 +1,6 @@
 import { AuthHttpError, authFetch } from "@/services/auth-session";
 import { isLoopbackHostname } from "@/lib/loopback-host";
+import { passwordPolicyError } from "@/lib/password-policy";
 
 export type AdminUser = {
   id: string;
@@ -359,6 +360,18 @@ export async function putPlatformTenantQuota(tenantId: string, quota: number): P
 
 export async function patchPlatformUser(userId: string, patch: Partial<Pick<AdminUser, "status">>): Promise<AdminUser> {
   return json(await authFetch(`platform/users/${encodeURIComponent(userId)}`, { method: "PATCH", body: JSON.stringify(patch) }));
+}
+
+export async function resetPlatformUserPassword(userId: string, password: string): Promise<void> {
+  if (!userId.trim() || passwordPolicyError(password)) throw new Error("密码无效");
+  const response = await authFetch(`platform/users/${encodeURIComponent(userId)}/password`, {
+    method: "PUT",
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new AuthHttpError(response.status, detail || `HTTP ${response.status}`);
+  }
 }
 
 export async function adjustPlatformCredits(userId: string, input: { delta: number; reason: string; idempotencyKey: string }): Promise<{ user: AdminUser; log: AdminCreditLog; replayed: boolean }> {

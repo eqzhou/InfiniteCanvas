@@ -14,9 +14,12 @@ import {
   listPlatformUsers,
   patchPlatformUser,
   putPlatformTenantQuota,
+  resetPlatformUserPassword,
   type AdminUser,
   type PlatformTenant,
 } from "@/services/admin";
+import { PasswordField } from "@/components/auth/PasswordField";
+import { PASSWORD_MIN_LENGTH, passwordPolicyError, passwordsMatch } from "@/lib/password-policy";
 
 export function PlatformAdminPanel() {
   const { locale, t } = useI18n();
@@ -163,6 +166,7 @@ export function PlatformAdminPanel() {
                     user={user}
                     onChange={(next) => setUsers((current) => current.map((item) => item.id === next.id ? next : item))}
                     onError={setError}
+                    onNotice={setNotice}
                   />
                 ))}
               </tbody>
@@ -176,13 +180,19 @@ export function PlatformAdminPanel() {
   );
 }
 
-function PlatformUserRow({ user, onChange, onError }: { user: AdminUser; onChange: (user: AdminUser) => void; onError: (error: string) => void }) {
+function PlatformUserRow({ user, onChange, onError, onNotice }: { user: AdminUser; onChange: (user: AdminUser) => void; onError: (error: string) => void; onNotice: (notice: string) => void }) {
   const { locale, t } = useI18n();
   const [delta, setDelta] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [resetError, setResetError] = useState<string | null>(null);
+  const resetPanelId = `platform-reset-password-${user.id}`;
   const deltaValue = Number(delta);
   const canAdjust = delta !== "" && Number.isSafeInteger(deltaValue) && deltaValue !== 0 && reason.trim().length > 0 && !busy;
+  const canReset = !busy && !passwordPolicyError(newPassword) && passwordsMatch(newPassword, confirmPassword);
   const saveStatus = async (status: AdminUser["status"]) => {
     if (busy) return;
     setBusy(true);
@@ -198,6 +208,34 @@ function PlatformUserRow({ user, onChange, onError }: { user: AdminUser; onChang
       setDelta(""); setReason("");
     } catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
+  };
+  const resetPassword = async () => {
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError === "too-short") {
+      setResetError(t("auth.passwordTooShort"));
+      return;
+    }
+    if (policyError === "too-long") {
+      setResetError(t("auth.passwordTooLong"));
+      return;
+    }
+    if (!passwordsMatch(newPassword, confirmPassword)) {
+      setResetError(t("auth.passwordMismatch"));
+      return;
+    }
+    if (busy) return;
+    setBusy(true);
+    setResetError(null);
+    try {
+      await resetPlatformUserPassword(user.id, newPassword);
+      setNewPassword("");
+      setConfirmPassword("");
+      setResetOpen(false);
+      onNotice(t("admin.passwordReset"));
+    } catch {
+      setResetError(t("admin.passwordResetFailed"));
+      onError(t("admin.passwordResetFailed"));
+    } finally { setBusy(false); }
   };
   return (
     <tr>
@@ -228,7 +266,49 @@ function PlatformUserRow({ user, onChange, onError }: { user: AdminUser; onChang
           <input className="ob-field w-20 py-1 text-[0.8125rem]" aria-label={`${user.email} · ${t("admin.creditDelta")}`} type="number" value={delta} disabled={busy} onChange={(event) => setDelta(event.target.value)} placeholder="+/-" />
           <input className="ob-field w-32 py-1 text-[0.8125rem]" aria-label={`${user.email} · ${t("admin.reason")}`} value={reason} disabled={busy} onChange={(event) => setReason(event.target.value)} placeholder={t("admin.reason")} />
           <button type="button" className="ob-btn" disabled={!canAdjust} onClick={() => void adjust()}>{busy ? t("admin.processing") : t("admin.adjust")}</button>
+          <button
+            type="button"
+            className="ob-btn"
+            disabled={busy}
+            aria-expanded={resetOpen}
+            aria-controls={resetPanelId}
+            onClick={() => setResetOpen((open) => !open)}
+          >
+            {t("admin.resetPassword")}
+          </button>
         </div>
+        {resetOpen ? (
+          <form id={resetPanelId} className="mt-2 max-w-xs space-y-2" onSubmit={(event) => { event.preventDefault(); void resetPassword(); }}>
+            <p className="text-xs text-[var(--ob-muted)]">{t("admin.resetPasswordHint")}</p>
+            <PasswordField
+              name={`reset-password-${user.id}`}
+              label={t("auth.newPassword")}
+              value={newPassword}
+              onChange={setNewPassword}
+              autoComplete="new-password"
+              required
+              minLength={PASSWORD_MIN_LENGTH}
+              placeholder={t("auth.passwordPlaceholder")}
+              disabled={busy}
+            />
+            <PasswordField
+              name={`reset-password-confirm-${user.id}`}
+              label={t("auth.confirmPassword")}
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+              autoComplete="new-password"
+              required
+              minLength={PASSWORD_MIN_LENGTH}
+              placeholder={t("auth.passwordPlaceholder")}
+              disabled={busy}
+            />
+            {resetError ? <p role="alert" className="text-xs text-[var(--ob-danger)]">{resetError}</p> : null}
+            <div className="flex flex-wrap gap-1">
+              <button type="submit" className="ob-btn-primary" disabled={!canReset}>{t("admin.confirmResetPassword")}</button>
+              <button type="button" className="ob-btn" disabled={busy} onClick={() => { setResetOpen(false); setNewPassword(""); setConfirmPassword(""); setResetError(null); }}>{t("admin.cancelResetPassword")}</button>
+            </div>
+          </form>
+        ) : null}
       </td>
     </tr>
   );

@@ -25,6 +25,9 @@ var (
 	ErrInvitationInvalid    = errors.New("invalid invitation")
 	ErrBootstrapRequired    = errors.New("bootstrap authorization required")
 	ErrRegistrationDisabled = errors.New("registration disabled")
+	ErrPasswordTooShort     = errors.New("password must be at least 8 characters")
+	ErrPasswordTooLong      = errors.New("password is too long")
+	ErrPasswordUnchanged    = errors.New("new password must be different")
 )
 
 const DefaultTenantID = "local"
@@ -664,6 +667,8 @@ type Store interface {
 	CountUsers(ctx context.Context) (int, error)
 	RegisterUser(ctx context.Context, input RegisterInput) (AuthUser, string, error) // user, sessionToken, err
 	LoginUser(ctx context.Context, email, password string) (AuthUser, string, error)
+	ChangeUserPassword(ctx context.Context, userID, currentPassword, newPassword, keepSessionToken string) error
+	ResetUserPassword(ctx context.Context, userID, newPassword string) error
 	LogoutSession(ctx context.Context, sessionToken string) error
 	LookupSession(ctx context.Context, sessionToken string) (AuthUser, error)
 	GetTenant(ctx context.Context, tenantID string) (Tenant, error)

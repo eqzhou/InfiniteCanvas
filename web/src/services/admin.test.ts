@@ -41,6 +41,7 @@ import {
   putPlatformTenantQuota,
   patchAdminUser,
   patchPlatformUser,
+  resetPlatformUserPassword,
   adjustPlatformCredits,
   createTenantInvitation,
   deleteAdminChannel,
@@ -141,6 +142,20 @@ describe("admin client", () => {
     expect(requests[3]?.url).toContain("user%2F1");
     expect(() => putPlatformTenantQuota("", 1)).toThrow("租户额度无效");
     expect(() => adjustPlatformCredits("user-1", { delta: 0, reason: "repair", idempotencyKey: "adjust-2" })).toThrow("算力调整参数无效");
+  });
+
+  test("resets a platform user password on the platform-scoped endpoint", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+
+    await resetPlatformUserPassword("user/1", "new-pass1");
+    expect(requests[0]?.url).toContain("platform/users/user%2F1/password");
+    expect(requests[0]?.init?.method).toBe("PUT");
+    expect(requests[0]?.init?.body).toBe(JSON.stringify({ password: "new-pass1" }));
+    expect(() => resetPlatformUserPassword("user-1", "short")).toThrow("密码无效");
   });
 
   test("keeps tenant invitations owner-scoped and constrains new roles to user", async () => {

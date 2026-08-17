@@ -167,6 +167,54 @@ func (s *Server) patchPlatformUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, updated)
 }
 
+func (s *Server) resetPlatformUserPassword(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePlatformAdmin(w, r) {
+		return
+	}
+	backend, ok := platformStore(s, w)
+	if !ok {
+		return
+	}
+	userID := strings.TrimSpace(chi.URLParam(r, "userId"))
+	if userID == "" || len(userID) > 128 {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	if _, err := backend.GetUserAnyTenant(r.Context(), userID); errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "failed to load user", http.StatusInternalServerError)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input struct {
+		Password string `json:"password"`
+	}
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := store.ValidateNewPassword(input.Password); err != nil {
+		writePasswordPolicyError(w, err)
+		return
+	}
+	if err := s.store.ResetUserPassword(r.Context(), userID, input.Password); errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		if writePasswordPolicyError(w, err) {
+			return
+		}
+		http.Error(w, "failed to reset password", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) adjustPlatformUserCredits(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePlatformAdmin(w, r) {
 		return

@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Database,
   HardDrive,
+  KeyRound,
   Languages,
   MousePointerClick,
   Server,
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 
 export type SettingsSectionId =
+  | "account"
   | "interface"
   | "models"
   | "generation"
@@ -26,6 +28,7 @@ export type SettingsSectionDefinition = Readonly<{
 export type SettingsPolicyLoad = "loading" | "ready" | "unavailable";
 
 const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = Object.freeze([
+  { id: "account", labelKey: "settings.account", icon: KeyRound },
   { id: "interface", labelKey: "settings.interface", icon: Languages },
   { id: "models", labelKey: "settings.modelsAndChannels", icon: Server },
   { id: "generation", labelKey: "settings.generationDefaults", icon: Sliders },

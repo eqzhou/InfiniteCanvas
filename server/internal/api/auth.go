@@ -399,6 +399,84 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"user": user, "sessionToken": token})
 }
 
+func writePasswordPolicyError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, store.ErrPasswordTooShort), errors.Is(err, store.ErrPasswordTooLong):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return true
+	default:
+		return false
+	}
+}
+
+func sessionTokenFromRequest(r *http.Request) string {
+	token := strings.TrimSpace(r.Header.Get(sessionHeader))
+	if token != "" {
+		return token
+	}
+	if c, err := r.Cookie("openboard_session"); err == nil {
+		return strings.TrimSpace(c.Value)
+	}
+	return ""
+}
+
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "auth unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if authMode() == "off" {
+		http.Error(w, "auth disabled", http.StatusNotFound)
+		return
+	}
+	user, ok := authUserFrom(r.Context())
+	if !ok || strings.TrimSpace(user.ID) == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(user.Status), "ban") {
+		http.Error(w, "account banned", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if decoder.Decode(&body) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := store.ValidateNewPassword(body.NewPassword); err != nil {
+		writePasswordPolicyError(w, err)
+		return
+	}
+	err := s.store.ChangeUserPassword(r.Context(), user.ID, body.CurrentPassword, body.NewPassword, sessionTokenFromRequest(r))
+	if errors.Is(err, store.ErrInvalidCredentials) {
+		http.Error(w, "current password is incorrect", http.StatusUnauthorized)
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if errors.Is(err, store.ErrPasswordUnchanged) {
+		http.Error(w, store.ErrPasswordUnchanged.Error(), http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		if writePasswordPolicyError(w, err) {
+			return
+		}
+		http.Error(w, "failed to change password", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		w.WriteHeader(http.StatusNoContent)

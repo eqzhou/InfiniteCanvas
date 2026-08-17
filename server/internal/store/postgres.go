@@ -4543,6 +4543,61 @@ VALUES ($1, $2, $3, $4)`, sessionID, user.ID, tokenHash, expires); err != nil {
 	return user, token, nil
 }
 
+func (s *PostgresStore) ChangeUserPassword(ctx context.Context, userID, currentPassword, newPassword, keepSessionToken string) error {
+	return s.updateUserPassword(ctx, userID, currentPassword, newPassword, keepSessionToken, true)
+}
+
+func (s *PostgresStore) ResetUserPassword(ctx context.Context, userID, newPassword string) error {
+	return s.updateUserPassword(ctx, userID, "", newPassword, "", false)
+}
+
+func (s *PostgresStore) updateUserPassword(ctx context.Context, userID, currentPassword, newPassword, keepSessionToken string, verifyCurrent bool) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || len(userID) > 128 {
+		return ErrInvalidInput
+	}
+	if err := ValidateNewPassword(newPassword); err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var passwordHash string
+	err = tx.QueryRow(ctx, `SELECT COALESCE(password_hash,'') FROM openboard_users WHERE id=$1 FOR UPDATE`, userID).Scan(&passwordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if verifyCurrent {
+		if err := VerifyCurrentPassword(passwordHash, currentPassword); err != nil {
+			return err
+		}
+		if passwordHash != "" && currentPassword == newPassword {
+			return ErrPasswordUnchanged
+		}
+	}
+	nextHash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE openboard_users SET password_hash=$2 WHERE id=$1`, userID, nextHash); err != nil {
+		return err
+	}
+	if keepSessionToken != "" {
+		_, err = tx.Exec(ctx, `DELETE FROM openboard_sessions WHERE user_id=$1 AND token_hash<>$2`, userID, HashSessionToken(keepSessionToken))
+	} else {
+		_, err = tx.Exec(ctx, `DELETE FROM openboard_sessions WHERE user_id=$1`, userID)
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *PostgresStore) LogoutSession(ctx context.Context, sessionToken string) error {
 	if sessionToken == "" {
 		return nil
