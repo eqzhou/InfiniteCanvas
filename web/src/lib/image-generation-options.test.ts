@@ -3,6 +3,7 @@ import {
   IMAGE_QUALITY_OPTIONS,
   IMAGE_SIZE_OPTIONS,
   imageAspectOptionsFor,
+  clampImageCountForProvider,
   imageOutputLimitFor,
   imageQualityOptionsFor,
   normalizeImageAspectForProvider,
@@ -53,7 +54,10 @@ describe("image generation setting options", () => {
       expect(imageSizeOptionsFor("openai", model).map((option) => option.value))
         .toEqual(["1024x1024", "1536x1024", "1024x1536"]);
       expect(imageOutputLimitFor("openai", model)).toBe(4);
+      expect(clampImageCountForProvider(8, "openai", model)).toBe(4);
     }
+    expect(clampImageCountForProvider(0, "openai", "custom-image")).toBe(1);
+    expect(clampImageCountForProvider(3, "openai", "custom-image")).toBe(3);
     expect(imageSizeOptionsFor("apimart", "gpt-image-1-official").map((option) => option.value))
       .toEqual(["1024x1024", "1536x1024", "1024x1536"]);
     expect(imageAspectOptionsFor("apimart", "gpt-image-1-official").map((option) => option.aspect))

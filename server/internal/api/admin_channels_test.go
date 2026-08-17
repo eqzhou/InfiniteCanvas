@@ -843,3 +843,135 @@ func TestAdminAzureAudioConnectionUsesSpeechEndpoint(t *testing.T) {
 		t.Fatalf("Azure connection: %d %s", connection.Code, connection.Body.String())
 	}
 }
+
+func TestPreviewAdminChannelModelsDoesNotRequireASavedChannel(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer sk-preview" {
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-image-1"},{"id":"gpt-image-2"}]}`))
+	}))
+	defer upstream.Close()
+
+	body, _ := json.Marshal(adminChannelPreviewInput{
+		BaseURL: upstream.URL + "/v1", Protocol: "openai", TimeoutSeconds: 15, APIKey: "sk-preview",
+	})
+	got := request(t, router, http.MethodPost, "/api/admin/channels/preview-models", body)
+	if got.Code != http.StatusOK {
+		t.Fatalf("preview models = %d %s", got.Code, got.Body.String())
+	}
+	var payload adminChannelModelList
+	if json.Unmarshal(got.Body.Bytes(), &payload) != nil || len(payload.Models) != 2 {
+		t.Fatalf("preview payload = %s", got.Body.String())
+	}
+	listed := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), "gpt-image-1") {
+		t.Fatalf("preview persisted a channel: %s", listed.Body.String())
+	}
+}
+
+func TestPutAdminChannelUpsertsOneWithoutReplacingSiblings(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	existing, _ := json.Marshal([]adminChannelPublic{
+		{ID: "keep-me", Name: "Keep", BaseURL: "https://keep.example/v1", Protocol: "openai", Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "keep-image"},
+	})
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", existing); got.Code != http.StatusOK {
+		t.Fatalf("seed sibling: %d %s", got.Code, got.Body.String())
+	}
+	listed := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	body, _ := json.Marshal(adminChannelPublic{
+		ID: "new-one", Name: "New", BaseURL: "https://new.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 2, TimeoutSeconds: 45, DefaultImageModel: "new-image",
+	})
+	got := requestWithHeaders(t, router, http.MethodPut, "/api/admin/channels/new-one", body, map[string]string{
+		adminRevisionHeader: listed.Header().Get(adminRevisionHeader),
+		"Authorization":     "Bearer test-token",
+	})
+	if got.Code != http.StatusOK {
+		t.Fatalf("upsert channel = %d %s", got.Code, got.Body.String())
+	}
+	var saved []adminChannelPublic
+	if json.Unmarshal(got.Body.Bytes(), &saved) != nil || len(saved) != 2 {
+		t.Fatalf("upsert payload = %s", got.Body.String())
+	}
+	ids := map[string]bool{}
+	for _, channel := range saved {
+		ids[channel.ID] = true
+	}
+	if !ids["keep-me"] || !ids["new-one"] {
+		t.Fatalf("upsert dropped a sibling: %#v", saved)
+	}
+}
+
+func TestPreviewAdminChannelModelsReusesStoredSecretOnlyForMatchingDestination(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer sk-stored" {
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-image-1"}]}`))
+	}))
+	defer upstream.Close()
+
+	channels, _ := json.Marshal([]adminChannelPublic{{
+		ID: "shared-main", Name: "Shared", BaseURL: upstream.URL + "/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 15, DefaultImageModel: "gpt-image-1",
+	}})
+	if got := putAdminConfigForTest(t, router, "/api/admin/channels", channels); got.Code != http.StatusOK {
+		t.Fatalf("put channels: %d %s", got.Code, got.Body.String())
+	}
+	if got := putSharedChannelSecret(t, router, "shared-main", "sk-stored"); got.Code != http.StatusNoContent {
+		t.Fatalf("put secret: %d %s", got.Code, got.Body.String())
+	}
+
+	sameDest, _ := json.Marshal(adminChannelPreviewInput{
+		ID: "shared-main", BaseURL: upstream.URL + "/v1", Protocol: "openai", TimeoutSeconds: 15,
+	})
+	if got := request(t, router, http.MethodPost, "/api/admin/channels/preview-models", sameDest); got.Code != http.StatusOK {
+		t.Fatalf("matching destination preview = %d %s", got.Code, got.Body.String())
+	}
+
+	changedDest, _ := json.Marshal(adminChannelPreviewInput{
+		ID: "shared-main", BaseURL: "https://other.example/v1", Protocol: "openai", TimeoutSeconds: 15,
+	})
+	if got := request(t, router, http.MethodPost, "/api/admin/channels/preview-models", changedDest); got.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("changed destination without key = %d %s", got.Code, got.Body.String())
+	}
+
+	typedKey, _ := json.Marshal(adminChannelPreviewInput{
+		ID: "shared-main", BaseURL: upstream.URL + "/v1", Protocol: "openai", TimeoutSeconds: 15, APIKey: "sk-stored",
+	})
+	if got := request(t, router, http.MethodPost, "/api/admin/channels/preview-test", typedKey); got.Code != http.StatusOK {
+		t.Fatalf("typed-key preview test = %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestPreviewAdminChannelTestUsesDraftAudioModel(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/cognitiveservices/v1" ||
+			r.Header.Get("Ocp-Apim-Subscription-Key") != "azure-test" {
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("ID3-azure-preview"))
+	}))
+	defer upstream.Close()
+
+	body, _ := json.Marshal(adminChannelPreviewInput{
+		BaseURL: upstream.URL, Protocol: "azure", TimeoutSeconds: 15,
+		DefaultAudioModel: "azure-neural-tts", APIKey: "azure-test",
+	})
+	got := request(t, router, http.MethodPost, "/api/admin/channels/preview-test", body)
+	if got.Code != http.StatusOK {
+		t.Fatalf("azure preview test = %d %s", got.Code, got.Body.String())
+	}
+	listed := request(t, router, http.MethodGet, "/api/admin/channels", nil)
+	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), "azure-neural-tts") {
+		t.Fatalf("preview test persisted a channel: %s", listed.Body.String())
+	}
+}

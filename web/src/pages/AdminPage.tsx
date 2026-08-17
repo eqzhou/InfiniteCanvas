@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { BookMarked, Cable, Coins, Cpu, Database, Gauge, HardDrive, Library, Plus, Search, ShieldAlert, ShieldCheck, SlidersHorizontal, Users, X, type LucideIcon } from "lucide-react";
+import { Coins, Cpu, Database, Gauge, Plus, Search, ShieldAlert, SlidersHorizontal, Users, X } from "lucide-react";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { EmptyState, Notice, SectionHeader } from "@/components/admin/AdminSection";
 import { AdminPromptCatalogPanel } from "@/components/admin/AdminPromptCatalogPanel";
@@ -10,7 +10,13 @@ import { PlatformAdminPanel } from "@/components/admin/PlatformAdminPanel";
 import { TenantPolicyPanel } from "@/components/admin/TenantPolicyPanel";
 import { TenantInvitationsPanel } from "@/components/admin/TenantInvitationsPanel";
 import { useI18n } from "@/i18n/I18nProvider";
-import type { MessageKey } from "@/i18n/core";
+import {
+  ADMIN_TAB_ICONS,
+  ADMIN_TAB_LABELS,
+  adminNavGroupsForCapabilities,
+  adminTabsForCapabilities,
+  type AdminTab,
+} from "@/lib/admin-navigation";
 import {
   getAdminModelCosts,
   getAdminTenantQuota,
@@ -26,19 +32,10 @@ import {
   type AdminUser,
 } from "@/services/admin";
 
-export type AdminTab = "quota" | "users" | "credits" | "policy" | "channels" | "prompts" | "library" | "storage" | "platform" | "models";
-const tenantTabs: readonly AdminTab[] = ["quota", "users", "credits", "policy", "channels", "prompts", "library", "storage"];
-const platformTabs: readonly AdminTab[] = ["platform", "models"];
-const adminTabLabels: Record<AdminTab, MessageKey> = { quota: "admin.tab.quota", users: "admin.tab.users", credits: "admin.tab.credits", policy: "admin.tab.policy", models: "admin.tab.models", channels: "admin.tab.channels", prompts: "admin.tab.prompts", library: "admin.tab.library", storage: "admin.tab.storage", platform: "admin.tab.platform" };
-const adminTabIcons: Record<AdminTab, LucideIcon> = { quota: Gauge, users: Users, credits: Coins, policy: ShieldCheck, models: Cpu, channels: Cable, prompts: BookMarked, library: Library, storage: HardDrive, platform: Database };
-const QUOTA_WARNING_RATIO = 0.8;
+export type { AdminTab };
+export { adminTabsForCapabilities };
 
-export function adminTabsForCapabilities(capabilities: { tenantOwner: boolean; platformAdmin: boolean }): AdminTab[] {
-  return [
-    ...(capabilities.tenantOwner ? tenantTabs : []),
-    ...(capabilities.platformAdmin ? platformTabs : []),
-  ];
-}
+const QUOTA_WARNING_RATIO = 0.8;
 
 export function AdminPage() {
   const { t } = useI18n();
@@ -48,6 +45,10 @@ export function AdminPage() {
   const platformAdmin = hasPlatformAdminCapability(auth);
   const actorRole = tenantOwner ? "owner" : "user";
   const role = auth?.localAdmin ? t("admin.localOperator") : actorRole;
+  const navGroups = useMemo(
+    () => adminNavGroupsForCapabilities({ tenantOwner, platformAdmin }),
+    [platformAdmin, tenantOwner],
+  );
   const visibleTabs = adminTabsForCapabilities({ tenantOwner, platformAdmin });
   const activeTab = visibleTabs.includes(tab) ? tab : visibleTabs[0];
   if (!canAccessAdminPage(auth)) {
@@ -62,12 +63,30 @@ export function AdminPage() {
   }
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: AdminTab) => {
     const currentIndex = visibleTabs.indexOf(current);
-    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? visibleTabs.length - 1 : event.key === "ArrowRight" ? (currentIndex + 1) % visibleTabs.length : event.key === "ArrowLeft" ? (currentIndex - 1 + visibleTabs.length) % visibleTabs.length : -1;
+    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? visibleTabs.length - 1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? (currentIndex + 1) % visibleTabs.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (currentIndex - 1 + visibleTabs.length) % visibleTabs.length : -1;
     if (nextIndex < 0) return;
     event.preventDefault();
     const next = visibleTabs[nextIndex];
     setTab(next);
     requestAnimationFrame(() => document.getElementById(`admin-tab-${next}`)?.focus());
+  };
+  const renderTabButton = (item: AdminTab, className: string, id?: string) => {
+    const Icon = ADMIN_TAB_ICONS[item];
+    return (
+      <button
+        key={item}
+        id={id}
+        type="button"
+        aria-current={activeTab === item ? "page" : undefined}
+        className={className}
+        data-active={activeTab === item}
+        onKeyDown={(event) => handleTabKeyDown(event, item)}
+        onClick={() => setTab(item)}
+      >
+        <Icon size={13} aria-hidden />
+        {t(ADMIN_TAB_LABELS[item])}
+      </button>
+    );
   };
   return (
     <div className="mx-auto flex h-full w-full max-w-7xl flex-col overflow-hidden p-4 sm:p-6">
@@ -80,28 +99,31 @@ export function AdminPage() {
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {platformAdmin ? (
             <span className="ob-chip border-[color-mix(in_srgb,var(--ob-accent)_35%,transparent)] bg-[var(--ob-accent-soft)] text-[var(--ob-accent)] font-medium text-xs">
-              <Database size={12} className="inline mr-1" />
+              <Database size={12} className="mr-1 inline" />
               {t("admin.platformAdmin")}
             </span>
           ) : null}
           <span className="ob-chip text-xs text-[var(--ob-muted)]">
-            <Users size={12} className="inline mr-1" />
-            {t("admin.roleLabel")} <strong className="text-[var(--ob-ink)] font-semibold">{role}</strong>
+            <Users size={12} className="mr-1 inline" />
+            {t("admin.roleLabel")} <strong className="font-semibold text-[var(--ob-ink)]">{role}</strong>
           </span>
         </div>
       </header>
-      <div className="-mx-1 mb-4 overflow-x-auto px-1 pb-1">
-        <div className="ob-segment min-w-max" role="tablist" aria-label={t("admin.sections")}>
-          {visibleTabs.map((item) => (
-            <button key={item} id={`admin-tab-${item}`} type="button" role="tab" aria-controls="admin-tabpanel" aria-selected={activeTab === item} tabIndex={activeTab === item ? 0 : -1} className="ob-segment-item" data-active={activeTab === item} onKeyDown={(event) => handleTabKeyDown(event, item)} onClick={() => setTab(item)}>
-              {(() => { const Icon = adminTabIcons[item]; return <Icon size={13} aria-hidden />; })()}
-              {t(adminTabLabels[item])}
-            </button>
+      <nav className="ob-settings-tabbar mb-0" aria-label={t("admin.sections")}>
+        {visibleTabs.map((item) => renderTabButton(item, "ob-settings-tabbar-item"))}
+      </nav>
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel)]">
+        <nav className="ob-settings-sidebar" aria-label={t("admin.sections")}>
+          {navGroups.map((group) => (
+            <div key={group.id} className="mb-3 last:mb-0">
+              <p className="ob-micro-label px-2 pb-1.5 pt-1">{t(group.labelKey)}</p>
+              {group.tabs.map((item) => renderTabButton(item, "ob-settings-sidebar-link", `admin-tab-${item}`))}
+            </div>
           ))}
+        </nav>
+        <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${activeTab}`} className="ob-view-fade-in min-h-0 flex-1 overflow-auto p-4 sm:p-5" key={activeTab}>
+          {activeTab === "quota" ? <TenantQuotaAdmin /> : activeTab === "users" ? <UsersAdmin /> : activeTab === "credits" ? <CreditsAdmin /> : activeTab === "policy" ? <TenantPolicyPanel /> : activeTab === "models" ? <ModelsAdmin /> : activeTab === "channels" ? <AdminChannelsPanel /> : activeTab === "prompts" ? <AdminPromptCatalogPanel /> : activeTab === "library" ? <AdminLibraryPanel /> : activeTab === "platform" ? <PlatformAdminPanel /> : <AdminStoragePoolPanel />}
         </div>
-      </div>
-      <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${activeTab}`} className="ob-view-fade-in min-h-0 flex-1 overflow-auto pb-6" key={activeTab}>
-        {activeTab === "quota" ? <TenantQuotaAdmin /> : activeTab === "users" ? <UsersAdmin /> : activeTab === "credits" ? <CreditsAdmin /> : activeTab === "policy" ? <TenantPolicyPanel /> : activeTab === "models" ? <ModelsAdmin /> : activeTab === "channels" ? <AdminChannelsPanel /> : activeTab === "prompts" ? <AdminPromptCatalogPanel /> : activeTab === "library" ? <AdminLibraryPanel /> : activeTab === "platform" ? <PlatformAdminPanel /> : <AdminStoragePoolPanel />}
       </div>
     </div>
   );

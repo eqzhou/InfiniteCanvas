@@ -25,8 +25,13 @@ import {
   listAdminChannels,
   listAdminUsers,
   normalizeAdminMediaCapabilities,
+  previewAdminChannelModels,
+  previewAdminChannelTest,
+  previewPlatformChannelModels,
+  putAdminChannel,
   putAdminChannelSecret,
   putAdminChannels,
+  putPlatformChannel,
   putAdminModelCosts,
   putAdminTenantQuota,
   putAdminStoragePool,
@@ -338,6 +343,63 @@ describe("admin client", () => {
     expect(saved[0].secretConfigured).toBeUndefined();
 	expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({ apiKey: "sk-private", secretBindingId: "binding-1" });
     expect(requests[1]?.url).toContain("shared%2Fmain/secret");
+  });
+
+  test("previews models from a draft secret and saves one channel by id", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      if (String(input).endsWith("/preview-models")) return new Response(JSON.stringify({ models: ["gpt-image-1"] }));
+      if (String(input).endsWith("/preview-test")) return new Response(JSON.stringify({ ok: true, modelCount: 2 }));
+      return versionedResponse(JSON.stringify([{
+        id: "draft-one", name: "Draft", baseUrl: "https://api.example.com/v1", protocol: "openai",
+        enabled: true, allowUserUse: true, weight: 1, timeoutSeconds: 30, defaultImageModel: "gpt-image-1",
+        mediaCapabilities: [], defaultTextModel: "", defaultVideoModel: "", defaultAudioModel: "",
+      }]));
+    }) as typeof fetch;
+    const draft = {
+      id: "draft-one", name: "Draft", baseUrl: "https://api.example.com/v1", protocol: "openai" as const,
+      enabled: true, allowUserUse: true, weight: 1, timeoutSeconds: 30,
+      defaultTextModel: "", defaultImageModel: "gpt-image-1", defaultVideoModel: "", defaultAudioModel: "",
+      secretConfigured: false,
+    };
+
+    expect(await previewAdminChannelModels({
+      baseUrl: draft.baseUrl, protocol: draft.protocol, timeoutSeconds: draft.timeoutSeconds,
+      defaultAudioModel: "tts-1", apiKey: "sk-draft",
+    })).toEqual(["gpt-image-1"]);
+    expect(await previewAdminChannelTest({
+      baseUrl: draft.baseUrl, protocol: draft.protocol, timeoutSeconds: draft.timeoutSeconds, apiKey: "sk-draft",
+    })).toEqual({ ok: true, modelCount: 2 });
+    expect(await previewPlatformChannelModels({
+      baseUrl: draft.baseUrl, protocol: draft.protocol, timeoutSeconds: draft.timeoutSeconds, apiKey: "sk-draft",
+    })).toEqual(["gpt-image-1"]);
+    const saved = await putAdminChannel(draft, adminRevision);
+    expect(saved.items).toHaveLength(1);
+    await putPlatformChannel(draft, adminRevision);
+
+    expect(requests[0]?.url).toContain("tenant/channels/preview-models");
+    expect(requests[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      baseUrl: draft.baseUrl, protocol: draft.protocol, timeoutSeconds: draft.timeoutSeconds,
+      defaultAudioModel: "tts-1", apiKey: "sk-draft",
+    });
+    expect(requests[2]?.url).toContain("platform/channels/preview-models");
+    expect(requests[3]?.url).toContain("tenant/channels/draft-one");
+    expect(requests[3]?.init?.method).toBe("PUT");
+    expect(requests[4]?.url).toContain("platform/channels/draft-one");
+    expect(JSON.parse(String(requests[3]?.init?.body)).id).toBe("draft-one");
+    expect(Array.isArray(JSON.parse(String(requests[3]?.init?.body)))).toBe(false);
+  });
+
+  test("surfaces the server message when a single-channel save is rejected", async () => {
+    globalThis.fetch = mock(async () => new Response("shared channel requires a default model", { status: 400 })) as typeof fetch;
+    await expect(putAdminChannel({
+      id: "draft-one", name: "Draft", baseUrl: "https://api.example.com/v1", protocol: "openai",
+      enabled: true, allowUserUse: true, weight: 1, timeoutSeconds: 30,
+      defaultTextModel: "", defaultImageModel: "gpt-image-1", defaultVideoModel: "", defaultAudioModel: "",
+      secretConfigured: false,
+    }, adminRevision)).rejects.toThrow("shared channel requires a default model");
   });
 
   test("cleanAdminChannelModels trims blanks and case-insensitive dedupes", () => {

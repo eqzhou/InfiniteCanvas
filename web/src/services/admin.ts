@@ -612,6 +612,46 @@ export async function listAdminChannels(): Promise<{ items: AdminChannel[]; revi
   })) };
 }
 
+export type AdminChannelPreviewInput = {
+  id?: string;
+  baseUrl: string;
+  protocol: AdminChannelProtocol;
+  timeoutSeconds: number;
+  defaultAudioModel?: string;
+  apiKey?: string;
+};
+
+async function readChannelCollection(response: Response, conflictMessage: string): Promise<{ items: AdminChannel[]; revision: string }> {
+  if (response.status === 409) throw new Error(conflictMessage);
+  const items = await json<AdminChannel[]>(response);
+  return { items: items.map(normalizeLoadedAdminChannel), revision: readAdminRevision(response) };
+}
+
+export async function putAdminChannel(channel: AdminChannel, revision: string): Promise<{ items: AdminChannel[]; revision: string }> {
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载共享渠道再保存");
+  const response = await authFetch(`tenant/channels/${encodeURIComponent(channel.id)}`, {
+    method: "PUT",
+    headers: { "X-OpenBoard-Revision": revision },
+    body: JSON.stringify(normalizeAdminChannel(channel)),
+  });
+  return readChannelCollection(response, "共享渠道已被其他管理员修改，请重新加载后重试");
+}
+
+export async function previewAdminChannelModels(input: AdminChannelPreviewInput): Promise<string[]> {
+  const result = await json<{ models: string[] }>(await authFetch("tenant/channels/preview-models", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }));
+  return result.models;
+}
+
+export async function previewAdminChannelTest(input: AdminChannelPreviewInput): Promise<{ ok: boolean; modelCount: number }> {
+  return json(await authFetch("tenant/channels/preview-test", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }));
+}
+
 export async function putAdminChannels(channels: AdminChannel[], revision: string): Promise<{ items: AdminChannel[]; revision: string }> {
   if (channels.length > 100) throw new Error("共享渠道数量不能超过 100");
   const normalized = channels.map(normalizeAdminChannel);
@@ -676,6 +716,31 @@ export async function listPlatformChannels(): Promise<{ items: AdminChannel[]; r
   const revision = readAdminRevision(response);
   const channels = await json<AdminChannel[]>(response);
   return { revision, items: channels.map(normalizeLoadedAdminChannel) };
+}
+
+export async function putPlatformChannel(channel: AdminChannel, revision: string): Promise<{ items: AdminChannel[]; revision: string }> {
+  if (!adminRevisionPattern.test(revision)) throw new Error("请先重新加载平台渠道再保存");
+  const response = await authFetch(`platform/channels/${encodeURIComponent(channel.id)}`, {
+    method: "PUT",
+    headers: { "X-OpenBoard-Revision": revision },
+    body: JSON.stringify(normalizePlatformChannel(channel)),
+  });
+  return readChannelCollection(response, "平台渠道已被其他管理员修改，请重新加载后重试");
+}
+
+export async function previewPlatformChannelModels(input: AdminChannelPreviewInput): Promise<string[]> {
+  const result = await json<{ models: string[] }>(await authFetch("platform/channels/preview-models", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }));
+  return result.models;
+}
+
+export async function previewPlatformChannelTest(input: AdminChannelPreviewInput): Promise<{ ok: boolean; modelCount: number }> {
+  return json(await authFetch("platform/channels/preview-test", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }));
 }
 
 export async function putPlatformChannels(channels: AdminChannel[], revision: string): Promise<{ items: AdminChannel[]; revision: string }> {

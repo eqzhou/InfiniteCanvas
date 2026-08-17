@@ -257,3 +257,40 @@ func TestPlatformChannelMigrationRequiresPlatformAndSourceOwnerCapabilities(t *t
 func containsJSONString(raw []byte, value string) bool {
 	return len(raw) > 0 && bytes.Contains(raw, []byte(value))
 }
+
+func TestPutPlatformChannelUpsertsOneWithoutReplacingSiblings(t *testing.T) {
+	_, _, router := sharedChannelHandler(t)
+	initial := request(t, router, http.MethodGet, "/api/platform/channels", nil)
+	existing, _ := json.Marshal([]platformChannelPublic{{
+		ID: "keep-me", Name: "Keep", BaseURL: "https://keep.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30, DefaultImageModel: "keep-image", PublishToAll: true,
+	}})
+	if got := requestWithHeaders(t, router, http.MethodPut, "/api/platform/channels", existing, map[string]string{
+		"Authorization": "Bearer test-token", adminRevisionHeader: initial.Header().Get(adminRevisionHeader),
+	}); got.Code != http.StatusOK {
+		t.Fatalf("seed sibling: %d %s", got.Code, got.Body.String())
+	}
+	listed := request(t, router, http.MethodGet, "/api/platform/channels", nil)
+	body, _ := json.Marshal(platformChannelPublic{
+		ID: "new-one", Name: "New", BaseURL: "https://new.example/v1", Protocol: "openai",
+		Enabled: true, AllowUserUse: true, Weight: 2, TimeoutSeconds: 45, DefaultImageModel: "new-image", PublishToAll: true,
+	})
+	got := requestWithHeaders(t, router, http.MethodPut, "/api/platform/channels/new-one", body, map[string]string{
+		"Authorization":     "Bearer test-token",
+		adminRevisionHeader: listed.Header().Get(adminRevisionHeader),
+	})
+	if got.Code != http.StatusOK {
+		t.Fatalf("upsert platform channel = %d %s", got.Code, got.Body.String())
+	}
+	var saved []platformChannelPublic
+	if json.Unmarshal(got.Body.Bytes(), &saved) != nil || len(saved) != 2 {
+		t.Fatalf("upsert payload = %s", got.Body.String())
+	}
+	ids := map[string]bool{}
+	for _, channel := range saved {
+		ids[channel.ID] = true
+	}
+	if !ids["keep-me"] || !ids["new-one"] {
+		t.Fatalf("upsert dropped a sibling: %#v", saved)
+	}
+}

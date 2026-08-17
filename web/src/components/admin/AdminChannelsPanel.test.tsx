@@ -28,9 +28,19 @@ describe("AdminChannelModelDiffReview", () => {
   });
 
   test("allows keyless Edge channels to run the connection test", () => {
-    expect(adminChannelCanTest({ protocol: "edge", secretConfigured: false })).toBe(true);
-    expect(adminChannelCanTest({ protocol: "azure", secretConfigured: false })).toBe(false);
-    expect(adminChannelCanTest({ protocol: "openai", secretConfigured: true })).toBe(true);
+    expect(adminChannelCanTest({ protocol: "edge", secretConfigured: false, baseUrl: "https://edge.example" })).toBe(true);
+    expect(adminChannelCanTest({ protocol: "azure", secretConfigured: false, baseUrl: "https://azure.example" })).toBe(false);
+    expect(adminChannelCanTest({ protocol: "openai", secretConfigured: false, baseUrl: "https://api.example/v1" }, "sk-draft")).toBe(true);
+    expect(adminChannelCanTest(
+      { protocol: "openai", secretConfigured: true, baseUrl: "https://api.example/v1" },
+      "",
+      { protocol: "openai", baseUrl: "https://api.example/v1", secretConfigured: true },
+    )).toBe(true);
+    expect(adminChannelCanTest(
+      { protocol: "openai", secretConfigured: false, baseUrl: "https://other.example/v1" },
+      "",
+      { protocol: "openai", baseUrl: "https://api.example/v1", secretConfigured: true },
+    )).toBe(false);
   });
 
   test("keeps newly created platform channels unpublished until explicitly targeted", () => {

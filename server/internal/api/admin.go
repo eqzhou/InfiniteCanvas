@@ -207,6 +207,79 @@ func (s *Server) putAdminChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, clean)
 }
 
+func upsertAdminChannelList(current []adminChannelPublic, next adminChannelPublic) []adminChannelPublic {
+	out := append([]adminChannelPublic(nil), current...)
+	for index, item := range out {
+		if item.ID == next.ID {
+			out[index] = next
+			return out
+		}
+	}
+	return append(out, next)
+}
+
+func (s *Server) putAdminChannel(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var item adminChannelPublic
+	if err := decoder.Decode(&item); err != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	item, message := normalizeAdminChannel(item)
+	if message != "" {
+		http.Error(w, message, http.StatusBadRequest)
+		return
+	}
+	if item.ID != id {
+		http.Error(w, "channel id mismatch", http.StatusBadRequest)
+		return
+	}
+	if err := validateAccountManagedChannelURL(item.BaseURL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	current, err := s.loadAdminChannels(r.Context(), tenantIDFrom(r))
+	if err != nil {
+		http.Error(w, "failed to load admin channels", http.StatusInternalServerError)
+		return
+	}
+	if len(current) >= 100 {
+		found := false
+		for _, existing := range current {
+			if existing.ID == item.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "too many channels", http.StatusBadRequest)
+			return
+		}
+	}
+	clean, err := s.replaceAdminChannels(r.Context(), tenantIDFrom(r), r.Header.Get(adminRevisionHeader), upsertAdminChannelList(current, item))
+	if errors.Is(err, store.ErrConflict) {
+		http.Error(w, "channels changed concurrently", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to save admin channel", http.StatusInternalServerError)
+		return
+	}
+	revision := adminConfigRevision(clean)
+	configured, _ := s.adminChannelSecretPresence(r.Context(), tenantIDFrom(r))
+	for index := range clean {
+		clean[index].SecretConfigured = configured[clean[index].ID]
+	}
+	w.Header().Set(adminRevisionHeader, revision)
+	writeJSON(w, clean)
+}
+
 func (s *Server) getAdminModels(w http.ResponseWriter, r *http.Request) {
 	// Public price list for billing estimate UI; no secrets.
 	if s.store == nil {

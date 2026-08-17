@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { AdminChannel } from "@/services/admin";
 import {
   applyAdminChannelModelSelection,
+  adminChannelCanPreviewModels,
   adminChannelSecretBindingIsCurrent,
+  applySavedAdminChannel,
   buildAdminChannelModelDiff,
   mergeSavedAdminChannels,
+  nextSelectedChannelId,
   shouldDeleteAdminChannel,
 } from "./admin-channel-state";
 
@@ -15,6 +18,33 @@ const channel = (id: string, secretConfigured: boolean): AdminChannel => ({
 });
 
 describe("admin channel persistence state", () => {
+  test("keeps the current channel selected unless it disappeared", () => {
+    expect(nextSelectedChannelId([{ id: "a" }, { id: "b" }], "b")).toBe("b");
+    expect(nextSelectedChannelId([{ id: "a" }, { id: "c" }], "b")).toBe("a");
+    expect(nextSelectedChannelId([{ id: "a" }, { id: "c" }], "b", "c")).toBe("c");
+    expect(nextSelectedChannelId([], "a")).toBeNull();
+  });
+
+  test("lets a draft channel preview models from a typed secret without saving first", () => {
+    const draft = channel("draft", false);
+    expect(adminChannelCanPreviewModels(draft, "sk-preview")).toBe(true);
+    expect(adminChannelCanPreviewModels(draft, "")).toBe(false);
+    expect(adminChannelCanPreviewModels(draft, "", { ...draft, secretConfigured: true })).toBe(true);
+    expect(adminChannelCanPreviewModels({ ...draft, baseUrl: "https://other.example/v1" }, "", {
+      ...draft, secretConfigured: true,
+    })).toBe(false);
+    expect(adminChannelCanPreviewModels({ ...draft, protocol: "gemini" }, "sk-preview")).toBe(false);
+  });
+
+  test("applies one saved channel without replacing sibling drafts", () => {
+    const draft = { ...channel("b", false), name: "Draft B" };
+    const saved = { ...channel("a", true), name: "Saved A", secretBindingId: "bind-a" };
+    expect(applySavedAdminChannel([channel("a", false), draft], saved)).toEqual([
+      { ...saved, models: undefined },
+      draft,
+    ]);
+  });
+
   test("deletes any persisted channel even when it has no secret", () => {
     expect(shouldDeleteAdminChannel(new Set(["saved"]), "saved")).toBe(true);
     expect(shouldDeleteAdminChannel(new Set(["saved"]), "draft")).toBe(false);

@@ -5105,7 +5105,7 @@ test("settings section navigation remains usable on mobile and across reopen", a
   let dialog = await openSettings();
   const navigation = dialog.getByRole("navigation", { name: "设置分区" });
   await expect(navigation).toBeVisible();
-  const webdavButton = navigation.getByRole("button", { name: "WebDAV" });
+  const webdavButton = navigation.getByRole("button", { name: "数据与备份" });
   await webdavButton.click();
   await expect.poll(() => dialog.locator("[data-settings-scroll-container]").evaluate(
     (element) => element.scrollTop / Math.max(1, element.scrollHeight - element.clientHeight),

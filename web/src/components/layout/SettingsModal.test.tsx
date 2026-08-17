@@ -1,13 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import {
-  SharedChannelManagedNotice,
-  UsageOverview,
-  settingsHorizontalScrollTarget,
-  settingsScrollTarget,
-  settingsSectionsFor,
-  settingsWorkspacePermissions,
-} from "./SettingsModal";
+import { SharedChannelManagedNotice, SettingsModal, UsageOverview } from "./SettingsModal";
+import { I18nProvider } from "@/i18n/I18nProvider";
 
 describe("UsageOverview", () => {
   test("separates team generations, personal credits, and server media storage", () => {
@@ -37,60 +31,20 @@ describe("SharedChannelManagedNotice", () => {
   });
 });
 
-describe("settings section navigation", () => {
-  test("keeps the settings modal personal for owners and ordinary users", () => {
-    const memberSections = settingsSectionsFor(false);
-    const ownerSections = settingsSectionsFor(true);
-
-    expect(memberSections.map((section) => section.id)).toEqual([
-      "interface",
-      "channel",
-      "usage",
-      "model",
-      "generation",
-      "defaults",
-      "toolbar",
-      "storage",
-      "configfile",
-      "webdav",
-    ]);
-    expect(ownerSections.map((section) => section.id)).toEqual([
-      "interface",
-      "channel",
-      "usage",
-      "model",
-      "generation",
-      "defaults",
-      "toolbar",
-      "storage",
-      "configfile",
-      "webdav",
-    ]);
-    expect(memberSections).not.toBe(ownerSections);
-    expect(ownerSections.some((section) => section.id === "policy")).toBe(false);
-  });
-
-  test("reserves tenant-wide import, backup, and restore for the tenant owner", () => {
-    expect(settingsWorkspacePermissions(false)).toEqual({
-      importCompleteProject: false,
-      exportCompleteWorkspace: false,
-      restoreCompleteWorkspace: false,
-    });
-    expect(settingsWorkspacePermissions(true)).toEqual({
-      importCompleteProject: true,
-      exportCompleteWorkspace: true,
-      restoreCompleteWorkspace: true,
-    });
-  });
-
-  test("calculates a container-local scroll target and never scrolls above the start", () => {
-    expect(settingsScrollTarget(240, 100, 460)).toBe(584);
-    expect(settingsScrollTarget(0, 100, 80)).toBe(0);
-  });
-
-  test("centers the active mobile section within the available horizontal range", () => {
-    expect(settingsHorizontalScrollTarget(100, 10, 300, 250, 80, 500)).toBe(230);
-    expect(settingsHorizontalScrollTarget(0, 10, 300, 0, 80, 500)).toBe(0);
-    expect(settingsHorizontalScrollTarget(480, 10, 300, 500, 80, 500)).toBe(500);
+describe("settings chrome", () => {
+  test("keeps notices in the dialog chrome instead of after the last section", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <SettingsModal open onClose={() => {}} />
+      </I18nProvider>,
+    );
+    const noticeIndex = html.indexOf("data-settings-notice");
+    const lastSection = html.indexOf('data-section-id="data"');
+    expect(noticeIndex).toBeGreaterThan(-1);
+    expect(lastSection).toBeGreaterThan(-1);
+    expect(noticeIndex).toBeLessThan(lastSection);
+    expect(html).toContain("模型与渠道");
+    expect(html).toContain("数据与备份");
+    expect(html).not.toContain('data-section-id="webdav"');
   });
 });

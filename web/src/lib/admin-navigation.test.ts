@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { adminTabsForCapabilities } from "@/lib/admin-navigation";
+import { adminNavGroupsForCapabilities, adminTabsForCapabilities } from "./admin-navigation";
 
-describe("admin role architecture", () => {
+describe("admin navigation", () => {
   test("keeps tenant and platform management surfaces independent", () => {
     expect(adminTabsForCapabilities({ tenantOwner: true, platformAdmin: false })).toEqual([
       "quota", "users", "credits", "policy", "channels", "prompts", "library", "storage",
@@ -14,5 +14,12 @@ describe("admin role architecture", () => {
       "platform", "models",
     ]);
     expect(adminTabsForCapabilities({ tenantOwner: false, platformAdmin: false })).toEqual([]);
+  });
+
+  test("groups tenant and platform tabs for the sidebar", () => {
+    expect(adminNavGroupsForCapabilities({ tenantOwner: true, platformAdmin: true }).map((group) => group.id))
+      .toEqual(["tenant", "platform"]);
+    expect(adminNavGroupsForCapabilities({ tenantOwner: true, platformAdmin: false })[0]?.tabs)
+      .toContain("channels");
   });
 });

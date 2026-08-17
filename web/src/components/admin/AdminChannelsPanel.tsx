@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Cable, Check, Eye, EyeOff, GitCompare, KeyRound, Layers, PlugZap, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Cable, Check, Eye, EyeOff, GitCompare, Layers, PlugZap, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import {
   deleteAdminChannel,
   deletePlatformChannel,
-  fetchAdminChannelModels,
-  fetchPlatformChannelModels,
   listAdminChannels,
   listPlatformChannels,
+  previewAdminChannelModels,
+  previewAdminChannelTest,
+  previewPlatformChannelModels,
+  previewPlatformChannelTest,
+  putAdminChannel,
   putAdminChannelSecret,
-  putAdminChannels,
+  putPlatformChannel,
   putPlatformChannelSecret,
-  putPlatformChannels,
-  testAdminChannel,
-  testPlatformChannel,
+  type AdminChannelPreviewInput,
   type AdminChannel,
   type AdminChannelProtocol,
   type AdminMediaCapability,
@@ -22,10 +23,12 @@ import {
 import { invalidateSharedChannelCatalog } from "@/services/shared-channels";
 import { uid } from "@/lib/id";
 import {
+  adminChannelCanPreviewModels,
+  adminChannelDestinationMatches,
   applyAdminChannelModelSelection,
-  adminChannelSecretBindingIsCurrent,
+  applySavedAdminChannel,
   buildAdminChannelModelDiff,
-  mergeSavedAdminChannels,
+  nextSelectedChannelId,
   shouldDeleteAdminChannel,
   type AdminChannelModelDiff,
 } from "@/lib/admin-channel-state";
@@ -37,8 +40,6 @@ import type { MessageKey } from "@/i18n/core";
 const protocols: AdminChannelProtocol[] = ["openai", "gemini", "apimart", "kie", "azure", "edge"];
 /** Only these adapters carry an audio contract; the audio model field is inert elsewhere. */
 const AUDIO_PROTOCOLS: AdminChannelProtocol[] = ["openai", "azure", "edge"];
-/** Model discovery is implemented for OpenAI-compatible list endpoints only. */
-const MODEL_FETCH_PROTOCOLS: AdminChannelProtocol[] = ["openai", "apimart"];
 /** The server clamps the same bounds; mirrored so the inputs cannot offer an invalid value. */
 const WEIGHT_MIN = 1;
 const WEIGHT_MAX = 100;
@@ -48,9 +49,13 @@ const MAX_REFERENCE_IMAGES = 16;
 const MODELS_PLACEHOLDER = "gpt-image-1\ngpt-image-2\nseedream-4";
 
 export function adminChannelCanTest(
-  channel: Pick<AdminChannel, "protocol" | "secretConfigured">,
+  channel: Pick<AdminChannel, "protocol" | "secretConfigured" | "baseUrl">,
+  secret = "",
+  persisted?: Pick<AdminChannel, "protocol" | "baseUrl" | "secretConfigured">,
 ): boolean {
-  return channel.protocol === "edge" || channel.secretConfigured;
+  if (channel.protocol === "edge") return true;
+  if (secret.trim()) return true;
+  return Boolean(persisted?.secretConfigured && adminChannelDestinationMatches(channel, persisted));
 }
 
 export function emptyAdminChannel(index: number, name = `共享渠道 ${index}`, publishToAll = false): AdminChannel {
@@ -83,29 +88,29 @@ export function emptyAdminChannelForScope(index: number, name: string, _scope: C
 
 type ChannelService = {
   list: () => Promise<{ items: AdminChannel[]; revision: string }>;
-  put: (channels: AdminChannel[], revision: string) => Promise<{ items: AdminChannel[]; revision: string }>;
+  putOne: (channel: AdminChannel, revision: string) => Promise<{ items: AdminChannel[]; revision: string }>;
   remove: (channelId: string, revision: string) => Promise<string>;
   putSecret: (channelId: string, apiKey: string, secretBindingId: string) => Promise<void>;
-  fetchModels: (channelId: string) => Promise<string[]>;
-  test: (channelId: string) => Promise<{ ok: boolean; modelCount: number }>;
+  previewModels: (input: AdminChannelPreviewInput) => Promise<string[]>;
+  previewTest: (input: AdminChannelPreviewInput) => Promise<{ ok: boolean; modelCount: number }>;
 };
 
 const tenantChannelService: ChannelService = {
   list: listAdminChannels,
-  put: putAdminChannels,
+  putOne: putAdminChannel,
   remove: deleteAdminChannel,
   putSecret: putAdminChannelSecret,
-  fetchModels: fetchAdminChannelModels,
-  test: testAdminChannel,
+  previewModels: previewAdminChannelModels,
+  previewTest: previewAdminChannelTest,
 };
 
 const platformChannelService: ChannelService = {
   list: listPlatformChannels,
-  put: putPlatformChannels,
+  putOne: putPlatformChannel,
   remove: deletePlatformChannel,
   putSecret: putPlatformChannelSecret,
-  fetchModels: fetchPlatformChannelModels,
-  test: testPlatformChannel,
+  previewModels: previewPlatformChannelModels,
+  previewTest: previewPlatformChannelTest,
 };
 
 /** Field shell: uppercase micro-label above the control, matching the rest of the admin console. */
@@ -130,13 +135,7 @@ function FieldGroup({ label, children, className }: { label: string; children: R
 
 function ToggleField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
-    <div
-      className="ob-toggle-field"
-      onClick={(event) => {
-        if (event.target instanceof Element && event.target.closest("button[role='switch']")) return;
-        onChange(!checked);
-      }}
-    >
+    <label className="ob-toggle-field">
       <button
         type="button"
         role="switch"
@@ -147,7 +146,7 @@ function ToggleField({ label, checked, onChange }: { label: string; checked: boo
         onClick={() => onChange(!checked)}
       />
       <span>{label}</span>
-    </div>
+    </label>
   );
 }
 
@@ -383,13 +382,53 @@ interface ChannelHandlers {
   update: (patch: Partial<AdminChannel>) => void;
   changeModelsText: (value: string) => void;
   setSecret: (value: string) => void;
-  saveSecret: () => void;
+  save: () => void;
   test: () => void;
   fetchModels: () => void;
   requestDelete: () => void;
   toggleReviewModel: (model: string) => void;
   confirmReview: () => void;
   cancelReview: () => void;
+}
+
+function ChannelListItem({
+  channel,
+  selected,
+  persisted,
+  onSelect,
+}: {
+  channel: AdminChannel;
+  selected: boolean;
+  persisted: boolean;
+  onSelect: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      className="ob-channel-list-item"
+      data-active={selected}
+      data-channel-id={channel.id}
+      aria-current={selected ? "true" : undefined}
+      onClick={onSelect}
+    >
+      <span className="ob-channel-list-title">{channel.name.trim() || t("admin.unnamed")}</span>
+      <span className="ob-channel-list-meta">
+        <span className="ob-chip">{channel.protocol}</span>
+        <span className="ob-status-chip" data-tone={channel.enabled ? "success" : undefined}>
+          {channel.enabled ? t("admin.channels.enabled") : t("admin.channels.disabled")}
+        </span>
+        {channel.protocol === "edge" ? (
+          <span className="ob-chip">{t("admin.channels.edgeNoSecret")}</span>
+        ) : (
+          <span className="ob-status-chip" data-tone={channel.secretConfigured ? "success" : "warning"}>
+            {channel.secretConfigured ? t("admin.channels.secretOk") : t("admin.channels.noSecret")}
+          </span>
+        )}
+        {persisted ? null : <span className="ob-status-chip" data-tone="warning">{t("admin.channels.unsaved")}</span>}
+      </span>
+    </button>
+  );
 }
 
 function ChannelHeader({ channel, persisted }: { channel: AdminChannel; persisted: boolean }) {
@@ -492,13 +531,11 @@ function RoutingGroup({ channel, handlers, modelsBusy }: { channel: AdminChannel
 function AccessGroup({
   channel,
   secret,
-  bindingCurrent,
   handlers,
   scope,
 }: {
   channel: AdminChannel;
   secret: string;
-  bindingCurrent: boolean;
   handlers: ChannelHandlers;
   scope: ChannelScope;
 }) {
@@ -559,44 +596,62 @@ function AccessGroup({
             ) : null}
           </div>
         </label>
-        <button
-          type="button"
-          className="ob-btn"
-          title={bindingCurrent ? undefined : t("admin.channels.saveConfigFirst")}
-          disabled={!secret || !bindingCurrent}
-          onClick={handlers.saveSecret}
-        >
-          <KeyRound size={14} aria-hidden />
-          {bindingCurrent ? t("admin.channels.saveSecret") : t("admin.channels.saveChannelFirst")}
-        </button>
       </div>
     </FieldGroup>
   );
 }
 
-function ChannelActions({ channel, handlers }: { channel: AdminChannel; handlers: ChannelHandlers }) {
+function ChannelActions({
+  channel,
+  secret,
+  persisted,
+  reviewing,
+  busy,
+  handlers,
+}: {
+  channel: AdminChannel;
+  secret: string;
+  persisted?: AdminChannel;
+  reviewing: boolean;
+  busy: boolean;
+  handlers: ChannelHandlers;
+}) {
   const { t } = useI18n();
-  const canFetchModels = channel.secretConfigured && MODEL_FETCH_PROTOCOLS.includes(channel.protocol);
+  const canFetchModels = adminChannelCanPreviewModels(channel, secret, persisted);
   return (
-    <div className="ob-record-actions">
-      <button type="button" className="ob-btn ob-btn-sm" disabled={!adminChannelCanTest(channel)} onClick={handlers.test}>
-        <PlugZap size={14} aria-hidden />
-        {t("admin.channels.test")}
-      </button>
-      <button type="button" className="ob-btn ob-btn-sm" disabled={!canFetchModels} onClick={handlers.fetchModels}>
-        <RefreshCw size={14} aria-hidden />
-        {t("admin.channels.pullModels")}
-      </button>
-      <span className="ob-record-actions-end" />
-      <button
-        type="button"
-        className="ob-btn ob-btn-danger ob-btn-sm"
-        aria-label={t("admin.channels.deleteChannel", { name: channel.name })}
-        onClick={handlers.requestDelete}
-      >
-        <Trash2 size={14} aria-hidden />
-        {t("common.delete")}
-      </button>
+    <div className="space-y-2">
+      <div className="ob-record-actions">
+        <button type="button" className="ob-btn ob-btn-sm" disabled={busy || !adminChannelCanTest(channel, secret, persisted)} onClick={handlers.test}>
+          <PlugZap size={14} aria-hidden />
+          {t("admin.channels.test")}
+        </button>
+        <button type="button" className="ob-btn ob-btn-sm" disabled={busy || !canFetchModels} onClick={handlers.fetchModels}>
+          <RefreshCw size={14} aria-hidden />
+          {t("admin.channels.pullModels")}
+        </button>
+        <button
+          type="button"
+          className="ob-btn ob-btn-primary ob-btn-sm"
+          disabled={busy || reviewing}
+          title={reviewing ? t("admin.channels.confirmModelsFirst") : undefined}
+          onClick={handlers.save}
+        >
+          <Save size={14} aria-hidden />
+          {t("admin.channels.saveOne")}
+        </button>
+        <span className="ob-record-actions-end" />
+        <button
+          type="button"
+          className="ob-btn ob-btn-danger ob-btn-sm"
+          disabled={busy}
+          aria-label={t("admin.channels.deleteChannel", { name: channel.name })}
+          onClick={handlers.requestDelete}
+        >
+          <Trash2 size={14} aria-hidden />
+          {t("common.delete")}
+        </button>
+      </div>
+      <p className="ob-subpanel-hint">{t("admin.channels.previewHint")}</p>
     </div>
   );
 }
@@ -604,19 +659,21 @@ function ChannelActions({ channel, handlers }: { channel: AdminChannel; handlers
 function ChannelRecord({
   channel,
   secret,
-  bindingCurrent,
   persisted,
+  persistedChannel,
   modelsBusy,
   review,
+  busy,
   handlers,
   scope,
 }: {
   channel: AdminChannel;
   secret: string;
-  bindingCurrent: boolean;
   persisted: boolean;
+  persistedChannel?: AdminChannel;
   modelsBusy: boolean;
   review?: PendingModelReview;
+  busy: boolean;
   handlers: ChannelHandlers;
   scope: ChannelScope;
 }) {
@@ -626,7 +683,7 @@ function ChannelRecord({
       <ConnectionGroup channel={channel} handlers={handlers} />
       <DefaultModelsGroup channel={channel} handlers={handlers} />
       <RoutingGroup channel={channel} handlers={handlers} modelsBusy={modelsBusy} />
-      <AccessGroup channel={channel} secret={secret} bindingCurrent={bindingCurrent} handlers={handlers} scope={scope} />
+      <AccessGroup channel={channel} secret={secret} handlers={handlers} scope={scope} />
       <AdminMediaCapabilityEditor
         models={capabilityModelOptions(channel)}
         capabilities={channel.mediaCapabilities ?? []}
@@ -641,7 +698,14 @@ function ChannelRecord({
           onCancel={handlers.cancelReview}
         />
       ) : null}
-      <ChannelActions channel={channel} handlers={handlers} />
+      <ChannelActions
+        channel={channel}
+        secret={secret}
+        persisted={persistedChannel}
+        reviewing={Boolean(review)}
+        busy={busy}
+        handlers={handlers}
+      />
     </article>
   );
 }
@@ -659,26 +723,33 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
   const [loaded, setLoaded] = useState(false);
   const [revision, setRevision] = useState("");
   const [pendingDelete, setPendingDelete] = useState<AdminChannel | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const persistedIdsRef = useRef(new Set<string>());
   const persistedChannelsRef = useRef(new Map<string, AdminChannel>());
+  const busyRef = useRef(false);
+  const loadGenerationRef = useRef(0);
 
   const load = async () => {
+    const generation = ++loadGenerationRef.current;
     setLoading(true);
     setLoaded(false);
     try {
       setError("");
       const result = await service.list();
+      if (generation !== loadGenerationRef.current) return;
       const loaded = result.items;
       setRevision(result.revision);
       persistedIdsRef.current = new Set(loaded.map((channel) => channel.id));
       persistedChannelsRef.current = new Map(loaded.map((channel) => [channel.id, channel]));
       setModelReviews({});
       setChannels(loaded);
+      setSelectedId((current) => nextSelectedChannelId(loaded, current));
       setLoaded(true);
     } catch (cause) {
+      if (generation !== loadGenerationRef.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      if (generation === loadGenerationRef.current) setLoading(false);
     }
   };
   useEffect(() => { void load(); }, []);
@@ -688,30 +759,62 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
   };
   const discardReview = (id: string) => setModelReviews((current) => omit(current, id));
   const run = async (key: string, operation: () => Promise<string>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     try {
       setBusy(key); setError(""); setNotice(""); setNotice(await operation());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      busyRef.current = false;
       setBusy("");
     }
   };
 
-  const saveSecret = (channel: AdminChannel) => void run(`secret:${channel.id}`, async () => {
-    await service.putSecret(channel.id, secrets[channel.id] ?? "", channel.secretBindingId ?? "");
+  const previewPayload = (channel: AdminChannel): AdminChannelPreviewInput => ({
+    id: channel.id,
+    baseUrl: channel.baseUrl,
+    protocol: channel.protocol,
+    timeoutSeconds: channel.timeoutSeconds,
+    ...(channel.defaultAudioModel.trim() ? { defaultAudioModel: channel.defaultAudioModel } : {}),
+    ...(secrets[channel.id]?.trim() ? { apiKey: secrets[channel.id] } : {}),
+  });
+
+  const saveOne = (channel: AdminChannel) => void run(`save:${channel.id}`, async () => {
+    const result = await service.putOne(channel, revision);
+    const saved = result.items.find((item) => item.id === channel.id);
+    if (!saved) throw new Error(t("admin.channels.saveFailed"));
+    loadGenerationRef.current += 1;
+    setLoading(false);
+    setLoaded(true);
+    setRevision(result.revision);
+    persistedIdsRef.current = new Set([...persistedIdsRef.current, saved.id]);
+    persistedChannelsRef.current = new Map(persistedChannelsRef.current).set(saved.id, saved);
+    discardReview(channel.id);
+    setChannels((current) => applySavedAdminChannel(current, saved));
     invalidateSharedChannelCatalog();
-    setSecrets((current) => ({ ...current, [channel.id]: "" }));
-    setChannels((current) => current.map((item) => item.id === channel.id ? { ...item, secretConfigured: true } : item));
-    return t("admin.channels.secretSaved");
+    const draftSecret = secrets[channel.id]?.trim() ?? "";
+    if (draftSecret) {
+      try {
+        await service.putSecret(saved.id, draftSecret, saved.secretBindingId ?? "");
+      } catch {
+        throw new Error(t("admin.channels.secretSaveFailed"));
+      }
+      const nextSaved = { ...saved, secretConfigured: true };
+      persistedChannelsRef.current = new Map(persistedChannelsRef.current).set(nextSaved.id, nextSaved);
+      setSecrets((current) => ({ ...current, [channel.id]: "" }));
+      setChannels((current) => applySavedAdminChannel(current, nextSaved));
+    }
+    return t("admin.channels.savedOne", { name: saved.name || t("admin.unnamed") });
   });
 
   const testConnection = (channel: AdminChannel) => void run(`test:${channel.id}`, async () => {
-    const result = await service.test(channel.id);
+    const result = await service.previewTest(previewPayload(channel));
     return t("admin.channels.connectionSucceeded", { count: result.modelCount });
   });
 
   const fetchModels = (channel: AdminChannel) => void run(`models:${channel.id}`, async () => {
-    const models = await service.fetchModels(channel.id);
+    const models = await service.previewModels(previewPayload(channel));
     const diff = buildAdminChannelModelDiff(channel.models ?? [], models);
     setModelReviews((current) => ({ ...current, [channel.id]: { diff, selected: [...diff.selected] } }));
     return models.length
@@ -722,23 +825,19 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
   const removeChannel = (channel: AdminChannel) => void run(`delete:${channel.id}`, async () => {
     const persisted = shouldDeleteAdminChannel(persistedIdsRef.current, channel.id);
     if (persisted) setRevision(await service.remove(channel.id, revision));
+    loadGenerationRef.current += 1;
+    setLoading(false);
+    setLoaded(true);
     persistedIdsRef.current = new Set([...persistedIdsRef.current].filter((id) => id !== channel.id));
     invalidateSharedChannelCatalog();
-    setChannels((current) => current.filter((item) => item.id !== channel.id));
+    setChannels((current) => {
+      const remaining = current.filter((item) => item.id !== channel.id);
+      setSelectedId((currentId) => nextSelectedChannelId(remaining, currentId));
+      return remaining;
+    });
     discardReview(channel.id);
     setPendingDelete(null);
     return persisted ? t("admin.channels.deleted") : t("admin.channels.unsavedRemoved");
-  });
-
-  const saveAll = () => void run("save", async () => {
-    const result = await service.put(channels, revision);
-    const saved = result.items;
-    setRevision(result.revision);
-    persistedIdsRef.current = new Set(saved.map((channel) => channel.id));
-    persistedChannelsRef.current = new Map(saved.map((channel) => [channel.id, channel]));
-    invalidateSharedChannelCatalog();
-    setChannels(mergeSavedAdminChannels(saved));
-    return t("admin.channels.saved");
   });
 
   const confirmReview = (channel: AdminChannel) => {
@@ -758,7 +857,7 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
       discardReview(channel.id);
     },
     setSecret: (value) => setSecrets((current) => ({ ...current, [channel.id]: value })),
-    saveSecret: () => saveSecret(channel),
+    save: () => saveOne(channel),
     test: () => testConnection(channel),
     fetchModels: () => fetchModels(channel),
     requestDelete: () => {
@@ -777,18 +876,34 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
     cancelReview: () => discardReview(channel.id),
   });
 
+  const addChannel = () => {
+    const created = emptyAdminChannelForScope(
+      channels.length + 1,
+      t("admin.channels.defaultName", { index: channels.length + 1 }),
+      scope,
+    );
+    setChannels((current) => [...current, created]);
+    setSelectedId(created.id);
+  };
+  const selectedChannel = channels.find((channel) => channel.id === selectedId) ?? null;
+
   return (
     <div className="ob-admin-stack" aria-busy={loading || busy !== ""}>
       <section className="ob-admin-section">
         <SectionHeader
           icon={<Cable size={16} />}
           title={scope === "platform" ? t("admin.platformChannelsTitle") : t("admin.tab.channels")}
+          desc={scope === "platform" ? undefined : t("admin.channels.shortDesc")}
           actions={
             <>
               <span className="ob-micro-label">{t("admin.channels.count", { count: channels.length })}</span>
-              <button type="button" className="ob-btn ob-btn-ghost ob-btn-sm" disabled={loading} onClick={() => void load()}>
+              <button type="button" className="ob-btn ob-btn-ghost ob-btn-sm" disabled={loading || busy !== ""} onClick={() => void load()}>
                 <RefreshCw size={14} aria-hidden />
                 {t("admin.channels.reload")}
+              </button>
+              <button type="button" className="ob-btn ob-btn-sm" disabled={!loaded || busy !== ""} onClick={addChannel}>
+                <Plus size={14} aria-hidden />
+                {t("admin.channels.add")}
               </button>
             </>
           }
@@ -804,39 +919,39 @@ export function AdminChannelsPanel({ scope = "tenant" }: { scope?: ChannelScope 
           <fieldset className="contents" disabled={busy !== "" || !loaded}>
             {loaded && !channels.length ? (
               <EmptyState icon={<Cable size={20} />} title={t("admin.channels.empty")} desc={t("admin.channels.emptyDesc")} />
-            ) : null}
-            {channels.map((channel) => (
-              <ChannelRecord
-                key={channel.id}
-                channel={channel}
-                secret={secrets[channel.id] ?? ""}
-                bindingCurrent={adminChannelSecretBindingIsCurrent(channel, persistedChannelsRef.current.get(channel.id))}
-                persisted={persistedIdsRef.current.has(channel.id)}
-                modelsBusy={busy === `models:${channel.id}`}
-                review={modelReviews[channel.id]}
-                handlers={handlersFor(channel)}
-                scope={scope}
-              />
-            ))}
-            <div className="ob-record-actions">
-              <button
-                type="button"
-                className="ob-btn"
-                disabled={!loaded || busy !== ""}
-                onClick={() => setChannels((current) => [
-                  ...current,
-                  emptyAdminChannelForScope(current.length + 1, t("admin.channels.defaultName", { index: current.length + 1 }), scope),
-                ])}
-              >
-                <Plus size={14} aria-hidden />
-                {t("admin.channels.add")}
-              </button>
-              <span className="ob-record-actions-end" />
-              <button type="button" className="ob-btn ob-btn-primary" disabled={!loaded || busy !== ""} onClick={saveAll}>
-                <Save size={14} aria-hidden />
-                {t("admin.channels.saveAll")}
-              </button>
-            </div>
+            ) : (
+              <div className="ob-admin-split">
+                <aside className="ob-channel-list" aria-label={t("admin.channels.list")}>
+                  {channels.map((channel) => (
+                    <ChannelListItem
+                      key={channel.id}
+                      channel={channel}
+                      selected={channel.id === selectedChannel?.id}
+                      persisted={persistedIdsRef.current.has(channel.id)}
+                      onSelect={() => setSelectedId(channel.id)}
+                    />
+                  ))}
+                </aside>
+                <div className="ob-channel-editor">
+                  {selectedChannel ? (
+                    <ChannelRecord
+                      key={selectedChannel.id}
+                      channel={selectedChannel}
+                      secret={secrets[selectedChannel.id] ?? ""}
+                      persisted={persistedIdsRef.current.has(selectedChannel.id)}
+                      persistedChannel={persistedChannelsRef.current.get(selectedChannel.id)}
+                      modelsBusy={busy === `models:${selectedChannel.id}`}
+                      review={modelReviews[selectedChannel.id]}
+                      busy={busy !== ""}
+                      handlers={handlersFor(selectedChannel)}
+                      scope={scope}
+                    />
+                  ) : (
+                    <EmptyState title={t("admin.channels.selectPrompt")} />
+                  )}
+                </div>
+              </div>
+            )}
           </fieldset>
         </div>
       </section>

@@ -31,6 +31,15 @@ type adminChannelSecretInput struct {
 	SecretBindingID string `json:"secretBindingId"`
 }
 
+type adminChannelPreviewInput struct {
+	ID                string `json:"id"`
+	BaseURL           string `json:"baseUrl"`
+	Protocol          string `json:"protocol"`
+	TimeoutSeconds    int    `json:"timeoutSeconds"`
+	DefaultAudioModel string `json:"defaultAudioModel"`
+	APIKey            string `json:"apiKey"`
+}
+
 type adminChannelModelList struct {
 	Models []string `json:"models"`
 }
@@ -992,6 +1001,103 @@ func (s *Server) fetchChannelModels(ctx context.Context, channel adminChannelPub
 		APIKey:   apiKey,
 		Protocol: channel.Protocol,
 	}, providerModelHTTPClient, true)
+}
+
+func (s *Server) resolveAdminChannelPreview(ctx context.Context, tenantID string, input adminChannelPreviewInput) (adminChannelPublic, string, error) {
+	timeout := input.TimeoutSeconds
+	if timeout < 1 {
+		timeout = 30
+	}
+	draft := adminChannelPublic{
+		ID: "preview", Name: "preview", BaseURL: strings.TrimSpace(input.BaseURL), Protocol: strings.TrimSpace(input.Protocol),
+		Enabled: true, AllowUserUse: false, Weight: 1, TimeoutSeconds: timeout,
+		DefaultAudioModel: strings.TrimSpace(input.DefaultAudioModel),
+	}
+	if id := strings.TrimSpace(input.ID); id != "" {
+		draft.ID = id
+	}
+	channel, message := normalizeAdminChannel(draft)
+	if message != "" {
+		return adminChannelPublic{}, "", errors.New(message)
+	}
+	if err := validateAccountManagedChannelURL(channel.BaseURL); err != nil {
+		return adminChannelPublic{}, "", err
+	}
+	apiKey := strings.TrimSpace(input.APIKey)
+	if apiKey != "" {
+		if len(apiKey) > maxAdminChannelSecretBytes {
+			return adminChannelPublic{}, "", errors.New("invalid channel secret")
+		}
+		return channel, apiKey, nil
+	}
+	if channel.Protocol == "edge" {
+		return channel, "", nil
+	}
+	if channel.ID == "preview" {
+		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
+	}
+	stored, err := s.findAdminChannel(ctx, tenantID, channel.ID)
+	if err != nil {
+		return adminChannelPublic{}, "", err
+	}
+	if !sameAdminChannelSecretDestination(stored, channel) {
+		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
+	}
+	secrets, err := s.decryptAdminChannelSecrets(ctx, tenantID)
+	if err != nil || strings.TrimSpace(secrets[channel.ID]) == "" {
+		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
+	}
+	return channel, secrets[channel.ID], nil
+}
+
+func (s *Server) previewAdminChannelModels(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminChannelSecretBytes+4096)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input adminChannelPreviewInput
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	channel, apiKey, err := s.resolveAdminChannelPreview(r.Context(), tenantIDFrom(r), input)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	models, err := s.fetchChannelModels(r.Context(), channel, apiKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, adminChannelModelList{Models: models})
+}
+
+func (s *Server) previewAdminChannelTest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant channels unavailable") {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminChannelSecretBytes+4096)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input adminChannelPreviewInput
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	channel, apiKey, err := s.resolveAdminChannelPreview(r.Context(), tenantIDFrom(r), input)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	modelCount, err := s.checkChannelConnection(r.Context(), channel, apiKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "modelCount": modelCount})
 }
 
 func (s *Server) getAdminChannelModels(w http.ResponseWriter, r *http.Request) {

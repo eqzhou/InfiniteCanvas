@@ -47,6 +47,16 @@ export function shouldDeleteAdminChannel(persistedIds: ReadonlySet<string>, chan
   return persistedIds.has(channelId);
 }
 
+export function nextSelectedChannelId(
+  channels: ReadonlyArray<{ id: string }>,
+  currentId: string | null,
+  preferredId?: string | null,
+): string | null {
+  if (preferredId && channels.some((channel) => channel.id === preferredId)) return preferredId;
+  if (currentId && channels.some((channel) => channel.id === currentId)) return currentId;
+  return channels[0]?.id ?? null;
+}
+
 export function mergeSavedAdminChannels(
   saved: readonly AdminChannel[],
 ): AdminChannel[] {
@@ -54,6 +64,37 @@ export function mergeSavedAdminChannels(
     ...channel,
     models: channel.models ? [...channel.models] : undefined,
   }));
+}
+
+export function adminChannelDestinationMatches(
+  channel: Pick<AdminChannel, "protocol" | "baseUrl">,
+  persisted: Pick<AdminChannel, "protocol" | "baseUrl"> | undefined,
+): boolean {
+  return Boolean(persisted) &&
+    persisted!.protocol === channel.protocol &&
+    persisted!.baseUrl === channel.baseUrl;
+}
+
+export function adminChannelCanPreviewModels(
+  channel: Pick<AdminChannel, "protocol" | "secretConfigured" | "baseUrl">,
+  secret = "",
+  persisted?: Pick<AdminChannel, "protocol" | "baseUrl" | "secretConfigured">,
+): boolean {
+  if (channel.protocol !== "openai" && channel.protocol !== "apimart") return false;
+  if (secret.trim()) return true;
+  return Boolean(persisted?.secretConfigured && adminChannelDestinationMatches(channel, persisted));
+}
+
+export function applySavedAdminChannel(
+  channels: readonly AdminChannel[],
+  saved: AdminChannel,
+): AdminChannel[] {
+  const next = channels.some((channel) => channel.id === saved.id)
+    ? channels.map((channel) => channel.id === saved.id ? saved : channel)
+    : [...channels, saved];
+  return next.map((channel) => channel.id === saved.id
+    ? { ...saved, models: saved.models ? [...saved.models] : undefined }
+    : channel);
 }
 
 export function adminChannelSecretBindingIsCurrent(

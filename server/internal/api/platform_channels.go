@@ -584,6 +584,83 @@ func (s *Server) putPlatformChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, next)
 }
 
+func upsertPlatformChannelList(current []platformChannelPublic, next platformChannelPublic) []platformChannelPublic {
+	out := append([]platformChannelPublic(nil), current...)
+	for index, item := range out {
+		if item.ID == next.ID {
+			out[index] = next
+			return out
+		}
+	}
+	return append(out, next)
+}
+
+func (s *Server) putPlatformChannel(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePlatformAdmin(w, r) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var item platformChannelPublic
+	if err := decoder.Decode(&item); err != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	normalized, message := normalizePlatformChannel(item)
+	if message != "" {
+		http.Error(w, message, http.StatusBadRequest)
+		return
+	}
+	if normalized.ID != id {
+		http.Error(w, "channel id mismatch", http.StatusBadRequest)
+		return
+	}
+	current, err := s.loadPlatformChannels(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load platform channels", http.StatusInternalServerError)
+		return
+	}
+	if len(current) >= 100 {
+		found := false
+		for _, existing := range current {
+			if existing.ID == normalized.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "too many platform channels", http.StatusBadRequest)
+			return
+		}
+	}
+	if !normalized.PublishToAll {
+		if err := s.validatePlatformAudience(r.Context(), normalized.TenantIDs); errors.Is(err, store.ErrInvalidInput) {
+			http.Error(w, "invalid platform channel tenant", http.StatusBadRequest)
+			return
+		} else if err != nil {
+			http.Error(w, "failed to validate platform channel tenant", http.StatusInternalServerError)
+			return
+		}
+	}
+	next, err := s.replacePlatformChannels(r.Context(), r.Header.Get(adminRevisionHeader), upsertPlatformChannelList(current, normalized))
+	if errors.Is(err, store.ErrConflict) {
+		http.Error(w, "platform channels changed concurrently", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to save platform channel", http.StatusInternalServerError)
+		return
+	}
+	configured, _ := s.platformChannelSecretPresence(r.Context())
+	for index := range next {
+		next[index].SecretConfigured = configured[next[index].ID]
+	}
+	w.Header().Set(adminRevisionHeader, platformChannelRevision(next))
+	writeJSON(w, next)
+}
+
 func (s *Server) putPlatformChannelSecret(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePlatformAdmin(w, r) {
 		return
@@ -740,6 +817,104 @@ func (s *Server) fetchPlatformChannelModels(ctx context.Context, id string) ([]s
 		return nil, errors.New("channel secret is not configured")
 	}
 	return s.fetchChannelModels(ctx, channel, secrets[id])
+}
+
+func (s *Server) resolvePlatformChannelPreview(ctx context.Context, input adminChannelPreviewInput) (adminChannelPublic, string, error) {
+	timeout := input.TimeoutSeconds
+	if timeout < 1 {
+		timeout = 30
+	}
+	draft := adminChannelPublic{
+		ID: "preview", Name: "preview", BaseURL: strings.TrimSpace(input.BaseURL), Protocol: strings.TrimSpace(input.Protocol),
+		Enabled: true, AllowUserUse: false, Weight: 1, TimeoutSeconds: timeout,
+		DefaultAudioModel: strings.TrimSpace(input.DefaultAudioModel),
+	}
+	if id := strings.TrimSpace(input.ID); id != "" {
+		draft.ID = id
+	}
+	channel, message := normalizeAdminChannel(draft)
+	if message != "" {
+		return adminChannelPublic{}, "", errors.New(message)
+	}
+	if err := validateAccountManagedChannelURL(channel.BaseURL); err != nil {
+		return adminChannelPublic{}, "", err
+	}
+	apiKey := strings.TrimSpace(input.APIKey)
+	if apiKey != "" {
+		if len(apiKey) > maxAdminChannelSecretBytes {
+			return adminChannelPublic{}, "", errors.New("invalid channel secret")
+		}
+		return channel, apiKey, nil
+	}
+	if channel.Protocol == "edge" {
+		return channel, "", nil
+	}
+	if channel.ID == "preview" {
+		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
+	}
+	stored, err := s.findPlatformChannelForAdmin(ctx, channel.ID)
+	if err != nil {
+		return adminChannelPublic{}, "", err
+	}
+	storedChannel := stored.adminChannel()
+	if !sameAdminChannelSecretDestination(storedChannel, channel) {
+		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
+	}
+	secrets, err := s.decryptPlatformChannelSecrets(ctx)
+	if err != nil || strings.TrimSpace(secrets[channel.ID]) == "" {
+		return adminChannelPublic{}, "", errors.New("channel secret is not configured")
+	}
+	return channel, secrets[channel.ID], nil
+}
+
+func (s *Server) previewPlatformChannelModels(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePlatformAdmin(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminChannelSecretBytes+4096)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input adminChannelPreviewInput
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	channel, apiKey, err := s.resolvePlatformChannelPreview(r.Context(), input)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	models, err := s.fetchChannelModels(r.Context(), channel, apiKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, adminChannelModelList{Models: models})
+}
+
+func (s *Server) previewPlatformChannelTest(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePlatformAdmin(w, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminChannelSecretBytes+4096)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input adminChannelPreviewInput
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	channel, apiKey, err := s.resolvePlatformChannelPreview(r.Context(), input)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	modelCount, err := s.checkChannelConnection(r.Context(), channel, apiKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "modelCount": modelCount})
 }
 
 func (s *Server) getPlatformChannelModels(w http.ResponseWriter, r *http.Request) {

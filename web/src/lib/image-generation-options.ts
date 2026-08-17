@@ -147,6 +147,17 @@ export function imageOutputLimitFor(
   return maxOutputs && maxOutputs > 0 ? Math.min(fallback, maxOutputs) : fallback;
 }
 
+export function clampImageCountForProvider(
+  count: number,
+  protocol: string | undefined,
+  model: string | undefined,
+  fallback = 8,
+): number {
+  const limit = imageOutputLimitFor(protocol, model, fallback);
+  const requested = Number.isFinite(count) ? Math.floor(count) : 1;
+  return Math.min(limit, Math.max(1, requested));
+}
+
 export function optionsWithCurrentValue(
   options: readonly ImageGenerationOption[],
   currentValue: string,
