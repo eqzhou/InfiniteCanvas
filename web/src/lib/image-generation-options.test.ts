@@ -52,6 +52,7 @@ describe("image generation setting options", () => {
     for (const model of ["gpt-image-1", "gpt-image-1.5", "gpt-image-2"]) {
       expect(imageSizeOptionsFor("openai", model).map((option) => option.value))
         .toEqual(["1024x1024", "1536x1024", "1024x1536"]);
+      expect(imageOutputLimitFor("openai", model)).toBe(4);
     }
     expect(imageSizeOptionsFor("apimart", "gpt-image-1-official").map((option) => option.value))
       .toEqual(["1024x1024", "1536x1024", "1024x1536"]);

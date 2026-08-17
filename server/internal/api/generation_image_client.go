@@ -256,12 +256,13 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 	}
 	limited := &io.LimitedReader{R: response.Body, N: maxImageProviderResponseBytes + 1}
 	decoder := json.NewDecoder(limited)
-	if err := decoder.Decode(&payload); err != nil || limited.N <= 0 || ensureJSONEOF(decoder) != nil || len(payload.Data) < 1 || len(payload.Data) > 8 {
+	if err := decoder.Decode(&payload); err != nil || limited.N <= 0 || ensureJSONEOF(decoder) != nil ||
+		len(payload.Data) < request.Count || len(payload.Data) > 8 {
 		return nil, errors.New("image provider returned an invalid result")
 	}
-	images := make([]generatedImage, 0, len(payload.Data))
+	images := make([]generatedImage, 0, request.Count)
 	totalBytes := 0
-	for _, item := range payload.Data {
+	for _, item := range payload.Data[:request.Count] {
 		var imageData []byte
 		if item.Base64 != "" {
 			if len(item.Base64) > base64.StdEncoding.EncodedLen(maxGeneratedImageBytes)+4 {

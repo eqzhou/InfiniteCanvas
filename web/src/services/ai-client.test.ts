@@ -276,7 +276,12 @@ describe("generateVideo provider contracts", () => {
         method: init?.method,
         body: JSON.parse(String(init?.body)),
       });
-      return json({ data: [{ url: "https://cdn.example/generated.png" }] });
+      return json({
+        data: [
+          { url: "https://cdn.example/generated-1.png" },
+          { url: "https://cdn.example/generated-2.png" },
+        ],
+      });
     }) as typeof fetch;
 
     await expect(generateImages({
@@ -286,7 +291,10 @@ describe("generateVideo provider contracts", () => {
       size: "1536x1024",
       quality: "high",
       n: 2,
-    })).resolves.toEqual(["https://cdn.example/generated.png"]);
+    })).resolves.toEqual([
+      "https://cdn.example/generated-1.png",
+      "https://cdn.example/generated-2.png",
+    ]);
 
     expect(requests).toEqual([{
       url: "https://api.example/v1/images/generations",
@@ -299,6 +307,76 @@ describe("generateVideo provider contracts", () => {
         quality: "high",
       },
     }]);
+  });
+
+  test("keeps an OpenAI n=4 request on one generations call and requires four results", async () => {
+    const requests: Array<{ url: string; method?: string; body: unknown }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method,
+        body: JSON.parse(String(init?.body)),
+      });
+      return json({
+        data: [1, 2, 3, 4].map((index) => ({ url: `https://cdn.example/generated-${index}.png` })),
+      });
+    }) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "four variants",
+      size: "1024x1024",
+      quality: "auto",
+      n: 4,
+    })).resolves.toEqual([
+      "https://cdn.example/generated-1.png",
+      "https://cdn.example/generated-2.png",
+      "https://cdn.example/generated-3.png",
+      "https://cdn.example/generated-4.png",
+    ]);
+    expect(requests).toEqual([{
+      url: "https://api.example/v1/images/generations",
+      method: "POST",
+      body: {
+        model: "gpt-image-1",
+        prompt: "four variants",
+        n: 4,
+        size: "1024x1024",
+        quality: "auto",
+      },
+    }]);
+  });
+
+  test("rejects an OpenAI response that returns fewer images than requested", async () => {
+    globalThis.fetch = mock(async () => json({
+      data: [{ url: "https://cdn.example/only-one.png" }],
+    })) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "need four",
+      n: 4,
+    })).rejects.toThrow("invalid result count");
+  });
+
+  test("keeps only the requested OpenAI image count when the provider returns extras", async () => {
+    globalThis.fetch = mock(async () => json({
+      data: [1, 2, 3, 4, 5].map((index) => ({ url: `https://cdn.example/extra-${index}.png` })),
+    })) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "trim extras",
+      n: 4,
+    })).resolves.toEqual([
+      "https://cdn.example/extra-1.png",
+      "https://cdn.example/extra-2.png",
+      "https://cdn.example/extra-3.png",
+      "https://cdn.example/extra-4.png",
+    ]);
   });
 
   test("normalizes legacy ratio values before direct OpenAI image requests", async () => {

@@ -62,14 +62,16 @@ async function authFetch(
   return providerFetch(provider, path, init, { maxErrorBytes: MAX_PROVIDER_ERROR_BYTES });
 }
 
-async function readImageProviderResults(response: Response, expectedMaximum: number): Promise<string[]> {
+async function readImageProviderResults(response: Response, expectedCount: number): Promise<string[]> {
   const payload = await readBoundedProviderJson(response, MAX_IMAGE_PROVIDER_RESPONSE_BYTES);
   if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) {
     throw new Error("Image provider response is malformed");
   }
   const data = (payload as { data: unknown[] }).data;
-  if (data.length > expectedMaximum || data.length > 8) throw new Error("Image provider returned too many results");
-  return data.map((item) => {
+  if (data.length < expectedCount || data.length > 8) {
+    throw new Error("Image provider returned an invalid result count");
+  }
+  return data.slice(0, expectedCount).map((item) => {
     if (!item || typeof item !== "object") throw new Error("Image provider result is malformed");
     const result = item as { b64_json?: unknown; url?: unknown };
     if (typeof result.b64_json === "string" && result.b64_json.length <= MAX_IMAGE_PROVIDER_RESPONSE_BYTES) {
