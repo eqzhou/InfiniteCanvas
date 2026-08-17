@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { displayCardSrc } from "@/lib/media-preview";
 
 export function MediaView({
@@ -23,8 +24,13 @@ export function MediaView({
   muted?: boolean;
   onActivate?: () => void;
 }) {
+  const [previewFailed, setPreviewFailed] = useState(false);
+  useEffect(() => {
+    setPreviewFailed(false);
+  }, [previewSrc, src]);
   const fitClass = fit === "contain" ? "object-contain" : "object-cover";
-  const cardSrc = displayCardSrc(previewSrc, src);
+  const usablePreview = previewFailed ? undefined : previewSrc;
+  const cardSrc = displayCardSrc(usablePreview, src);
   if (!cardSrc && !src) return null;
 
   if (kind === "image") {
@@ -37,6 +43,9 @@ export function MediaView({
         draggable={false}
         className={className ?? `h-full w-full ${fitClass}`}
         onClick={onActivate}
+        onError={() => {
+          if (usablePreview && src && usablePreview !== src) setPreviewFailed(true);
+        }}
       />
     );
   }
@@ -45,7 +54,7 @@ export function MediaView({
     return (
       <video
         src={src}
-        poster={previewSrc || undefined}
+        poster={usablePreview || undefined}
         aria-label={alt}
         controls
         autoPlay={autoPlay}
@@ -56,16 +65,17 @@ export function MediaView({
     );
   }
 
-  if (previewSrc) {
+  if (usablePreview) {
     return (
       <img
-        src={previewSrc}
+        src={usablePreview}
         alt={alt}
         loading="lazy"
         decoding="async"
         draggable={false}
         className={className ?? `h-full w-full ${fitClass}`}
         onClick={onActivate}
+        onError={() => setPreviewFailed(true)}
       />
     );
   }

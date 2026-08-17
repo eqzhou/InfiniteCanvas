@@ -181,8 +181,8 @@ export function WorkbenchHistoryRow({
           >
             <MediaView
               kind={job.kind === "video" ? "video" : "image"}
-              src={cardMedia.hasPreview ? undefined : activeMediaUrl}
-              previewSrc={cardMedia.hasPreview ? activePreviewUrl : undefined}
+              src={activeMediaUrl}
+              previewSrc={cardMedia.hasPreview && activePreviewUrl ? activePreviewUrl : undefined}
               alt=""
               className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
             />

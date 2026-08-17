@@ -47,19 +47,34 @@ describe("canvas durable generation recovery", () => {
     });
   });
 
+  test("clears a previous preview when the recovered result has none", () => {
+    const succeeded = { ...job("succeeded"), id: "job-image", kind: "image" as const };
+    succeeded.result = { items: [{ storageKey: "image:next", mimeType: "image/png", bytes: 8 }] };
+    expect(canvasGenerationPatch(succeeded, "blob:next")).toMatchObject({
+      storageKey: "image:next",
+      thumbnailStorageKey: undefined,
+      thumbnailUrl: undefined,
+    });
+  });
+
   test("maps an indexed image result onto the matching batch placeholder", () => {
     const succeeded = { ...job("succeeded"), id: "job-image", kind: "image" as const };
     succeeded.result = { items: [
       { storageKey: "image:first", mimeType: "image/png", width: 10, height: 20, bytes: 30 },
       { storageKey: "image:second", mimeType: "image/png", width: 40, height: 50, bytes: 60 },
     ] };
-    expect(canvasGenerationPatch(succeeded, "blob:second", 1)).toMatchObject({
+    expect(canvasGenerationPatch(succeeded, "blob:second", 1)).toEqual({
       content: "blob:second",
       storageKey: "image:second",
+      mimeType: "image/png",
+      bytes: 60,
       naturalWidth: 40,
       naturalHeight: 50,
+      thumbnailStorageKey: undefined,
+      thumbnailUrl: undefined,
       generationJobId: "job-image",
       status: "success",
+      errorDetails: undefined,
     });
   });
 

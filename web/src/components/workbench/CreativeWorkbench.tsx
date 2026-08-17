@@ -978,6 +978,14 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       const blob = await getBlob(item.storageKey.startsWith("media:") ? "media" : "image", item.storageKey);
       if (blob) content = URL.createObjectURL(blob);
     }
+    let thumbnailUrl: string | undefined;
+    if (item.thumbnailStorageKey) {
+      const preview = await getBlob(
+        item.thumbnailStorageKey.startsWith("media:") ? "media" : "image",
+        item.thumbnailStorageKey,
+      ).catch(() => undefined);
+      if (preview) thumbnailUrl = URL.createObjectURL(preview);
+    }
     addNode(kind, { x: (420 - viewport.x) / viewport.k, y: (260 - viewport.y) / viewport.k }, {
       title: kind === "image" ? t("workbench.imageNode") : t("workbench.videoNode"),
       metadata: {
@@ -987,7 +995,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         naturalWidth: item.width,
         naturalHeight: item.height,
         thumbnailStorageKey: item.thumbnailStorageKey,
-        thumbnailUrl: item.thumbnailUrl,
+        thumbnailUrl,
         prompt: job.prompt,
         model: job.model,
         status: "success",
