@@ -124,7 +124,7 @@ func validWorkflowStepState(state workflowStepRunState) bool {
 	case "queued", "running":
 		return workflowIDPattern.MatchString(state.ChildJobID) && len(state.StorageKeys) == 0 && len(state.Error) <= 10_000
 	case "succeeded":
-		if len(state.StorageKeys) < 1 || len(state.StorageKeys) > 8 || len(state.Error) > 10_000 {
+		if len(state.StorageKeys) < 1 || len(state.StorageKeys) > maxImageGenerationCount || len(state.Error) > 10_000 {
 			return false
 		}
 		for _, key := range state.StorageKeys {
@@ -430,7 +430,7 @@ func imageResultStorageKeys(value json.RawMessage) ([]string, error) {
 	var result struct {
 		Items []generationResultItem `json:"items"`
 	}
-	if json.Unmarshal(value, &result) != nil || len(result.Items) < 1 || len(result.Items) > 8 {
+	if json.Unmarshal(value, &result) != nil || len(result.Items) < 1 || len(result.Items) > maxImageGenerationCount {
 		return nil, errors.New("invalid image child result")
 	}
 	keys := make([]string, 0, len(result.Items))

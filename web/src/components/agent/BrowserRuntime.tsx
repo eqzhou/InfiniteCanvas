@@ -136,7 +136,7 @@ async function executeRuntimeCommand(
           model: configNode.metadata.model || getProvider(channel, "image").model,
           prompt,
           size: typeof command.data.size === "string" ? command.data.size : state.config.imageSize,
-          n: Math.min(8, Math.max(1, numberValue(command.data.count, 1))),
+          n: Math.min(100, Math.max(1, numberValue(command.data.count, 1))),
           systemPrompt: state.config.systemPrompt,
         });
         const images: BoardNode[] = [];

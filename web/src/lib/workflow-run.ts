@@ -47,7 +47,7 @@ function validateNextStepState(previous: WorkflowStepRunState, next: WorkflowSte
   if (next.status === "queued" && (!next.childJobId || next.childJobId.length > 128)) {
     throw new Error("queued workflow step requires a child job id");
   }
-  if (next.status === "succeeded" && (!next.storageKeys?.length || next.storageKeys.length > 8 ||
+  if (next.status === "succeeded" && (!next.storageKeys?.length || next.storageKeys.length > 100 ||
       next.storageKeys.some((key) => !/^(?:image|media):[^\s]{1,500}$/.test(key)))) {
     throw new Error("succeeded workflow step requires bounded result media");
   }

@@ -1,6 +1,7 @@
 import type { BoardProject } from "@/types/board";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
+import { IMAGE_GENERATION_MAX_COUNT } from "@/lib/image-generation-batch";
 import type { createImageGenerationMetadata } from "@/lib/image-generation";
 
 type ImageGenerationMetadata = ReturnType<typeof createImageGenerationMetadata>;
@@ -45,7 +46,7 @@ export function applyServerImagePlaceholders(
   options: { replaceExisting?: boolean } = {},
 ): BoardProject {
   const root = project.nodes.find((node) => node.id === rootId);
-  if (!root || (root.type !== "image" && root.type !== "config") || generation.count < 1 || generation.count > 8) {
+  if (!root || (root.type !== "image" && root.type !== "config") || generation.count < 1 || generation.count > IMAGE_GENERATION_MAX_COUNT) {
     throw new Error("Server image placeholder root is invalid");
   }
   if (root.type === "image" && generation.count === 1 &&

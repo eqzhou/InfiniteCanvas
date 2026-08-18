@@ -110,17 +110,25 @@ describe("creative workbench history refill", () => {
     const hostile: GenerationJob = {
       ...imageJob,
       parameters: {
-        size: 42, quality: null, count: 99, transparentBackground: "yes",
+        size: 42, quality: null, count: 101, transparentBackground: "yes",
         category: "x".repeat(101), referenceStorageKeys: ["ok", "", 7],
       },
     };
     const refilled = workbenchRefillForm(hostile, currentForm);
     expect(refilled.size).toBe(currentForm.size);
     expect(refilled.quality).toBe(currentForm.quality);
-    expect(refilled.count).toBe(8);
+    expect(refilled.count).toBe(100);
     expect(refilled.transparentBackground).toBe(false);
     expect(refilled.category).toBe("未分类");
     expect(refilled.referenceStorageKeys).toEqual(["ok"]);
+  });
+
+  test("restores the original batch size from a split n=1 history card", () => {
+    const splitCard: GenerationJob = {
+      ...imageJob,
+      parameters: { ...imageJob.parameters, count: 1, requestedCount: 4, batchId: "batch_hist", batchIndex: 2 },
+    };
+    expect(workbenchRefillForm(splitCard, currentForm).count).toBe(4);
   });
 
   test("never mutates the record or the current form", () => {

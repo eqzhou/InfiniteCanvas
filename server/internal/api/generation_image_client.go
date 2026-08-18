@@ -18,8 +18,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// maxImageGenerationCount is an operational ceiling after each image is its
+// own n=1 upstream request. It is not a provider n= limit.
+const maxImageGenerationCount = 100
 
 const maxImageProviderResponseBytes = 40 << 20
 
@@ -50,7 +55,7 @@ func newOpenAIImageExecutor() *openAIImageExecutor {
 }
 
 func (e *openAIImageExecutor) Generate(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
-	if request.Count < 1 || request.Count > 8 {
+	if request.Count < 1 || request.Count > maxImageGenerationCount {
 		return nil, errors.New("image result count is out of range")
 	}
 	switch request.Protocol {
@@ -117,7 +122,7 @@ func (e *openAIImageExecutor) generateTemplate(ctx context.Context, request imag
 		return nil, err
 	}
 	outputs, ok := value.([]any)
-	if !ok || len(outputs) < request.Count || len(outputs) > 8 {
+	if !ok || len(outputs) < request.Count || len(outputs) > maxImageGenerationCount {
 		return nil, errors.New("image template provider returned an invalid result count")
 	}
 	images := make([]generatedImage, 0, request.Count)
@@ -150,6 +155,67 @@ func (e *openAIImageExecutor) generateTemplate(ctx context.Context, request imag
 }
 
 func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
+	if request.Count == 1 {
+		return e.generateOpenAIOnce(ctx, request)
+	}
+	type slot struct {
+		index int
+		image generatedImage
+		err   error
+	}
+	results := make(chan slot, request.Count)
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var workers sync.WaitGroup
+	for index := 0; index < request.Count; index++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			single := request
+			single.Count = 1
+			if request.RequestID != "" {
+				single.RequestID = providerRequestID(request.RequestID + ":" + strconv.Itoa(index))
+			}
+			images, err := e.generateOpenAIOnce(childCtx, single)
+			if err != nil {
+				results <- slot{index: index, err: err}
+				return
+			}
+			if len(images) != 1 {
+				results <- slot{index: index, err: errors.New("image provider returned an invalid result")}
+				return
+			}
+			results <- slot{index: index, image: images[0]}
+		}(index)
+	}
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+	images := make([]generatedImage, request.Count)
+	var firstErr error
+	received := 0
+	for item := range results {
+		if item.err != nil {
+			if firstErr == nil {
+				firstErr = item.err
+				cancel()
+			}
+			continue
+		}
+		images[item.index] = item.image
+		received++
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if received != request.Count {
+		return nil, errors.New("image provider returned an invalid result")
+	}
+	return images, nil
+}
+
+func (e *openAIImageExecutor) generateOpenAIOnce(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
 	if isGPTImage2(request.Model) && request.TransparentBackground {
 		return nil, errors.New("gpt-image-2 does not support transparent backgrounds")
 	}
@@ -164,7 +230,7 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 		buffer := new(bytes.Buffer)
 		writer := multipart.NewWriter(buffer)
 		for key, value := range map[string]string{
-			"model": request.Model, "prompt": request.Prompt, "n": strconv.Itoa(request.Count),
+			"model": request.Model, "prompt": request.Prompt, "n": "1",
 			"size": request.Size, "quality": request.Quality,
 		} {
 			if value != "" {
@@ -205,7 +271,7 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 		contentType = writer.FormDataContentType()
 	} else {
 		value, err := json.Marshal(map[string]any{
-			"model": request.Model, "prompt": request.Prompt, "n": request.Count,
+			"model": request.Model, "prompt": request.Prompt, "n": 1,
 			"size": request.Size, "quality": request.Quality,
 			"background": func() string {
 				if request.TransparentBackground {
@@ -257,12 +323,12 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 	limited := &io.LimitedReader{R: response.Body, N: maxImageProviderResponseBytes + 1}
 	decoder := json.NewDecoder(limited)
 	if err := decoder.Decode(&payload); err != nil || limited.N <= 0 || ensureJSONEOF(decoder) != nil ||
-		len(payload.Data) < request.Count || len(payload.Data) > 8 {
+		len(payload.Data) < 1 || len(payload.Data) > 8 {
 		return nil, errors.New("image provider returned an invalid result")
 	}
-	images := make([]generatedImage, 0, request.Count)
+	images := make([]generatedImage, 0, 1)
 	totalBytes := 0
-	for _, item := range payload.Data[:request.Count] {
+	for _, item := range payload.Data[:1] {
 		var imageData []byte
 		if item.Base64 != "" {
 			if len(item.Base64) > base64.StdEncoding.EncodedLen(maxGeneratedImageBytes)+4 {

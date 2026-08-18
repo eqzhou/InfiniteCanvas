@@ -8,7 +8,7 @@ import type {
 export const WORKFLOW_MAX_DOCUMENT_BYTES = 256 * 1024;
 export const WORKFLOW_MAX_VARIABLES = 32;
 export const WORKFLOW_MAX_STEPS = 16;
-export const WORKFLOW_MAX_RESULTS = 64;
+export const WORKFLOW_MAX_RESULTS = 1600;
 export const WORKFLOW_MAX_REFERENCES_PER_STEP = 16;
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
@@ -107,7 +107,7 @@ function parseReference(value: unknown, stepIndex: number, referenceIndex: numbe
   if (input.source === "step") {
     exactKeys(input, ["source", "stepId", "output"], label);
     const output = input.output;
-    if (output !== "all" && (!Number.isSafeInteger(output) || (output as number) < 0 || (output as number) > 7)) {
+    if (output !== "all" && (!Number.isSafeInteger(output) || (output as number) < 0 || (output as number) > 99)) {
       throw new Error(`${label}.output is invalid`);
     }
     return { source: "step", stepId: identifier(input.stepId, `${label}.stepId`), output: output as "all" | number };
@@ -124,7 +124,7 @@ function parseStep(value: unknown, index: number): WorkflowStep {
   const size = text(parameters.size, `${label}.parameters.size`, 50);
   if (!SIZE.test(size)) throw new Error(`${label}.parameters.size is invalid`);
   const count = finite(parameters.count, `${label}.parameters.count`);
-  if (!Number.isSafeInteger(count) || count < 1 || count > 8) throw new Error(`${label}.parameters.count must be 1-8`);
+  if (!Number.isSafeInteger(count) || count < 1 || count > 100) throw new Error(`${label}.parameters.count must be 1-100`);
   if (!Array.isArray(input.references) || input.references.length > WORKFLOW_MAX_REFERENCES_PER_STEP) {
     throw new Error(`${label}.references exceeds limit`);
   }

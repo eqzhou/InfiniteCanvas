@@ -45,16 +45,17 @@ describe("image generation setting options", () => {
       .toEqual(["auto", "1K", "2K"]);
     expect(normalizeImageQualityForProvider("high", "apimart", "doubao-seedream-5-0-pro")).toBe("auto");
     expect(normalizeImageQualityForProvider("2K", "apimart", "doubao-seedream-5-0-pro")).toBe("2K");
-    expect(imageOutputLimitFor("apimart", "doubao-seedream-5-0-pro")).toBe(1);
-    expect(imageOutputLimitFor("apimart", "nano-banana-2-lite")).toBe(4);
+    expect(imageOutputLimitFor("apimart", "doubao-seedream-5-0-pro")).toBe(100);
+    expect(imageOutputLimitFor("apimart", "nano-banana-2-lite")).toBe(100);
   });
 
   test("filters dimensions and aspect ratios by known provider capability", () => {
     for (const model of ["gpt-image-1", "gpt-image-1.5", "gpt-image-2"]) {
       expect(imageSizeOptionsFor("openai", model).map((option) => option.value))
         .toEqual(["1024x1024", "1536x1024", "1024x1536"]);
-      expect(imageOutputLimitFor("openai", model)).toBe(4);
-      expect(clampImageCountForProvider(8, "openai", model)).toBe(4);
+      expect(imageOutputLimitFor("openai", model)).toBe(100);
+      expect(clampImageCountForProvider(8, "openai", model)).toBe(8);
+      expect(clampImageCountForProvider(20, "openai", model)).toBe(20);
     }
     expect(clampImageCountForProvider(0, "openai", "custom-image")).toBe(1);
     expect(clampImageCountForProvider(3, "openai", "custom-image")).toBe(3);

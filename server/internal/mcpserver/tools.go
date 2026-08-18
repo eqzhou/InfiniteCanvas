@@ -78,7 +78,7 @@ var boardTools = []toolDefinition{
 			"prompt": map[string]any{"type": "string", "maxLength": 32000},
 			"model":  map[string]any{"type": "string", "maxLength": 200},
 			"size":   map[string]any{"type": "string", "maxLength": 50},
-			"count":  map[string]any{"type": "integer", "minimum": 1, "maximum": 8},
+			"count":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
 			"x":      map[string]any{"type": "number"},
 			"y":      map[string]any{"type": "number"},
 		}, "prompt"),

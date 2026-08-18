@@ -147,6 +147,26 @@ func TestServerImageJobCategoryIsBounded(t *testing.T) {
 	}
 }
 
+func TestServerImageJobAcceptsFanOutCountAndBatchMetadata(t *testing.T) {
+	input := createImageJobRequest{
+		ID: "job-batch-slot", ProjectID: "board-1", Prompt: "draw", ProviderID: "image-main", Model: "image",
+		Parameters: createImageJobParameters{
+			Size: "1024x1024", Count: 1, RequestedCount: 20, BatchID: "batch_test", BatchIndex: 4,
+		},
+	}
+	if !validCreateImageJob(input) {
+		t.Fatal("expected split n=1 slot with requestedCount=20 to be valid")
+	}
+	input.Parameters.Count = 20
+	if !validCreateImageJob(input) {
+		t.Fatal("expected a 20-image canvas job to be valid after n=1 fan-out")
+	}
+	input.Parameters.Count = 101
+	if validCreateImageJob(input) {
+		t.Fatal("expected count 101 to stay rejected as an operational ceiling")
+	}
+}
+
 func TestReferenceImageAllowsOriginalCameraResolutionWithoutRelaxingGeneratedOutputs(t *testing.T) {
 	pngBytes, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
 	if err != nil {

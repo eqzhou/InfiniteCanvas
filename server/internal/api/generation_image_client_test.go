@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -158,11 +159,14 @@ func TestOpenAIImageExecutorGenerationsRequestAndBase64Result(t *testing.T) {
 	}
 }
 
-func TestOpenAIImageExecutorGenerationsReturnsRequestedCountInOneRequest(t *testing.T) {
+func TestOpenAIImageExecutorGenerationsFansOutSingleImageRequests(t *testing.T) {
+	var mu sync.Mutex
 	calls := 0
 	pixel := onePixelPNGBase64()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		calls++
+		mu.Unlock()
 		if r.URL.Path != "/v1/images/generations" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
@@ -170,11 +174,11 @@ func TestOpenAIImageExecutorGenerationsReturnsRequestedCountInOneRequest(t *test
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["model"] != "gpt-image-1" || body["n"] != float64(4) || body["prompt"] != "four variants" {
+		if body["model"] != "gpt-image-1" || body["n"] != float64(1) || body["prompt"] != "four variants" {
 			t.Errorf("request body = %#v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+pixel+`"},{"b64_json":"`+pixel+`"},{"b64_json":"`+pixel+`"},{"b64_json":"`+pixel+`"}]}`)
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+pixel+`"}]}`)
 	}))
 	defer upstream.Close()
 
@@ -185,28 +189,28 @@ func TestOpenAIImageExecutorGenerationsReturnsRequestedCountInOneRequest(t *test
 	if err != nil || len(images) != 4 {
 		t.Fatalf("images = %#v, %v", images, err)
 	}
-	if calls != 1 {
-		t.Fatalf("openai calls = %d, want 1", calls)
+	if calls != 4 {
+		t.Fatalf("openai calls = %d, want 4", calls)
 	}
 }
 
-func TestOpenAIImageExecutorRejectsFewerResultsThanRequested(t *testing.T) {
+func TestOpenAIImageExecutorRejectsEmptySingleImageResult(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+onePixelPNGBase64()+`"}]}`)
+		_, _ = io.WriteString(w, `{"data":[]}`)
 	}))
 	defer upstream.Close()
 
 	_, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
 		BaseURL: upstream.URL + "/v1", Model: "gpt-image-1",
-		Prompt: "need four", Size: "1024x1024", Quality: "auto", Count: 4,
+		Prompt: "need one", Size: "1024x1024", Quality: "auto", Count: 1,
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid result") {
 		t.Fatalf("error = %v, want invalid result count", err)
 	}
 }
 
-func TestOpenAIImageExecutorTrimsExtraResultsToRequestedCount(t *testing.T) {
+func TestOpenAIImageExecutorTrimsExtraResultsOnEachFanOutCall(t *testing.T) {
 	pixel := onePixelPNGBase64()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -472,7 +476,7 @@ func TestImageExecutorRejectsInvalidResultCountBeforeProviderRequest(t *testing.
 	}))
 	defer upstream.Close()
 	executor := newOpenAIImageExecutor()
-	for _, count := range []int{0, 9} {
+	for _, count := range []int{0, 101} {
 		if _, err := executor.Generate(context.Background(), imageGenerationRequest{
 			Protocol: "gemini", BaseURL: upstream.URL + "/v1beta",
 			Model: "gemini-image", Prompt: "draw", Count: count,

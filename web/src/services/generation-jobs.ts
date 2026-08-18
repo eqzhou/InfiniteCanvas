@@ -34,6 +34,9 @@ export type ServerImageGenerationInput = {
 		size: string;
 		quality?: string;
 		count: number;
+		requestedCount?: number;
+		batchId?: string;
+		batchIndex?: number;
 		category?: string;
 		transparentBackground?: boolean;
 		referenceStorageKeys?: string[];

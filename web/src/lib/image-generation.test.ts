@@ -58,7 +58,7 @@ describe("image generation lineage", () => {
     });
     const normalized = normalizeImageGenerationForProvider(source, "apimart");
 
-    expect(normalized).toMatchObject({ size: "1536x1024", quality: "auto", count: 1 });
+    expect(normalized).toMatchObject({ size: "1536x1024", quality: "auto", count: 8 });
     expect(normalized).not.toBe(source);
     expect(normalized.referenceStorageKeys).not.toBe(source.referenceStorageKeys);
   });

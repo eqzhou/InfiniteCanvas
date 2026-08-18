@@ -97,7 +97,7 @@ export async function executePluginHostRequest(
     }
     case "ai.image": {
       const count = params.count === undefined ? undefined : Number(params.count);
-      if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > 8)) {
+      if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > 100)) {
         throw new Error("plugin image count is invalid");
       }
       return context.generateImage({

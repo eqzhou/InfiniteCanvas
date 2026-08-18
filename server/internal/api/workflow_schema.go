@@ -134,7 +134,7 @@ func validateWorkflowTemplate(template workflowTemplate) error {
 		if !workflowIDPattern.MatchString(step.ID) || strings.TrimSpace(step.Title) == "" || len(step.Title) > 500 ||
 			strings.TrimSpace(step.PromptTemplate) == "" || len(step.PromptTemplate) > 100_000 ||
 			len(step.ProviderID) > 128 || len(step.Model) > 500 || !imageSizePattern.MatchString(step.Parameters.Size) ||
-			len(step.Parameters.Quality) > 50 || step.Parameters.Count < 1 || step.Parameters.Count > 8 || len(step.References) > 16 {
+			len(step.Parameters.Quality) > 50 || step.Parameters.Count < 1 || step.Parameters.Count > maxImageGenerationCount || len(step.References) > 16 {
 			return errors.New("invalid workflow step")
 		}
 		if _, exists := steps[step.ID]; exists {
@@ -143,7 +143,7 @@ func validateWorkflowTemplate(template workflowTemplate) error {
 		steps[step.ID] = step
 		totalResults += step.Parameters.Count
 	}
-	if totalResults > 64 {
+	if totalResults > maxImageGenerationCount*16 {
 		return errors.New("workflow result count exceeds limit")
 	}
 	for _, step := range template.Steps {

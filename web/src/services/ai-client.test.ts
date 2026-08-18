@@ -42,8 +42,8 @@ test("rejects an excessive image batch before contacting a provider", async () =
     channel: channel("https://api.example/v1"),
     model: "image",
     prompt: "scene",
-    n: 9,
-  })).rejects.toThrow("between 1 and 8");
+    n: 101,
+  })).rejects.toThrow("between 1 and 100");
   expect(calls).toBe(0);
 });
 
@@ -279,7 +279,6 @@ describe("generateVideo provider contracts", () => {
       return json({
         data: [
           { url: "https://cdn.example/generated-1.png" },
-          { url: "https://cdn.example/generated-2.png" },
         ],
       });
     }) as typeof fetch;
@@ -293,23 +292,24 @@ describe("generateVideo provider contracts", () => {
       n: 2,
     })).resolves.toEqual([
       "https://cdn.example/generated-1.png",
-      "https://cdn.example/generated-2.png",
+      "https://cdn.example/generated-1.png",
     ]);
 
-    expect(requests).toEqual([{
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toEqual({
       url: "https://api.example/v1/images/generations",
       method: "POST",
       body: {
         model: "gpt-image-1",
         prompt: "draw a lighthouse",
-        n: 2,
+        n: 1,
         size: "1536x1024",
         quality: "high",
       },
-    }]);
+    });
   });
 
-  test("keeps an OpenAI n=4 request on one generations call and requires four results", async () => {
+  test("fans an OpenAI n=4 request out into four n=1 generations calls", async () => {
     const requests: Array<{ url: string; method?: string; body: unknown }> = [];
     globalThis.fetch = mock(async (input, init) => {
       requests.push({
@@ -318,7 +318,7 @@ describe("generateVideo provider contracts", () => {
         body: JSON.parse(String(init?.body)),
       });
       return json({
-        data: [1, 2, 3, 4].map((index) => ({ url: `https://cdn.example/generated-${index}.png` })),
+        data: [{ url: "https://cdn.example/generated.png" }],
       });
     }) as typeof fetch;
 
@@ -330,38 +330,40 @@ describe("generateVideo provider contracts", () => {
       quality: "auto",
       n: 4,
     })).resolves.toEqual([
-      "https://cdn.example/generated-1.png",
-      "https://cdn.example/generated-2.png",
-      "https://cdn.example/generated-3.png",
-      "https://cdn.example/generated-4.png",
+      "https://cdn.example/generated.png",
+      "https://cdn.example/generated.png",
+      "https://cdn.example/generated.png",
+      "https://cdn.example/generated.png",
     ]);
-    expect(requests).toEqual([{
+    expect(requests).toHaveLength(4);
+    expect(requests.every((request) => request.body && typeof request.body === "object" && (request.body as { n: number }).n === 1)).toBe(true);
+    expect(requests[0]).toEqual({
       url: "https://api.example/v1/images/generations",
       method: "POST",
       body: {
         model: "gpt-image-1",
         prompt: "four variants",
-        n: 4,
+        n: 1,
         size: "1024x1024",
         quality: "auto",
       },
-    }]);
+    });
   });
 
-  test("rejects an OpenAI response that returns fewer images than requested", async () => {
+  test("rejects an OpenAI response that returns no image", async () => {
     globalThis.fetch = mock(async () => json({
-      data: [{ url: "https://cdn.example/only-one.png" }],
+      data: [],
     })) as typeof fetch;
 
     await expect(generateImages({
       channel: channel("https://api.example/v1"),
       model: "gpt-image-1",
-      prompt: "need four",
-      n: 4,
+      prompt: "need one",
+      n: 1,
     })).rejects.toThrow("invalid result count");
   });
 
-  test("keeps only the requested OpenAI image count when the provider returns extras", async () => {
+  test("keeps only one image from each fan-out call when the provider returns extras", async () => {
     globalThis.fetch = mock(async () => json({
       data: [1, 2, 3, 4, 5].map((index) => ({ url: `https://cdn.example/extra-${index}.png` })),
     })) as typeof fetch;
@@ -373,9 +375,9 @@ describe("generateVideo provider contracts", () => {
       n: 4,
     })).resolves.toEqual([
       "https://cdn.example/extra-1.png",
-      "https://cdn.example/extra-2.png",
-      "https://cdn.example/extra-3.png",
-      "https://cdn.example/extra-4.png",
+      "https://cdn.example/extra-1.png",
+      "https://cdn.example/extra-1.png",
+      "https://cdn.example/extra-1.png",
     ]);
   });
 
@@ -408,7 +410,7 @@ describe("generateVideo provider contracts", () => {
       model: "gpt-image-1",
       prompt: "invalid count",
       n: 0,
-    })).rejects.toThrow("between 1 and 8");
+    })).rejects.toThrow("between 1 and 100");
     expect(requests).toBe(0);
   });
 

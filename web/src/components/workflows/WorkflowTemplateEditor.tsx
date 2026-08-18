@@ -153,7 +153,7 @@ export function WorkflowTemplateEditor({
                   onChange={(event) => updateStep(index, { ...step, model: event.target.value })} /></label>
                 <label><span className="ob-label">{t("workflow.size")}</span><input className="ob-field" value={step.parameters.size}
                   onChange={(event) => updateStep(index, { ...step, parameters: { ...step.parameters, size: event.target.value } })} /></label>
-                <label><span className="ob-label">{t("workflow.count")}</span><input className="ob-field" type="number" min={1} max={8} value={step.parameters.count}
+                <label><span className="ob-label">{t("workflow.count")}</span><input className="ob-field" type="number" min={1} max={100} value={step.parameters.count}
                   onChange={(event) => updateStep(index, { ...step, parameters: { ...step.parameters, count: Number(event.target.value) } })} /></label>
                 <label><span className="ob-label">{t("workflow.imageVariables")}</span><select multiple className="ob-field min-h-20" value={[...imageReferences]}
                   onChange={(event) => {

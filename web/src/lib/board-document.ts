@@ -122,7 +122,7 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   }
   if (input.count !== undefined) {
     const count = finite(input.count, `${path}.count`);
-    if (!Number.isSafeInteger(count) || count < 1 || count > 8) {
+    if (!Number.isSafeInteger(count) || count < 1 || count > 100) {
       throw new Error(`${path}.count is outside the supported range`);
     }
   }

@@ -84,7 +84,7 @@ describe("workflow template document", () => {
     expect(() => parseWorkflowTemplate(tooManySteps)).toThrow(/steps/i);
 
     const tooManyResults = template();
-    tooManyResults.steps[0]!.parameters.count = 9;
+    tooManyResults.steps[0]!.parameters.count = 101;
     expect(() => parseWorkflowTemplate(tooManyResults)).toThrow(/count/i);
 
     const oversized = template();

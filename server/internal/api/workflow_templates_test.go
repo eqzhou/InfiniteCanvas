@@ -115,7 +115,7 @@ func TestWorkflowTemplateEnforcesAggregateOutputsAndReferenceIndexes(t *testing.
 			Parameters: workflowStepParameters{Size: "1024x1024", Count: 8}, References: []workflowStepReference{},
 		})
 	}
-	if err := validateWorkflowTemplate(template); err == nil {
-		t.Fatal("workflow with more than 64 aggregate results must fail")
+	if err := validateWorkflowTemplate(template); err != nil {
+		t.Fatalf("72 aggregate results should be valid after n=1 fan-out: %v", err)
 	}
 }

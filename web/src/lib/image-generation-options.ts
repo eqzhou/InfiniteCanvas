@@ -1,3 +1,4 @@
+import { IMAGE_GENERATION_MAX_COUNT } from "@/lib/image-generation-batch";
 import { resolveProviderCapability } from "@/lib/provider-capabilities";
 import { IMAGE_ASPECT_PRESETS, type ImageAspectSelection } from "@/lib/workbench-preferences";
 
@@ -139,19 +140,20 @@ export function normalizeImageQualityForProvider(
 }
 
 export function imageOutputLimitFor(
-  protocol: string | undefined,
-  model: string | undefined,
-  fallback = 8,
+  _protocol?: string,
+  _model?: string,
+  fallback = IMAGE_GENERATION_MAX_COUNT,
 ): number {
-  const maxOutputs = resolveProviderCapability(protocol ?? "", "image", model ?? "")?.maxOutputs;
-  return maxOutputs && maxOutputs > 0 ? Math.min(fallback, maxOutputs) : fallback;
+  // Each image is an independent n=1 request, so model maxOutputs no longer
+  // caps how many variants the workbench or canvas may request.
+  return fallback > 0 ? fallback : IMAGE_GENERATION_MAX_COUNT;
 }
 
 export function clampImageCountForProvider(
   count: number,
   protocol: string | undefined,
   model: string | undefined,
-  fallback = 8,
+  fallback = IMAGE_GENERATION_MAX_COUNT,
 ): number {
   const limit = imageOutputLimitFor(protocol, model, fallback);
   const requested = Number.isFinite(count) ? Math.floor(count) : 1;

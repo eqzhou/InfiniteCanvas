@@ -7,6 +7,11 @@ import { getProvider } from "@/lib/ai-config";
 import { resolveProviderCapability } from "@/lib/provider-capabilities";
 import { normalizeVideoFrameMode } from "@/lib/video-generation";
 import { assertResolvedImageReferences } from "@/lib/image-generation";
+import {
+  IMAGE_GENERATION_MAX_COUNT,
+  imageGenerationBatchCount,
+  imageGenerationSlotParameters,
+} from "@/lib/image-generation-batch";
 import { generateImages, generateVideo, resolveMediaRefs } from "@/services/ai-client";
 import {
   createGenerationJob,
@@ -175,7 +180,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const [error, setError] = useState("");
   const [creditEstimate, setCreditEstimate] = useState<CreditEstimate | null>(null);
   const controllersRef = useRef(new Map<string, AbortController>());
-  const activeServerJobIdsRef = useRef(new Map<string, string>());
+  const activeServerJobIdsRef = useRef(new Map<string, string[]>());
   const reusableAssets = useMemo(() => workbenchImageAssets(assets), [assets]);
   const categories = useMemo(() => workbenchCategories(jobs), [jobs]);
   const visibleJobs = useMemo(
@@ -204,7 +209,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   );
   const videoCapability = resolveProviderCapability(provider?.protocol ?? "", "video", model)?.video;
   const videoSizePreset = videoSizePresetFor(ratio, resolution);
-  const imageOutputLimit = imageOutputLimitFor(provider?.protocol, model, 8);
+  const imageOutputLimit = imageOutputLimitFor(provider?.protocol, model, IMAGE_GENERATION_MAX_COUNT);
   const allowsEmptyKlingPrompt = kind === "video" && provider?.protocol === "apimart" && model === "kling-v3" &&
     klingOptions.multiShot && klingOptions.shotType === "customize" && klingOptions.shots.length > 0;
 	const allowsEmptySeedancePrompt = kind === "video" && provider?.protocol === "apimart" &&
@@ -504,10 +509,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       }
       const removableIds = new Set(removable.map((job) => job.id));
       // Abort waiters for soft-deleted jobs so polling does not hang on tombstones.
-      for (const [token, jobId] of [...activeServerJobIdsRef.current.entries()]) {
-        if (removableIds.has(jobId)) {
+      for (const [token, jobIds] of [...activeServerJobIdsRef.current.entries()]) {
+        const remaining = jobIds.filter((jobId) => !removableIds.has(jobId));
+        if (remaining.length === 0) {
           controllersRef.current.get(token)?.abort();
           activeServerJobIdsRef.current.delete(token);
+        } else {
+          activeServerJobIdsRef.current.set(token, remaining);
         }
       }
       // Soft-delete keeps tombstones for multi-device history sync; media is retained until project cleanup.
@@ -521,12 +529,19 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 
   const deleteHistoryJob = useCallback(async (job: GenerationJob) => {
     try {
+      if (isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running")) {
+        setError(t("creative.runningDeleteWarning"));
+        return;
+      }
       // Soft-delete hides the card while retaining a sync tombstone and media ownership.
       // Abort any in-flight waiters for this job so waitForGenerationJob does not spin.
-      for (const [token, jobId] of activeServerJobIdsRef.current.entries()) {
-        if (jobId === job.id) {
+      for (const [token, jobIds] of activeServerJobIdsRef.current.entries()) {
+        const remaining = jobIds.filter((jobId) => jobId !== job.id);
+        if (remaining.length === 0) {
           controllersRef.current.get(token)?.abort();
           activeServerJobIdsRef.current.delete(token);
+        } else if (remaining.length !== jobIds.length) {
+          activeServerJobIdsRef.current.set(token, remaining);
         }
       }
       await deleteGenerationJob(job.id);
@@ -535,7 +550,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [refresh]);
+  }, [refresh, t]);
 
 
 
@@ -646,6 +661,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setActiveRuns((value) => value + 1);
     setError("");
     let job: GenerationJob | undefined;
+    const createdJobs: GenerationJob[] = [];
     const uploadedReferenceKeys: string[] = [];
     try {
       const referenceData: string[] = [];
@@ -788,20 +804,73 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				!runProvider.template?.supportsTransparentBackground) {
 					throw new Error(t("creative.transparentTemplate"));
 			}
-			job = kind === "image" ? await createServerImageGenerationJob({
-				projectId: project?.id,
-				prompt: runPrompt.trim(),
-				providerId: runChannel.id,
-				model: runModel,
-				parameters: {
-					size: String(parameters.size ?? size),
-					quality: String(parameters.quality ?? quality),
-					count: Number(parameters.count ?? count),
-					category: normalizeWorkbenchCategory(parameters.category),
-					transparentBackground: Boolean(parameters.transparentBackground),
-					referenceStorageKeys,
-				},
-			}) : await createServerVideoGenerationJob({
+			if (kind === "image") {
+				const total = imageGenerationBatchCount(parameters.count ?? count);
+				const batchId = total > 1 ? uid("batch") : "";
+				for (let index = 0; index < total; index += 1) {
+					if (controller.signal.aborted) break;
+					const slot = imageGenerationSlotParameters({
+						size: String(parameters.size ?? size),
+						quality: String(parameters.quality ?? quality),
+						count: total,
+						category: normalizeWorkbenchCategory(parameters.category),
+						transparentBackground: Boolean(parameters.transparentBackground),
+						referenceStorageKeys,
+					}, index, total, batchId);
+					const next = await createServerImageGenerationJob({
+						projectId: project?.id,
+						prompt: runPrompt.trim(),
+						providerId: runChannel.id,
+						model: runModel,
+						parameters: {
+							size: slot.size,
+							quality: slot.quality,
+							count: 1,
+							requestedCount: slot.requestedCount,
+							batchId: slot.batchId || undefined,
+							batchIndex: slot.batchIndex || undefined,
+							category: slot.category,
+							transparentBackground: slot.transparentBackground,
+							referenceStorageKeys,
+						},
+					});
+					createdJobs.push(next);
+					job = createdJobs[0];
+					activeServerJobIdsRef.current.set(runToken, createdJobs.map((item) => item.id));
+					setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+				}
+				if (controller.signal.aborted) {
+					await Promise.allSettled(createdJobs.map((item) => cancelServerGenerationJob(item.id)));
+					return;
+				}
+				const created = createdJobs;
+				const settled = await Promise.allSettled(created.map((item) => waitForGenerationJob(item.id, {
+					signal: controller.signal,
+					onUpdate: (next) => setJobs((current) => [next, ...current.filter((row) => row.id !== next.id)]),
+				})));
+				if (controller.signal.aborted) return;
+				const completedJobs = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+				for (const completed of completedJobs) {
+					if (completed.status !== "succeeded") continue;
+					const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
+					const previewItems = await enrichResultItemsWithPreviews(completedItems);
+					if (previewItems.some((item, index) => item.thumbnailStorageKey !== completedItems[index]?.thumbnailStorageKey)) {
+						await updateGenerationJob(completed.id, { result: { ...completed.result, items: previewItems } });
+					}
+					await adoptAssetResult(completed, previewItems);
+				}
+				const failed = completedJobs.filter((item) => item.status === "failed");
+				const rejected = settled.filter((result) => result.status === "rejected").length;
+				if (failed.length + rejected === created.length) {
+					throw new Error(failed[0]?.error || t("creative.generationFailed", { kind: t("common.image") }));
+				}
+				if (failed.length || rejected) {
+					setError(t("creative.generationFailed", { kind: t("common.image") }));
+				}
+				await refresh();
+				return;
+			}
+			job = await createServerVideoGenerationJob({
 				projectId: project?.id,
 				prompt: runPrompt.trim(),
 				providerId: runChannel.id,
@@ -823,13 +892,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					referenceStorageKeys,
 				},
 			});
-			activeServerJobIdsRef.current.set(runToken, job.id);
+			activeServerJobIdsRef.current.set(runToken, [job.id]);
 			setJobs((current) => [job!, ...current.filter((item) => item.id !== job!.id)]);
 			const completed = await waitForGenerationJob(job.id, {
 				signal: controller.signal,
 				onUpdate: (next) => setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]),
 			});
-				if (completed.status === "failed") throw new Error(completed.error || t("creative.generationFailed", { kind: t(kind === "image" ? "common.image" : "common.video") }));
+				if (completed.status === "failed") throw new Error(completed.error || t("creative.generationFailed", { kind: t("common.video") }));
 			if (completed.status === "cancelled" || completed.status === "deleted") return;
 			const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
 			const previewItems = await enrichResultItemsWithPreviews(completedItems);
@@ -837,6 +906,89 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				await updateGenerationJob(completed.id, { result: { ...completed.result, items: previewItems } });
 			}
 			await adoptAssetResult(completed, previewItems);
+			await refresh();
+			return;
+		}
+		if (kind === "image") {
+			const total = imageGenerationBatchCount(parameters.count ?? count);
+			const batchId = total > 1 ? uid("batch") : "";
+			for (let index = 0; index < total; index += 1) {
+				if (controller.signal.aborted) break;
+				const slot = imageGenerationSlotParameters(parameters, index, total, batchId);
+				const next = await createGenerationJob({
+					projectId: project?.id,
+					kind,
+					status: "running",
+					prompt: runPrompt.trim(),
+					providerId: runChannel.id,
+					model: runModel,
+					parameters: slot,
+					result: {},
+				});
+				createdJobs.push(next);
+				job = createdJobs[0];
+				setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+			}
+			if (controller.signal.aborted) {
+				await Promise.allSettled(createdJobs.map((item) => updateGenerationJob(item.id, {
+					status: "cancelled",
+					error: t("creative.cancelled"),
+				})));
+				return;
+			}
+			const created = createdJobs;
+			const settled = await Promise.allSettled(created.map(async (next) => {
+				try {
+					const urls = await generateImages({
+						channel: runChannel,
+						model: runModel,
+						prompt: runPrompt.trim(),
+						size: String(parameters.size ?? size),
+						quality: String(parameters.quality ?? quality),
+						n: 1,
+						transparentBackground: Boolean(parameters.transparentBackground),
+						referenceDataUrls: referenceData.filter((value) => value.startsWith("data:image/")),
+						systemPrompt: config.systemPrompt,
+						signal: controller.signal,
+						activityId: next.id,
+						activitySurface: "image-workbench",
+						deferActivitySuccess: true,
+					});
+					const items: WorkbenchResultItem[] = [];
+					for (const url of urls) {
+						const media = await uploadDisplayMedia(url, "image");
+						items.push({
+							url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
+							bytes: media.bytes, mimeType: media.mimeType,
+							thumbnailUrl: media.thumbnailUrl, thumbnailStorageKey: media.thumbnailStorageKey,
+						});
+					}
+					if (!items.length) throw new Error(t("creative.resultsMissing"));
+					const completedJob = await updateGenerationJob(next.id, { status: "succeeded", result: { items } });
+					await adoptAssetResult(completedJob, items);
+					completeGenerationActivity(next.id, "succeeded");
+				} catch (cause) {
+					const cancelled = controller.signal.aborted;
+					completeGenerationActivity(
+						next.id,
+						cancelled ? "cancelled" : "failed",
+						cancelled ? t("creative.cancelled") : cause instanceof Error ? cause.message : String(cause),
+					);
+					await updateGenerationJob(next.id, {
+						status: cancelled ? "cancelled" : "failed",
+						error: cancelled ? t("creative.cancelled") : cause instanceof Error ? cause.message : String(cause),
+					}).catch(() => undefined);
+					throw cause;
+				}
+			}));
+			if (controller.signal.aborted) return;
+			const failed = settled.filter((result) => result.status === "rejected");
+			if (failed.length === created.length) {
+				throw failed[0]?.status === "rejected" ? failed[0].reason : new Error(t("creative.generationFailed", { kind: t("common.image") }));
+			}
+			if (failed.length) {
+				setError(t("creative.generationFailed", { kind: t("common.image") }));
+			}
 			await refresh();
 			return;
 		}
@@ -852,31 +1004,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		});
       setJobs((current) => [job!, ...current.filter((item) => item.id !== job!.id)]);
       const items: WorkbenchResultItem[] = [];
-      if (kind === "image") {
-        const urls = await generateImages({
-          channel: runChannel,
-          model: runModel,
-          prompt: runPrompt.trim(),
-          size: String(parameters.size ?? size),
-          quality: String(parameters.quality ?? quality),
-          n: Number(parameters.count ?? count),
-          transparentBackground: Boolean(parameters.transparentBackground),
-          referenceDataUrls: referenceData.filter((value) => value.startsWith("data:image/")),
-          systemPrompt: config.systemPrompt,
-          signal: controller.signal,
-          activityId: job.id,
-          activitySurface: "image-workbench",
-          deferActivitySuccess: true,
-        });
-        for (const url of urls) {
-          const media = await uploadDisplayMedia(url, "image");
-          items.push({
-            url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
-            bytes: media.bytes, mimeType: media.mimeType,
-            thumbnailUrl: media.thumbnailUrl, thumbnailStorageKey: media.thumbnailStorageKey,
-          });
-        }
-      } else {
+      {
         const output = await generateVideo({
           channel: runChannel,
           model: runModel,
@@ -921,7 +1049,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       await refresh();
     } catch (cause) {
       const cancelled = controller.signal.aborted;
-      if (!job && uploadedReferenceKeys.length) {
+      if (!job && createdJobs.length === 0 && uploadedReferenceKeys.length) {
         await Promise.allSettled(uploadedReferenceKeys.map(deleteStorageKey));
       }
 		if (job && !isServerOwnedGenerationJob(job)) {
@@ -945,7 +1073,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   };
 
 	const stopActiveJobs = async () => {
-		const jobIds = [...new Set(activeServerJobIdsRef.current.values())];
+		const jobIds = [...new Set([...activeServerJobIdsRef.current.values()].flat())];
 		const cancelled = await Promise.allSettled(jobIds.map(cancelServerGenerationJob));
 		for (const result of cancelled) {
 			if (result.status === "fulfilled") {

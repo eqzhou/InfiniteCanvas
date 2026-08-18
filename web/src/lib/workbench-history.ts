@@ -1,4 +1,5 @@
 import type { AssetItem, GenerationJob } from "@/types/board";
+import { workbenchImageCountFromParameters } from "@/lib/image-generation-batch";
 
 export type WorkbenchLayout = "side" | "bottom";
 
@@ -78,9 +79,6 @@ export type WorkbenchRefillForm = {
   referenceStorageKeys: string[];
 };
 
-const WORKBENCH_MIN_COUNT = 1;
-const WORKBENCH_MAX_COUNT = 8;
-
 function refillText(raw: unknown, current: string): string {
   if (typeof raw !== "string") return current;
   const trimmed = raw.trim();
@@ -111,8 +109,8 @@ export function workbenchRefillForm(
     providerId: refillText(job.providerId, current.providerId),
     size: refillText(parameters.size, current.size),
     quality: refillText(parameters.quality, current.quality),
-    count: typeof count === "number" && Number.isInteger(count)
-      ? Math.min(WORKBENCH_MAX_COUNT, Math.max(WORKBENCH_MIN_COUNT, count))
+    count: typeof parameters.requestedCount === "number" || typeof count === "number"
+      ? workbenchImageCountFromParameters(parameters as Record<string, unknown>, current.count)
       : current.count,
     transparentBackground: transparent === undefined ? current.transparentBackground : transparent === true,
     category: category === undefined ? current.category : normalizeWorkbenchCategory(category),

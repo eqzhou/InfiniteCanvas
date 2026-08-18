@@ -19,7 +19,7 @@ const MISSING_JOB_GRACE_MS = 30_000;
 
 function resultItem(job: GenerationJob, index = 0): GenerationResultItem | undefined {
   const items = Array.isArray(job.result.items) ? job.result.items : [];
-  if (items.length > 8) return undefined;
+  if (items.length > 100) return undefined;
   const value = items[index];
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;

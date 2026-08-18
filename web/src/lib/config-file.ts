@@ -144,7 +144,7 @@ function parsePortableConfig(value: Record<string, unknown>, current: AppConfig)
     throw new Error("配置文件中的主题无效");
   }
   const imageCount = value.imageCount;
-  if (!Number.isSafeInteger(imageCount) || Number(imageCount) < 1 || Number(imageCount) > 8) {
+  if (!Number.isSafeInteger(imageCount) || Number(imageCount) < 1 || Number(imageCount) > 100) {
     throw new Error("配置文件中的默认数量无效");
   }
   const imported = {

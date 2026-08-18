@@ -220,6 +220,9 @@ type createImageJobParameters struct {
 	Size                  string                 `json:"size"`
 	Quality               string                 `json:"quality,omitempty"`
 	Count                 int                    `json:"count"`
+	RequestedCount        int                    `json:"requestedCount,omitempty"`
+	BatchID               string                 `json:"batchId,omitempty"`
+	BatchIndex            int                    `json:"batchIndex,omitempty"`
 	Category              string                 `json:"category,omitempty"`
 	TransparentBackground bool                   `json:"transparentBackground,omitempty"`
 	ReferenceStorageKeys  []string               `json:"referenceStorageKeys,omitempty"`
@@ -240,6 +243,9 @@ type persistedImageJobParameters struct {
 	Size                  string                     `json:"size"`
 	Quality               string                     `json:"quality,omitempty"`
 	Count                 int                        `json:"count"`
+	RequestedCount        int                        `json:"requestedCount,omitempty"`
+	BatchID               string                     `json:"batchId,omitempty"`
+	BatchIndex            int                        `json:"batchIndex,omitempty"`
 	Category              string                     `json:"category,omitempty"`
 	TransparentBackground bool                       `json:"transparentBackground,omitempty"`
 	ReferenceStorageKeys  []string                   `json:"referenceStorageKeys,omitempty"`
@@ -391,6 +397,9 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	parameters, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, RequestHash: requestHash,
 		Size: input.Parameters.Size, Quality: input.Parameters.Quality, Count: input.Parameters.Count,
+		RequestedCount:        input.Parameters.RequestedCount,
+		BatchID:               input.Parameters.BatchID,
+		BatchIndex:            input.Parameters.BatchIndex,
 		Category:              input.Parameters.Category,
 		TransparentBackground: input.Parameters.TransparentBackground,
 		ReferenceStorageKeys:  append([]string(nil), input.Parameters.ReferenceStorageKeys...),
@@ -448,7 +457,11 @@ func validCreateImageJob(input createImageJobRequest) bool {
 	}
 	prompt := strings.TrimSpace(input.Prompt)
 	if prompt == "" || len(prompt) > 100_000 || !imageSizePattern.MatchString(input.Parameters.Size) ||
-		len(input.Parameters.Quality) > 50 || input.Parameters.Count < 1 || input.Parameters.Count > 8 ||
+		len(input.Parameters.Quality) > 50 || input.Parameters.Count < 1 || input.Parameters.Count > maxImageGenerationCount ||
+		input.Parameters.RequestedCount < 0 || input.Parameters.RequestedCount > maxImageGenerationCount ||
+		(input.Parameters.RequestedCount > 0 && input.Parameters.RequestedCount < input.Parameters.Count) ||
+		input.Parameters.BatchIndex < 0 || input.Parameters.BatchIndex > maxImageGenerationCount ||
+		(input.Parameters.BatchID != "" && !projectIDPattern.MatchString(input.Parameters.BatchID)) ||
 		len(strings.TrimSpace(input.Parameters.Category)) > 100 || len(input.Parameters.ReferenceStorageKeys) > 16 {
 		return false
 	}
@@ -1101,7 +1114,7 @@ func (s *Server) persistGeneratedImages(ctx context.Context, tenantID, userID, j
 }
 
 func (s *Server) persistGeneratedImagesScoped(ctx context.Context, tenantID, userID, jobID, attemptID string, images []generatedImage, protected bool) ([]generationResultItem, []string, error) {
-	if len(images) < 1 || len(images) > 8 {
+	if len(images) < 1 || len(images) > maxImageGenerationCount {
 		return nil, nil, errors.New("invalid generated image count")
 	}
 	items := make([]generationResultItem, 0, len(images))

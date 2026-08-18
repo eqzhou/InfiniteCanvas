@@ -343,14 +343,11 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
   const size = normalizeImageSizeForProvider(options.size ?? "1024x1024");
   const quality = normalizeImageQualityForProvider(options.quality ?? "auto", provider.protocol, model);
   const requestedCount = Number(options.n ?? 1);
-  // Keep the public 1..8 validation for arbitrary providers while reducing
-  // legacy counts for known model contracts before their request is built.
-  const n = Number.isSafeInteger(requestedCount) && requestedCount >= 1 && requestedCount <= 8
-    ? Math.min(requestedCount, imageOutputLimitFor(provider.protocol, model))
-    : requestedCount;
-  if (!Number.isSafeInteger(n) || n < 1 || n > 8) {
-    throw new Error("Image generation count must be between 1 and 8");
+  const maxCount = imageOutputLimitFor(provider.protocol, model);
+  if (!Number.isSafeInteger(requestedCount) || requestedCount < 1 || requestedCount > maxCount) {
+    throw new Error(`Image generation count must be between 1 and ${maxCount}`);
   }
+  const n = requestedCount;
   if (referenceDataUrls.length + referenceBlobs.length > 16 ||
       referenceBlobs.reduce((total, blob) => total + blob.size, 0) > 64 * 1024 * 1024) {
     throw new Error("Image generation references exceed the supported limit");
@@ -390,42 +387,48 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     throw new Error("gpt-image-2 does not support transparent backgrounds");
   }
 
-  if (referenceDataUrls.length > 0 || referenceBlobs.length > 0) {
-    const form = new FormData();
-    form.set("model", model);
-    form.set("prompt", effectivePrompt);
-    form.set("n", String(n));
-    form.set("size", size);
-    if (quality) form.set("quality", quality);
-    if (transparentBackground) form.set("background", "transparent");
-    for (const [i, dataUrl] of referenceDataUrls.entries()) {
-      const decoded = decodeBoundedDataUrl(dataUrl, {
-        maxBytes: MAX_IMAGE_PROVIDER_RESPONSE_BYTES,
-        mimeTypes: ["image/"],
-      });
-      const blob = new Blob([decoded.bytes], { type: decoded.mimeType });
-      form.append("image[]", blob, `ref-${i}.${imageFileExtension(decoded.mimeType)}`);
+  const generateOne = async (): Promise<string[]> => {
+    if (referenceDataUrls.length > 0 || referenceBlobs.length > 0) {
+      const form = new FormData();
+      form.set("model", model);
+      form.set("prompt", effectivePrompt);
+      form.set("n", "1");
+      form.set("size", size);
+      if (quality) form.set("quality", quality);
+      if (transparentBackground) form.set("background", "transparent");
+      for (const [i, dataUrl] of referenceDataUrls.entries()) {
+        const decoded = decodeBoundedDataUrl(dataUrl, {
+          maxBytes: MAX_IMAGE_PROVIDER_RESPONSE_BYTES,
+          mimeTypes: ["image/"],
+        });
+        const blob = new Blob([decoded.bytes], { type: decoded.mimeType });
+        form.append("image[]", blob, `ref-${i}.${imageFileExtension(decoded.mimeType)}`);
+      }
+      for (const [i, blob] of referenceBlobs.entries()) {
+        form.append("image[]", blob, `ref-${referenceDataUrls.length + i}.${imageFileExtension(blob.type)}`);
+      }
+      const res = await authFetch(channel, "/images/edits", { method: "POST", body: form, signal }, "image");
+      return readImageProviderResults(res, 1);
     }
-    for (const [i, blob] of referenceBlobs.entries()) {
-      form.append("image[]", blob, `ref-${referenceDataUrls.length + i}.${imageFileExtension(blob.type)}`);
-    }
-    const res = await authFetch(channel, "/images/edits", { method: "POST", body: form, signal }, "image");
-    return readImageProviderResults(res, n);
-  }
 
-  const res = await authFetch(channel, "/images/generations", {
-    method: "POST",
-    body: JSON.stringify({
-      model,
-      prompt: effectivePrompt,
-      n,
-      size,
-      quality,
-      ...(transparentBackground ? { background: "transparent" } : {}),
-    }),
-    signal,
-  }, "image");
-  return readImageProviderResults(res, n);
+    const res = await authFetch(channel, "/images/generations", {
+      method: "POST",
+      body: JSON.stringify({
+        model,
+        prompt: effectivePrompt,
+        n: 1,
+        size,
+        quality,
+        ...(transparentBackground ? { background: "transparent" } : {}),
+      }),
+      signal,
+    }, "image");
+    return readImageProviderResults(res, 1);
+  };
+
+  if (n === 1) return generateOne();
+  const batches = await Promise.all(Array.from({ length: n }, () => generateOne()));
+  return batches.flat();
 }
 
 export type VideoGenOptions = {
