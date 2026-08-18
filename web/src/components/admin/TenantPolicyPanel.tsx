@@ -20,11 +20,16 @@ export function parseTenantModelList(value: string): string[] {
   return [...new Set(value.split("\n").map((item) => item.trim()).filter(Boolean))];
 }
 
+export function tenantPolicyWritePayload(policy: TenantPolicy, modelDraft: string): TenantPolicy {
+  return { ...policy, availableModels: parseTenantModelList(modelDraft) };
+}
+
 export function TenantPolicyPanel() {
   const { t } = useI18n();
   const [policy, setPolicy] = useState<TenantPolicy>(DEFAULT_TENANT_POLICY);
   const [modelDraft, setModelDraft] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -36,6 +41,7 @@ export function TenantPolicyPanel() {
         if (cancelled) return;
         setPolicy(value);
         setModelDraft((value.availableModels ?? []).join("\n"));
+        setLoaded(true);
       })
       .catch((cause) => {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -48,7 +54,7 @@ export function TenantPolicyPanel() {
 
   const models = useMemo(() => parseTenantModelList(modelDraft), [modelDraft]);
   const save = async (next: TenantPolicy) => {
-    if (busy) return;
+    if (busy || !loaded) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -64,8 +70,12 @@ export function TenantPolicyPanel() {
     }
   };
 
+  const persist = (next: TenantPolicy) => {
+    void save(tenantPolicyWritePayload(next, modelDraft));
+  };
+
   const toggle = (key: "allowCustomChannel" | "allowCloudChannel") => {
-    void save({ ...policy, [key]: !policy[key] });
+    persist({ ...policy, [key]: !policy[key] });
   };
 
   return (
@@ -77,7 +87,20 @@ export function TenantPolicyPanel() {
           desc={t("settings.sitePolicyDescription")}
         />
         <p className="mb-3 text-xs text-[var(--ob-muted)]">{t("settings.sitePolicyHint")}</p>
-        {loading ? <Notice tone="info">{t("settings.loadingPolicy")}</Notice> : (
+        {loading ? <Notice tone="info">{t("settings.loadingPolicy")}</Notice> : !loaded ? (
+          <button type="button" className="ob-btn" onClick={() => {
+            setLoading(true);
+            setError("");
+            void getTenantPolicy()
+              .then((value) => {
+                setPolicy(value);
+                setModelDraft((value.availableModels ?? []).join("\n"));
+                setLoaded(true);
+              })
+              .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+              .finally(() => setLoading(false));
+          }}>{t("settings.retry")}</button>
+        ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
               <PolicySwitch
@@ -116,7 +139,7 @@ export function TenantPolicyPanel() {
                         className="ob-field"
                         value={current}
                         disabled={busy}
-                        onChange={(event) => void save({ ...policy, [key]: event.target.value })}
+                        onChange={(event) => persist({ ...policy, [key]: event.target.value })}
                       >
                         <option value="">{t("settings.unsetModel")}</option>
                         {options.map((model) => <option key={model} value={model}>{model}</option>)}
@@ -129,7 +152,7 @@ export function TenantPolicyPanel() {
                 type="button"
                 className="ob-btn ob-btn-primary mt-3"
                 disabled={busy}
-                onClick={() => void save({ ...policy, availableModels: models })}
+                onClick={() => persist(policy)}
               >
                 {busy ? t("admin.saving") : t("settings.saveModelList")}
               </button>

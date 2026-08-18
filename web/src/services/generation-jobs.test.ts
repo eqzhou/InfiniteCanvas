@@ -6,6 +6,7 @@ import {
   findUnreferencedGenerationStorageKeys,
   generationRequestError,
   isServerOwnedGenerationJob,
+  generationJobListExhausted,
   paginateGenerationJobs,
   selectGenerationJobsForNodeCleanup,
   selectGenerationJobsForProject,
@@ -64,6 +65,13 @@ describe("generation job pagination", () => {
     // An HTML error page or an oversized body is not a reason worth showing.
     expect(generationRequestError(502, "<!doctype html><html>...</html>").message).toContain("502");
     expect(generationRequestError(503, "x".repeat(1000)).message.length).toBeLessThan(400);
+  });
+
+  test("stops listing when the page is short, complete, or missing a total", () => {
+    expect(generationJobListExhausted(1, 100, 3, Number.NaN)).toBe(true);
+    expect(generationJobListExhausted(1, 100, 100, 250)).toBe(false);
+    expect(generationJobListExhausted(3, 100, 100, 250)).toBe(true);
+    expect(generationJobListExhausted(1, 0, 100, 500)).toBe(true);
   });
 
   test("filters, sorts newest first, paginates, and leaves input immutable", () => {

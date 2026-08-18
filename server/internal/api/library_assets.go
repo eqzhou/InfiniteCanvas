@@ -82,7 +82,7 @@ func (s *Server) createLibraryAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.store.CreateLibraryAsset(r.Context(), tenantIDFrom(r), asset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid library asset", http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -110,7 +110,7 @@ func (s *Server) updateLibraryAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid library asset", http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, updated)

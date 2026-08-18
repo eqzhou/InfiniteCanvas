@@ -162,7 +162,7 @@ func (s *Server) createMediaReferences(w http.ResponseWriter, r *http.Request) {
 		// Ensure the blob exists for this tenant before minting a token.
 		if _, err := s.readTenantBlob(r.Context(), tenantID, key, maxUploadBytes); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				http.Error(w, "storage key not found: "+key, http.StatusNotFound)
+				http.Error(w, "storage key not found", http.StatusNotFound)
 				return
 			}
 			http.Error(w, "failed to verify storage key", http.StatusInternalServerError)

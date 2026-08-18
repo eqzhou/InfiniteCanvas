@@ -810,7 +810,7 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "file field is required", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -828,7 +828,7 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	storedBytes, err := directoryBytes(dir)
-	if err != nil || hdr.Size < 0 || storedBytes+hdr.Size > maxStoredFiles {
+	if err != nil || storedBytes >= maxStoredFiles {
 		http.Error(w, "file storage quota exceeded", http.StatusInsufficientStorage)
 		return
 	}
@@ -845,16 +845,24 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer out.Close()
-	if _, err := io.Copy(out, file); err != nil {
+	remaining := maxStoredFiles - storedBytes
+	written, err := io.Copy(out, io.LimitReader(file, remaining+1))
+	if err != nil {
 		_ = out.Close()
 		_ = os.Remove(dst)
 		http.Error(w, "failed to store file", http.StatusInternalServerError)
 		return
 	}
+	if written > remaining {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		http.Error(w, "file storage quota exceeded", http.StatusInsufficientStorage)
+		return
+	}
 	writeJSON(w, map[string]any{
 		"name": name,
 		"url":  "/api/files/" + name, // resolved under the caller's tenant on GET
-		"size": hdr.Size,
+		"size": written,
 	})
 }
 

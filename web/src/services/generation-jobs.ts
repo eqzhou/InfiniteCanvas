@@ -404,6 +404,19 @@ export async function deleteGenerationJobsForNodeIds(
   return deleted;
 }
 
+export function generationJobListExhausted(
+  page: number,
+  pageSize: number,
+  itemCount: number,
+  total: number,
+): boolean {
+  if (!Number.isSafeInteger(page) || page < 1) return true;
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1) return true;
+  if (!Number.isSafeInteger(itemCount) || itemCount < pageSize) return true;
+  if (Number.isSafeInteger(total) && page * pageSize >= total) return true;
+  return page >= 1_000;
+}
+
 export async function listAllGenerationJobs(options: { includeDeleted?: boolean } = {}): Promise<GenerationJob[]> {
   const jobs: GenerationJob[] = [];
   let page = 1;
@@ -414,7 +427,7 @@ export async function listAllGenerationJobs(options: { includeDeleted?: boolean 
       includeDeleted: options.includeDeleted,
     });
     jobs.push(...result.items);
-    if (page * result.pageSize >= result.total) return jobs;
+    if (generationJobListExhausted(page, result.pageSize, result.items.length, result.total)) return jobs;
     page += 1;
   }
 }

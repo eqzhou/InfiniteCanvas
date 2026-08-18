@@ -622,6 +622,9 @@ func (s *Server) deleteDirectorCapture(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pruneDirectorCaptures(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant director captures unavailable") {
+		return
+	}
 	if s.store == nil {
 		http.Error(w, "persistent store unavailable", http.StatusServiceUnavailable)
 		return

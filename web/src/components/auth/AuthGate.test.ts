@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AuthHttpError,
+} from "@/services/auth-session";
+import {
+  authMeFailureAction,
   createScopeReadyCoordinator,
   isGuestIdentity,
   requiresLoginWall,
@@ -141,6 +145,15 @@ describe("guest bootstrap status", () => {
 });
 
 
+
+describe("auth bootstrap failures", () => {
+  test("treats only a 404 as authentication disabled", () => {
+    expect(authMeFailureAction(new AuthHttpError(404, "auth unavailable"))).toBe("auth_off");
+    expect(authMeFailureAction(new AuthHttpError(401, "unauthorized"))).toBe("login_required");
+    expect(authMeFailureAction(new AuthHttpError(500, "failed"))).toBe("login_required");
+    expect(authMeFailureAction(new Error("network down"))).toBe("login_required");
+  });
+});
 
 describe("login wall enforcement", () => {
   test("requires a login wall for guests when accounts are enabled", () => {

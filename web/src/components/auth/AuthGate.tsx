@@ -90,6 +90,11 @@ export function shouldOfferLogin(
  * must hit the login wall. The current browser URL is left alone so a deep link
  * like /prompts is restored after a successful sign-in.
  */
+/** How /api/auth/me failures should land the gate. Only 404 means auth is off. */
+export function authMeFailureAction(error: unknown): "auth_off" | "login_required" {
+  return isAuthDisabledError(error) ? "auth_off" : "login_required";
+}
+
 export function requiresLoginWall(
   status: AuthStatus,
   user: AuthUser | null,
@@ -202,25 +207,23 @@ export function AuthGate({ children, onReady, onBeforeScopeChange, onScopeCreden
         void loadUsage();
       } catch (error) {
         if (cancelled) return;
-        // Auth-enabled deployments always land on the sign-in wall for 401.
-        if (error instanceof AuthHttpError && error.status === 401) {
-          const hadSession = Boolean(getSessionToken());
+        if (authMeFailureAction(error) === "auth_off") {
           setUser(null);
           readyScopeRef.current = "open";
-          setLocalAdmin(false);
+          setLocalAdmin(true);
           setUsageSnapshot(null);
-          if (hadSession) clearSessionToken();
-          // Auth-enabled deployments always land on the sign-in wall so deep
-          // links like /prompts cannot be used anonymously.
-          setStatus("login_required");
+          revealAuthBeforeWorkspaceReady("open", setStatus, finishReady);
           return;
         }
-        // 404 (auth off) / network error → open / backward-compatible mode
+        const hadSession = Boolean(getSessionToken());
         setUser(null);
         readyScopeRef.current = "open";
-        setLocalAdmin(isAuthDisabledError(error));
+        setLocalAdmin(false);
         setUsageSnapshot(null);
-        revealAuthBeforeWorkspaceReady("open", setStatus, finishReady);
+        if (hadSession && error instanceof AuthHttpError && error.status === 401) {
+          clearSessionToken();
+        }
+        setStatus("login_required");
       }
     })();
 

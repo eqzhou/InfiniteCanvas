@@ -41,7 +41,7 @@ func tenantCaptureHandler(t *testing.T, memory *memoryStore) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenantID := r.Header.Get("X-Test-Tenant")
 			if tenantID != "" {
-				user := store.AuthUser{ID: "user-" + tenantID, TenantID: tenantID}
+				user := store.AuthUser{ID: "user-" + tenantID, TenantID: tenantID, Role: "owner", Status: "active"}
 				r = r.WithContext(context.WithValue(r.Context(), authUserKey, user))
 			}
 			next.ServeHTTP(w, r)
@@ -240,6 +240,32 @@ func TestDirectorCaptureCreateCompensatesBlobWhenMetadataCASFails(t *testing.T) 
 	}
 	if memory.storageUsage != 0 {
 		t.Fatalf("storage usage leaked: %d", memory.storageUsage)
+	}
+}
+
+func TestDirectorCapturePruneRejectsOrdinaryMembers(t *testing.T) {
+	t.Setenv("OPENBOARD_AUTH_MODE", "required")
+	png, _ := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	memory := newMemoryStore()
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user := store.AuthUser{ID: "member-a", TenantID: "tenant-a", Role: "member", Status: "active"}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authUserKey, user)))
+		})
+	})
+	MountServer(router, NewServerWithStore(t.TempDir(), memory))
+	created := directorCaptureRequest(t, router, http.MethodPost,
+		captureCreatePath("project-a", "director-a", "camera-main", "主摄像机", 1, 1), png, "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("member create status=%d body=%s", created.Code, created.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/director-captures/prune", bytes.NewBufferString(`{"projects":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	pruned := httptest.NewRecorder()
+	router.ServeHTTP(pruned, req)
+	if pruned.Code != http.StatusForbidden {
+		t.Fatalf("member prune = %d %s", pruned.Code, pruned.Body.String())
 	}
 }
 
