@@ -141,6 +141,7 @@ func (s *Server) executeClaimedVoiceCloneJob(claimed store.TenantGenerationJob) 
 	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := backend.CompleteVoiceIdentityVersion(ctx, tenantID, job.ProjectID, parameters.VersionID, job.ID, "running", "", "", now); err != nil {
+		_, _ = s.store.CompleteServerGenerationJob(context.Background(), tenantID, job.ID, job.LeaseOwner, "failed", json.RawMessage(`{}`), "Voice clone version could not be marked running", time.Now().UTC())
 		return
 	}
 	if ctx.Err() != nil {

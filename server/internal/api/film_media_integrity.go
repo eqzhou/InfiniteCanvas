@@ -31,6 +31,13 @@ func protectedFilmBlobKey(key string) bool {
 	return strings.HasPrefix(key, "film:media:") || strings.HasPrefix(key, "film:deliverable:")
 }
 
+func publicBlobAPIProtectedKey(key string) bool {
+	if protectedFilmBlobKey(key) || strings.HasPrefix(key, "director-capture:") {
+		return true
+	}
+	return strings.HasPrefix(key, "image:generated:") || strings.HasPrefix(key, "media:generated:")
+}
+
 func verifyFilmBlob(value blobObject, mimePrefix, expectedMIME, digest, objectVersion string, expectedBytes int64) error {
 	if digest == "" || !validSHA256Hex(digest) || sha256Hex(value.Data) != digest {
 		return errors.New("film media digest does not match the tenant object")

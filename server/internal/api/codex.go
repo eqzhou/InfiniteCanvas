@@ -1422,6 +1422,9 @@ func (s *codexSession) cancelTurnStart() {
 }
 
 func (s *Server) interruptCodex(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxCodexBody)
 	var req struct {
 		SessionID string `json:"sessionId"`
@@ -1490,6 +1493,9 @@ func (s *Server) respondCodexApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) codexEvents(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	session, ok := s.findCodexForScope(requestAgentScope(r), r.URL.Query().Get("sessionId"))
 	if !ok {
 		http.Error(w, "codex session not found", http.StatusNotFound)
@@ -1543,6 +1549,9 @@ func (s *Server) codexEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) closeCodexSession(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	id := chi.URLParam(r, "id")
 	scope := requestAgentScope(r)
 	s.codex.mu.Lock()

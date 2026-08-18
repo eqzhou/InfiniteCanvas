@@ -161,10 +161,23 @@ export function applyBoardOperations(
   return parseBoardProject(next);
 }
 
+export function runtimeWebsocketProtocol(ticket: string): string {
+  return `openboard.${ticket}`;
+}
+
+export function runtimeWebsocketUrl(baseUrl: string): string {
+  const websocketUrl = new URL(normalizeAgentBaseUrl(baseUrl));
+  websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
+  websocketUrl.pathname = "/api/runtime/ws";
+  websocketUrl.search = "";
+  websocketUrl.hash = "";
+  return websocketUrl.toString();
+}
+
 export async function requestRuntimeTicket(
   connection: AgentConnection,
   fetcher: typeof fetch = fetch,
-): Promise<{ ticket: string; websocketUrl: string }> {
+): Promise<{ ticket: string; websocketUrl: string; protocol: string }> {
   const baseUrl = normalizeAgentBaseUrl(connection.baseUrl);
   const headers = agentAuthHeaders(connection);
   const response = await fetcher(`${baseUrl}/api/runtime/ticket`, {
@@ -179,11 +192,11 @@ export async function requestRuntimeTicket(
   if (typeof value.ticket !== "string" || !RUNTIME_ID.test(value.ticket)) {
     throw new Error("runtime ticket response is invalid");
   }
-  const websocketUrl = new URL(baseUrl);
-  websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
-  websocketUrl.pathname = "/api/runtime/ws";
-  websocketUrl.search = new URLSearchParams({ ticket: value.ticket }).toString();
-  return { ticket: value.ticket, websocketUrl: websocketUrl.toString() };
+  return {
+    ticket: value.ticket,
+    websocketUrl: runtimeWebsocketUrl(baseUrl),
+    protocol: runtimeWebsocketProtocol(value.ticket),
+  };
 }
 
 export async function uploadRuntimeSnapshot(

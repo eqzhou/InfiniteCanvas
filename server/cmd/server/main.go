@@ -59,6 +59,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(redactRuntimeTicketLogs)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(timeoutRequests(requestHandlingTimeout))
@@ -274,13 +275,28 @@ func isLoopbackAddress(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func redactRuntimeTicketLogs(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/runtime/ws" && r.URL.Query().Get("ticket") != "" {
+			query := r.URL.Query()
+			query.Set("ticket", "redacted")
+			cloned := r.Clone(r.Context())
+			cloned.URL.RawQuery = query.Encode()
+			cloned.RequestURI = cloned.URL.RequestURI()
+			next.ServeHTTP(w, cloned)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func requireToken(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if token == "" {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/runtime/ws" && r.URL.Query().Get("ticket") != "" {
+			if r.URL.Path == "/api/runtime/ws" && api.RuntimeSocketTicket(r) != "" {
 				next.ServeHTTP(w, r)
 				return
 			}

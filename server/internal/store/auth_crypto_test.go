@@ -27,6 +27,15 @@ func TestHashPasswordRejectsShort(t *testing.T) {
 	}
 }
 
+func TestMediaReferenceTokenHashing(t *testing.T) {
+	if HashMediaReferenceToken("plain-token") == "plain-token" {
+		t.Fatal("media reference token must be hashed")
+	}
+	if HashMediaReferenceToken("plain-token") != HashSessionToken("plain-token") {
+		t.Fatal("media reference tokens should use the same digest as sessions")
+	}
+}
+
 func TestSessionTokenHashing(t *testing.T) {
 	token, hash, err := NewSessionToken()
 	if err != nil {

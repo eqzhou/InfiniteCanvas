@@ -95,6 +95,12 @@ func TestExpiredMediaReferencesAreSweptRatherThanAccumulating(t *testing.T) {
 	if _, err := backend.GetMediaReference(t.Context(), live.Token); err != nil {
 		t.Fatalf("sweep removed a live reference: %v", err)
 	}
+	if _, hashed := backend.mediaRefs[live.Token]; hashed {
+		t.Fatal("media reference token was stored in plaintext")
+	}
+	if _, err := backend.GetMediaReference(t.Context(), store.HashMediaReferenceToken(live.Token)); err == nil {
+		t.Fatal("stored digest must not work as a bearer token")
+	}
 }
 
 func TestMediaReferenceServesBytesWithSafeHeaders(t *testing.T) {

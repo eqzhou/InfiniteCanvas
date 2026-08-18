@@ -362,7 +362,7 @@ export function BrowserRuntime() {
       try {
         const ticket = await requestRuntimeTicket(connection);
         if (stopped) return;
-        socket = new WebSocket(ticket.websocketUrl);
+        socket = new WebSocket(ticket.websocketUrl, [ticket.protocol]);
         socketRef.current = socket;
         socket.addEventListener("open", () => {
           attempt = 0;

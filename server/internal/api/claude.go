@@ -267,6 +267,9 @@ func (s *Server) sendClaudeMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) interruptClaude(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxClaudeBody)
 	var req struct {
 		SessionID string `json:"sessionId"`
@@ -282,6 +285,9 @@ func (s *Server) interruptClaude(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) claudeEvents(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	session, ok := s.findClaudeForScope(requestAgentScope(r), r.URL.Query().Get("sessionId"))
 	if !ok {
 		http.Error(w, "claude session not found", http.StatusNotFound)
@@ -329,6 +335,9 @@ func (s *Server) claudeEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) closeClaudeSession(w http.ResponseWriter, r *http.Request) {
+	if !authorizeAccountAgentExecution(w, r) {
+		return
+	}
 	id := chi.URLParam(r, "id")
 	scope := requestAgentScope(r)
 	s.claude.mu.Lock()

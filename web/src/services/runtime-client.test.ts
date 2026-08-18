@@ -3,6 +3,8 @@ import {
   applyBoardOperations,
   parseRuntimeCommand,
   resolveRuntimeFileUrl,
+  runtimeWebsocketProtocol,
+  runtimeWebsocketUrl,
 } from "./runtime-client";
 import { createProject, createNode } from "@/lib/defaults";
 
@@ -75,5 +77,16 @@ describe("browser runtime protocol", () => {
       "https://agent.example.com",
       "http://localhost:5173",
     )).toBe("https://agent.example.com/api/files/snapshot.png");
+  });
+});
+
+describe("runtime websocket ticket transport", () => {
+  test("keeps the ticket out of the websocket URL", () => {
+    expect(runtimeWebsocketUrl("http://127.0.0.1:8790")).toBe("ws://127.0.0.1:8790/api/runtime/ws");
+    expect(runtimeWebsocketUrl("https://canvas.example")).toBe("wss://canvas.example/api/runtime/ws");
+  });
+
+  test("carries the ticket as a websocket subprotocol", () => {
+    expect(runtimeWebsocketProtocol("runtime-abc")).toBe("openboard.runtime-abc");
   });
 });

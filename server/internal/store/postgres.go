@@ -5771,24 +5771,20 @@ func (s *PostgresStore) CreateMediaReference(ctx context.Context, tenantID, stor
 	if expiresAt.IsZero() || expiresAt.Before(time.Now().UTC()) {
 		expiresAt = time.Now().UTC().Add(15 * time.Minute)
 	}
-	token, err := newID()
+	first, err := newID()
 	if err != nil {
 		return MediaReference{}, err
 	}
-	token += newIDMust()
+	second, err := newID()
+	if err != nil {
+		return MediaReference{}, err
+	}
+	token := first + second
 	if _, err := s.pool.Exec(ctx, `INSERT INTO openboard_media_references (token, tenant_id, storage_key, expires_at) VALUES ($1,$2,$3,$4)`,
-		token, tenantID, storageKey, expiresAt.UTC()); err != nil {
+		HashMediaReferenceToken(token), tenantID, storageKey, expiresAt.UTC()); err != nil {
 		return MediaReference{}, err
 	}
 	return MediaReference{Token: token, TenantID: tenantID, StorageKey: storageKey, ExpiresAt: expiresAt.UTC()}, nil
-}
-
-func newIDMust() string {
-	id, err := newID()
-	if err != nil {
-		return ""
-	}
-	return id
 }
 
 func (s *PostgresStore) GetMediaReference(ctx context.Context, token string) (MediaReference, error) {
@@ -5796,10 +5792,24 @@ func (s *PostgresStore) GetMediaReference(ctx context.Context, token string) (Me
 	if token == "" {
 		return MediaReference{}, ErrNotFound
 	}
+	stored := HashMediaReferenceToken(token)
+	ref, err := s.lookupMediaReference(ctx, stored)
+	if err != nil {
+		return MediaReference{}, err
+	}
+	if time.Now().UTC().After(ref.ExpiresAt) {
+		_, _ = s.pool.Exec(ctx, `DELETE FROM openboard_media_references WHERE token=$1`, stored)
+		return MediaReference{}, ErrNotFound
+	}
+	ref.Token = token
+	return ref, nil
+}
+
+func (s *PostgresStore) lookupMediaReference(ctx context.Context, storedToken string) (MediaReference, error) {
 	var ref MediaReference
 	var expires time.Time
-	err := s.pool.QueryRow(ctx, `SELECT token, tenant_id, storage_key, expires_at FROM openboard_media_references WHERE token=$1`, token).Scan(
-		&ref.Token, &ref.TenantID, &ref.StorageKey, &expires)
+	err := s.pool.QueryRow(ctx, `SELECT tenant_id, storage_key, expires_at FROM openboard_media_references WHERE token=$1`, storedToken).Scan(
+		&ref.TenantID, &ref.StorageKey, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MediaReference{}, ErrNotFound
 	}
@@ -5807,10 +5817,6 @@ func (s *PostgresStore) GetMediaReference(ctx context.Context, token string) (Me
 		return MediaReference{}, err
 	}
 	ref.ExpiresAt = expires.UTC()
-	if time.Now().UTC().After(ref.ExpiresAt) {
-		_, _ = s.pool.Exec(ctx, `DELETE FROM openboard_media_references WHERE token=$1`, token)
-		return MediaReference{}, ErrNotFound
-	}
 	return ref, nil
 }
 

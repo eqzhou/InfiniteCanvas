@@ -1364,18 +1364,19 @@ func (*memoryStore) UpsertLinuxDoUser(context.Context, store.LinuxDoUserInput) (
 func (m *memoryStore) CreateMediaReference(_ context.Context, tenantID, storageKey string, expiresAt time.Time) (store.MediaReference, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	token := fmt.Sprintf("ref-%d", len(m.mediaRefs)+1)
+	token := fmt.Sprintf("ref-%d-%s", len(m.mediaRefs)+1, "plain")
 	ref := store.MediaReference{Token: token, TenantID: tenantID, StorageKey: storageKey, ExpiresAt: expiresAt.UTC()}
-	m.mediaRefs[token] = ref
+	m.mediaRefs[store.HashMediaReferenceToken(token)] = store.MediaReference{TenantID: tenantID, StorageKey: storageKey, ExpiresAt: expiresAt.UTC()}
 	return ref, nil
 }
 func (m *memoryStore) GetMediaReference(_ context.Context, token string) (store.MediaReference, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	ref, ok := m.mediaRefs[token]
+	ref, ok := m.mediaRefs[store.HashMediaReferenceToken(token)]
 	if !ok || time.Now().UTC().After(ref.ExpiresAt) {
 		return store.MediaReference{}, store.ErrNotFound
 	}
+	ref.Token = token
 	return ref, nil
 }
 func (m *memoryStore) DeleteExpiredMediaReferences(_ context.Context, now time.Time) (int64, error) {

@@ -304,8 +304,8 @@ func (s *Server) putBlob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid blob key", http.StatusBadRequest)
 		return
 	}
-	if protectedFilmBlobKey(key) {
-		http.Error(w, "protected film blobs cannot be written through the public blob API", http.StatusForbidden)
+	if publicBlobAPIProtectedKey(key) {
+		http.Error(w, "protected blobs cannot be written through the public blob API", http.StatusForbidden)
 		return
 	}
 	contentType := r.Header.Get("Content-Type")
@@ -595,8 +595,8 @@ func (s *Server) deleteBlob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid blob key", http.StatusBadRequest)
 		return
 	}
-	if protectedFilmBlobKey(key) {
-		http.Error(w, "protected film blobs cannot be deleted through the public blob API", http.StatusForbidden)
+	if publicBlobAPIProtectedKey(key) {
+		http.Error(w, "protected blobs cannot be deleted through the public blob API", http.StatusForbidden)
 		return
 	}
 	if err := s.deleteTenantBlob(r.Context(), tenantIDFrom(r), userIDFrom(r), key); err != nil {

@@ -66,3 +66,7 @@ func HashSessionToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+
+func HashMediaReferenceToken(token string) string {
+	return HashSessionToken(token)
+}

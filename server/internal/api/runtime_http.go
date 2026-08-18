@@ -7,13 +7,32 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 )
 
-const runtimeTicketTTL = 30 * time.Second
+const (
+	runtimeTicketTTL      = 30 * time.Second
+	runtimeTicketProtocol = "openboard."
+)
+
+func RuntimeSocketTicket(r *http.Request) string {
+	if ticket := strings.TrimSpace(r.URL.Query().Get("ticket")); ticket != "" {
+		return ticket
+	}
+	for _, protocol := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+		protocol = strings.TrimSpace(protocol)
+		if token, ok := strings.CutPrefix(protocol, runtimeTicketProtocol); ok {
+			if token = strings.TrimSpace(token); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
 
 type websocketRuntimeTransport struct {
 	connection *websocket.Conn
@@ -42,20 +61,29 @@ func (s *Server) runtimeTicket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runtimeSocket(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); origin != "" {
-		if _, allowed := s.runtimeOrigins[origin]; !allowed {
-			http.Error(w, "runtime origin is not allowed", http.StatusForbidden)
-			return
-		}
-	}
-	scope, ok := s.runtime.consumeTicket(r.URL.Query().Get("ticket"))
+	ticket := RuntimeSocketTicket(r)
+	scope, ok := s.runtime.consumeTicket(ticket)
 	if !ok {
 		http.Error(w, "runtime ticket is invalid or expired", http.StatusUnauthorized)
 		return
 	}
-	connection, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		if !isLoopbackRemote(r.RemoteAddr) {
+			http.Error(w, "runtime origin is not allowed", http.StatusForbidden)
+			return
+		}
+	} else if _, allowed := s.runtimeOrigins[origin]; !allowed {
+		http.Error(w, "runtime origin is not allowed", http.StatusForbidden)
+		return
+	}
+	accept := &websocket.AcceptOptions{
 		InsecureSkipVerify: true, // Origin was checked against the server allowlist above.
-	})
+	}
+	if strings.HasPrefix(r.Header.Get("Sec-WebSocket-Protocol"), runtimeTicketProtocol) {
+		accept.Subprotocols = []string{runtimeTicketProtocol + ticket}
+	}
+	connection, err := websocket.Accept(w, r, accept)
 	if err != nil {
 		return
 	}

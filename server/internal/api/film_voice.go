@@ -191,6 +191,9 @@ func (s *Server) listVoiceIdentities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) addVoiceSample(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant voice samples unavailable") {
+		return
+	}
 	backend, projectID, ok := s.loadVoiceProject(w, r)
 	if !ok {
 		return
@@ -374,6 +377,9 @@ func hashVoiceIdempotency(tenantID, projectID, voiceID, key string) string {
 }
 
 func (s *Server) createVoiceClone(w http.ResponseWriter, r *http.Request) {
+	if !s.requireTenantOwner(w, r, "tenant voice clone unavailable") {
+		return
+	}
 	backend, projectID, ok := s.loadVoiceProject(w, r)
 	if !ok {
 		return

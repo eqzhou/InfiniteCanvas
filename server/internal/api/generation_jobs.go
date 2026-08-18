@@ -229,7 +229,7 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
 		return
 	}
-	if !requestCanAccessGenerationJob(r, current) {
+	if !requestOwnsGenerationJob(r, current) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
