@@ -74,6 +74,23 @@ export type DirectorCamera = {
   aperture: number;
   aspect: "16:9" | "4:3" | "1:1" | "3:4" | "9:16";
 };
+export type DirectorCameraEase = "linear" | "ease-in" | "ease-out" | "ease-in-out";
+export type DirectorCameraKeyframe = {
+  id: string;
+  time: number;
+  position: DirectorVector3;
+  target: DirectorVector3;
+  focalLength: number;
+  ease: DirectorCameraEase;
+};
+export type DirectorCameraMove = {
+  id: string;
+  cameraId: string;
+  name: string;
+  duration: number;
+  loop: boolean;
+  keyframes: DirectorCameraKeyframe[];
+};
 export type DirectorScene = {
   version: 4;
   background: string;
@@ -88,6 +105,8 @@ export type DirectorScene = {
   selectedObjectId: string | null;
   activeCameraId: string;
   cameras: DirectorCamera[];
+  cameraMoves: DirectorCameraMove[];
+  activeCameraMoveId: string | null;
   environment: {
     rotationY: number;
     intensity: number;

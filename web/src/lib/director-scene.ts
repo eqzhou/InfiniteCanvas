@@ -1,4 +1,9 @@
 import { uid } from "@/lib/id";
+import {
+  dropDirectorCameraMovesForCamera,
+  parseDirectorCameraMoves,
+  stabilizeDirectorLook,
+} from "@/lib/director-camera-move";
 import type {
   DirectorCamera,
   DirectorCharacterConfig,
@@ -144,6 +149,8 @@ export function createDefaultDirectorScene(): DirectorScene {
     selectedObjectId: character.id,
     activeCameraId: camera.id,
     cameras: [camera],
+    cameraMoves: [],
+    activeCameraMoveId: null,
     environment: { rotationY: 0, intensity: 1 },
     objects: [character, light],
   };
@@ -156,10 +163,13 @@ export function getActiveDirectorCamera(scene: DirectorScene): DirectorCamera {
 export function addDirectorCamera(scene: DirectorScene): DirectorScene {
   if (scene.cameras.length >= MAX_CAMERAS) return scene;
   const active = getActiveDirectorCamera(scene);
+  const look = stabilizeDirectorLook(active.position, active.target);
   const camera: DirectorCamera = {
     ...structuredClone(active),
     id: uid("camera"),
     name: `机位 ${scene.cameras.length + 1}`,
+    position: look.position,
+    target: look.target,
   };
   return { ...scene, cameras: [...scene.cameras, camera], activeCameraId: camera.id };
 }
@@ -184,11 +194,11 @@ export function renameDirectorCamera(scene: DirectorScene, id: string, name: str
 export function removeDirectorCamera(scene: DirectorScene, id: string): DirectorScene {
   if (scene.cameras.length <= 1 || !scene.cameras.some((camera) => camera.id === id)) return scene;
   const cameras = scene.cameras.filter((camera) => camera.id !== id);
-  return {
+  return dropDirectorCameraMovesForCamera({
     ...scene,
     cameras,
     activeCameraId: scene.activeCameraId === id ? cameras[0]!.id : scene.activeCameraId,
-  };
+  }, id);
 }
 
 export function setDirectorViewMode(scene: DirectorScene, viewMode: DirectorScene["viewMode"]): DirectorScene {
@@ -508,14 +518,17 @@ export function updateDirectorCamera(scene: DirectorScene, patch: Partial<Direct
   const activeId = scene.activeCameraId;
   return {
     ...scene,
-    cameras: scene.cameras.map((camera) => camera.id === activeId ? {
-      ...camera,
-      ...patch,
-      id: camera.id,
-      name: camera.name,
-      position: patch.position ? { ...patch.position } : { ...camera.position },
-      target: patch.target ? { ...patch.target } : { ...camera.target },
-    } : camera),
+    cameras: scene.cameras.map((camera) => {
+      if (camera.id !== activeId) return camera;
+      return {
+        ...camera,
+        ...patch,
+        id: camera.id,
+        name: camera.name,
+        position: patch.position ? { ...patch.position } : { ...camera.position },
+        target: patch.target ? { ...patch.target } : { ...camera.target },
+      };
+    }),
   };
 }
 
@@ -582,6 +595,8 @@ export function parseDirectorScene(value: unknown, path = "directorScene"): Dire
   let showSafeFrame: boolean;
   let viewMode: DirectorScene["viewMode"];
   let directorView: DirectorScene["directorView"];
+  let cameraMoves: DirectorScene["cameraMoves"] = [];
+  let activeCameraMoveId: string | null = null;
   if (version === 1) {
     if (typeof input.showGrid !== "boolean") throw new Error(`${path}.showGrid must be a boolean`);
     const camera = parseCamera(input.camera, `${path}.camera`, { id: "camera_main", name: "主摄像机" });
@@ -616,6 +631,13 @@ export function parseDirectorScene(value: unknown, path = "directorScene"): Dire
       throw new Error(`${path}.activeCameraId references an unknown camera`);
     }
     activeCameraId = input.activeCameraId;
+    cameraMoves = parseDirectorCameraMoves(input.cameraMoves, cameraIds, `${path}.cameraMoves`);
+    const requestedMoveId = input.activeCameraMoveId;
+    if (requestedMoveId !== undefined && requestedMoveId !== null &&
+        (typeof requestedMoveId !== "string" || !cameraMoves.some((move) => move.id === requestedMoveId))) {
+      throw new Error(`${path}.activeCameraMoveId references an unknown camera move`);
+    }
+    activeCameraMoveId = typeof requestedMoveId === "string" ? requestedMoveId : null;
     showGroundGrid = input.showGroundGrid;
     showRuleOfThirds = input.showRuleOfThirds;
     showSafeFrame = input.showSafeFrame;
@@ -770,6 +792,8 @@ export function parseDirectorScene(value: unknown, path = "directorScene"): Dire
     selectedObjectId,
     activeCameraId,
     cameras,
+    cameraMoves,
+    activeCameraMoveId,
     environment,
     objects,
   };

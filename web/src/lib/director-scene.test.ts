@@ -44,6 +44,8 @@ describe("director scene model", () => {
     expect(scene.showRuleOfThirds).toBe(false);
     expect(scene.showSafeFrame).toBe(false);
     expect(scene.viewMode).toBe("director");
+    expect(scene.cameraMoves).toEqual([]);
+    expect(scene.activeCameraMoveId).toBeNull();
     expect(scene.directorView.position).not.toEqual(getActiveDirectorCamera(scene).position);
     expect(scene.environment).toEqual({ rotationY: 0, intensity: 1 });
     expect(scene.objects.every((object) => object.locked === false)).toBe(true);
@@ -244,6 +246,18 @@ describe("director scene model", () => {
     expect(getActiveDirectorCamera(next)).not.toBe(original);
     expect(getActiveDirectorCamera(next)).toMatchObject({ focalLength: 85, aperture: 4, aspect: "4:3" });
     expect(original).toMatchObject({ focalLength: 50, aperture: 2.8, aspect: "16:9" });
+  });
+
+  test("does not rewrite a live camera look when persisting orbit updates", () => {
+    const scene = createDefaultDirectorScene();
+    const next = updateDirectorCamera(scene, {
+      position: { x: 0, y: 12, z: 0 },
+      target: { x: 0, y: 0, z: 0 },
+    });
+    expect(getActiveDirectorCamera(next).position).toEqual({ x: 0, y: 12, z: 0 });
+    expect(getActiveDirectorCamera(next).target).toEqual({ x: 0, y: 0, z: 0 });
+    const reloaded = parseDirectorScene(JSON.parse(JSON.stringify(next)));
+    expect(getActiveDirectorCamera(reloaded).target).toEqual({ x: 0, y: 0, z: 0 });
   });
 
   test("adds, renames, selects, edits, and removes cameras immutably", () => {

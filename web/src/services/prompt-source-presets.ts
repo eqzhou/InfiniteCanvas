@@ -114,6 +114,17 @@ export const COMMUNITY_PROMPT_SOURCE_PRESETS: PromptSourcePreset[] = [
     ),
   },
   {
+    id: "freestylefly-gpt-image-2",
+    name: "Freestylefly GPT Image 2",
+    description: "Freestylefly GPT Image 2 统一 Image Prompts JSON",
+    repositoryUrl: "https://github.com/yukkcat/image-prompts",
+    source: imagePromptsSource(
+      "freestylefly-gpt-image-2",
+      "Freestylefly GPT Image 2",
+      "https://github.com/yukkcat/image-prompts",
+    ),
+  },
+  {
     id: "xianyu-awesome-gptimage2",
     name: "Xianyu GPT Image 2",
     description: "xianyu110/awesome-gptimage2 分类提示词 Markdown",

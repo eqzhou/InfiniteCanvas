@@ -10,6 +10,7 @@ import {
   videoResolutionOptionsFor,
   videoDurationOptionsFor,
   videoSizePresetFor,
+  videoResolutionLabel,
 } from "@/lib/video-generation-options";
 
 describe("video generation options", () => {
@@ -20,6 +21,17 @@ describe("video generation options", () => {
     expect(videoSizePresetFor("9:16", "720p")).toBe("720x1280");
     expect(videoSizePresetFor("3:2", "720p")).toBe("1080x720");
     expect(videoSizePresetFor("2:1", "720p")).toBe("auto");
+    expect(videoSizePresetFor("16:9", "2K")).toBe("2560x1440");
+    expect(videoSizePresetFor("16:9", "4K")).toBe("3840x2160");
+  });
+
+  test("does not append p to 2K or 4K resolution labels", () => {
+    expect(videoResolutionLabel("2K")).toBe("2K");
+    expect(videoResolutionLabel("4K")).toBe("4K");
+    expect(videoResolutionLabel("2k")).toBe("2K");
+    expect(videoResolutionLabel("1080p")).toBe("1080p");
+    expect(videoResolutionLabel("4k")).toBe("4K");
+    expect(videoResolutionOptionsFor("template", "custom").some((item) => item.label.includes("2Kp") || item.label.includes("4Kp"))).toBe(false);
   });
 
   test("offers bounded duration choices for Grok and Seedance 2.0", () => {

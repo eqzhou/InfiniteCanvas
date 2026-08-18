@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AiChannel, BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
 import {
@@ -158,6 +158,8 @@ export function NodeActions({
   const updateActive = useBoardStore((s) => s.updateActive);
   const addAssetFromNode = useBoardStore((s) => s.addAssetFromNode);
 	const persistNow = useBoardStore((s) => s.persistNow);
+  const imageRetryRequestId = useBoardStore((s) => s.imageRetryRequestId);
+  const requestImageRetry = useBoardStore((s) => s.requestImageRetry);
   const [cropOpen, setCropOpen] = useState(false);
   const [angleOpen, setAngleOpen] = useState(false);
   const [imageTool, setImageTool] = useState<ImageToolMode | null>(null);
@@ -773,6 +775,14 @@ export function NodeActions({
       await persistNow();
     }
   };
+  const retryImageResultRef = useRef(retryImageResult);
+  retryImageResultRef.current = retryImageResult;
+  useEffect(() => {
+    if (useBoardStore.getState().imageRetryRequestId !== node.id) return;
+    requestImageRetry(null);
+    if (node.type !== "image") return;
+    void retryImageResultRef.current();
+  }, [imageRetryRequestId, node.id, node.type, requestImageRetry]);
 
   const reversePrompt = async () => {
     if (!channel || !getProvider(channel, "text").apiKey) {

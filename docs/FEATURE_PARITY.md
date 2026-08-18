@@ -18,12 +18,15 @@ claim about either reference product. Its status and evidence are recorded
 separately below so local engineering verification is not presented as legal,
 source-origin, visual-similarity, or Provider certification.
 
-The newer Basket `v0.15.1`, Tiger `v0.5.2`, and DramaClaw `v1.3.2` deltas are
-tracked in `plans/openboard-three-upstream-increment-v0151-v052-v132.md`.
-The shared feature-gate contract, the locale foundation, and frozen four-mode
-video resolution now carry passing evidence; page-domain translation and the
-remaining storage, voice, provider, style, and Film workflow deltas are still
-planned. This inventory must not be read as current full-version parity.
+The newer Basket `v0.15.1`, Tiger `v0.5.2`–`v0.5.4`, and DramaClaw `v1.3.2`
+deltas are tracked in
+`plans/openboard-three-upstream-increment-v0151-v052-v132.md`.
+The shared feature-gate contract, locale foundation, frozen four-mode video
+resolution, Freestylefly prompt source, locate-node 100% zoom cap, 2K/4K
+resolution labels, multi-image slot actions, and director camera-move
+timeline now carry passing evidence. Exact Zhipu GLM, MiMo, and Seedance 2.5
+contracts remain fail-closed until independently documented. This inventory
+must not be read as current full-version parity.
 
 ## Tiger v0.4.5 convergence baseline
 
@@ -73,8 +76,27 @@ bundled assets:
 | Agent consolidation and homepage Agent entry | [verified existing] the local canvas already has one dockable `画布 Agent` entry and the Agent is integrated with the current project/canvas runtime |
 | Panorama cross-origin loading fix | [verified existing] panorama content is resolved through managed same-origin media rather than upstream raw URLs |
 | Aspect-ratio rounding fix | [verified existing] image geometry derives from a single scale factor and frozen aspect presets |
-| Video size presets linked to ratio and resolution | [verified] the video workbench and video config nodes derive bounded ratio/resolution options from exact provider capability tables, preserve custom values for unknown providers, avoid assuming 16:9 for unrecognized ratios, preserve explicit node size overrides, and persist a linked pixel/native size preset through browser and durable generation paths |
-| WebDAV cloud media storage | [not implemented] WebDAV remains a project/workspace backup transport; protected media uses the filesystem or S3/R2 backends |
+| Video size presets linked to ratio and resolution | [verified] the video workbench and video config nodes derive bounded ratio/resolution options from exact provider capability tables, preserve custom values for unknown providers, avoid assuming 16:9 for unrecognized ratios, preserve explicit node size overrides, and persist a linked pixel/native size preset through browser and durable generation paths. 2K/4K labels stay as K values and do not append `p`; 2K maps to 1440p pixel presets |
+
+## Tiger v0.5.3–v0.5.4 and Basket public Unreleased
+
+Public Tiger `v0.5.3`/`v0.5.4` release notes and the Basket CHANGELOG Unreleased
+row were rechecked on 2026-08-18 without reading implementation source,
+styles, fixtures, screenshots, or bundled assets.
+
+| Public behavior | Local status |
+|---|---|
+| Basket Freestylefly GPT Image 2 built-in source | [verified] the public Image Prompts registry entry `freestylefly-gpt-image-2` is a built-in prompt-source preset and merges into existing workspaces |
+| Locate node zoom cap 100% | [verified] the left-panel locate action recenters the node and never auto-zooms above 100% |
+| Multi-image four-column expand, failed retry, delete, copy, download | [verified] expanded batches use four columns; each slot can retry a failed leaf, delete that result, download it, or duplicate it as an independent image node |
+| Select/move tools and Control/Space invert | [verified existing] the canvas toolbar already has select/pan tools and Control or Space temporarily inverts the current tool |
+| Director camera-move timeline and keyframe speed curves | [verified] a director scene can store bounded camera moves with 2–16 keyframes, duration, loop, and linear/ease-in/ease-out/ease-in-out curves; playback previews in the viewport without rewriting the stored camera until the user records a keyframe |
+| Top-down camera creation orientation | [verified] adding or editing a nearly vertical look offsets the target so yaw stays defined |
+| Zhipu official GLM text/image/video/audio | [blocked-contract] no independently verified official request/response/limit contract is recorded yet; unknown model names remain fail-closed |
+| MiMo Agent multi-turn tools and image understanding | [blocked-contract] same as the existing MiMo text/TTS decision; no unofficial field guessing |
+| Seedance 2.5 | [blocked-contract] remains disabled until an official model ID, modes, limits, and error contract are recorded |
+| Tiger desktop client | [not-targeted] current PWA, PM2, and Compose deployments cover the local target |
+| WebDAV cloud media storage | [verified] optional `OPENBOARD_WEBDAV_MEDIA` media backend can join the tenant storage pool with encrypted write-only credentials; workspace WebDAV backup remains a separate transport |
 
 ## Basket v0.11.0–v0.13.0 additive parity
 
@@ -141,7 +163,7 @@ implementation evidence.
 | Public Unreleased client-scoped operations and focused-tab fallback | runtime pin/ownership Go tests and two-tab generation ownership E2E |
 | Public Unreleased shared Codex session/running state, approvals and exact turn completion | Codex replay/state/approval Go tests, `codex-events.test.ts`, and two-tab Codex E2E |
 | Public Unreleased addable custom prompt sources | JSON/HTML/Markdown mappings plus local transform scripts, migration tests, manager E2E, and PostgreSQL reload E2E |
-| Community prompt catalog one-click install | `prompt-source-presets.ts`, unified JSON registry presets plus the Tiger Xianyu GPT-Image-2 Markdown catalog, fence-aware nested H2/H3/H4/H5 parsing (including numbered supplemental prompts), stable prompt identities, and prompt library E2E |
+| Community prompt catalog one-click install | `prompt-source-presets.ts`, unified JSON registry presets including Freestylefly GPT Image 2 plus the Tiger Xianyu GPT-Image-2 Markdown catalog, fence-aware nested H2/H3/H4/H5 parsing (including numbered supplemental prompts), stable prompt identities, and prompt library E2E |
 | Public Unreleased canvas prompt-library tab grouped by source | `CanvasPromptsPanel.tsx`, grouping unit tests, canvas prompt-panel E2E |
 | Public Unreleased keep node prompt after generation | `NodePromptBar.tsx` retains draft text after successful generate |
 | Node prompt multi-line paste and local wheel scroll | `prompt-chip-editor.ts`, `PromptChipInput.tsx`, unit tests and canvas E2E |

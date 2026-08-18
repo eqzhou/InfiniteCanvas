@@ -4,6 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls, type TransformControlsMode } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { DirectorCamera, DirectorObject, DirectorScene, DirectorTransform, DirectorVector3 } from "@/types/board";
+import { navigationAfterDirectorPreviewStart, shouldPersistDirectorView } from "@/lib/director-view-persist";
 import { directorTransformFromRadians, getActiveDirectorCamera, getDirectorPopulation } from "@/lib/director-scene";
 import {
   createDirectorCharacterRoot,
@@ -166,6 +167,8 @@ type DirectorRuntime = {
   environmentUrl?: string;
   environmentLoadToken: number;
   resize: () => void;
+  userNavigating: boolean;
+  cameraInteracted: boolean;
 };
 
 function pumpModelLoads(runtime: DirectorRuntime): void {
@@ -210,6 +213,7 @@ export function DirectorViewport({
   transformMode,
   onTransformCommit,
   onModelStatus,
+  previewPose,
 }: {
   scene: DirectorScene;
   environmentUrl?: string;
@@ -227,6 +231,7 @@ export function DirectorViewport({
   transformMode: TransformControlsMode;
   onTransformCommit: (id: string, transform: DirectorTransform) => void;
   onModelStatus: (id: string, status: "loading" | "loaded" | "missing" | "error") => void;
+  previewPose?: Pick<DirectorCamera, "position" | "target" | "focalLength"> | null;
 }) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -234,6 +239,7 @@ export function DirectorViewport({
   const runtimeRef = useRef<DirectorRuntime | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const documentRef = useRef(document);
+  const previewPoseRef = useRef(previewPose);
   const onSelectRef = useRef(onSelect);
   const onViewChangeRef = useRef(onViewChange);
   const onTransformCommitRef = useRef(onTransformCommit);
@@ -241,6 +247,7 @@ export function DirectorViewport({
   const tRef = useRef(t);
   const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
   documentRef.current = document;
+  previewPoseRef.current = previewPose;
   onSelectRef.current = onSelect;
   onViewChangeRef.current = onViewChange;
   onTransformCommitRef.current = onTransformCommit;
@@ -304,6 +311,8 @@ export function DirectorViewport({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(initialPose.target.x, initialPose.target.y, initialPose.target.z);
     controls.enableDamping = true;
+    controls.minPolarAngle = 0.04;
+    controls.maxPolarAngle = Math.PI - 0.04;
     controls.update();
     const transformControls = new TransformControls(camera, renderer.domElement);
     const transformHelper = transformControls.getHelper();
@@ -318,7 +327,7 @@ export function DirectorViewport({
       transformStart = transformControls.object ? readTransform(transformControls.object) : null;
     };
     const handleTransformEnd = () => {
-      controls.enabled = true;
+      controls.enabled = !previewPoseRef.current;
       const target = transformControls.object;
       const id = target?.userData.directorObjectId;
       if (!target || typeof id !== "string") return;
@@ -327,24 +336,33 @@ export function DirectorViewport({
       onTransformCommitRef.current(id, next);
     };
     const handleTransformDragging = (event: { value: unknown }) => {
-      controls.enabled = event.value !== true;
+      controls.enabled = event.value !== true && !previewPoseRef.current;
     };
     transformControls.addEventListener("mouseDown", handleTransformStart);
     transformControls.addEventListener("mouseUp", handleTransformEnd);
     transformControls.addEventListener("dragging-changed", handleTransformDragging);
-    let cameraInteracted = false;
-    const markCameraInteraction = () => { cameraInteracted = true; };
     const persistCamera = () => {
-      if (!cameraInteracted) return;
-      cameraInteracted = false;
+      const runtime = runtimeRef.current;
+      if (runtime) runtime.userNavigating = false;
+      const shouldPersist = shouldPersistDirectorView({
+        previewing: Boolean(previewPoseRef.current),
+        cameraInteracted: Boolean(runtime?.cameraInteracted),
+      });
+      if (runtime) runtime.cameraInteracted = false;
+      if (!shouldPersist) return;
       onViewChangeRef.current(
         documentRef.current.viewMode,
         { x: camera.position.x, y: camera.position.y, z: camera.position.z },
         { x: controls.target.x, y: controls.target.y, z: controls.target.z },
       );
     };
-    renderer.domElement.addEventListener("pointerdown", markCameraInteraction, true);
-    renderer.domElement.addEventListener("wheel", markCameraInteraction, true);
+    const beginCameraInteraction = () => {
+      const runtime = runtimeRef.current;
+      if (!runtime) return;
+      runtime.cameraInteracted = true;
+      runtime.userNavigating = true;
+    };
+    controls.addEventListener("start", beginCameraInteraction);
     controls.addEventListener("end", persistCamera);
 
     const resize = () => {
@@ -517,6 +535,8 @@ export function DirectorViewport({
       environmentError: false,
       environmentLoadToken: 0,
       resize,
+      userNavigating: false,
+      cameraInteracted: false,
     };
 
     return () => {
@@ -531,8 +551,7 @@ export function DirectorViewport({
       cancelAnimationFrame(frame);
       observer.disconnect();
       renderer.domElement.removeEventListener("dblclick", selectFromPointer);
-      renderer.domElement.removeEventListener("pointerdown", markCameraInteraction, true);
-      renderer.domElement.removeEventListener("wheel", markCameraInteraction, true);
+      controls.removeEventListener("start", beginCameraInteraction);
       controls.removeEventListener("end", persistCamera);
       transformControls.removeEventListener("mouseDown", handleTransformStart);
       transformControls.removeEventListener("mouseUp", handleTransformEnd);
@@ -554,15 +573,28 @@ export function DirectorViewport({
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    runtime.scene.background = new THREE.Color(document.background);
+    if (previewPose) {
+      runtime.controls.enabled = false;
+      Object.assign(runtime, navigationAfterDirectorPreviewStart());
+    } else if (!runtime.transformControls.dragging) {
+      runtime.controls.enabled = true;
+    }
+    if (runtime.userNavigating && !previewPose) return;
     const shot = getActiveDirectorCamera(document);
-    const pose = document.viewMode === "director" ? document.directorView : shot;
-    runtime.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(36 / (2 * shot.focalLength)));
+    const pose = previewPose ?? (document.viewMode === "director" ? document.directorView : shot);
+    const focalLength = previewPose?.focalLength ?? shot.focalLength;
+    runtime.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(36 / (2 * focalLength)));
     runtime.camera.position.set(pose.position.x, pose.position.y, pose.position.z);
     runtime.controls.target.set(pose.target.x, pose.target.y, pose.target.z);
     runtime.camera.lookAt(runtime.controls.target);
     runtime.camera.updateProjectionMatrix();
     runtime.controls.update();
+  }, [document.viewMode, document.directorView, document.activeCameraId, document.cameras, previewPose]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    runtime.scene.background = new THREE.Color(document.background);
     runtime.grid.visible = document.showGroundGrid;
     runtime.environmentSphere.rotation.y = THREE.MathUtils.degToRad(document.environment.rotationY);
     runtime.environmentSphere.material.color.setScalar(document.environment.intensity);

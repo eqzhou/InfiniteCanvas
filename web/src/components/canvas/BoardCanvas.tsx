@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -49,6 +50,8 @@ import {
   renderCanvasSnapshot,
 } from "@/lib/canvas-export";
 import { useI18n } from "@/i18n/I18nProvider";
+import { isModalDialogOpen } from "@/lib/canvas-overlay";
+import { getOpenDirectorNodeId, subscribeOpenDirectorNodeId } from "@/lib/open-director-node";
 
 type DragMode =
   | { kind: "pan"; start: Point; origin: Point }
@@ -140,6 +143,11 @@ export function BoardCanvas() {
   const [groupHoverId, setGroupHoverId] = useState<string | null>(null);
   const [assetPicker, setAssetPicker] = useState<{ open: boolean; at: Point | null }>({ open: false, at: null });
   const [exportingSnapshot, setExportingSnapshot] = useState(false);
+  const openDirectorNodeId = useSyncExternalStore(
+    subscribeOpenDirectorNodeId,
+    getOpenDirectorNodeId,
+    getOpenDirectorNodeId,
+  );
 
   const enqueueMediaImport = (operation: () => Promise<void>): Promise<void> => {
     const pending = mediaImportQueueRef.current.then(operation, operation);
@@ -295,6 +303,32 @@ export function BoardCanvas() {
     commitScheduledViewport();
   }, [commitScheduledViewport, releaseCanvasPointer]);
 
+  useEffect(() => {
+    const releaseIfModal = () => {
+      if (!isModalDialogOpen()) return;
+      if (interactionActiveRef.current || pendingCapturePointerRef.current !== null) {
+        endDragInteraction(activePointerIdRef.current ?? undefined);
+      }
+    };
+    let alive = true;
+    const observer = new MutationObserver(() => {
+      queueMicrotask(() => {
+        if (alive) releaseIfModal();
+      });
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["role", "aria-modal"],
+    });
+    releaseIfModal();
+    return () => {
+      alive = false;
+      observer.disconnect();
+    };
+  }, [endDragInteraction]);
+
   const exportSnapshot = useCallback(async () => {
     const surface = rootRef.current;
     if (!surface || !project || exportingSnapshot) return;
@@ -421,11 +455,14 @@ export function BoardCanvas() {
     [project, size.h, size.w],
   );
   const visibleNodes = useMemo(
-    () =>
-      project
-        ? nodeSpatialIndex.query(visibleWorldRect)
-        : [],
-    [nodeSpatialIndex, project, visibleWorldRect],
+    () => {
+      if (!project) return [];
+      const nodes = nodeSpatialIndex.query(visibleWorldRect);
+      if (!openDirectorNodeId || nodes.some((node) => node.id === openDirectorNodeId)) return nodes;
+      const pinned = project.nodes.find((node) => node.id === openDirectorNodeId);
+      return pinned ? [...nodes, pinned] : nodes;
+    },
+    [nodeSpatialIndex, openDirectorNodeId, project, visibleWorldRect],
   );
   const edgeGeometryIndex = useMemo(
     () => createEdgeGeometryIndex(project?.edges ?? [], nodeById),
@@ -442,7 +479,7 @@ export function BoardCanvas() {
   }, []);
 
   const onWheel = (e: ReactWheelEvent) => {
-    if (!project) return;
+    if (!project || isModalDialogOpen()) return;
     e.preventDefault();
     const p = localPoint(e);
     const oldK = project.viewport.k;
@@ -457,7 +494,7 @@ export function BoardCanvas() {
 
 
   const onPointerDownBackground = (e: ReactPointerEvent) => {
-    if (!project) return;
+    if (!project || isModalDialogOpen()) return;
     if (e.target instanceof Element && e.target.closest("[data-canvas-control]")) return;
     if (e.pointerType === "touch") return;
     if (e.button !== 0) return;
@@ -484,7 +521,7 @@ export function BoardCanvas() {
   };
 
   const onTouchPointerDownCapture = (e: ReactPointerEvent) => {
-    if (!project || e.pointerType !== "touch") return;
+    if (!project || e.pointerType !== "touch" || isModalDialogOpen()) return;
     if (e.target instanceof Element && e.target.closest("[data-canvas-control]")) return;
     captureCanvasPointer(e.pointerId);
     const current = touchGestureRef.current ?? createGestureState(project.viewport);
@@ -498,6 +535,12 @@ export function BoardCanvas() {
   };
 
   const onPointerMove = (e: ReactPointerEvent) => {
+    if (isModalDialogOpen()) {
+      if (interactionActiveRef.current || pendingCapturePointerRef.current !== null) {
+        endDragInteraction(activePointerIdRef.current ?? undefined);
+      }
+      return;
+    }
     if (!interactionActiveRef.current) return;
     if (pendingCapturePointerRef.current !== null) {
       const pending = pendingCapturePointerRef.current;

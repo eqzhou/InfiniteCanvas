@@ -28,6 +28,10 @@ implementation input.
 
 | Date | Surface | Public/observed input | Required observable result | Confidence |
 |---|---|---|---|---|
+| 2026-08-18 | Freestylefly prompt source | Install the built-in Freestylefly GPT Image 2 catalog from the prompt center | The public Image Prompts JSON source appears as a built-in preset and can be enabled without a custom URL | high |
+| 2026-08-18 | Locate-node zoom | Click locate on a left-panel element while zoomed above 100% | The node is centered and zoom is capped at 100%; a zoomed-out view only recenters | high |
+| 2026-08-18 | Multi-image slot actions | Expand a multi-result image node and retry, delete, download, or copy one result | Failed leaves can retry in place; deleting one slot keeps the others; download and copy do not change the remaining batch | high |
+| 2026-08-18 | Director camera move | Add a camera move, record keyframes, choose a speed curve, and preview | Playback interpolates the stored keyframes in the viewport; stored cameras are unchanged until the user records a keyframe | high |
 | 2026-07-16 | Canvas camera | Pointer drag, wheel, pinch, reset, fit | Viewport translates/scales around the expected anchor and remains bounded | high |
 | 2026-07-16 | Selection/history | Marquee, additive select, delete, undo/redo | Selection and history preserve ordering; redo is invalidated by a new edit | high |
 | 2026-07-16 | Media nodes | Import image/video/audio, resize, preview, transform | Media remains inspectable, persists locally, and derived images retain lineage metadata | high |
@@ -171,6 +175,10 @@ implementation input.
 | https://api.github.com/repos/tigerowo/infinite-canvas/releases/latest | 2026-07-25 | Historical release metadata snapshot: at that date the latest tag was `v0.4.4`; superseded by the v0.4.5 row below |
 | https://github.com/tigerowo/infinite-canvas/releases/tag/v0.4.5 | 2026-07-28 | Public v0.4.5 release metadata and user-visible change names; tag commit `9435f1c`; no implementation source or assets inspected |
 | https://github.com/tigerowo/infinite-canvas/releases/tag/v0.5.2 | 2026-08-11 | Frozen release `4b5fdbff37a7de9bb29e90bc0fc9622a9e70a7b8`; public release notes used to scope WebDAV media, MiMo voice/text, Seedance 2.5 and desktop-client decisions; no implementation source or assets inspected |
+| https://github.com/tigerowo/infinite-canvas/releases/tag/v0.5.3 | 2026-08-18 | Public release notes for guest local-channel adapter reuse, Grok2API parameter refresh, 2K/4K labels, workbench preset sync, select/move invert, locate-node 100% zoom, and resource-badge removal; no implementation source or assets inspected |
+| https://github.com/tigerowo/infinite-canvas/releases/tag/v0.5.4 | 2026-08-18 | Public release notes for official GLM, director camera-move timeline and speed curves, director grid control, MiMo Agent image understanding, current-camera capture, and top-down camera orientation; no implementation source or assets inspected |
+| https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md | 2026-08-18 | Public Unreleased Freestylefly GPT Image 2 source name and v0.15.0 multi-image/locate-zoom/select-move behavior names; no implementation source inspected |
+| https://github.com/yukkcat/image-prompts/tree/main/dist/sources | 2026-08-18 | Public Image Prompts registry listing used only to confirm the `freestylefly-gpt-image-2.json` catalog identity and HTTPS URL |
 | https://github.com/dramaclaw/dramaclaw/releases/tag/v1.3.2 | 2026-08-11 | Frozen release `07fd68bc4adfd7ce424f4b424b74d55d26afaf46`; public release notes and README behavior used to scope local ComfyUI workflows, stable video modes and film-production deltas; no implementation source, prompts, assets or UI expression inspected |
 | https://api.github.com/repos/tigerowo/infinite-canvas/commits | 2026-08-01 | Public post-tag commit metadata only; current main `2fad4630d7478b630169e85ca35cc678ec57c7c1` names the already-covered Agent consolidation |
 | https://learn.chatgpt.com/docs/app-server.md | 2026-08-01 | Official Codex App Server `model/list` catalog and `turn/start` model/effort override contract |

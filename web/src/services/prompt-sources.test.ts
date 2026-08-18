@@ -475,6 +475,11 @@ describe("community prompt source presets", () => {
     expect(xianyu).toBeDefined();
     expect(xianyu!.source.url).toContain("xianyu110/awesome-gptimage2");
     expect(xianyu!.source.format).toBe("markdown");
+    const freestylefly = COMMUNITY_PROMPT_SOURCE_PRESETS.find((item) => item.id === "freestylefly-gpt-image-2");
+    expect(freestylefly).toBeDefined();
+    expect(freestylefly!.source.url).toContain("yukkcat/image-prompts");
+    expect(freestylefly!.source.url).toContain("freestylefly-gpt-image-2.json");
+    expect(freestylefly!.source.format).toBe("json");
     for (const preset of COMMUNITY_PROMPT_SOURCE_PRESETS) {
       const source = clonePresetSource(preset);
       expect(source.id).toBe(preset.id);

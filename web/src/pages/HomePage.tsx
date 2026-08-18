@@ -17,6 +17,8 @@ import {
   X,
 } from "lucide-react";
 import { parseBoardProject } from "@/lib/board-document";
+import { isModalDialogOpen } from "@/lib/canvas-overlay";
+import { focusNodeViewport } from "@/lib/geometry";
 import { assertPlainProjectImportSafe } from "@/lib/plain-project-import";
 import { loadFilmCapabilities } from "@/services/film-client";
 import { useEscapeDismiss } from "@/lib/use-escape-dismiss";
@@ -166,6 +168,7 @@ export function HomePage() {
   };
 
   const focusNode = (node: BoardNode) => {
+    if (isModalDialogOpen()) return;
     const project = useBoardStore.getState().getActive();
     if (!project) return;
     setProjectsOpen(false);
@@ -183,17 +186,17 @@ export function HomePage() {
       : canvasRect?.width;
     const canvasWidth = Math.max(320, visibleCanvasWidth ?? window.innerWidth - panelWidth);
     const canvasHeight = Math.max(240, canvasRect?.height ?? window.innerHeight - 104);
-    const target = {
-      k: start.k,
-      x: canvasWidth / 2 - (node.position.x + node.width / 2) * start.k,
-      y: canvasHeight / 2 - (node.position.y + node.height / 2) * start.k,
-    };
+    const target = focusNodeViewport(node, start, canvasWidth, canvasHeight);
     const startedAt = performance.now();
     const tick = (now: number) => {
+      if (isModalDialogOpen()) {
+        viewportAnimationRef.current = null;
+        return;
+      }
       const progress = Math.min(1, (now - startedAt) / 260);
       const eased = 1 - (1 - progress) ** 3;
       setViewport({
-        k: start.k,
+        k: start.k + (target.k - start.k) * eased,
         x: start.x + (target.x - start.x) * eased,
         y: start.y + (target.y - start.y) * eased,
       }, false);

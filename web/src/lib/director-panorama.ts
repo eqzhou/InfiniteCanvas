@@ -169,6 +169,8 @@ export function bindDirectorPanorama(
               aperture: 2.8,
               aspect: "16:9" as const,
             }],
+            cameraMoves: [],
+            activeCameraMoveId: null,
             environment: {
               rotationY: 0,
               intensity: 1,

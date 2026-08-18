@@ -28,6 +28,7 @@ import {
   getDirectorPopulation,
 } from "@/lib/director-scene";
 import { DirectorViewport, type DirectorRenderedCapture, type DirectorViewportActions } from "@/components/director/DirectorViewport";
+import { DirectorCameraMovePanel } from "@/components/director/DirectorCameraMovePanel";
 import { DirectorCaptureTray, type DirectorCaptureView } from "@/components/director/DirectorCaptureTray";
 import { DirectorFigurePicker } from "@/components/director/DirectorFigurePicker";
 import {
@@ -85,6 +86,7 @@ export function DirectorDialog({
   onPanoramaChange: (panoramaId: string | null) => void;
 }) {
   const { t } = useI18n();
+  const [previewPose, setPreviewPose] = useState<Pick<DirectorCamera, "position" | "target" | "focalLength"> | null>(null);
   const captureRef = useRef<(() => Promise<DirectorRenderedCapture>) | null>(null);
   const viewportActionsRef = useRef<DirectorViewportActions | null>(null);
   const captureInFlightRef = useRef(false);
@@ -339,6 +341,8 @@ export function DirectorDialog({
       aria-modal="true"
       aria-label={t("director.dialog")}
       onPointerDown={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+      onScroll={(event) => event.stopPropagation()}
     >
       <aside className="flex w-60 shrink-0 flex-col border-r border-white/10 bg-[#1b1b1b]">
         <header className="border-b border-white/10 px-4 py-3">
@@ -468,6 +472,7 @@ export function DirectorDialog({
           transformMode={transformMode}
           onTransformCommit={(id, transform) => onTransformCommit(updateDirectorObjectTransform(scene, id, transform))}
           onModelStatus={(id, status) => setModelStatuses((current) => current[id] === status ? current : { ...current, [id]: status })}
+          previewPose={previewPose}
         />
         <div className="absolute bottom-44 left-1/2 z-10 flex max-w-[min(92%,48rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-xl border border-[var(--ob-line)] bg-[var(--ob-panel-glass)] p-1 text-xs shadow-[var(--ob-elev-2)] backdrop-blur-md" aria-label={t("director.transformTools")}>
           {(["translate", "rotate", "scale"] as const).map((mode) => (
@@ -690,6 +695,7 @@ export function DirectorDialog({
             <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showRuleOfThirds} onChange={(event) => onChange({ ...scene, showRuleOfThirds: event.target.checked })} />{t("director.showThirds")}</label>
             <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={scene.showSafeFrame} onChange={(event) => onChange({ ...scene, showSafeFrame: event.target.checked })} />{t("director.showSafeFrame")}</label>
             <label className="mt-3 block">{t("director.environmentColor")}<input aria-label={t("director.environmentColor")} type="color" className="mt-1 h-8 w-full rounded bg-transparent" value={scene.background} onChange={(event) => onChange({ ...scene, background: event.target.value })} /></label>
+            <DirectorCameraMovePanel scene={scene} onChange={onChange} onPreview={setPreviewPose} previewPose={previewPose} />
           </section>
         </div>
       </aside>

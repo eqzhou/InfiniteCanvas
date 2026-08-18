@@ -1,5 +1,6 @@
-import { lazy, Suspense, useMemo, useRef, useState } from "react";
-import type { AiChannel, BoardNode } from "@/types/board";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { AiChannel, BoardNode, Viewport } from "@/types/board";
 import { cn } from "@/lib/cn";
 import { ProjectCommitRollbackError, useBoardStore } from "@/stores/use-board-store";
 import { NodeActions } from "@/components/canvas/NodeActions";
@@ -21,7 +22,9 @@ import {
 } from "@/services/director-capture-store";
 import { useOptionalAuth } from "@/components/auth/AuthGate";
 import { toast } from "@/components/common/toast";
-import { fitMediaDisplaySize } from "@/lib/geometry";
+import { isModalDialogOpen } from "@/lib/canvas-overlay";
+import { setOpenDirectorNodeId } from "@/lib/open-director-node";
+import { fitMediaDisplaySize, viewportsEqual } from "@/lib/geometry";
 import { defaultModelForMode } from "@/lib/generation-model";
 import { normalizeNodeTitle } from "@/lib/node-format";
 import {
@@ -39,6 +42,7 @@ import {
   optionsWithCurrentVideoValue,
   videoDurationOptionsFor,
   videoRatioOptionsFor,
+  videoResolutionLabel,
   videoResolutionOptionsFor,
   videoSizeAfterSelectionChange,
   videoSizeForProvider,
@@ -117,11 +121,37 @@ export function BoardNodeView({
   const { t } = useI18n();
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const directorEditStartedRef = useRef(false);
+  const viewportBeforeDirectorRef = useRef<Viewport | null>(null);
+  const fallbackDirectorSceneRef = useRef<ReturnType<typeof createDefaultDirectorScene> | null>(null);
+  if (node.type === "director" && !node.metadata.directorScene && !fallbackDirectorSceneRef.current) {
+    fallbackDirectorSceneRef.current = createDefaultDirectorScene();
+  }
+  const directorScene = node.metadata.directorScene ?? fallbackDirectorSceneRef.current;
+  const restoreViewportBeforeDirector = () => {
+    const saved = viewportBeforeDirectorRef.current;
+    viewportBeforeDirectorRef.current = null;
+    const current = useBoardStore.getState().getActive()?.viewport;
+    if (saved && current && !viewportsEqual(saved, current)) {
+      useBoardStore.getState().setViewport({ ...saved }, false);
+    }
+  };
   const updateNode = useBoardStore((s) => s.updateNode);
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
   const [playingSource, setPlayingSource] = useState<string | null>(null);
   const videoPlaying = playingSource === node.metadata.content;
   const [directorOpen, setDirectorOpen] = useState(false);
+  useEffect(() => {
+    if (!directorOpen) {
+      setOpenDirectorNodeId(null);
+      restoreViewportBeforeDirector();
+      return;
+    }
+    setOpenDirectorNodeId(node.id);
+  }, [directorOpen, node.id]);
+  useEffect(() => () => {
+    setOpenDirectorNodeId(null);
+    restoreViewportBeforeDirector();
+  }, []);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(node.title);
   const project = useBoardStore((s) => s.getActive());
@@ -225,7 +255,7 @@ export function BoardNodeView({
         ? videoCapability.ratios.map((value) => ({ value, label: value }))
         : videoRatioOptionsFor(videoProvider?.protocol, videoModel),
       videoResolutionOptions: videoCapability?.resolutions.length
-        ? videoCapability.resolutions.map((value) => ({ value, label: `${value} 分辨率` }))
+        ? videoCapability.resolutions.map((value) => ({ value, label: `${videoResolutionLabel(value)} 分辨率` }))
         : videoResolutionOptionsFor(videoProvider?.protocol, videoModel),
       videoDurationOptions,
       videoDuration,
@@ -322,6 +352,7 @@ export function BoardNodeView({
       }}
       onPointerDown={(e) => {
         e.stopPropagation();
+        if (isModalDialogOpen()) return;
         onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
         onDragStart(e);
       }}
@@ -1163,6 +1194,9 @@ export function BoardNodeView({
               className="rounded-lg bg-[var(--ob-accent)] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:brightness-110"
               onClick={() => {
                 directorEditStartedRef.current = false;
+                const viewport = useBoardStore.getState().getActive()?.viewport;
+                viewportBeforeDirectorRef.current = viewport ? { ...viewport } : null;
+                setOpenDirectorNodeId(node.id);
                 setDirectorOpen(true);
               }}
             >
@@ -1261,14 +1295,14 @@ export function BoardNodeView({
       ) : null}
 
       {node.type === "director" ? (
-        <Suspense fallback={directorOpen ? <div role="dialog" aria-modal="true" aria-label={t("canvasNodes.loadingDirector")} className="fixed inset-0 z-[150] grid place-items-center bg-[#111] text-sm text-white">{t("canvasNodes.loadingDirectorEllipsis")}</div> : null}>
+        <Suspense fallback={directorOpen && typeof document !== "undefined" ? createPortal(<div role="dialog" aria-modal="true" aria-label={t("canvasNodes.loadingDirector")} className="fixed inset-0 z-[150] grid place-items-center bg-[#111] text-sm text-white" onPointerDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>{t("canvasNodes.loadingDirectorEllipsis")}</div>, document.body) : null}>
           <DirectorDialog
             open={directorOpen}
             ownerScope={captureOwnerScope}
             projectId={directorProjectId}
             directorNodeId={node.id}
             title={node.title}
-            scene={node.metadata.directorScene ?? createDefaultDirectorScene()}
+            scene={directorScene ?? createDefaultDirectorScene()}
             panoramaOptions={(project ? listDirectorEnvironmentOptions(project, node.id) : []).map((candidate) => ({
               id: candidate.id,
               label: `${candidate.title} (${isSphericalDirectorEnvironment(candidate) ? t("canvasNodes.sphericalPanorama") : t("canvasNodes.flatBackground")})`,
@@ -1303,6 +1337,8 @@ export function BoardNodeView({
             }}
             onClose={() => {
               setDirectorOpen(false);
+              setOpenDirectorNodeId(null);
+              restoreViewportBeforeDirector();
               void useBoardStore.getState().persistNow();
             }}
             onSendCaptures={async (captures: DirectorCapture[]) => {

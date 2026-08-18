@@ -138,6 +138,7 @@ type BoardState = {
   showMinimap: boolean;
   showShortcuts: boolean;
   showLocalAgent: boolean;
+  imageRetryRequestId: string | null;
   hydrate: (promptCatalogScope?: string) => Promise<void>;
   loadProjectsOnDemand: () => Promise<void>;
   loadAssetsOnDemand: () => Promise<void>;
@@ -219,6 +220,7 @@ type BoardState = {
   setShowMinimap: (v: boolean) => void;
   setShowShortcuts: (v: boolean) => void;
   setShowLocalAgent: (v: boolean) => void;
+  requestImageRetry: (nodeId: string | null) => void;
   alignSelected: (mode: "left" | "right" | "top" | "bottom" | "hcenter" | "vcenter") => void;
   distributeSelected: (axis: "x" | "y") => void;
   duplicateSelected: () => void;
@@ -382,6 +384,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   showMinimap: true,
   showShortcuts: false,
   showLocalAgent: false,
+  imageRetryRequestId: null,
 
   hydrate: (promptCatalogScope = "open") => {
     if (hydratePromise?.scope === promptCatalogScope) return hydratePromise.promise;
@@ -1386,6 +1389,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setShowMinimap: (v) => set({ showMinimap: v }),
   setShowShortcuts: (v) => set({ showShortcuts: v }),
   setShowLocalAgent: (v) => set({ showLocalAgent: v }),
+  requestImageRetry: (nodeId) => set({ imageRetryRequestId: nodeId }),
 
   alignSelected: (mode) => {
     const { selectedIds } = get();

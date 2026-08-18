@@ -18,6 +18,10 @@ export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
+export function viewportsEqual(left: Viewport, right: Viewport): boolean {
+  return left.x === right.x && left.y === right.y && left.k === right.k;
+}
+
 export function fitMediaDisplaySize(
   width: number,
   height: number,
@@ -60,6 +64,23 @@ export function rectsIntersect(
 export function edgePath(from: Point, to: Point): string {
   const dx = Math.max(40, Math.abs(to.x - from.x) * 0.45);
   return `M ${from.x} ${from.y} C ${from.x + dx} ${from.y}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`;
+}
+
+export const LOCATE_NODE_MAX_ZOOM = 1;
+
+export function focusNodeViewport(
+  node: Pick<BoardNode, "position" | "width" | "height">,
+  viewport: Viewport,
+  width: number,
+  height: number,
+  maxZoom = LOCATE_NODE_MAX_ZOOM,
+): Viewport {
+  const k = Math.min(viewport.k, maxZoom);
+  return {
+    k,
+    x: width / 2 - (node.position.x + node.width / 2) * k,
+    y: height / 2 - (node.position.y + node.height / 2) * k,
+  };
 }
 
 export function fitViewport(

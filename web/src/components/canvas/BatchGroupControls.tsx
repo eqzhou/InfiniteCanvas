@@ -1,7 +1,22 @@
 import type { BoardNode } from "@/types/board";
 import { useBoardStore } from "@/stores/use-board-store";
-import { Layers, Star } from "lucide-react";
+import { Copy, Download, Layers, RotateCcw, Star, Trash2 } from "lucide-react";
 import { useI18n } from "@/i18n/I18nProvider";
+import { toast } from "@/components/common/toast";
+import { downloadStorageKey } from "@/services/storage";
+import { deleteGenerationJobsForNodeIds } from "@/services/generation-jobs";
+import { filenameForMimeType } from "@/lib/download-filename";
+import {
+  generationCleanupNodeIdsAfterDeletion,
+  orphanedGenerationJobIdsAfterDeletion,
+} from "@/lib/director-shot-generation";
+import {
+  collapseImageBatchPositions,
+  deleteImageBatchSlot,
+  duplicateImageBatchSlot,
+  expandImageBatchPositions,
+  imageBatchSlotActions,
+} from "@/lib/image-batch-slots";
 
 export function batchResultCount(
   metadata: Pick<BoardNode["metadata"], "content" | "generationRunId" | "batchChildIds">,
@@ -17,6 +32,9 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
   const project = useBoardStore((s) => s.getActive());
   const updateActive = useBoardStore((s) => s.updateActive);
   const updateNode = useBoardStore((s) => s.updateNode);
+  const persistNow = useBoardStore((s) => s.persistNow);
+  const requestImageRetry = useBoardStore((s) => s.requestImageRetry);
+  const setSelected = useBoardStore((s) => s.setSelected);
 
   if (!project) return null;
   const isRoot = Boolean(node.metadata.isBatchRoot);
@@ -34,7 +52,13 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
 
   const toggleExpand = () => {
     updateActive((p) => {
-      const nextExpanded = !expanded;
+      const currentRoot = p.nodes.find((n) => n.id === rootId);
+      if (!currentRoot?.metadata.isBatchRoot) return p;
+      const currentChildIds = currentRoot.metadata.batchChildIds ?? [];
+      const nextExpanded = currentRoot.metadata.imageBatchExpanded === false;
+      const positions = nextExpanded
+        ? expandImageBatchPositions(currentRoot, currentChildIds)
+        : collapseImageBatchPositions(currentRoot, currentChildIds);
       return {
         ...p,
         nodes: p.nodes.map((n) => {
@@ -44,29 +68,8 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
               metadata: { ...n.metadata, imageBatchExpanded: nextExpanded },
             };
           }
-          if (childIds.includes(n.id)) {
-            // collapse: stack children under root with offsets
-            if (!nextExpanded) {
-              const idx = childIds.indexOf(n.id);
-              return {
-                ...n,
-                position: {
-                  x: root.position.x + 12 + idx * 8,
-                  y: root.position.y + 12 + idx * 8,
-                },
-              };
-            }
-            // expand: fan out to the right
-            const idx = childIds.indexOf(n.id);
-            const columnStride = Math.max(300, root.width + 48);
-            const rowStride = Math.max(300, root.height + 48);
-            return {
-              ...n,
-              position: {
-                x: root.position.x + root.width + 48 + (idx % 3) * columnStride,
-                y: root.position.y + Math.floor(idx / 3) * rowStride,
-              },
-            };
+          if (currentChildIds.includes(n.id)) {
+            return { ...n, position: positions[n.id] ?? n.position };
           }
           return n;
         }),
@@ -76,6 +79,44 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
 
   const setPrimary = (id: string) => {
     updateNode(rootId, { metadata: { primaryImageId: id } });
+  };
+
+  const actions = imageBatchSlotActions(node, {
+    hasMedia: Boolean(node.metadata.storageKey || node.metadata.content),
+  });
+  const downloadSlot = async () => {
+    if (node.metadata.storageKey) {
+      try {
+        await downloadStorageKey(
+          node.metadata.storageKey,
+          filenameForMimeType(node.title || node.id, node.metadata.mimeType, "jpg"),
+        );
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : t("batch.downloadFailed"));
+      }
+      return;
+    }
+    if (!node.metadata.content || !/^(?:blob:|data:image\/)/i.test(node.metadata.content)) {
+      toast.warn(t("batch.downloadMissing"));
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = node.metadata.content;
+    link.download = filenameForMimeType(node.title || node.id, node.metadata.mimeType, "jpg");
+    link.click();
+  };
+  const retrySlot = () => {
+    setSelected([node.id]);
+    requestImageRetry(node.id);
+  };
+  const deleteSlot = () => {
+    const selected = new Set([node.id]);
+    const nodeJobIds = orphanedGenerationJobIdsAfterDeletion(project, selected);
+    const generationCleanupNodeIds = generationCleanupNodeIdsAfterDeletion(project, selected);
+    updateActive((current) => deleteImageBatchSlot(current, node.id), { history: true });
+    setSelected([]);
+    void deleteGenerationJobsForNodeIds(project.id, generationCleanupNodeIds, { nodeJobIds }).catch(() => 0);
+    void persistNow();
   };
 
   return (
@@ -111,6 +152,30 @@ export function BatchGroupControls({ node }: { node: BoardNode }) {
         >
           <Star size={12} fill={primaryId === node.id ? "currentColor" : "none"} />
           {panoramaBatch ? t("batch.primaryResult") : t("batch.primaryImage")}
+        </button>
+      ) : null}
+      {actions.retry ? (
+        <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--ob-accent-soft)]" title={t("batch.retryFailed")} aria-label={t("batch.retryFailed")} onClick={retrySlot}>
+          <RotateCcw size={12} />
+          {t("batch.retry")}
+        </button>
+      ) : null}
+      {actions.download ? (
+        <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--ob-accent-soft)]" title={t("batch.downloadImage")} aria-label={t("batch.downloadImage")} onClick={() => void downloadSlot()}>
+          <Download size={12} />
+          {t("batch.download")}
+        </button>
+      ) : null}
+      {actions.duplicate ? (
+        <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--ob-accent-soft)]" title={t("batch.duplicateImage")} aria-label={t("batch.duplicateImage")} onClick={() => { updateActive((current) => duplicateImageBatchSlot(current, node.id), { history: true }); void persistNow(); }}>
+          <Copy size={12} />
+          {t("batch.duplicate")}
+        </button>
+      ) : null}
+      {actions.deleteSlot ? (
+        <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[var(--ob-danger)] hover:bg-[var(--ob-accent-soft)]" title={t("batch.deleteFailed")} aria-label={t("batch.deleteSlot")} onClick={deleteSlot}>
+          <Trash2 size={12} />
+          {t("batch.delete")}
         </button>
       ) : null}
     </div>

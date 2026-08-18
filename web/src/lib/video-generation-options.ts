@@ -32,7 +32,10 @@ function capabilityOptions(
   suffix: string,
 ): readonly VideoGenerationOption[] {
   if (!values?.length) return fallback;
-  return immutableOptions(values.map((value) => ({ value, label: `${value}${suffix}` })));
+  return immutableOptions(values.map((value) => ({
+    value,
+    label: `${videoResolutionLabel(value)}${suffix}`,
+  })));
 }
 
 export function videoRatioOptionsFor(
@@ -128,8 +131,17 @@ const RESOLUTION_HEIGHTS: Readonly<Record<string, number>> = Object.freeze({
   "480p": 480,
   "720p": 720,
   "1080p": 1080,
+  "2k": 1440,
   "4k": 2160,
 });
+
+export function videoResolutionLabel(value: string): string {
+  const current = value.trim();
+  if (!current) return current;
+  if (/^[1248]k$/i.test(current)) return `${current[0]}K`;
+  if (/^\d{3,4}p$/i.test(current)) return current.toLowerCase();
+  return current;
+}
 
 export function videoSizePresetFor(ratio: string, resolution: string): string {
   const normalizedRatio = ratio.trim().toLowerCase();

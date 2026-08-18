@@ -1,10 +1,12 @@
 # OpenBoard 三参考线增量实施蓝图
 
-状态：实施中（2026-08-11 启动批次 A）
+状态：实施中（2026-08-18 续批次：公开最新功能）
 
 冻结基线：Basket `v0.15.1`、Tiger `v0.5.2`、DramaClaw `v1.3.2`
 
-当前检查点：S0/S0.5、S1 基础层和 S5a 已完成 RED→GREEN；页面域完整双语迁移仍按 S2a–S2d 执行，WebDAV、声音、精确 Provider、风格提取和阶段豁免尚未开始。
+计划变更：2026-08-18 登记 Tiger 公开 `v0.5.3`/`v0.5.4` 与 Basket CHANGELOG Unreleased，不读取实现源码。
+
+当前检查点：S0/S0.5、S1、S5a 以及后续独立落地的 WebDAV 媒体开关、声音身份、风格提取、阶段豁免、Freestylefly 来源、定位缩放上限、多图槽位操作和导演台运镜时间线已完成 RED→GREEN。精确 GLM/MiMo/Seedance 2.5 仍为 `blocked-contract`。页面域完整双语迁移仍按 S2a–S2d 执行。
 
 ## 1. 目标与完成定义
 
