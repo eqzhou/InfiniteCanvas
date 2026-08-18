@@ -230,6 +230,7 @@ func TestAICallLogRetentionSweepDeletesOnlyExpiredRows(t *testing.T) {
 	}
 	if _, err := storeMem.CreateAICallLog(t.Context(), store.DefaultTenantID, store.AICallLog{
 		Kind: "image", Status: "succeeded", Model: "demo",
+		CreatedAt: now.Format(time.RFC3339Nano),
 	}); err != nil {
 		t.Fatal(err)
 	}
