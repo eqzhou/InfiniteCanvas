@@ -35,9 +35,11 @@
     "@tailwindcss/vite": "^4.1.11",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@types/react-test-renderer": "^19.1.0",
     "@types/three": "^0.185.1",
     "@vitejs/plugin-react": "^4.6.0",
     "postcss": "^8.5.23",
+    "react-test-renderer": "19.1.0",
     "tailwindcss": "^4.1.11",
     "typescript": "^5.8.3",
     "vite": "^7.0.4"
