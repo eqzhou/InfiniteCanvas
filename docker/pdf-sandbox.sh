@@ -3,7 +3,12 @@ set -eu
 
 if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
   exec /usr/bin/bwrap \
-    --unshare-all \
+    --unshare-user \
+    --unshare-ipc \
+    --unshare-pid \
+    --unshare-net \
+    --unshare-uts \
+    --unshare-cgroup-try \
     --die-with-parent \
     --new-session \
     --clearenv \
@@ -38,7 +43,12 @@ ulimit -v 524288
 ulimit -u 16
 
 exec /usr/bin/bwrap \
-  --unshare-all \
+  --unshare-user \
+  --unshare-ipc \
+  --unshare-pid \
+  --unshare-net \
+  --unshare-uts \
+  --unshare-cgroup-try \
   --die-with-parent \
   --new-session \
   --clearenv \

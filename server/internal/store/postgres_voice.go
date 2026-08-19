@@ -408,7 +408,7 @@ func (s *PostgresStore) CompleteVoiceIdentityVersion(ctx context.Context, tenant
 		return VoiceIdentityVersion{}, ErrConflict
 	}
 	if status == "ready" {
-		if _, err := tx.Exec(ctx, `UPDATE openboard_film_voice_identities identity SET current_version_id=$4,revision=revision+1,updated_at=$5
+		if _, err := tx.Exec(ctx, `UPDATE openboard_film_voice_identities identity SET current_version_id=$4,revision=identity.revision+1,updated_at=$5
 			FROM openboard_film_voice_versions version WHERE identity.tenant_id=$1 AND identity.project_id=$2 AND identity.id=version.voice_identity_id
 			AND version.tenant_id=$1 AND version.project_id=$2 AND version.id=$3`, tenantID, projectID, versionID, versionID, when); err != nil {
 			return VoiceIdentityVersion{}, err

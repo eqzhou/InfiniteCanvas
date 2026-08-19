@@ -22,11 +22,13 @@ test("container pins distro media and PDF tools and exposes exact executable pat
   assert.match(notices, /Poppler utilities \| 25\.12\.0-r0/);
   assert.match(notices, /Bubblewrap \| 0\.11\.0-r2/);
   const sandbox = read("docker/pdf-sandbox.sh");
-  assert.match(sandbox, /--unshare-all/);
+  assert.match(sandbox, /--unshare-user/);
+  assert.match(sandbox, /--unshare-cgroup-try/);
   assert.match(sandbox, /--clearenv/);
   assert.match(sandbox, /--ro-bind \/usr \/usr/);
   assert.match(sandbox, /--ro-bind-try \/lib \/lib/);
   assert.match(sandbox, /\/usr\/bin\/true/);
+  assert.doesNotMatch(sandbox, /--unshare-all/);
   assert.doesNotMatch(sandbox, /--ro-bind \/bin \/bin/);
 });
 

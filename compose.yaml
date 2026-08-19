@@ -106,8 +106,9 @@ services:
     pids_limit: 256
     tmpfs:
       - /tmp:size=512m,mode=1777,uid=101,gid=101
-    security_opt:
-      - no-new-privileges:true
+    # Bubblewrap PDF isolation creates a user namespace. Docker's
+    # no-new-privileges bit blocks writing uid_map, so it is omitted here.
+    # Capabilities are still dropped and the root filesystem is read-only.
     cap_drop:
       - ALL
     healthcheck:

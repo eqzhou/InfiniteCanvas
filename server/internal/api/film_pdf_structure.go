@@ -108,7 +108,7 @@ func resolveFilmPDFTextConfig(dataDir string, allowInjectedTestRunner ...bool) (
 			return filmPDFTextConfig{}, fmt.Errorf("%w: configured PDF sandbox is missing, writable, or not executable", errFilmPDFToolUnavailable)
 		}
 		if err := probeFilmPDFSandbox(sandboxExecutable); err != nil {
-			return filmPDFTextConfig{}, fmt.Errorf("%w: configured PDF sandbox self-test failed", errFilmPDFToolUnavailable)
+			return filmPDFTextConfig{}, fmt.Errorf("%w: configured PDF sandbox self-test failed: %v", errFilmPDFToolUnavailable, err)
 		}
 	}
 	timeout := defaultFilmPDFTextTimeout
@@ -142,9 +142,24 @@ func probeFilmPDFSandbox(executable string) error {
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "--self-test")
 	command.Env = []string{"HOME=/nonexistent", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "PATH=/usr/bin:/bin"}
-	command.Stdout = io.Discard
-	command.Stderr = io.Discard
-	return command.Run()
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	diagnostic := strings.TrimSpace(string(output))
+	if len(diagnostic) > 512 {
+		diagnostic = diagnostic[:512]
+	}
+	diagnostic = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) && character != '\n' && character != '\t' {
+			return -1
+		}
+		return character
+	}, diagnostic)
+	if diagnostic == "" {
+		return err
+	}
+	return fmt.Errorf("%w (%s)", err, diagnostic)
 }
 
 func resolveFilmPDFExecutable(value string) (string, error) {

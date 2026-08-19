@@ -6,9 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestVoiceIdentityReadyUpdateQualifiesRevisionColumn(t *testing.T) {
+	source, err := os.ReadFile("postgres_voice.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "revision=identity.revision+1") {
+		t.Fatal("ready update must qualify identity.revision; the joined version table also has revision")
+	}
+}
 
 func TestVoiceCloneGenerationClaimIsNarrowlyScoped(t *testing.T) {
 	if currentSchemaVersion < 24 {
