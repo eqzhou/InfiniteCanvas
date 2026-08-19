@@ -472,6 +472,31 @@ func TestFilmMP4CapabilityRequiresFFprobe(t *testing.T) {
 	}
 }
 
+func TestFilmFFmpegCapabilityAcceptsSymlinkedExecutables(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	ffmpegLink := filepath.Join(dir, "ffmpeg")
+	ffprobeLink := filepath.Join(dir, "ffprobe")
+	if err := os.Symlink(executable, ffmpegLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, ffprobeLink); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENBOARD_FFMPEG_PATH", ffmpegLink)
+	t.Setenv("OPENBOARD_FFPROBE_PATH", ffprobeLink)
+	server := NewServerWithStore(t.TempDir(), newFilmMemoryStore())
+	server.filmCommandRunner = &countingFilmCommandRunner{}
+	server.filmProbeRunner = &fakeFilmProbeRunner{result: []byte("ffprobe version")}
+	t.Cleanup(server.Close)
+	if _, available, diagnostic := server.filmFFmpegCapability(t.Context()); !available {
+		t.Fatalf("symlinked ffmpeg/ffprobe should be available, diagnostic=%q", diagnostic)
+	}
+}
+
 func TestFilmRendererProducesARealPlayableMP4(t *testing.T) {
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {

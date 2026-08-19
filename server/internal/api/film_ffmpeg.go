@@ -118,33 +118,46 @@ func (s *Server) filmFFmpegCapability(ctx context.Context) (string, bool, string
 }
 
 func (s *Server) probeFilmFFmpeg(ctx context.Context, path, probePath string) (bool, string) {
-	if !validFilmFFmpegPath(path) {
-		return false, "FFmpeg is not configured; set OPENBOARD_FFMPEG_PATH to an executable absolute path"
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 || info.Mode()&os.ModeSymlink != 0 {
+	resolved, err := resolveFilmMediaExecutable(path)
+	if err != nil {
+		if !validFilmFFmpegPath(path) {
+			return false, "FFmpeg is not configured; set OPENBOARD_FFMPEG_PATH to an executable absolute path"
+		}
 		return false, "Configured FFmpeg executable is unavailable"
 	}
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	if err := s.filmCommandRunner.Run(probeCtx, path, []string{"-hide_banner", "-version"}); err != nil {
+	if err := s.filmCommandRunner.Run(probeCtx, resolved, []string{"-hide_banner", "-version"}); err != nil {
 		return false, "Configured FFmpeg failed its capability probe"
 	}
-	if !validFilmExecutable(probePath) {
+	probeResolved, err := resolveFilmMediaExecutable(probePath)
+	if err != nil {
 		return false, "FFprobe is unavailable; set OPENBOARD_FFPROBE_PATH to an executable absolute path"
 	}
-	if _, err := s.filmProbeRunner.Probe(probeCtx, probePath, []string{"-hide_banner", "-version"}); err != nil {
+	if _, err := s.filmProbeRunner.Probe(probeCtx, probeResolved, []string{"-hide_banner", "-version"}); err != nil {
 		return false, "Configured FFprobe failed its capability probe"
 	}
 	return true, ""
 }
 
 func validFilmExecutable(path string) bool {
+	_, err := resolveFilmMediaExecutable(path)
+	return err == nil
+}
+
+func resolveFilmMediaExecutable(path string) (string, error) {
 	if !validFilmFFmpegPath(path) {
-		return false
+		return "", errFilmFFmpegUnavailable
 	}
-	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 && info.Mode()&os.ModeSymlink == 0
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || !validFilmFFmpegPath(resolved) {
+		return "", errFilmFFmpegUnavailable
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Mode().Perm()&0o022 != 0 {
+		return "", errFilmFFmpegUnavailable
+	}
+	return resolved, nil
 }
 
 func (s *Server) acquireFilmRender(ctx context.Context, tenantID string) (func(), error) {

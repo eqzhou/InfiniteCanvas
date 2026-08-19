@@ -8,12 +8,13 @@ if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
     --new-session \
     --clearenv \
     --cap-drop ALL \
-    --ro-bind /bin /bin \
-    --ro-bind /lib /lib \
+    --ro-bind /usr /usr \
+    --ro-bind-try /lib /lib \
+    --ro-bind-try /usr/lib /usr/lib \
     --proc /proc \
     --dev /dev \
     --tmpfs /tmp \
-    -- /bin/true
+    -- /usr/bin/true
 fi
 
 if [ "$#" -ne 7 ] || [ "$1" != "/usr/bin/pdftotext" ] || [ "$2" != "-layout" ] || \
@@ -43,7 +44,8 @@ exec /usr/bin/bwrap \
   --clearenv \
   --cap-drop ALL \
   --ro-bind /usr /usr \
-  --ro-bind /lib /lib \
+  --ro-bind-try /lib /lib \
+  --ro-bind-try /usr/lib /usr/lib \
   --dir /etc \
   --ro-bind-try /etc/fonts /etc/fonts \
   --ro-bind "$input_dir" /input \

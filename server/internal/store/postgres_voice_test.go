@@ -40,7 +40,7 @@ func TestPostgresVoiceIdentitySnapshotsAreTenantScopedAndImmutable(t *testing.T)
 	tenantID := fmt.Sprintf("voice-store-%d", time.Now().UnixNano())
 	projectID := "voice-film"
 	if _, err := backend.pool.Exec(t.Context(), `
-INSERT INTO openboard_tenants (id,name) VALUES ($1,$2)
+INSERT INTO openboard_tenants (id,name,generation_quota_monthly) VALUES ($1,$2,100)
 ON CONFLICT (id) DO NOTHING`, tenantID, tenantID); err != nil {
 		t.Fatal(err)
 	}

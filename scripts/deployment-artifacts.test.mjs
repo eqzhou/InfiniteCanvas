@@ -24,7 +24,10 @@ test("container pins distro media and PDF tools and exposes exact executable pat
   const sandbox = read("docker/pdf-sandbox.sh");
   assert.match(sandbox, /--unshare-all/);
   assert.match(sandbox, /--clearenv/);
-  assert.match(sandbox, /--ro-bind/);
+  assert.match(sandbox, /--ro-bind \/usr \/usr/);
+  assert.match(sandbox, /--ro-bind-try \/lib \/lib/);
+  assert.match(sandbox, /\/usr\/bin\/true/);
+  assert.doesNotMatch(sandbox, /--ro-bind \/bin \/bin/);
 });
 
 test("compose forwards media controls and bounds temporary storage", () => {
@@ -53,5 +56,6 @@ test("CI makes coverage, film Chromium, deployment, and container capability che
   assert.match(workflow, /apk list --installed poppler-utils/);
   assert.match(workflow, /"mp4Export":\[\[:space:\]\]\*true/);
   assert.match(workflow, /"pdfImport":\[\[:space:\]\]\*true/);
+  assert.match(workflow, /cat film-capabilities\.json/);
   assert.doesNotMatch(workflow, /apk info -v ffmpeg/);
 });
