@@ -178,3 +178,25 @@ export function workbenchImageAssets(assets: readonly AssetItem[]): AssetItem[] 
 export function normalizeWorkbenchLayout(value: unknown): WorkbenchLayout {
   return value === "bottom" ? "bottom" : "side";
 }
+
+/**
+ * Keep history card order stable while jobs stream in.
+ * Matching ids are updated in place. Brand-new ids are inserted after the
+ * last already-visible incoming job so a batch grows left-to-right.
+ */
+export function upsertWorkbenchJobs(
+  current: readonly GenerationJob[],
+  incoming: readonly GenerationJob[],
+): GenerationJob[] {
+  if (incoming.length === 0) return [...current];
+  const incomingById = new Map(incoming.map((job) => [job.id, job]));
+  const currentIds = new Set(current.map((job) => job.id));
+  const updated = current.map((job) => incomingById.get(job.id) ?? job);
+  const added = incoming.filter((job) => !currentIds.has(job.id));
+  if (added.length === 0) return updated;
+  let insertAt = 0;
+  for (let index = 0; index < updated.length; index += 1) {
+    if (incomingById.has(updated[index]!.id)) insertAt = index + 1;
+  }
+  return [...updated.slice(0, insertAt), ...added, ...updated.slice(insertAt)];
+}

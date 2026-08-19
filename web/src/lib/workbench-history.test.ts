@@ -9,6 +9,7 @@ import {
   workbenchImageAssets,
   workbenchReferenceKeys,
   workbenchCardMedia,
+  upsertWorkbenchJobs,
   workbenchRefillAssetIds,
   workbenchRefillForm,
 } from "./workbench-history";
@@ -63,6 +64,28 @@ describe("creative workbench history presentation", () => {
     expect(normalizeWorkbenchLayout("bottom")).toBe("bottom");
     expect(normalizeWorkbenchLayout("side")).toBe("side");
     expect(normalizeWorkbenchLayout("grid")).toBe("side");
+  });
+});
+
+describe("creative workbench job upsert", () => {
+  test("keeps existing card order when a slot updates", () => {
+    const queued = [job("a"), job("b"), job("old")];
+    const succeededA = { ...job("a"), status: "running" as const };
+    expect(upsertWorkbenchJobs(queued, [succeededA]).map(({ id, status }) => [id, status]))
+      .toEqual([["a", "running"], ["b", "succeeded"], ["old", "succeeded"]]);
+  });
+
+  test("grows a batch in creation order instead of prepending each new slot", () => {
+    const withFirst = upsertWorkbenchJobs([job("old")], [job("a")]);
+    expect(withFirst.map(({ id }) => id)).toEqual(["a", "old"]);
+    expect(upsertWorkbenchJobs(withFirst, [job("a"), job("b")]).map(({ id }) => id))
+      .toEqual(["a", "b", "old"]);
+  });
+
+  test("does not drop an unrelated card interleaved with a growing batch", () => {
+    const current = [job("b"), job("other"), job("a"), job("old")];
+    expect(upsertWorkbenchJobs(current, [job("a"), job("b"), job("c")]).map(({ id }) => id))
+      .toEqual(["b", "other", "a", "c", "old"]);
   });
 });
 

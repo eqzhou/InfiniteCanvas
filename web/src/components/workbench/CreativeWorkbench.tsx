@@ -46,6 +46,7 @@ import {
   WORKBENCH_UNCATEGORIZED,
   workbenchCategories,
   workbenchImageAssets,
+  upsertWorkbenchJobs,
   workbenchRefillAssetIds,
   workbenchRefillForm,
   type WorkbenchLayout,
@@ -112,6 +113,19 @@ import { hasTenantOwnerCapability } from "@/services/admin";
 import { useLazyAssets, useLazyProjects } from "@/hooks/use-lazy-workspace";
 import { PageSkeleton } from "@/components/layout/PageSkeleton";
 import { WorkspaceLoadError } from "@/components/layout/WorkspaceLoadError";
+
+function withWorkbenchResultItems(job: GenerationJob, items: WorkbenchResultItem[]): GenerationJob {
+  return { ...job, result: { ...job.result, items } };
+}
+
+async function persistWorkbenchPreview(
+  job: GenerationJob,
+  items: WorkbenchResultItem[],
+): Promise<GenerationJob> {
+  const next = withWorkbenchResultItems(job, items);
+  if (isServerOwnedGenerationJob(job)) return next;
+  return updateGenerationJob(job.id, { result: { ...job.result, items } });
+}
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	const { t } = useI18n();
@@ -476,7 +490,16 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
         status: "failed",
         error: t("creative.interrupted"),
       })))).map((job) => [job.id, job]));
-    setJobs(res.items.map((job) => recovered.get(job.id) ?? job));
+    const incoming = res.items.map((job) => recovered.get(job.id) ?? job);
+    const keepIds = new Set([...activeServerJobIdsRef.current.values()].flat());
+    setJobs((current) => {
+      if (current.length === 0 || keepIds.size === 0) return incoming;
+      const incomingIds = new Set(incoming.map((item) => item.id));
+      return upsertWorkbenchJobs(
+        current.filter((job) => incomingIds.has(job.id) || keepIds.has(job.id)),
+        incoming,
+      );
+    });
     setTotalJobs(res.total);
     setPage(res.page);
   }, [kind, page, project?.id, statusFilter, t]);
@@ -849,7 +872,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					createdJobs.push(next);
 					job = createdJobs[0];
 					activeServerJobIdsRef.current.set(runToken, createdJobs.map((item) => item.id));
-					setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+					setJobs((current) => upsertWorkbenchJobs(current, createdJobs));
 				}
 				} catch (error) {
 					await Promise.allSettled(createdJobs.map((item) => cancelServerGenerationJob(item.id)));
@@ -862,7 +885,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				const created = createdJobs;
 				const settled = await Promise.allSettled(created.map((item) => waitForGenerationJob(item.id, {
 					signal: controller.signal,
-					onUpdate: (next) => setJobs((current) => [next, ...current.filter((row) => row.id !== next.id)]),
+					onUpdate: (next) => setJobs((current) => upsertWorkbenchJobs(current, [next])),
 				})));
 				if (controller.signal.aborted) return;
 				const completedJobs = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
@@ -872,7 +895,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
 					const previewItems = await enrichResultItemsWithPreviews(completedItems);
 					if (previewItems.some((item, index) => item.thumbnailStorageKey !== completedItems[index]?.thumbnailStorageKey)) {
-						await updateGenerationJob(completed.id, { result: { ...completed.result, items: previewItems } });
+						const previewed = await persistWorkbenchPreview(completed, previewItems);
+						setJobs((current) => upsertWorkbenchJobs(current, [previewed]));
 					}
 					previewByJob.set(completed.id, previewItems);
 				}
@@ -920,17 +944,18 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				},
 			});
 			activeServerJobIdsRef.current.set(runToken, [job.id]);
-			setJobs((current) => [job!, ...current.filter((item) => item.id !== job!.id)]);
+			setJobs((current) => upsertWorkbenchJobs(current, [job!]));
 			const completed = await waitForGenerationJob(job.id, {
 				signal: controller.signal,
-				onUpdate: (next) => setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]),
+				onUpdate: (next) => setJobs((current) => upsertWorkbenchJobs(current, [next])),
 			});
 				if (completed.status === "failed") throw new Error(completed.error || t("creative.generationFailed", { kind: t("common.video") }));
 			if (completed.status === "cancelled" || completed.status === "deleted") return;
 			const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
 			const previewItems = await enrichResultItemsWithPreviews(completedItems);
 			if (previewItems.some((item, index) => item.thumbnailStorageKey !== completedItems[index]?.thumbnailStorageKey)) {
-				await updateGenerationJob(completed.id, { result: { ...completed.result, items: previewItems } });
+				const previewed = await persistWorkbenchPreview(completed, previewItems);
+				setJobs((current) => upsertWorkbenchJobs(current, [previewed]));
 			}
 			await adoptAssetResult(completed, previewItems);
 			await refresh();
@@ -955,7 +980,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				});
 				createdJobs.push(next);
 				job = createdJobs[0];
-				setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+				setJobs((current) => upsertWorkbenchJobs(current, createdJobs));
 			}
 			} catch (error) {
 				await Promise.allSettled(createdJobs.map((item) => updateGenerationJob(item.id, {
@@ -1049,7 +1074,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 			parameters,
 			result: {},
 		});
-      setJobs((current) => [job!, ...current.filter((item) => item.id !== job!.id)]);
+      setJobs((current) => upsertWorkbenchJobs(current, [job!]));
       const items: WorkbenchResultItem[] = [];
       {
         const output = await generateVideo({
@@ -1124,7 +1149,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		const cancelled = await Promise.allSettled(jobIds.map(cancelServerGenerationJob));
 		for (const result of cancelled) {
 			if (result.status === "fulfilled") {
-				setJobs((current) => [result.value, ...current.filter((item) => item.id !== result.value.id)]);
+				setJobs((current) => upsertWorkbenchJobs(current, [result.value]));
 			} else {
 				setError(result.reason instanceof Error ? result.reason.message : String(result.reason));
 			}
@@ -1765,7 +1790,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					? async () => {
 						try {
 							const cancelled = await cancelServerGenerationJob(job.id);
-							setJobs((current) => [cancelled, ...current.filter((item) => item.id !== cancelled.id)]);
+							setJobs((current) => upsertWorkbenchJobs(current, [cancelled]));
 						} catch (cause) {
 							setError(cause instanceof Error ? cause.message : String(cause));
 						}

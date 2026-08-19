@@ -123,7 +123,7 @@ export function WorkbenchHistoryRow({
       cancelled = true;
       if (objectURL) URL.revokeObjectURL(objectURL);
     };
-  }, [activeItem?.storageKey, activeItem?.thumbnailStorageKey, activeItem?.thumbnailUrl, activeItem?.url]);
+  }, [job.id, activeItem?.storageKey, activeItem?.thumbnailStorageKey, activeItem?.thumbnailUrl, activeItem?.url]);
 
   useEffect(() => {
     if (!previewOpen) return;
