@@ -347,6 +347,22 @@ describe("generateVideo provider contracts", () => {
     });
   });
 
+  test("stops remaining OpenAI n=1 calls after the first slot fails", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      requests.push(String(input));
+      return new Response("provider unavailable", { status: 500 });
+    }) as typeof fetch;
+
+    await expect(generateImages({
+      channel: channel("https://api.example/v1"),
+      model: "gpt-image-1",
+      prompt: "four variants",
+      n: 4,
+    })).rejects.toThrow();
+    expect(requests.filter((url) => url.includes("/images/generations"))).toHaveLength(1);
+  });
+
   test("fans an OpenAI n=4 request out into four n=1 generations calls", async () => {
     const requests: Array<{ url: string; method?: string; body: unknown }> = [];
     globalThis.fetch = mock(async (input, init) => {

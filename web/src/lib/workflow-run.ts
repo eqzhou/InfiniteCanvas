@@ -133,3 +133,22 @@ export function workflowStepChildJobIds(runId: string, stepId: string, count: nu
   const total = Math.min(100, Number.isSafeInteger(count) && count > 0 ? count : 1);
   return Array.from({ length: total }, (_, index) => workflowChildJobId(runId, stepId, index));
 }
+
+export function resolveWorkflowStepChildJobIds(
+  runId: string,
+  stepId: string,
+  requestedCount: number,
+  recordedIds: readonly string[],
+  existing?: { found: false } | { found: true; count: number },
+  leftoverSlot0?: { found: false } | { found: true; count: number },
+): string[] {
+  if (recordedIds.length === 0) {
+    if (requestedCount > 1 && leftoverSlot0?.found && leftoverSlot0.count > 1) {
+      return [workflowChildJobId(runId, stepId, 0)];
+    }
+    return workflowStepChildJobIds(runId, stepId, requestedCount);
+  }
+  if (recordedIds.length !== 1 || requestedCount <= 1 || existing === undefined) return [...recordedIds];
+  if (!existing.found || existing.count === 1) return workflowStepChildJobIds(runId, stepId, requestedCount);
+  return [...recordedIds];
+}

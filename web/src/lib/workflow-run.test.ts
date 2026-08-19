@@ -5,7 +5,9 @@ import {
   createWorkflowRunResult,
   finalizeWorkflowRun,
   getReadyWorkflowStepIds,
+  resolveWorkflowStepChildJobIds,
   workflowChildJobId,
+  workflowStepChildJobIds,
 } from "./workflow-run";
 import type { WorkflowTemplate } from "@/types/workflow";
 
@@ -73,5 +75,16 @@ describe("workflow run state machine", () => {
     expect(first).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(workflowChildJobId("run_one", "base", 0)).toBe(workflowChildJobId("run_one", "base"));
     expect(workflowChildJobId("run_one", "base", 1)).not.toBe(workflowChildJobId("run_one", "base"));
+  });
+
+  test("expands a missing or n=1 child into per-image slots", () => {
+    const slot0 = workflowChildJobId("run_one", "base");
+    const slots = workflowStepChildJobIds("run_one", "base", 2);
+    expect(resolveWorkflowStepChildJobIds("run_one", "base", 2, [], undefined)).toEqual(slots);
+    expect(resolveWorkflowStepChildJobIds("run_one", "base", 2, [slot0], { found: false })).toEqual(slots);
+    expect(resolveWorkflowStepChildJobIds("run_one", "base", 2, [slot0], { found: true, count: 1 })).toEqual(slots);
+    expect(resolveWorkflowStepChildJobIds("run_one", "base", 2, [slot0], { found: true, count: 2 })).toEqual([slot0]);
+    expect(resolveWorkflowStepChildJobIds("run_one", "base", 2, [], undefined, { found: true, count: 2 })).toEqual([slot0]);
+    expect(resolveWorkflowStepChildJobIds("run_one", "base", 2, [], undefined, { found: false })).toEqual(slots);
   });
 });

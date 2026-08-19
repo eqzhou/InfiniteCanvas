@@ -4,6 +4,7 @@ import {
   applyServerImagePlaceholders,
   canvasGenerationJobIds,
   canvasInFlightGenerationJobIds,
+  nodeReferencesGenerationJob,
   submitServerImageGeneration,
 } from "./canvas-server-image";
 import { createImageGenerationMetadata } from "./image-generation";
@@ -160,6 +161,9 @@ describe("canvas server image placeholders", () => {
     const project = { ...createProject("Board"), nodes: [root] };
     expect(canvasGenerationJobIds(project, root.id)).toEqual(["job-a", "job-b"]);
     expect(canvasInFlightGenerationJobIds(project, root.id)).toEqual(["job-a", "job-b"]);
+    expect(nodeReferencesGenerationJob(root.metadata, ["job-b"])).toBe(true);
+    expect(nodeReferencesGenerationJob({ generationJobIds: ["job-b"] }, ["job-b"])).toBe(true);
+    expect(nodeReferencesGenerationJob({ generationJobId: "job-a" }, ["job-b"])).toBe(false);
   });
 
   test("keeps config runs isolated when it is generated twice", () => {

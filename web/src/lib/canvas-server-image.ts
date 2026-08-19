@@ -1,4 +1,4 @@
-import type { BoardProject } from "@/types/board";
+import type { BoardProject, NodeMetadata } from "@/types/board";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
 import {
@@ -118,6 +118,15 @@ export function canvasInFlightGenerationJobIds(project: BoardProject, rootId: st
       Boolean(node.metadata.generationJobIds?.includes(jobId))
     )),
   );
+}
+
+export function nodeReferencesGenerationJob(
+  metadata: Pick<NodeMetadata, "generationJobId" | "generationJobIds">,
+  jobIds: readonly string[],
+): boolean {
+  if (jobIds.length === 0) return false;
+  if (metadata.generationJobId && jobIds.includes(metadata.generationJobId)) return true;
+  return Boolean(metadata.generationJobIds?.some((id) => jobIds.includes(id)));
 }
 
 export function applyServerImagePlaceholders(

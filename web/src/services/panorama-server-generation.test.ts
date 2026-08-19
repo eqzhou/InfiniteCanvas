@@ -225,6 +225,70 @@ describe("panorama server generation", () => {
     expect(result[0]?.storageKey).toBe("image:panorama-one");
   });
 
+  test("resumes a count=2 split from the stored job id list", async () => {
+    const waited: string[] = [];
+    const media = await resumePanoramaServerGeneration("job-a", "project-one", 2, undefined, {
+      waitForJob: async (id) => {
+        waited.push(id);
+        return job({
+          id,
+          result: {
+            items: [{
+              storageKey: `image:${id}`,
+              mimeType: "image/png",
+              width: 2048,
+              height: 1024,
+              bytes: 24,
+            }],
+          },
+        });
+      },
+      readBlob: async () => png(2048, 1024),
+      createObjectURL: () => "blob:split",
+    }, ["job-a", "job-b"]);
+
+    expect(waited).toEqual(["job-a", "job-b"]);
+    expect(media.map((item) => item.storageKey)).toEqual(["image:job-a", "image:job-b"]);
+  });
+
+  test("resumes a legacy Count=N panorama from a single job when expectedCount is the image count", async () => {
+    const media = await resumePanoramaServerGeneration("job-panorama", "project-one", 2, undefined, {
+      waitForJob: async () => job({
+        result: {
+          items: [
+            { storageKey: "image:panorama-one", mimeType: "image/png", width: 2048, height: 1024, bytes: 24 },
+            { storageKey: "image:panorama-two", mimeType: "image/png", width: 2048, height: 1024, bytes: 24 },
+          ],
+        },
+      }),
+      readBlob: async () => png(2048, 1024),
+      createObjectURL: () => "blob:legacy",
+    });
+
+    expect(media.map((item) => item.storageKey)).toEqual(["image:panorama-one", "image:panorama-two"]);
+  });
+
+  test("cancels remaining panorama slots when one n=1 job fails", async () => {
+    const cancelled: string[] = [];
+    let finishB: ((value: GenerationJob) => void) | undefined;
+    const pendingB = new Promise<GenerationJob>((resolve) => { finishB = resolve; });
+    await expect(resumePanoramaServerGeneration("job-a", "project-one", 2, undefined, {
+      waitForJob: async (id) => {
+        if (id === "job-a") return job({ id, status: "failed", error: "provider down", result: {} });
+        return pendingB;
+      },
+      cancelJob: async (id) => {
+        cancelled.push(id);
+        return job({ id, status: "cancelled", result: {} });
+      },
+      readBlob: async () => png(2048, 1024),
+      createObjectURL: () => "blob:cancelled",
+    }, ["job-a", "job-b"])).rejects.toThrow("provider down");
+
+    expect([...cancelled].sort()).toEqual(["job-a", "job-b"]);
+    finishB?.(job({ id: "job-b", status: "cancelled", result: {} }));
+  });
+
   test("fans a count=2 panorama request into two n=1 server jobs", async () => {
     const submitted: Array<{ id?: string; parameters: { count?: number; requestedCount?: number; batchIndex?: number } }> = [];
     let created = 0;

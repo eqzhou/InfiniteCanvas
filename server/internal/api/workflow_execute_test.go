@@ -258,6 +258,49 @@ func TestResolveWorkflowStepChildIDsKeepsLegacyCountNJob(t *testing.T) {
 	if err != nil || len(expanded) != 2 || expanded[0] != slot0 {
 		t.Fatalf("expanded ids = %#v, %v", expanded, err)
 	}
+
+	legacySlot0 := serverWorkflowChildSlotJobID("workflow_legacy", "pending", 0)
+	legacyParams, _ := json.Marshal(persistedImageJobParameters{
+		Executor: serverExecutorMarker, Size: "1024x1024", Count: 2,
+		WorkflowRunID: "workflow_legacy", WorkflowStepID: "pending",
+	})
+	if err := backend.CreateGenerationJob(t.Context(), store.DefaultTenantID, store.GenerationJob{
+		ID: legacySlot0, Kind: "image", Status: "queued", Prompt: "pending-legacy", Parameters: legacyParams,
+		Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := server.resolveWorkflowStepChildIDs(t.Context(), store.DefaultTenantID, "workflow_legacy",
+		workflowStep{ID: "pending", Parameters: workflowStepParameters{Count: 2}},
+		workflowStepRunState{Status: "pending"})
+	if err != nil || len(kept) != 1 || kept[0] != legacySlot0 {
+		t.Fatalf("pending leftover Count=N should stay one job: %#v, %v", kept, err)
+	}
+}
+
+func TestServerWorkflowFailsWhenChildStatusIsInvalid(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	_, backend, handler := imageExecutionHandler(t, executor)
+	created := postWorkflowRun(t, handler, "workflow_invalid_child")
+	if created.code != http.StatusAccepted {
+		t.Fatalf("create workflow: %d %s", created.code, created.body)
+	}
+	_ = awaitExecutorStart(t, executor)
+	childID := serverWorkflowChildJobID("workflow_invalid_child", "base")
+	backend.mu.Lock()
+	key := tenantKey(store.DefaultTenantID, childID)
+	job := backend.jobs[key]
+	job.Status = "paused"
+	backend.jobs[key] = job
+	backend.mu.Unlock()
+	parent := waitForJobStatus(t, backend, "workflow_invalid_child", "failed")
+	var result workflowRunResult
+	if err := json.Unmarshal(parent.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Steps["base"].Status != "failed" {
+		t.Fatalf("base step = %#v", result.Steps["base"])
+	}
 }
 
 func TestWorkflowResultAcceptsLeafOutputsAboveLegacy64Cap(t *testing.T) {

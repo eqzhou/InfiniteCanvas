@@ -58,6 +58,7 @@ import {
   applyServerImagePlaceholders,
   canvasInFlightGenerationJobIds,
   createCanvasImageGenerationSlots,
+  nodeReferencesGenerationJob,
   submitServerImageGeneration,
 } from "@/lib/canvas-server-image";
 import { resolveConfigPrompt } from "@/lib/config-generation";
@@ -255,7 +256,7 @@ export function NodeActions({
 		updateActive((current) => ({
 			...current,
 			nodes: current.nodes.map((candidate) => {
-				const matchesJob = Boolean(candidate.metadata.generationJobId && jobIds.includes(candidate.metadata.generationJobId));
+				const matchesJob = nodeReferencesGenerationJob(candidate.metadata, jobIds);
 				if (!matchesJob && candidate.id !== node.id) return candidate;
 				return {
 					...candidate,

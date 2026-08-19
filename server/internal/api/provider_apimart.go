@@ -656,7 +656,7 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 			continue
 		}
 		urls := apimartImageResultURLs(payload)
-		if len(urls) < request.Count || len(urls) > 8 {
+		if len(urls) < request.Count || len(urls) > maxImageGenerationCount {
 			return nil, errors.New("APIMart image provider returned an invalid result count")
 		}
 		images := make([]generatedImage, 0, request.Count)

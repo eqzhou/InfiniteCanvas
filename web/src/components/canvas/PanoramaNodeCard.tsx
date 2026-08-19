@@ -316,7 +316,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
         const media = await resumePanoramaServerGeneration(
           jobId,
           historyProject.id,
-          storedJobIds.length,
+          settings.count,
           operation.signal,
           undefined,
           storedJobIds,

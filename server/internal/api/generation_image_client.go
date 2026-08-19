@@ -365,7 +365,7 @@ func (e *openAIImageExecutor) generateOpenAIOnce(ctx context.Context, request im
 	limited := &io.LimitedReader{R: response.Body, N: maxImageProviderResponseBytes + 1}
 	decoder := json.NewDecoder(limited)
 	if err := decoder.Decode(&payload); err != nil || limited.N <= 0 || ensureJSONEOF(decoder) != nil ||
-		len(payload.Data) < 1 || len(payload.Data) > 8 {
+		len(payload.Data) < 1 {
 		return nil, errors.New("image provider returned an invalid result")
 	}
 	images := make([]generatedImage, 0, 1)

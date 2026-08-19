@@ -82,7 +82,7 @@ function serverResultItems(job: GenerationJob, expectedCount: number, scope: Pan
   if (job.status === "cancelled" || job.status === "deleted") throw new Error("全景图生成已取消");
   if (job.status !== "succeeded") throw new Error("全景生成任务尚未完成");
   const values = Array.isArray(job.result.items) ? job.result.items : [];
-  if (values.length !== expectedCount || expectedCount < 1 || expectedCount > 8) {
+  if (values.length !== expectedCount || expectedCount < 1 || expectedCount > PANORAMA_MAX_RESULTS) {
     throw new Error(`生成服务应返回 ${expectedCount} 张全景图片，实际返回 ${values.length} 张`);
   }
   let totalBytes = 0;
@@ -290,7 +290,15 @@ async function loadPanoramaJobs(
     throw new Error(`生成服务应返回 ${expectedCount} 张全景图片，实际返回 ${uniqueIds.length} 张`);
   }
   try {
-    const completed = await Promise.all(uniqueIds.map((id) => waitForDurablePanoramaJob(id, signal, dependencies)));
+    const completed = await Promise.all(uniqueIds.map(async (id) => {
+      const job = await waitForDurablePanoramaJob(id, signal, dependencies);
+      if (job.status !== "succeeded") {
+        if (job.status === "failed") throw new Error(job.error || "图片生成失败，请检查模型服务配置后重试");
+        if (job.status === "cancelled" || job.status === "deleted") throw new Error("全景图生成已取消");
+        throw new Error("全景生成任务尚未完成");
+      }
+      return job;
+    }));
     const media: PanoramaGeneratedMedia[] = [];
     const createdURLs: string[] = [];
     try {

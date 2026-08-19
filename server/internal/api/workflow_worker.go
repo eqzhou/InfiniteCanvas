@@ -15,6 +15,9 @@ import (
 
 const workflowExecutorMarker = "workflow"
 
+var errWorkflowRunningCheckpoint = errors.New("workflow running checkpoint failed")
+var errWorkflowChildStatus = errors.New("workflow child status is invalid")
+
 func (s *Server) startWorkflowWorkers(count int) {
 	if s.store == nil || count < 1 {
 		return
@@ -214,6 +217,15 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 		step := steps[stepID]
 		childIDs, err := s.resolveWorkflowStepChildIDs(ctx, tenantID, job.ID, step, state)
 		if err != nil {
+			knownIDs := workflowKnownStepChildIDs(job.ID, step, state)
+			if ctx.Err() != nil {
+				s.cancelWorkflowChildrenIfParentCancelled(tenantID, job.ID, knownIDs)
+				return
+			}
+			if !isPermanentWorkflowChildError(err) {
+				return
+			}
+			s.failClaimedWorkflowStep(tenantID, job, parameters, result, stepID, knownIDs, "工作流子任务解析失败")
 			return
 		}
 		if !sameStringSlice(childIDs, workflowStateChildJobIDs(state)) {
@@ -226,13 +238,11 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 		activeChildIDs = childIDs
 		for index, childID := range childIDs {
 			if _, err := s.ensureWorkflowChildJob(ctx, tenantID, job, parameters, result, step, childID, index, len(childIDs)); err != nil {
-				s.cancelWorkflowChildren(tenantID, job.ID, step.ID, childIDs)
 				if ctx.Err() != nil {
+					s.cancelWorkflowChildrenIfParentCancelled(tenantID, job.ID, childIDs)
 					return
 				}
-				result.Steps[stepID] = failedWorkflowStepState(childIDs, "图片子任务创建失败")
-				status, finalResult := finalizeServerWorkflowResult(parameters.TemplateSnapshot, result)
-				s.completeWorkflowJob(tenantID, job, status, finalResult, "工作流步骤生成失败")
+				s.failClaimedWorkflowStep(tenantID, job, parameters, result, stepID, childIDs, "图片子任务创建失败")
 				return
 			}
 		}
@@ -251,14 +261,16 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 		})
 		if err != nil {
 			if ctx.Err() != nil {
-				for _, childID := range childIDs {
-					s.cancelWorkflowChildIfParentCancelled(tenantID, job.ID, childID)
-				}
+				s.cancelWorkflowChildrenIfParentCancelled(tenantID, job.ID, childIDs)
 				return
 			}
+			if errors.Is(err, errWorkflowRunningCheckpoint) || !isPermanentWorkflowChildError(err) {
+				return
+			}
+			s.failClaimedWorkflowStep(tenantID, job, parameters, result, stepID, childIDs, "图片子任务等待失败")
 			return
 		}
-		result.Steps[stepID] = completeWorkflowStepFromChildren(childIDs, children)
+		result.Steps[stepID] = completeWorkflowStepFromChildren(childIDs, children, step.Parameters.Count)
 		activeChildIDs = nil
 		if !s.checkpointWorkflowJob(tenantID, job, result) {
 			return
@@ -271,6 +283,35 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 	}
 	status, finalResult := finalizeServerWorkflowResult(parameters.TemplateSnapshot, result)
 	s.completeWorkflowJob(tenantID, job, status, finalResult, "")
+}
+
+func workflowKnownStepChildIDs(runID string, step workflowStep, state workflowStepRunState) []string {
+	ids := workflowStateChildJobIDs(state)
+	if len(ids) > 0 {
+		return ids
+	}
+	if step.Parameters.Count > 1 {
+		return []string{serverWorkflowChildSlotJobID(runID, step.ID, 0)}
+	}
+	return nil
+}
+
+func isPermanentWorkflowChildError(err error) bool {
+	return errors.Is(err, store.ErrUnauthorized) || errors.Is(err, store.ErrNotFound) ||
+		errors.Is(err, errWorkflowChildStatus)
+}
+
+func (s *Server) cancelWorkflowChildrenIfParentCancelled(tenantID, parentID string, childIDs []string) {
+	for _, childID := range childIDs {
+		s.cancelWorkflowChildIfParentCancelled(tenantID, parentID, childID)
+	}
+}
+
+func (s *Server) failClaimedWorkflowStep(tenantID string, job store.GenerationJob, parameters workflowRunParameters, result workflowRunResult, stepID string, childIDs []string, message string) {
+	s.cancelWorkflowChildren(tenantID, job.ID, stepID, childIDs)
+	result.Steps[stepID] = failedWorkflowStepState(childIDs, message)
+	status, finalResult := finalizeServerWorkflowResult(parameters.TemplateSnapshot, result)
+	s.completeWorkflowJob(tenantID, job, status, finalResult, "工作流步骤生成失败")
 }
 
 func (s *Server) cancelWorkflowChildIfParentCancelled(tenantID, parentID, childID string) {
@@ -337,7 +378,7 @@ func failedWorkflowStepState(childIDs []string, message string) workflowStepRunS
 	return state
 }
 
-func completeWorkflowStepFromChildren(childIDs []string, children []store.GenerationJob) workflowStepRunState {
+func completeWorkflowStepFromChildren(childIDs []string, children []store.GenerationJob, expectedCount int) workflowStepRunState {
 	state := queuedWorkflowStepState(childIDs)
 	keys := make([]string, 0, len(children))
 	cancelled := false
@@ -367,6 +408,14 @@ func completeWorkflowStepFromChildren(childIDs []string, children []store.Genera
 		state.Error = "已取消"
 		return state
 	}
+	if expectedCount < 1 {
+		expectedCount = 1
+	}
+	if len(keys) != expectedCount {
+		state.Status = "failed"
+		state.Error = "图片生成失败"
+		return state
+	}
 	state.Status = "succeeded"
 	state.StorageKeys = keys
 	return state
@@ -393,13 +442,13 @@ func (s *Server) waitForWorkflowChildren(ctx context.Context, tenantID string, p
 			case "queued", "running":
 				pending = true
 				if child.Status == "running" && !markRunning() {
-					return nil, errors.New("workflow running checkpoint failed")
+					return nil, errWorkflowRunningCheckpoint
 				}
 			case "failed", "cancelled", "deleted":
 				terminalFailure = true
 			case "succeeded":
 			default:
-				return nil, errors.New("workflow child status is invalid")
+				return nil, errWorkflowChildStatus
 			}
 			children = append(children, child)
 		}
@@ -428,6 +477,20 @@ func workflowChildPersistedCount(job store.GenerationJob) int {
 func (s *Server) resolveWorkflowStepChildIDs(ctx context.Context, tenantID, runID string, step workflowStep, state workflowStepRunState) ([]string, error) {
 	ids := workflowStateChildJobIDs(state)
 	if len(ids) == 0 {
+		if step.Parameters.Count <= 1 {
+			return workflowStepChildSlotIDs(runID, step.ID, step.Parameters.Count), nil
+		}
+		slot0 := serverWorkflowChildSlotJobID(runID, step.ID, 0)
+		existing, err := s.store.GetGenerationJob(ctx, tenantID, slot0)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return workflowStepChildSlotIDs(runID, step.ID, step.Parameters.Count), nil
+			}
+			return nil, err
+		}
+		if workflowChildPersistedCount(existing) > 1 {
+			return []string{slot0}, nil
+		}
 		return workflowStepChildSlotIDs(runID, step.ID, step.Parameters.Count), nil
 	}
 	if len(ids) != 1 || step.Parameters.Count <= 1 {
@@ -498,7 +561,8 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	requestHash, _ := hashImageJobRequest(request)
 	if existing, err := s.store.GetGenerationJob(ctx, tenantID, childID); err == nil {
 		if authMode() != "off" && (parent.UserID == "" || existing.UserID != parent.UserID) ||
-			!isResumableWorkflowChild(existing, parent.ID, step.ID) {
+			!isResumableWorkflowChild(existing, parent.ID, step.ID) ||
+			workflowChildPersistedCount(existing) != imageCount {
 			return store.GenerationJob{}, store.ErrConflict
 		}
 		return existing, nil
@@ -524,7 +588,8 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	meta, _ := json.Marshal(map[string]any{"jobId": child.ID, "kind": child.Kind, "workflowRunId": parent.ID, "workflowStepId": step.ID})
 	if err := s.store.CreateServerGenerationJob(ctx, tenantID, billingUserID, child, imageCount, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(ctx, tenantID, childID)
-		if getErr == nil && (authMode() == "off" || existing.UserID == billingUserID) && isResumableWorkflowChild(existing, parent.ID, step.ID) {
+		if getErr == nil && (authMode() == "off" || existing.UserID == billingUserID) && isResumableWorkflowChild(existing, parent.ID, step.ID) &&
+			workflowChildPersistedCount(existing) == imageCount {
 			return existing, nil
 		}
 		return store.GenerationJob{}, store.ErrConflict

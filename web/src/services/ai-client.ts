@@ -18,6 +18,7 @@ import { authFetch as apiFetch } from "@/services/auth-session";
 import { isServerManagedChannel } from "@/services/shared-channels";
 import { usesBrowserE2EGeneration } from "@/services/generation-jobs";
 import { providerFetch, providerFetchUrl, ProviderHttpError } from "@/services/provider-http";
+import { IMAGE_GENERATION_MAX_COUNT } from "@/lib/image-generation-batch";
 import {
   imageOutputLimitFor,
   normalizeImageQualityForProvider,
@@ -68,7 +69,7 @@ async function readImageProviderResults(response: Response, expectedCount: numbe
     throw new Error("Image provider response is malformed");
   }
   const data = (payload as { data: unknown[] }).data;
-  if (data.length < expectedCount || data.length > 8) {
+  if (data.length < expectedCount || data.length > IMAGE_GENERATION_MAX_COUNT) {
     throw new Error("Image provider returned an invalid result count");
   }
   return data.slice(0, expectedCount).map((item) => {
@@ -315,6 +316,21 @@ type ImageGenerationOptions = {
   deferActivitySuccess?: boolean;
 };
 
+async function collectImageSlots(
+  count: number,
+  generateOne: () => Promise<string[]>,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const images: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    const batch = await generateOne();
+    if (batch.length < 1) throw new Error("Image provider returned an invalid result count");
+    images.push(batch[0]!);
+  }
+  return images;
+}
+
 export async function generateImages(options: ImageGenerationOptions): Promise<string[]> {
 	assertNotManagedBrowserProvider(options.channel, "image");
   return runTrackedGeneration({
@@ -365,13 +381,8 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
   if (provider.protocol === "gemini") {
     if (transparentBackground) throw new Error("Gemini image generation does not support transparent background");
     const references = [...referenceDataUrls, ...await encodedBlobReferences()];
-    const batches = await Promise.all(Array.from({ length: n }, () =>
-      generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, references, signal),
-    ));
-    return batches.map((urls) => {
-      if (urls.length < 1) throw new Error("Image provider returned an invalid result count");
-      return urls[0]!;
-    });
+    return collectImageSlots(n, () =>
+      generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, references, signal), signal);
   }
   if (provider.protocol === "template") {
     if (!provider.template) throw new Error("Image template configuration is missing");
@@ -382,12 +393,7 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     const generateOneTemplate = async (): Promise<string[]> => generateTemplateImages(provider, {
       prompt: effectivePrompt, model, size, quality, count: 1, transparentBackground, referenceImages,
     }, signal);
-    if (n === 1) return generateOneTemplate();
-    const batches = await Promise.all(Array.from({ length: n }, () => generateOneTemplate()));
-    return batches.map((urls) => {
-      if (urls.length < 1) throw new Error("Image provider returned an invalid result count");
-      return urls[0]!;
-    });
+    return collectImageSlots(n, generateOneTemplate, signal);
   }
   if (provider.protocol !== "openai") {
     throw new Error(`${provider.protocol} does not support image generation`);
@@ -435,9 +441,7 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     return readImageProviderResults(res, 1);
   };
 
-  if (n === 1) return generateOne();
-  const batches = await Promise.all(Array.from({ length: n }, () => generateOne()));
-  return batches.flat();
+  return collectImageSlots(n, generateOne, signal);
 }
 
 export type VideoGenOptions = {

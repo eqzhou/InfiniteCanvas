@@ -5,8 +5,9 @@ import {
   advanceWorkflowStep,
   finalizeWorkflowRun,
   getReadyWorkflowStepIds,
+  resolveWorkflowStepChildJobIds,
+  workflowChildJobId,
   workflowStateChildJobIds,
-  workflowStepChildJobIds,
 } from "@/lib/workflow-run";
 import { compileWorkflowPrompt } from "@/lib/workflow-dag";
 import { getProvider } from "@/lib/ai-config";
@@ -178,16 +179,28 @@ async function runBrowserStep(
   const parameters = parseWorkflowRunParameters(parent.parameters);
   const step = parameters.templateSnapshot.steps.find((candidate) => candidate.id === stepId)!;
   const existingState = result.steps[stepId];
-  let childIds = workflowStateChildJobIds(existingState ?? {}).length
-    ? workflowStateChildJobIds(existingState!)
-    : workflowStepChildJobIds(parent.id, step.id, step.parameters.count);
-  if (childIds.length === 1 && step.parameters.count > 1) {
-    const existing = await getGenerationJob(childIds[0]!);
-    const existingCount = typeof existing?.parameters?.count === "number" ? existing.parameters.count : 0;
-    if (existingCount === 1) {
-      childIds = workflowStepChildJobIds(parent.id, step.id, step.parameters.count);
-    }
+  const recordedIds = workflowStateChildJobIds(existingState ?? {});
+  let existing: { found: false } | { found: true; count: number } | undefined;
+  let leftoverSlot0: { found: false } | { found: true; count: number } | undefined;
+  if (recordedIds.length === 1 && step.parameters.count > 1) {
+    const recorded = await getGenerationJob(recordedIds[0]!);
+    existing = recorded
+      ? { found: true, count: typeof recorded.parameters?.count === "number" ? recorded.parameters.count : 0 }
+      : { found: false };
+  } else if (recordedIds.length === 0 && step.parameters.count > 1) {
+    const slot0 = await getGenerationJob(workflowChildJobId(parent.id, step.id, 0));
+    leftoverSlot0 = slot0
+      ? { found: true, count: typeof slot0.parameters?.count === "number" ? slot0.parameters.count : 0 }
+      : { found: false };
   }
+  const childIds = resolveWorkflowStepChildJobIds(
+    parent.id,
+    step.id,
+    step.parameters.count,
+    recordedIds,
+    existing,
+    leftoverSlot0,
+  );
   const splitSlots = childIds.length > 1;
   let nextResult = advanceWorkflowStep(parameters.templateSnapshot, result, stepId, {
     status: "queued",
