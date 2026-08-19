@@ -95,7 +95,8 @@ export function finalizeWorkflowRun(template: WorkflowTemplate, value: WorkflowR
   const states = template.steps.map((step) => result.steps[step.id]!);
   let status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   if (states.some((state) => state.status === "failed")) status = "failed";
-  else if (states.every((state) => state.status === "cancelled" || state.status === "skipped")) status = "cancelled";
+  else if (states.some((state) => state.status === "cancelled") ||
+      states.every((state) => state.status === "cancelled" || state.status === "skipped")) status = "cancelled";
   else if (states.every((state) => TERMINAL.has(state.status))) status = "succeeded";
   else if (states.some((state) => state.status === "running" || state.status === "queued" || state.status === "succeeded")) status = "running";
   else status = "queued";

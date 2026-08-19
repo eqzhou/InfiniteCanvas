@@ -211,7 +211,7 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 		}
 		if state.Status == "failed" || state.Status == "cancelled" || state.Status == "skipped" {
 			status, finalResult := finalizeServerWorkflowResult(parameters.TemplateSnapshot, result)
-			s.completeWorkflowJob(tenantID, job, status, finalResult, "工作流步骤生成失败")
+			s.completeWorkflowJob(tenantID, job, status, finalResult, workflowCompleteMessage(status, "工作流步骤生成失败"))
 			return
 		}
 		step := steps[stepID]
@@ -277,7 +277,7 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 		}
 		if result.Steps[stepID].Status != "succeeded" {
 			status, finalResult := finalizeServerWorkflowResult(parameters.TemplateSnapshot, result)
-			s.completeWorkflowJob(tenantID, job, status, finalResult, "工作流步骤生成失败")
+			s.completeWorkflowJob(tenantID, job, status, finalResult, workflowCompleteMessage(status, "工作流步骤生成失败"))
 			return
 		}
 	}
@@ -340,6 +340,13 @@ func (s *Server) checkpointWorkflowJob(tenantID string, job store.GenerationJob,
 	defer cancel()
 	_, err = s.store.CheckpointServerGenerationJob(ctx, tenantID, job.ID, job.LeaseOwner, value, time.Now().UTC())
 	return err == nil
+}
+
+func workflowCompleteMessage(status, fallback string) string {
+	if status == "cancelled" {
+		return "已取消"
+	}
+	return fallback
 }
 
 func (s *Server) completeWorkflowJob(tenantID string, job store.GenerationJob, status string, result workflowRunResult, message string) {

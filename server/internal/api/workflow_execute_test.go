@@ -303,6 +303,51 @@ func TestServerWorkflowFailsWhenChildStatusIsInvalid(t *testing.T) {
 	}
 }
 
+func TestFinalizeServerWorkflowResultMarksMixedSuccessAndCancelAsCancelled(t *testing.T) {
+	template := workflowTemplate{
+		Steps: []workflowStep{
+			{ID: "base"},
+			{ID: "detail", References: []workflowStepReference{{Source: "step", StepID: "base"}}},
+			{ID: "alternate", References: []workflowStepReference{{Source: "step", StepID: "base"}}},
+			{ID: "final", References: []workflowStepReference{
+				{Source: "step", StepID: "detail"},
+				{Source: "step", StepID: "alternate"},
+			}},
+		},
+	}
+	result := workflowRunResult{
+		Steps: map[string]workflowStepRunState{
+			"base":      {Status: "succeeded", StorageKeys: []string{"image:base"}},
+			"detail":    {Status: "cancelled", Error: "已取消"},
+			"alternate": {Status: "succeeded", StorageKeys: []string{"image:alt"}},
+			"final":     {Status: "pending"},
+		},
+	}
+	status, final := finalizeServerWorkflowResult(template, result)
+	if status != "cancelled" {
+		t.Fatalf("status = %s, want cancelled", status)
+	}
+	if final.Steps["final"].Status != "skipped" {
+		t.Fatalf("final step = %#v", final.Steps["final"])
+	}
+	if len(final.OutputStorageKeys) != 0 {
+		t.Fatalf("cancelled run leaked outputs: %#v", final.OutputStorageKeys)
+	}
+	if got := final.Steps["alternate"].StorageKeys; len(got) != 1 || got[0] != "image:alt" {
+		t.Fatalf("alternate keys = %#v", got)
+	}
+
+	allSucceeded := workflowRunResult{Steps: map[string]workflowStepRunState{
+		"base":      {Status: "succeeded", StorageKeys: []string{"image:base"}},
+		"detail":    {Status: "succeeded", StorageKeys: []string{"image:detail"}},
+		"alternate": {Status: "succeeded", StorageKeys: []string{"image:alt"}},
+		"final":     {Status: "succeeded", StorageKeys: []string{"image:final"}},
+	}}
+	if status, _ := finalizeServerWorkflowResult(template, allSucceeded); status != "succeeded" {
+		t.Fatalf("all succeeded status = %s", status)
+	}
+}
+
 func TestWorkflowResultAcceptsLeafOutputsAboveLegacy64Cap(t *testing.T) {
 	keys := make([]string, 65)
 	for index := range keys {

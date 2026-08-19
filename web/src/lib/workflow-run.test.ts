@@ -68,6 +68,25 @@ describe("workflow run state machine", () => {
     expect(terminal.result.outputStorageKeys).toEqual([]);
   });
 
+  test("marks a mixed succeeded and cancelled run as cancelled", () => {
+    let result = createWorkflowRunResult(template);
+    result = advanceWorkflowStep(template, result, "base", { status: "queued", childJobId: "job_base" });
+    result = advanceWorkflowStep(template, result, "base", { status: "running" });
+    result = advanceWorkflowStep(template, result, "base", { status: "succeeded", storageKeys: ["image:base"] });
+    result = advanceWorkflowStep(template, result, "detail", { status: "queued", childJobId: "job_detail" });
+    result = advanceWorkflowStep(template, result, "detail", { status: "running" });
+    result = advanceWorkflowStep(template, result, "detail", { status: "cancelled", error: "已取消" });
+    result = advanceWorkflowStep(template, result, "alternate", { status: "queued", childJobId: "job_alt" });
+    result = advanceWorkflowStep(template, result, "alternate", { status: "running" });
+    result = advanceWorkflowStep(template, result, "alternate", { status: "succeeded", storageKeys: ["image:alt"] });
+
+    const terminal = finalizeWorkflowRun(template, result);
+    expect(terminal.status).toBe("cancelled");
+    expect(terminal.result.steps.final?.status).toBe("skipped");
+    expect(terminal.result.steps.alternate?.storageKeys).toEqual(["image:alt"]);
+    expect(terminal.result.outputStorageKeys).toEqual([]);
+  });
+
   test("uses bounded deterministic child ids", () => {
     const first = workflowChildJobId("run_" + "x".repeat(120), "step_" + "y".repeat(120));
     expect(first).toBe(workflowChildJobId("run_" + "x".repeat(120), "step_" + "y".repeat(120)));

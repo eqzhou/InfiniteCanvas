@@ -468,19 +468,20 @@ func finalizeServerWorkflowResult(template workflowTemplate, result workflowRunR
 	}
 	allTerminal := true
 	hasFailure := false
-	hasSuccess := false
+	hasCancelled := false
 	allCancelledOrSkipped := true
 	for _, step := range template.Steps {
 		status := result.Steps[step.ID].Status
 		hasFailure = hasFailure || status == "failed"
-		hasSuccess = hasSuccess || status == "succeeded"
+		hasCancelled = hasCancelled || status == "cancelled"
 		allCancelledOrSkipped = allCancelledOrSkipped && (status == "cancelled" || status == "skipped")
 		allTerminal = allTerminal && (status == "succeeded" || status == "failed" || status == "cancelled" || status == "skipped")
 	}
 	if hasFailure {
 		return "failed", result
 	}
-	if allTerminal && allCancelledOrSkipped && !hasSuccess {
+	if hasCancelled || (allCancelledOrSkipped && allTerminal) {
+		result.OutputStorageKeys = []string{}
 		return "cancelled", result
 	}
 	if !allTerminal {
