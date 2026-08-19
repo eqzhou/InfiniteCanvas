@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 func TestServerTimeoutsCoverSlowTextGeneration(t *testing.T) {
@@ -131,6 +136,42 @@ func TestLoopbackAddressAndTokenMiddleware(t *testing.T) {
 	handler.ServeHTTP(authorized, authorizedRequest)
 	if authorized.Code != http.StatusNoContent {
 		t.Fatalf("authorized status = %d", authorized.Code)
+	}
+}
+
+func TestRuntimeTicketRedactionPreservesOriginalRequestThroughMiddlewareChain(t *testing.T) {
+	previousWriter := log.Default().Writer()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	var handlerURI string
+	router := chi.NewRouter()
+	router.Use(middleware.RequestID)
+	router.Use(middleware.RealIP)
+	router.Use(redactRuntimeTicketLogs)
+	router.Get("/api/runtime/ws", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerURI = r.URL.RequestURI()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	const ticket = "runtime-secret-ticket"
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime/ws?ticket="+ticket+"&keep=1", nil)
+	req.RemoteAddr = "127.0.0.1:45678"
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if !strings.Contains(handlerURI, "ticket="+ticket) || !strings.Contains(handlerURI, "keep=1") {
+		t.Fatalf("handler request URI = %q, want original ticket and query", handlerURI)
+	}
+	if strings.Contains(logs.String(), ticket) {
+		t.Fatalf("runtime ticket leaked into middleware log: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "ticket=redacted") {
+		t.Fatalf("middleware log did not redact ticket: %s", logs.String())
 	}
 }
 

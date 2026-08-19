@@ -1,8 +1,80 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { TenantConfigAdminRequiredError } from "@/services/server-storage";
 import { applyGenerationDefaultsToNode, adoptCommittedWorkspace, removeDirectorShotPlan, saveWorkspaceReplacementConfig, useBoardStore } from "./use-board-store";
 import { DEFAULT_GENERATION_DEFAULTS } from "@/lib/generation-defaults";
-import { createNode, createProject } from "@/lib/defaults";
+import { createDefaultConfig, createNode, createProject } from "@/lib/defaults";
+import type { AssetItem, BoardProject, PromptItem } from "@/types/board";
+
+const originalFetch = globalThis.fetch;
+let fetchCalls: Array<{ url: string; method: string; body: string | undefined }> = [];
+
+function jsonResponse(value: unknown, status = 200, headers?: HeadersInit): Response {
+	return new Response(JSON.stringify(value), {
+		status,
+		headers: { "Content-Type": "application/json", ...headers },
+	});
+}
+
+function installFetch(
+	responder: (url: string, init: RequestInit) => Response | Promise<Response> = (url, init) => {
+		if (url.includes("/generation-jobs?") && (init.method ?? "GET") === "GET") {
+			return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 });
+		}
+		if (url.endsWith("/state/assets") || url.endsWith("/state/prompts")) {
+			return (init.method ?? "GET") === "GET" ? jsonResponse([]) : new Response(null, { status: 204 });
+		}
+		if (url.endsWith("/config") && (init.method ?? "GET") === "GET") return new Response(null, { status: 404 });
+		if (url.endsWith("/config") && init.method === "PUT") {
+			return new Response(null, { status: 200, headers: { ETag: '"test-config"' } });
+		}
+		return new Response(null, { status: 204 });
+	},
+): void {
+	fetchCalls = [];
+	globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+		const url = String(input);
+		fetchCalls.push({ url, method: init.method ?? "GET", body: typeof init.body === "string" ? init.body : undefined });
+		return responder(url, init);
+	}) as typeof fetch;
+}
+
+function seedProject(
+	title = "test project",
+	state: "idle" | "loaded" = "idle",
+): BoardProject {
+	const project = createProject(title);
+	useBoardStore.setState({
+		ready: true,
+		projectsState: state,
+		assetsState: state,
+		promptsState: state,
+		projects: [project],
+		activeProjectId: project.id,
+		selectedIds: [],
+		clipboard: null,
+		config: createDefaultConfig(),
+		assets: [],
+		prompts: [],
+		connectingFrom: null,
+		projectsError: null,
+		assetsError: null,
+		promptsError: null,
+	});
+	return project;
+}
+
+function activeProject(): BoardProject {
+	const project = useBoardStore.getState().getActive();
+	if (!project) throw new Error("expected an active project");
+	return project;
+}
+
+afterEach(async () => {
+	// Let fire-and-forget autosaves finish while their test fetch is still installed.
+	await Promise.resolve();
+	await Promise.resolve();
+	globalThis.fetch = originalFetch;
+});
 
 describe("workspace replacement permissions", () => {
 	test("keeps the current tenant config when a member restores a workspace", async () => {
@@ -86,6 +158,179 @@ describe("director formal shot rollback", () => {
 		expect(rolledBack.nodes.map((node) => node.id)).toEqual([director.id, concurrent.id]);
 		expect(rolledBack.edges).toEqual([{ id: "edge-concurrent", from: director.id, to: concurrent.id }]);
 		expect(project.nodes).toHaveLength(5);
+	});
+});
+
+describe("project and canvas editing behavior", () => {
+	test("creates, renames, imports, activates, and exports projects without mutating the source", () => {
+		installFetch();
+		useBoardStore.setState({
+			ready: true,
+			projectsState: "loaded",
+			projects: [],
+			activeProjectId: null,
+			selectedIds: [],
+		});
+
+		const id = useBoardStore.getState().createProject("first", "film");
+		const first = activeProject();
+		expect(first.title).toBe("first");
+		expect(first.projectKind).toBe("film");
+		expect(useBoardStore.getState().selectedIds).toEqual([]);
+
+		useBoardStore.getState().renameProject(id, "renamed");
+		expect(activeProject().title).toBe("renamed");
+
+		const source = createProject("source");
+		const sourceBefore = structuredClone(source);
+		const importedId = useBoardStore.getState().importProject(source);
+		const imported = useBoardStore.getState().projects.find((project) => project.id === importedId);
+		expect(imported).toMatchObject({ id: importedId, title: "source (导入)", projectKind: "canvas" });
+		expect(source).toEqual(sourceBefore);
+		expect(useBoardStore.getState().activeProjectId).toBe(importedId);
+
+		useBoardStore.getState().setActiveProject(id);
+		expect(useBoardStore.getState().activeProjectId).toBe(id);
+		expect(useBoardStore.getState().exportActiveProject()).toBe(useBoardStore.getState().projects[1]);
+	});
+
+	test("deletes unique projects durably and chooses a surviving active project", async () => {
+		installFetch();
+		const first = seedProject("first", "loaded");
+		const second = createProject("second");
+		useBoardStore.setState({ projects: [first, second], activeProjectId: first.id });
+
+		await useBoardStore.getState().deleteProjectsDurably([first.id, first.id, ""]);
+
+		expect(useBoardStore.getState().projects.map((project) => project.id)).toEqual([second.id]);
+		expect(useBoardStore.getState().activeProjectId).toBe(second.id);
+		expect(fetchCalls.filter((call) => call.method === "DELETE").map((call) => call.url)).toEqual([
+			`/api/projects/${first.id}`,
+			`/api/generation-jobs/project/${first.id}`,
+		]);
+	});
+
+	test("adds connected nodes, merges metadata patches, moves, and clamps resize dimensions", () => {
+		const project = seedProject();
+		const root = useBoardStore.getState().addNode("text", { x: 10, y: 20 }, {
+			title: "root",
+			metadata: { content: "original", fontSize: 20 },
+		});
+		const rootBefore = structuredClone(activeProject().nodes[0]);
+		const child = useBoardStore.getState().addConnectedNode("missing", "image", { x: 100, y: 100 });
+		expect(child).toBeNull();
+		expect(activeProject().nodes).toHaveLength(1);
+
+		const connected = useBoardStore.getState().addConnectedNode(root, "image", { x: 100, y: 100 });
+		expect(connected).toBeString();
+		expect(activeProject().edges).toHaveLength(1);
+		expect(activeProject().edges[0]).toMatchObject({ from: root, to: connected! });
+
+		useBoardStore.getState().updateNode(root, { title: "updated", metadata: { fontSize: 30 } });
+		const updated = activeProject().nodes.find((node) => node.id === root)!;
+		expect(updated).toMatchObject({ title: "updated", metadata: { content: "original", fontSize: 30 } });
+		useBoardStore.getState().updateNode(root, (node) => ({ ...node, position: { x: 3, y: 4 } }));
+		useBoardStore.getState().moveNodes([root, connected!], 5, -10);
+		useBoardStore.getState().resizeNode(root, 20, 30, { x: 50, y: 60 });
+		const moved = activeProject().nodes.find((node) => node.id === root)!;
+		expect(moved.position).toEqual({ x: 50, y: 60 });
+		expect(moved.width).toBe(120);
+		expect(moved.height).toBe(80);
+		expect(rootBefore).not.toEqual(moved);
+		expect(activeProject().nodes.find((node) => node.id === connected!)?.position).toEqual({ x: 105, y: 90 });
+		void project;
+	});
+
+	test("deduplicates and removes edges while preserving connecting state", () => {
+		const project = seedProject();
+		const from = useBoardStore.getState().addNode("text", { x: 0, y: 0 });
+		const to = useBoardStore.getState().addNode("image", { x: 200, y: 0 });
+		useBoardStore.getState().setConnectingFrom(from);
+		useBoardStore.getState().connect(from, from);
+		expect(activeProject().edges).toHaveLength(0);
+		expect(useBoardStore.getState().connectingFrom).toBe(from);
+
+		useBoardStore.getState().connect(from, to);
+		useBoardStore.getState().connect(from, to);
+		expect(activeProject().edges).toHaveLength(1);
+		expect(useBoardStore.getState().connectingFrom).toBeNull();
+		const edgeId = activeProject().edges[0]!.id;
+		useBoardStore.getState().deleteEdge(edgeId);
+		expect(activeProject().edges).toEqual([]);
+		expect(project.nodes).toHaveLength(0);
+	});
+
+	test("copies selected subgraphs with fresh ids and offset positions", () => {
+		seedProject();
+		const from = useBoardStore.getState().addNode("text", { x: 10, y: 20 });
+		const to = useBoardStore.getState().addConnectedNode(from, "image", { x: 100, y: 200 })!;
+		const original = structuredClone(activeProject());
+		useBoardStore.getState().setSelected([from, to]);
+		useBoardStore.getState().copySelected();
+		const clipboard = useBoardStore.getState().clipboard!;
+		expect(clipboard.nodes.map((node) => node.id)).toEqual([from, to]);
+		useBoardStore.getState().pasteClipboard({ x: 7, y: 9 });
+
+		const current = activeProject();
+		const pastedIds = useBoardStore.getState().selectedIds;
+		expect(pastedIds).toHaveLength(2);
+		expect(pastedIds.every((id) => ![from, to].includes(id))).toBe(true);
+		expect(current.nodes).toHaveLength(original.nodes.length + 2);
+		expect(current.edges).toHaveLength(original.edges.length + 1);
+		expect(current.nodes.find((node) => node.id === pastedIds[0])?.position).toEqual({ x: 17, y: 29 });
+		expect(current.edges.some((edge) => edge.from === pastedIds[0] && edge.to === pastedIds[1])).toBe(true);
+		expect(useBoardStore.getState().clipboard).toEqual(clipboard);
+
+		useBoardStore.getState().duplicateSelected();
+		expect(activeProject().nodes).toHaveLength(original.nodes.length + 4);
+	});
+
+	test("aligns, distributes, groups, and ungroups selected nodes", () => {
+		seedProject();
+		const a = useBoardStore.getState().addNode("text", { x: 0, y: 0 });
+		const b = useBoardStore.getState().addNode("text", { x: 200, y: 80 });
+		const c = useBoardStore.getState().addNode("text", { x: 500, y: 200 });
+		useBoardStore.getState().setSelected([a, b, c]);
+		useBoardStore.getState().alignSelected("top");
+		expect(new Set([a, b, c].map((id) => activeProject().nodes.find((node) => node.id === id)!.position.y)).size).toBe(1);
+		useBoardStore.getState().distributeSelected("x");
+		const positions = [a, b, c].map((id) => activeProject().nodes.find((node) => node.id === id)!.position.x);
+		expect(positions[1]! - positions[0]!).toBe(positions[2]! - positions[1]!);
+
+		useBoardStore.getState().groupSelected();
+		const groupId = useBoardStore.getState().selectedIds[0]!;
+		const group = activeProject().nodes.find((node) => node.id === groupId)!;
+		expect(group.type).toBe("group");
+		expect(group.metadata.childIds).toEqual(expect.arrayContaining([a, b, c]));
+		useBoardStore.getState().ungroupSelected();
+		expect(activeProject().nodes.some((node) => node.id === groupId)).toBe(false);
+		expect(useBoardStore.getState().selectedIds).toEqual(expect.arrayContaining([a, b, c]));
+	});
+
+	test("cascades batch-root deletion and repairs remaining metadata", () => {
+		installFetch();
+		seedProject();
+		const child = createNode("image", { x: 100, y: 0 }, {
+			id: "batch-child",
+			metadata: { batchRootId: "batch-root", content: "child" },
+		});
+		const root = createNode("image", { x: 0, y: 0 }, {
+			id: "batch-root",
+			metadata: { isBatchRoot: true, batchChildIds: [child.id], primaryImageId: child.id },
+		});
+		const survivor = createNode("text", { x: 300, y: 0 });
+		useBoardStore.setState({
+			projects: [{ ...activeProject(), nodes: [root, child, survivor], edges: [
+				{ id: "batch-edge", from: root.id, to: child.id },
+				{ id: "survivor-edge", from: root.id, to: survivor.id },
+			] }],
+			selectedIds: [root.id],
+		});
+
+		useBoardStore.getState().deleteSelected();
+		expect(activeProject().nodes.map((node) => node.id)).toEqual([survivor.id]);
+		expect(activeProject().edges).toEqual([]);
+		expect(useBoardStore.getState().selectedIds).toEqual([]);
 	});
 });
 
@@ -229,5 +474,264 @@ describe("lazy workspace writes", () => {
 		expect(useBoardStore.getState().assetsState).toBe("loaded");
 		expect(useBoardStore.getState().promptsState).toBe("loaded");
 		expect(useBoardStore.getState().projects[0]?.id).toBe(project.id);
+	});
+});
+
+describe("workspace catalog loading boundaries", () => {
+	test("hydrates config once per scope and normalizes the loaded value", async () => {
+		installFetch((url, init) => {
+			if (url.endsWith("/config") && (init.method ?? "GET") === "GET") {
+				const config = createDefaultConfig();
+				config.systemPrompt = "loaded prompt";
+				config.disabledPluginIds = ["plugin-a", "plugin-a"];
+				return jsonResponse({ config, secrets: {
+					apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "",
+					objectStorageSecretAccessKey: "", objectStorageSessionToken: "",
+				} }, 200, { ETag: '"hydrate-v1"' });
+			}
+			return new Response(null, { status: 204 });
+		});
+		const scope = `hydrate-${crypto.randomUUID()}`;
+		const first = useBoardStore.getState().hydrate(scope);
+		const second = useBoardStore.getState().hydrate(scope);
+		expect(first).toBe(second);
+		await first;
+		expect(useBoardStore.getState().ready).toBe(true);
+		expect(useBoardStore.getState().config.systemPrompt).toBe("loaded prompt");
+		expect(useBoardStore.getState().config.disabledPluginIds).toEqual(["plugin-a"]);
+		expect(fetchCalls.filter((call) => call.url.endsWith("/config"))).toHaveLength(1);
+	});
+
+	test("keeps the app usable with default config when hydration fails", async () => {
+		installFetch(async (url) => {
+			if (url.endsWith("/config")) throw new Error("config offline");
+			return new Response(null, { status: 204 });
+		});
+		await useBoardStore.getState().hydrate(`hydrate-error-${crypto.randomUUID()}`);
+		expect(useBoardStore.getState().ready).toBe(true);
+		expect(useBoardStore.getState().config.channels.length).toBeGreaterThan(0);
+	});
+
+	test("loads a project catalog, rehydrates it, and creates a default when empty", async () => {
+		const project = createProject("from server");
+		let returnEmpty = false;
+		installFetch((url, init) => {
+			if (url.endsWith("/projects") && (init.method ?? "GET") === "GET") {
+				return jsonResponse(returnEmpty ? [] : [{ id: project.id }]);
+			}
+			if (url.endsWith(`/projects/${project.id}`)) return jsonResponse(project);
+			return new Response(null, { status: 204 });
+		});
+		useBoardStore.setState({ ready: true, projectsState: "idle", projects: [], activeProjectId: null });
+		await useBoardStore.getState().loadProjectsOnDemand();
+		expect(useBoardStore.getState().projectsState).toBe("loaded");
+		expect(useBoardStore.getState().projects[0]).toMatchObject({ id: project.id, title: "from server" });
+
+		returnEmpty = true;
+		useBoardStore.setState({ projectsState: "idle", projects: [], activeProjectId: null });
+		await useBoardStore.getState().loadProjectsOnDemand();
+		expect(useBoardStore.getState().projects).toHaveLength(1);
+		expect(useBoardStore.getState().projects[0]?.title).toBe("我的第一个画布");
+	});
+
+	test("deduplicates concurrent project loads and exposes load failures", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const project = createProject("concurrent");
+		installFetch(async (url, init) => {
+			if (url.endsWith("/projects") && (init.method ?? "GET") === "GET") {
+				await gate;
+				return jsonResponse([{ id: project.id }]);
+			}
+			if (url.endsWith(`/projects/${project.id}`)) return jsonResponse(project);
+			return new Response(null, { status: 204 });
+		});
+		useBoardStore.setState({ projectsState: "idle", projects: [], activeProjectId: null });
+		const first = useBoardStore.getState().loadProjectsOnDemand();
+		const second = useBoardStore.getState().loadProjectsOnDemand();
+		expect(first).toBe(second);
+		await Promise.resolve();
+		expect(fetchCalls.filter((call) => call.url.endsWith("/projects"))).toHaveLength(1);
+		release();
+		await first;
+
+		installFetch(async (url) => {
+			if (url.endsWith("/projects")) throw new Error("project catalog offline");
+			return new Response(null, { status: 204 });
+		});
+		useBoardStore.setState({ projectsState: "idle", projects: [], activeProjectId: null });
+		await expect(useBoardStore.getState().loadProjectsOnDemand()).rejects.toThrow("project catalog offline");
+		expect(useBoardStore.getState().projectsState).toBe("error");
+		expect(useBoardStore.getState().projectsError).toBe("project catalog offline");
+	});
+
+	test("loads assets and prompts only after their catalogs are requested", async () => {
+		const asset: AssetItem = {
+			id: "asset-server", kind: "text", title: "server asset", tags: [], content: "hello",
+			createdAt: "2026-01-01", updatedAt: "2026-01-01",
+		};
+		const personal: PromptItem = { id: "personal", title: "Personal", body: "body", tags: ["mine"], source: "local" };
+		installFetch((url, init) => {
+			if (url.endsWith("/config")) return jsonResponse({ config: createDefaultConfig(), secrets: {
+				apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "",
+				objectStorageSecretAccessKey: "", objectStorageSessionToken: "",
+			} }, 200, { ETag: '"catalog-config"' });
+			if (url.endsWith("/state/assets") && (init.method ?? "GET") === "GET") return jsonResponse([asset]);
+			if (url.endsWith("/state/prompts") && (init.method ?? "GET") === "GET") return jsonResponse([personal]);
+			if (url.endsWith("/prompt-catalog")) {
+				return jsonResponse({
+					version: 1, revision: 4, categories: [{ id: "general", name: "General", order: 1 }],
+					prompts: [{ id: "shared", title: "Shared", body: "shared body", tags: ["team"] }],
+				});
+			}
+			return new Response(null, { status: 204 });
+		});
+		await useBoardStore.getState().hydrate(`catalog-${crypto.randomUUID()}`);
+		await useBoardStore.getState().loadAssetsOnDemand();
+		expect(useBoardStore.getState().assetsState).toBe("loaded");
+		expect(useBoardStore.getState().assets).toEqual([asset]);
+
+		await useBoardStore.getState().loadPromptsOnDemand();
+		expect(useBoardStore.getState().promptsState).toBe("loaded");
+		expect(useBoardStore.getState().prompts).toEqual([
+			personal,
+			{ id: "catalog:shared", title: "Shared", body: "shared body", tags: ["team"], source: "团队提示词库", sourceId: "server-public-prompt-catalog" },
+		]);
+	});
+
+	test("reports asset and prompt load failures without replacing the previous state", async () => {
+		installFetch(async (url) => {
+			if (url.endsWith("/state/assets")) throw new Error("asset catalog offline");
+			if (url.endsWith("/state/prompts")) throw new Error("prompt catalog offline");
+			return new Response(null, { status: 204 });
+		});
+		const oldAsset: AssetItem = { id: "old", kind: "text", title: "old", tags: [], createdAt: "t", updatedAt: "t" };
+		const oldPrompt: PromptItem = { id: "old-prompt", title: "old", body: "old", tags: [], source: "local" };
+		useBoardStore.setState({
+			assetsState: "idle", assets: [oldAsset],
+			promptsState: "idle", prompts: [oldPrompt],
+		});
+		await expect(useBoardStore.getState().loadAssetsOnDemand()).rejects.toThrow("asset catalog offline");
+		await expect(useBoardStore.getState().loadPromptsOnDemand()).rejects.toThrow("prompt catalog offline");
+		expect(useBoardStore.getState().assetsState).toBe("error");
+		expect(useBoardStore.getState().assets).toEqual([oldAsset]);
+		expect(useBoardStore.getState().promptsState).toBe("error");
+		expect(useBoardStore.getState().prompts).toEqual([oldPrompt]);
+	});
+});
+
+describe("canvas persistence and catalog updates", () => {
+	test("keeps local assets after a failed save and recovers on the next flush", async () => {
+		let fail = true;
+		installFetch((url, init) => {
+			if (url.endsWith("/state/assets") && init.method === "PUT" && fail) {
+				return new Response("asset storage offline", { status: 503 });
+			}
+			return new Response(null, { status: 204 });
+		});
+		seedProject("assets", "loaded");
+		const first: AssetItem = { id: "a1", kind: "text", title: "first", tags: [], createdAt: "t", updatedAt: "t" };
+		useBoardStore.getState().setAssets([first]);
+		await expect(useBoardStore.getState().flushAssets()).rejects.toThrow("State save failed: HTTP 503");
+		expect(useBoardStore.getState().assets).toEqual([first]);
+
+		fail = false;
+		const second = { ...first, id: "a2", title: "second" };
+		useBoardStore.getState().setAssets([first, second]);
+		await useBoardStore.getState().flushAssets();
+		expect(fetchCalls.filter((call) => call.url.endsWith("/state/assets") && call.method === "PUT")).toHaveLength(2);
+	});
+
+	test("persists only the latest prompt catalog and strips public entries", async () => {
+		installFetch();
+		seedProject("prompts", "loaded");
+		const personal: PromptItem = { id: "p1", title: "Personal", body: "one", tags: [], source: "local" };
+		const shared: PromptItem = {
+			id: "catalog:shared", title: "Shared", body: "two", tags: [], source: "团队提示词库", sourceId: "server-public-prompt-catalog",
+		};
+		useBoardStore.getState().setPrompts([personal]);
+		useBoardStore.getState().setPrompts([personal, shared]);
+		await useBoardStore.getState().flushPrompts();
+		expect(useBoardStore.getState().prompts).toEqual([personal, shared]);
+		const saved = fetchCalls
+			.filter((call) => call.url.endsWith("/state/prompts") && call.method === "PUT")
+			.at(-1)?.body;
+		expect(saved).toBe(JSON.stringify([personal]));
+	});
+
+	test("retries an asset update when another writer changes the baseline", async () => {
+		let releaseFirst!: () => void;
+		const firstWrite = new Promise<void>((resolve) => { releaseFirst = resolve; });
+		let assetWrites = 0;
+		installFetch(async (url, init) => {
+			if (url.endsWith("/state/assets") && init.method === "PUT") {
+				assetWrites += 1;
+				if (assetWrites === 1) await firstWrite;
+			}
+			return new Response(null, { status: 204 });
+		});
+		seedProject("asset race", "loaded");
+		const first: AssetItem = { id: "a1", kind: "text", title: "first", tags: [], createdAt: "t", updatedAt: "t" };
+		const concurrent: AssetItem = { id: "a2", kind: "text", title: "concurrent", tags: [], createdAt: "t", updatedAt: "t" };
+		const appended: AssetItem = { id: "a3", kind: "text", title: "appended", tags: [], createdAt: "t", updatedAt: "t" };
+		useBoardStore.setState({ assets: [first] });
+		const update = useBoardStore.getState().commitAssetUpdate((assets) => [...assets, appended]);
+		await Promise.resolve();
+		useBoardStore.getState().setAssets([first, concurrent]);
+		releaseFirst();
+		await update;
+		await useBoardStore.getState().flushAssets();
+		expect(useBoardStore.getState().assets).toEqual([first, concurrent, appended]);
+		expect(assetWrites).toBeGreaterThanOrEqual(2);
+	});
+
+	test("autoloads assets for atomic updates and clones inserted node media", async () => {
+		const project = seedProject("asset insertion", "loaded");
+		const asset: AssetItem = {
+			id: "text-asset", kind: "text", title: "Reusable", tags: [], content: "saved text",
+			createdAt: "t", updatedAt: "t", thumbnailUrl: "https://thumb.example/image.png",
+		};
+		installFetch((url, init) => {
+			if (url.endsWith("/state/assets") && (init.method ?? "GET") === "GET") return jsonResponse([]);
+			return new Response(null, { status: 204 });
+		});
+		useBoardStore.setState({ assetsState: "idle" });
+		await useBoardStore.getState().commitAssetUpdate((assets) => [...assets, asset]);
+		expect(useBoardStore.getState().assetsState).toBe("loaded");
+		expect(useBoardStore.getState().assets).toEqual([asset]);
+		const originalAsset = structuredClone(asset);
+		await useBoardStore.getState().insertAsset(asset.id, { x: 42, y: 84 });
+		const inserted = activeProject().nodes.find((node) => node.position.x === 42 && node.position.y === 84);
+		expect(inserted).toMatchObject({ type: "text", title: "Reusable", metadata: { content: "saved text", status: "success" } });
+		expect(asset).toEqual(originalAsset);
+		expect(project.nodes).toHaveLength(0);
+	});
+
+	test("keeps the local prompt catalog when a public source is stale", async () => {
+		const personal: PromptItem = { id: "local", title: "Local", body: "body", tags: [], source: "local" };
+		installFetch((url, init) => {
+			if (url.endsWith("/config")) return jsonResponse({ config: createDefaultConfig(), secrets: {
+				apiKeys: {}, webdavPass: "", objectStorageAccessKeyId: "",
+				objectStorageSecretAccessKey: "", objectStorageSessionToken: "",
+			} }, 200, { ETag: '"stale-config"' });
+			if (url.endsWith("/state/prompts")) return jsonResponse([personal]);
+			if (url.endsWith("/prompt-catalog")) return new Response("unavailable", { status: 503 });
+			return new Response(null, { status: 204 });
+		});
+		await useBoardStore.getState().hydrate(`stale-catalog-${crypto.randomUUID()}`);
+		await useBoardStore.getState().loadPromptsOnDemand();
+		expect(useBoardStore.getState().promptsState).toBe("loaded");
+		expect(useBoardStore.getState().prompts).toEqual([personal]);
+	});
+
+	test("persists project errors through persistNow instead of hiding them", async () => {
+		installFetch((url, init) => {
+			if (url.includes("/projects/") && init.method === "PUT") return new Response("offline", { status: 500 });
+			return new Response(null, { status: 204 });
+		});
+		seedProject("project error", "loaded");
+		useBoardStore.getState().addNode("text", { x: 0, y: 0 });
+		await expect(useBoardStore.getState().persistNow()).rejects.toThrow("Project save failed: HTTP 500");
+		expect(activeProject().nodes).toHaveLength(1);
 	});
 });

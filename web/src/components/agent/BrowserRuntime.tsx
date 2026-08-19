@@ -22,7 +22,7 @@ import {
   resolveAgentBaseUrl,
   type AgentConnection,
 } from "@/services/local-agent";
-import type { BoardNode, Point } from "@/types/board";
+import type { BoardNode, GenerationJob, Point } from "@/types/board";
 import {
   getRuntimeOwnerId,
   setRuntimeClientId,
@@ -34,9 +34,9 @@ import {
 } from "@/services/generation-activity";
 import {
   findInterruptedGenerationJobs,
+  failGenerationJobIfUnchanged,
   getGenerationJob,
   listAllGenerationJobs,
-  updateGenerationJob,
 } from "@/services/generation-jobs";
 import { useI18n } from "@/i18n/I18nProvider";
 import { createAgentHelpTranslator, type AgentHelpTranslator } from "@/i18n/messages/agent-help";
@@ -63,7 +63,17 @@ function runtimePosition(data: Record<string, unknown>): Point {
   };
 }
 
-async function executeRuntimeCommand(
+export async function recoverInterruptedGenerationJobs(
+  jobs: readonly GenerationJob[],
+  ownerClientId: string,
+  liveActivityIds: ReadonlySet<string>,
+  error: string,
+): Promise<GenerationJob[]> {
+  const interrupted = findInterruptedGenerationJobs(jobs, ownerClientId, liveActivityIds);
+  return Promise.all(interrupted.map(async (job) => await failGenerationJobIfUnchanged(job, error) ?? job));
+}
+
+export async function executeRuntimeCommand(
   command: RuntimeCommand,
   connection: AgentConnection,
   navigate: (path: string) => void,
@@ -254,10 +264,7 @@ async function executeRuntimeCommand(
           getRuntimeOwnerId(),
           new Set(),
         ).length > 0) {
-          stored = await updateGenerationJob(stored.id, {
-            status: "failed",
-            error: t("agent.pageRefreshInterrupted"),
-          });
+          stored = await failGenerationJobIfUnchanged(stored, t("agent.pageRefreshInterrupted"));
           visible = true;
         }
         if (visible) task = stored as typeof task;
@@ -304,11 +311,12 @@ export function BrowserRuntime() {
         const liveIds = new Set(
           getGenerationActivities().filter((item) => item.status === "running").map((item) => item.id),
         );
-        const interrupted = findInterruptedGenerationJobs(jobs, getRuntimeOwnerId(), liveIds);
-        await Promise.all(interrupted.map((job) => updateGenerationJob(job.id, {
-          status: "failed",
-          error: t("agent.pageRefreshInterrupted"),
-        })));
+        await recoverInterruptedGenerationJobs(
+          jobs,
+          getRuntimeOwnerId(),
+          liveIds,
+          t("agent.pageRefreshInterrupted"),
+        );
       }).catch(() => undefined);
     };
     recover();

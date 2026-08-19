@@ -18,6 +18,7 @@ import { authFetch } from "@/services/auth-session";
 import {
   cancelServerGenerationJob,
   createGenerationJob,
+  failGenerationJobIfUnchanged,
   getGenerationJob,
   listGenerationJobs,
   updateGenerationJob,
@@ -122,7 +123,7 @@ async function persistParentState(
   error = "",
   onUpdate?: WorkflowRunUpdate,
 ): Promise<GenerationJob> {
-  const updated = await updateGenerationJob(job.id, { status, result, error: error || undefined });
+  const updated = await updateGenerationJob(job.id, { status, result, error });
   onUpdate?.(updated);
   return updated;
 }
@@ -166,6 +167,10 @@ function workflowChildStorageKeys(child: GenerationJob): string[] {
   return items.flatMap((item) => item && typeof item === "object" &&
     typeof (item as { storageKey?: unknown }).storageKey === "string"
     ? [(item as { storageKey: string }).storageKey] : []);
+}
+
+function withoutWorkflowStepError(state: WorkflowRunResult["steps"][string]): Omit<WorkflowRunResult["steps"][string], "error"> {
+  return Object.fromEntries(Object.entries(state).filter(([key]) => key !== "error")) as Omit<WorkflowRunResult["steps"][string], "error">;
 }
 
 async function runBrowserStep(
@@ -241,8 +246,7 @@ async function runBrowserStep(
           parameters: {
             ...step.parameters,
             count: splitSlots ? 1 : step.parameters.count,
-            requestedCount: splitSlots ? childIds.length : undefined,
-            batchId: batchId || undefined,
+            ...(splitSlots ? { requestedCount: childIds.length, batchId } : {}),
             batchIndex: splitSlots ? index + 1 : 0,
             referenceStorageKeys,
             workflowRunId: parent.id,
@@ -286,7 +290,7 @@ async function runBrowserStep(
         items.push(persisted);
       }
       stage = "child-history";
-      await updateGenerationJob(child.id, { status: "succeeded", result: { items }, error: undefined });
+      await updateGenerationJob(child.id, { status: "succeeded", result: { items }, error: "" });
       completeGenerationActivity(child.id, "succeeded");
       succeededChildIds.add(child.id);
       succeededKeys.push(...stagedKeys.splice(0, stagedKeys.length));
@@ -337,30 +341,25 @@ export async function executeBrowserWorkflowRun(
       if (state.status !== "queued" && state.status !== "running") return [id, state] as const;
       const childIds = workflowStateChildJobIds(state);
       const children = await Promise.all(childIds.map((childId) => getGenerationJob(childId)));
-      if (children.length > 0 && children.every((child) => child?.status === "succeeded")) {
-        const storageKeys = children.flatMap((child) => child ? workflowChildStorageKeys(child) : []);
+      const recoveredChildren = await Promise.all(children.map(async (child) => {
+        if (!child || (child.status !== "queued" && child.status !== "running")) return child;
+        return await failGenerationJobIfUnchanged(child, "页面刷新后浏览器任务已中断，请按快照重试") ?? child;
+      }));
+      if (recoveredChildren.length > 0 && recoveredChildren.every((child) => child?.status === "succeeded")) {
+        const storageKeys = recoveredChildren.flatMap((child) => child ? workflowChildStorageKeys(child) : []);
         if (storageKeys.length > 0) {
-          return [id, { ...state, status: "succeeded" as const, storageKeys, error: undefined }] as const;
+          return [id, { ...withoutWorkflowStepError(state), status: "succeeded" as const, storageKeys }] as const;
         }
       }
-      if (children.some((child) => child?.status === "succeeded")) {
+      if (recoveredChildren.some((child) => child?.status === "succeeded")) {
         return [id, {
-          ...state,
+          ...withoutWorkflowStepError(state),
           status: "pending" as const,
           childJobId: childIds[0],
           childJobIds: childIds,
-          error: undefined,
         }] as const;
       }
       interrupted = true;
-      await Promise.all(children.map(async (child) => {
-        if (child && (child.status === "queued" || child.status === "running")) {
-          await updateGenerationJob(child.id, {
-            status: "failed",
-            error: "页面刷新后浏览器任务已中断，请按快照重试",
-          });
-        }
-      }));
       return [id, {
         ...state,
         status: "failed" as const,

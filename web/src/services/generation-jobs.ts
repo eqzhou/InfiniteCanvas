@@ -8,6 +8,11 @@ import { nowIso, uid } from "@/lib/id";
 import { validateJsonObject } from "@/lib/bounded-json";
 import { authFetch } from "@/services/auth-session";
 import { collectWorkflowJobStorageKeys, validateWorkflowGenerationJob } from "@/lib/workflow-job";
+import {
+  normalizeWorkbenchCategory,
+  WORKBENCH_ALL_CATEGORIES,
+  workbenchCategories,
+} from "@/lib/workbench-history";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 export const LEGACY_GENERATION_GRACE_MS = 30 * 60_000;
@@ -16,6 +21,7 @@ export type GenerationJobQuery = {
   projectId?: string;
   kind?: GenerationKind;
   status?: string;
+  category?: string;
   page?: number;
   pageSize?: number;
   /** When true, include soft-deleted tombstones (ownership/cleanup only). */
@@ -131,10 +137,16 @@ export function paginateGenerationJobs(
   const page = query.page ?? 1;
   const pageSize = query.pageSize ?? 20;
   validatePagination(page, pageSize);
-  const filtered = jobs
+  const rawCategory = query.category ?? "";
+  const normalizedCategory = rawCategory && rawCategory.trim() !== WORKBENCH_ALL_CATEGORIES
+    ? normalizeWorkbenchCategory(rawCategory)
+    : "";
+  const scoped = jobs
     .filter((job) => !query.projectId || job.projectId === query.projectId)
     .filter((job) => !query.kind || job.kind === query.kind)
-    .filter((job) => matchesGenerationStatus(job, query.status ?? ""))
+    .filter((job) => matchesGenerationStatus(job, query.status ?? ""));
+  const filtered = scoped
+    .filter((job) => !normalizedCategory || normalizeWorkbenchCategory(job.parameters.category) === normalizedCategory)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
   const start = (page - 1) * pageSize;
   return {
@@ -142,6 +154,7 @@ export function paginateGenerationJobs(
     page,
     pageSize,
     total: filtered.length,
+    categories: workbenchCategories(scoped),
   };
 }
 
@@ -215,6 +228,9 @@ export async function listGenerationJobs(query: GenerationJobQuery = {}): Promis
   if (query.projectId) params.set("projectId", query.projectId);
   if (query.kind) params.set("kind", query.kind);
   if (query.status) params.set("status", query.status);
+  if (query.category && query.category.trim() !== WORKBENCH_ALL_CATEGORIES) {
+    params.set("category", normalizeWorkbenchCategory(query.category));
+  }
   if (query.includeDeleted) params.set("includeDeleted", "1");
   const result = await api<GenerationJobPage>(`generation-jobs?${params}`);
   return { ...result, items: result.items.map(validateGenerationJob) };
@@ -320,6 +336,32 @@ export async function updateGenerationJob(id: string, patch: Partial<GenerationJ
   if (!current) throw new Error("generation job not found");
   const job = validateGenerationJob({ ...current, ...patch, id, createdAt: current.createdAt, updatedAt: nowIso() });
   return validateGenerationJob(await api<GenerationJob>(`generation-jobs/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(job) }));
+}
+
+/**
+ * Transition a browser recovery candidate only if its observed running
+ * version is still current. A 409 means another actor won the race, so read
+ * the latest job for the caller instead of overwriting it with a stale failure.
+ */
+export async function failGenerationJobIfUnchanged(
+  job: GenerationJob,
+  error: string,
+): Promise<GenerationJob | undefined> {
+  if (!ID.test(job.id)) throw new Error("invalid generation job id");
+  try {
+    return validateGenerationJob(await api<GenerationJob>(
+      `generation-jobs/${encodeURIComponent(job.id)}/recover`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedUpdatedAt: job.updatedAt, error }),
+      },
+    ));
+  } catch (cause) {
+    if (cause instanceof Error && (cause as Error & { status?: number }).status === 409) {
+      return getGenerationJob(job.id);
+    }
+    throw cause;
+  }
 }
 
 export async function deleteGenerationJob(id: string): Promise<void> {

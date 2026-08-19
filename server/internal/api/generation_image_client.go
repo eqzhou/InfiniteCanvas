@@ -26,6 +26,12 @@ import (
 // own n=1 upstream request. It is not a provider n= limit.
 const maxImageGenerationCount = 100
 
+// Keep enough image requests in flight to hide provider latency without
+// retaining one full max-sized image for every requested slot. The output
+// slots remain bounded by maxImageGenerationCount, but only this many calls
+// can hold a decoded provider response at once.
+const maxOpenAIImageGenerationConcurrency = 4
+
 const maxImageProviderResponseBytes = 40 << 20
 
 type imageProviderHTTPError struct {
@@ -196,39 +202,73 @@ func (e *openAIImageExecutor) generateTemplateOnce(ctx context.Context, request 
 	return images, nil
 }
 
-func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
-	if request.Count == 1 {
-		return e.generateOpenAIOnce(ctx, request)
+type openAIImageGenerationSlot struct {
+	index int
+	image generatedImage
+	err   error
+}
+
+func fanOutOpenAIImageGenerations(
+	ctx context.Context,
+	request imageGenerationRequest,
+	maxTotalBytes int,
+	once func(context.Context, imageGenerationRequest) ([]generatedImage, error),
+) ([]generatedImage, error) {
+	if request.Count <= 1 {
+		return once(ctx, request)
 	}
-	type slot struct {
-		index int
-		image generatedImage
-		err   error
+	workerCount := request.Count
+	if workerCount > maxOpenAIImageGenerationConcurrency {
+		workerCount = maxOpenAIImageGenerationConcurrency
 	}
-	results := make(chan slot, request.Count)
+	jobs := make(chan int, request.Count)
+	for index := 0; index < request.Count; index++ {
+		jobs <- index
+	}
+	close(jobs)
+	results := make(chan openAIImageGenerationSlot, workerCount)
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var workers sync.WaitGroup
-	for index := 0; index < request.Count; index++ {
+	for worker := 0; worker < workerCount; worker++ {
 		workers.Add(1)
-		go func(index int) {
+		go func() {
 			defer workers.Done()
-			single := request
-			single.Count = 1
-			if request.RequestID != "" {
-				single.RequestID = providerRequestID(request.RequestID + ":" + strconv.Itoa(index))
+			for {
+				if err := childCtx.Err(); err != nil {
+					return
+				}
+				var index int
+				var ok bool
+				select {
+				case <-childCtx.Done():
+					return
+				case index, ok = <-jobs:
+					if !ok {
+						return
+					}
+				}
+				single := request
+				single.Count = 1
+				if request.RequestID != "" {
+					single.RequestID = providerRequestID(request.RequestID + ":" + strconv.Itoa(index))
+				}
+				images, err := once(childCtx, single)
+				item := openAIImageGenerationSlot{index: index, err: err}
+				if err == nil {
+					if len(images) != 1 {
+						item.err = errors.New("image provider returned an invalid result")
+					} else {
+						item.image = images[0]
+					}
+				}
+				select {
+				case results <- item:
+				case <-childCtx.Done():
+					return
+				}
 			}
-			images, err := e.generateOpenAIOnce(childCtx, single)
-			if err != nil {
-				results <- slot{index: index, err: err}
-				return
-			}
-			if len(images) != 1 {
-				results <- slot{index: index, err: errors.New("image provider returned an invalid result")}
-				return
-			}
-			results <- slot{index: index, image: images[0]}
-		}(index)
+		}()
 	}
 	go func() {
 		workers.Wait()
@@ -237,7 +277,11 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 	images := make([]generatedImage, request.Count)
 	var firstErr error
 	received := 0
+	totalBytes := 0
 	for item := range results {
+		if firstErr != nil {
+			continue
+		}
 		if item.err != nil {
 			if firstErr == nil {
 				firstErr = item.err
@@ -245,16 +289,31 @@ func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageG
 			}
 			continue
 		}
+		if len(item.image.Data) > maxTotalBytes-totalBytes {
+			if firstErr == nil {
+				firstErr = errors.New("image provider results exceed total size limit")
+				cancel()
+			}
+			continue
+		}
 		images[item.index] = item.image
+		totalBytes += len(item.image.Data)
 		received++
 	}
 	if firstErr != nil {
 		return nil, firstErr
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if received != request.Count {
 		return nil, errors.New("image provider returned an invalid result")
 	}
 	return images, nil
+}
+
+func (e *openAIImageExecutor) generateOpenAI(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
+	return fanOutOpenAIImageGenerations(ctx, request, maxGeneratedTotalBytes, e.generateOpenAIOnce)
 }
 
 func (e *openAIImageExecutor) generateOpenAIOnce(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {

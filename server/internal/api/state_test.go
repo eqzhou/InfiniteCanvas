@@ -225,7 +225,8 @@ func (m *memoryStore) CompareAndSwapStates(_ context.Context, tenantID string, m
 func (m *memoryStore) ListGenerationJobs(_ context.Context, tenantID string, query store.GenerationJobQuery) (store.GenerationJobPage, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	items := make([]store.GenerationJob, 0, len(m.jobs))
+	query.Category = store.TrimGenerationJobCategory(query.Category)
+	scoped := make([]store.GenerationJob, 0, len(m.jobs))
 	prefix := tenantKey(tenantID, "")
 	for key, job := range m.jobs {
 		if len(key) < len(prefix) || key[:len(prefix)] != prefix {
@@ -252,9 +253,18 @@ func (m *memoryStore) ListGenerationJobs(_ context.Context, tenantID string, que
 				continue
 			}
 		}
-		items = append(items, job)
+		scoped = append(scoped, job)
 	}
-	return store.PaginateGenerationJobs(items, query.Page, query.PageSize), nil
+	items := make([]store.GenerationJob, 0, len(scoped))
+	for _, job := range scoped {
+		if query.Category == "" || store.GenerationJobCategory(job.Parameters) == query.Category {
+			items = append(items, job)
+		}
+	}
+	page := store.PaginateGenerationJobs(items, query.Page, query.PageSize)
+	metadataPage := store.PaginateGenerationJobs(scoped, 1, max(1, len(scoped)))
+	page.Categories = metadataPage.Categories
+	return page, nil
 }
 
 func (m *memoryStore) GetGenerationJob(_ context.Context, tenantID, id string) (store.GenerationJob, error) {
@@ -281,6 +291,24 @@ func (m *memoryStore) PutGenerationJob(_ context.Context, tenantID string, job s
 	}
 	m.jobs[tenantKey(tenantID, job.ID)] = job
 	return nil
+}
+
+func (m *memoryStore) FailGenerationJobIfUnchanged(_ context.Context, tenantID, id, expectedUpdatedAt, errorMessage string) (store.GenerationJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantKey(tenantID, id)
+	current, exists := m.jobs[key]
+	if !exists || current.Status == "deleted" {
+		return store.GenerationJob{}, store.ErrNotFound
+	}
+	if current.Status != "running" || current.UpdatedAt != expectedUpdatedAt {
+		return store.GenerationJob{}, store.ErrConflict
+	}
+	current.Status = "failed"
+	current.Error = errorMessage
+	current.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	m.jobs[key] = current
+	return current, nil
 }
 
 func (m *memoryStore) CreateGenerationJob(_ context.Context, tenantID string, job store.GenerationJob) error {

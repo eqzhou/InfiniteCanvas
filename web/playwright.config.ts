@@ -85,21 +85,23 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
+		locale: "zh-CN",
         ...(chromiumExecutable ? { launchOptions: { executablePath: chromiumExecutable } } : {}),
       },
     },
     {
       name: "firefox",
-      use: { ...devices["Desktop Firefox"] },
+      use: { ...devices["Desktop Firefox"], locale: "zh-CN" },
     },
     {
       name: "webkit",
-      use: { ...devices["Desktop Safari"] },
+      use: { ...devices["Desktop Safari"], locale: "zh-CN" },
     },
     {
       name: "mobile-chromium",
       use: {
         ...devices["Pixel 5"],
+		locale: "zh-CN",
         ...(chromiumExecutable ? { launchOptions: { executablePath: chromiumExecutable } } : {}),
       },
     },

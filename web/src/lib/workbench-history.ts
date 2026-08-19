@@ -3,13 +3,50 @@ import { workbenchImageCountFromParameters } from "@/lib/image-generation-batch"
 
 export type WorkbenchLayout = "side" | "bottom";
 
-export const WORKBENCH_ALL_CATEGORIES = "全部";
+// Keep the select value separate from the display label so a persisted
+// category literally named "全部" remains a real, filterable category.
+export const WORKBENCH_ALL_CATEGORIES = "\u0000openboard-all-categories";
+export const WORKBENCH_ALL_CATEGORIES_LABEL = "全部";
 export const WORKBENCH_UNCATEGORIZED = "未分类";
+
+export type WorkbenchRefreshCoordinator = {
+  begin: () => number;
+  isCurrent: (requestId: number) => boolean;
+  invalidate: () => number;
+};
+
+/**
+ * Gives each history request a monotonically increasing identity. A response
+ * may update the workbench only while its identity is current; starting a
+ * newer request invalidates every older response without relying on timing.
+ */
+export function createWorkbenchRefreshCoordinator(): WorkbenchRefreshCoordinator {
+  let latestRequestId = 0;
+  return {
+    begin: () => {
+      latestRequestId += 1;
+      return latestRequestId;
+    },
+    isCurrent: (requestId) => requestId === latestRequestId,
+    invalidate: () => {
+      latestRequestId += 1;
+      return latestRequestId;
+    },
+  };
+}
 
 export function normalizeWorkbenchCategory(value: unknown): string {
   if (typeof value !== "string") return WORKBENCH_UNCATEGORIZED;
   const normalized = value.trim();
-  return normalized && normalized.length <= 100 ? normalized : WORKBENCH_UNCATEGORIZED;
+  if (!normalized || normalized.length > 100) return WORKBENCH_UNCATEGORIZED;
+  for (const character of normalized) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if ((codePoint >= 0xd800 && codePoint <= 0xdfff) || /[\p{Cc}\p{Cf}]/u.test(character)) {
+      return WORKBENCH_UNCATEGORIZED;
+    }
+    if (/\s/u.test(character) && character !== " ") return WORKBENCH_UNCATEGORIZED;
+  }
+  return normalized;
 }
 
 export function workbenchCategories(jobs: readonly GenerationJob[]): string[] {
@@ -24,6 +61,40 @@ export function workbenchCategories(jobs: readonly GenerationJob[]): string[] {
     }
   }
   return [WORKBENCH_ALL_CATEGORIES, ...categories, ...(uncategorized ? [WORKBENCH_UNCATEGORIZED] : [])];
+}
+
+/**
+ * Extends the category picker with categories observed on any loaded page.
+ * The server returns paginated jobs rather than a separate category catalog,
+ * so this intentionally never invents a category that was not observed.
+ */
+export function mergeWorkbenchCategories(
+  knownCategories: readonly unknown[],
+  jobs: readonly GenerationJob[],
+): string[] {
+  const categories = [WORKBENCH_ALL_CATEGORIES];
+  const seen = new Set(categories);
+  const append = (value: unknown) => {
+    if (value === WORKBENCH_ALL_CATEGORIES) return;
+    const category = normalizeWorkbenchCategory(value);
+    if (seen.has(category)) return;
+    seen.add(category);
+    categories.push(category);
+  };
+  for (const category of knownCategories) append(category);
+  for (const job of jobs) append(job.parameters.category);
+  return categories;
+}
+
+/**
+ * Normalizes the optional category catalog returned by the server. An absent
+ * catalog means the caller must discard its previous metadata and fall back
+ * to categories observed in the current jobs.
+ */
+export function normalizeWorkbenchCategoryMetadata(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return mergeWorkbenchCategories(value, [])
+    .filter((category) => category !== WORKBENCH_ALL_CATEGORIES);
 }
 
 export type WorkbenchStatusFilter = "all" | "succeeded" | "failed" | string;

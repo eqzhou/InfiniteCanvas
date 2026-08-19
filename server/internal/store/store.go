@@ -9,6 +9,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 var (
@@ -64,9 +67,12 @@ type TenantGenerationJob struct {
 type GenerationJobQuery struct {
 	// UserID narrows history to one account. Empty means tenant-wide and is
 	// reserved for tenant owners, local auth-off mode, and internal workers.
-	UserID         string
-	ProjectID      string
-	Kind           string
+	UserID    string
+	ProjectID string
+	Kind      string
+	// Category matches the top-level string at parameters.category. Empty
+	// leaves category unrestricted.
+	Category       string
 	Status         string
 	Page           int
 	PageSize       int
@@ -74,10 +80,101 @@ type GenerationJobQuery struct {
 }
 
 type GenerationJobPage struct {
-	Items    []GenerationJob `json:"items"`
-	Page     int             `json:"page"`
-	PageSize int             `json:"pageSize"`
-	Total    int             `json:"total"`
+	Items      []GenerationJob `json:"items"`
+	Page       int             `json:"page"`
+	PageSize   int             `json:"pageSize"`
+	Total      int             `json:"total"`
+	Categories []string        `json:"categories"`
+}
+
+const GenerationJobUncategorized = "未分类"
+
+// generationJobCategoryWhitespace follows ECMAScript String.prototype.trim,
+// which is also what the workbench uses. Keep the set explicit so PostgreSQL,
+// Go, and JavaScript classify legacy categories identically (including NBSP,
+// ideographic space, and BOM).
+const generationJobCategoryWhitespace = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+func TrimGenerationJobCategory(value string) string {
+	return strings.Trim(value, generationJobCategoryWhitespace)
+}
+
+// NormalizeGenerationJobCategory mirrors the workbench's client-side
+// normalization: trim strings, and collapse missing, blank, or overlong
+// values into the stable unclassified bucket. JavaScript's String.length is
+// UTF-16 based, so count surrogate pairs the same way here.
+func NormalizeGenerationJobCategory(value string) string {
+	if !utf8.ValidString(value) {
+		return GenerationJobUncategorized
+	}
+	value = TrimGenerationJobCategory(value)
+	if value == "" || !validGenerationJobCategoryContent(value) || generationJobCategoryUTF16Length(value) > 100 {
+		return GenerationJobUncategorized
+	}
+	return value
+}
+
+// ValidGenerationJobCategory validates a category at an API boundary. Unlike
+// NormalizeGenerationJobCategory, it does not silently trim non-ASCII
+// whitespace around a value; callers can choose whether an empty value is
+// allowed, while legacy persisted values are normalized defensively.
+func ValidGenerationJobCategory(value string, allowEmpty bool) bool {
+	if !utf8.ValidString(value) || !validGenerationJobCategoryContent(value) {
+		return false
+	}
+	trimmed := TrimGenerationJobCategory(value)
+	if trimmed == "" {
+		return allowEmpty
+	}
+	return generationJobCategoryUTF16Length(trimmed) <= 100
+}
+
+func validGenerationJobCategoryContent(value string) bool {
+	for _, r := range value {
+		if !unicode.IsGraphic(r) || unicode.IsSpace(r) && r != ' ' {
+			return false
+		}
+	}
+	return true
+}
+
+func generationJobCategoryUTF16Length(value string) int {
+	length := 0
+	for _, r := range value {
+		length += utf16.RuneLen(r)
+	}
+	return length
+}
+
+// GenerationJobCategory returns the normalized top-level parameters.category
+// value. Non-string JSON values are treated like a missing category.
+func GenerationJobCategory(parameters json.RawMessage) string {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(parameters, &root) != nil {
+		return GenerationJobUncategorized
+	}
+	var value string
+	if raw, ok := root["category"]; !ok || json.Unmarshal(raw, &value) != nil {
+		return GenerationJobUncategorized
+	}
+	return NormalizeGenerationJobCategory(value)
+}
+
+// GenerationJobCategories returns unique normalized categories in the order
+// in which jobs are supplied. Callers can supply newest-first jobs to match
+// the history ordering exposed to clients.
+func GenerationJobCategories(jobs []GenerationJob) []string {
+	categories := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, job := range jobs {
+		category := GenerationJobCategory(job.Parameters)
+		if _, exists := seen[category]; exists {
+			continue
+		}
+		seen[category] = struct{}{}
+		categories = append(categories, category)
+	}
+	return categories
 }
 
 type GenerationClaim struct {
@@ -156,7 +253,7 @@ func PaginateGenerationJobs(items []GenerationJob, page, pageSize int) Generatio
 	if end > len(sorted) {
 		end = len(sorted)
 	}
-	return GenerationJobPage{Items: sorted[start:end], Page: page, PageSize: pageSize, Total: len(sorted)}
+	return GenerationJobPage{Items: sorted[start:end], Page: page, PageSize: pageSize, Total: len(sorted), Categories: GenerationJobCategories(sorted)}
 }
 
 type LibraryAssetKind = string
@@ -640,6 +737,7 @@ type Store interface {
 	CreateGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error
 	CreateServerGenerationJob(ctx context.Context, tenantID, userID string, job GenerationJob, units int, usageMeta json.RawMessage) error
 	PutGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error
+	FailGenerationJobIfUnchanged(ctx context.Context, tenantID, id, expectedUpdatedAt, errorMessage string) (GenerationJob, error)
 	ClaimServerGenerationJob(ctx context.Context, claim GenerationClaim, owner string, now, leaseUntil time.Time) (TenantGenerationJob, error)
 	RenewServerGenerationJobLease(ctx context.Context, tenantID, id, owner string, now, leaseUntil time.Time) error
 	CheckpointServerGenerationJob(ctx context.Context, tenantID, id, owner string, result json.RawMessage, now time.Time) (GenerationJob, error)

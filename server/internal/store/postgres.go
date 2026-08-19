@@ -87,7 +87,28 @@ CREATE INDEX IF NOT EXISTS openboard_generation_jobs_audio_claim_idx
 
 // migrationV3SQL is applied statement-by-statement because ALTER ... DROP CONSTRAINT
 // needs dynamic primary-key discovery.
-const currentSchemaVersion = 28
+const currentSchemaVersion = 30
+
+// PostgreSQL has no portable Unicode equivalent of JavaScript's String.trim.
+// Keep the same ECMAScript whitespace set used by TrimGenerationJobCategory
+// and the workbench, including NBSP, the Unicode space range, and BOM.
+const generationJobCategoryTrimSQL = `U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF'`
+
+// generationJobCategoryExpression is deliberately shared by the category
+// filter and metadata query. The byte scan is capped at 400 bytes: any UTF-8
+// string longer than 400 bytes cannot fit in 100 UTF-16 code units, while all
+// possible valid values within the limit are fully counted.
+const generationJobCategoryExpression = `CASE
+  WHEN jsonb_typeof(parameters->'category')='string'
+   AND btrim(parameters->>'category', ` + generationJobCategoryTrimSQL + `) <> ''
+   AND btrim(parameters->>'category', ` + generationJobCategoryTrimSQL + `) ~ '^[[:graph:] ]*$'
+   AND octet_length(btrim(parameters->>'category', ` + generationJobCategoryTrimSQL + `)) <= 400
+   AND (char_length(btrim(parameters->>'category', ` + generationJobCategoryTrimSQL + `)) + (SELECT count(*) FROM generate_series(
+     0, LEAST(399, octet_length(btrim(parameters->>'category', ` + generationJobCategoryTrimSQL + `)) - 1)) AS series(byte_index)
+     WHERE get_byte(convert_to(btrim(parameters->>'category', ` + generationJobCategoryTrimSQL + `), 'UTF8'), byte_index) BETWEEN 240 AND 244)) <= 100
+  THEN btrim(parameters->>'category', ` + generationJobCategoryTrimSQL + `)
+  ELSE '未分类'
+END`
 
 // tombstoneRetention keeps a deleted-row marker around long enough to outlive a
 // stale browser tab that still holds the pre-delete document. Without it an
@@ -294,6 +315,16 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+	if version < 29 {
+		if err := migrateV29(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
+	if version < 30 {
+		if err := migrateV30(ctx, lockConnection); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -486,6 +517,35 @@ FROM openboard_state AS state
 JOIN canonical_owner AS owner ON owner.tenant_id=state.tenant_id
 WHERE state.key='workflow-templates'
 ON CONFLICT (tenant_id,key) DO NOTHING;
+`)
+}
+
+func migrateV29(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 29, `
+-- Existing releases already stored new media-reference tokens as SHA-256
+-- digests, but did not record that fact in the schema. Treat every unmarked
+-- row as hashed by default; a digest must never become a second bearer token.
+ALTER TABLE openboard_media_references
+  ADD COLUMN IF NOT EXISTS token_hashed boolean NOT NULL DEFAULT true;
+`)
+}
+
+func migrateV30(ctx context.Context, connection *pgxpool.Conn) error {
+	return applyMigration(ctx, connection, 30, `
+-- V29 in an unreleased build used DEFAULT false, which would misclassify
+-- existing SHA-256 digests as plaintext bearers. There is no reliable way to
+-- distinguish a 64-character legacy token from a SHA-256 digest after the
+-- fact, so fail closed and preserve only hashed rows. Verified legacy rows may
+-- still be inserted with token_hashed=false and are upgraded on first use.
+ALTER TABLE openboard_media_references
+  ADD COLUMN IF NOT EXISTS token_hashed boolean NOT NULL DEFAULT true;
+ALTER TABLE openboard_media_references
+  ALTER COLUMN token_hashed SET DEFAULT true;
+UPDATE openboard_media_references
+SET token_hashed=true
+WHERE token_hashed IS DISTINCT FROM true;
+ALTER TABLE openboard_media_references
+  ALTER COLUMN token_hashed SET NOT NULL;
 `)
 }
 
@@ -2976,6 +3036,7 @@ func (s *PostgresStore) CompareAndSwapStates(ctx context.Context, tenantID strin
 func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string, query GenerationJobQuery) (GenerationJobPage, error) {
 	tenantID = normalizeTenantID(tenantID)
 	query.UserID = strings.TrimSpace(query.UserID)
+	query.Category = TrimGenerationJobCategory(query.Category)
 	query.Status = strings.TrimSpace(query.Status)
 	if query.Page < 1 {
 		query.Page = 1
@@ -2987,18 +3048,19 @@ func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string,
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND ($2='' OR user_id=$2) AND ($3='' OR project_id=$3)
 		  AND ($4='' OR kind=$4)
+		  AND ($5='' OR `+generationJobCategoryExpression+`=$5)
 		  AND (
-		    $5='' OR $5='all'
-		    OR ($5='succeeded' AND status IN ('succeeded', 'running', 'queued'))
-		    OR ($5='failed' AND status IN ('failed', 'cancelled'))
-		    OR status=$5
+		    $6='' OR $6='all'
+		    OR ($6='succeeded' AND status IN ('succeeded', 'running', 'queued'))
+		    OR ($6='failed' AND status IN ('failed', 'cancelled'))
+		    OR status=$6
 		  )
-		  AND ($6 OR status <> 'deleted')`,
-		tenantID, query.UserID, query.ProjectID, query.Kind, query.Status, query.IncludeDeleted).Scan(&total); err != nil {
+		  AND ($7 OR status <> 'deleted')`,
+		tenantID, query.UserID, query.ProjectID, query.Kind, query.Category, query.Status, query.IncludeDeleted).Scan(&total); err != nil {
 		return GenerationJobPage{}, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id, user_id, COALESCE(project_id,''), kind, status, prompt,
-		provider_id, model, parameters, result, error, created_at, updated_at
+	categoryRows, err := s.pool.Query(ctx, `WITH scoped AS (
+		SELECT parameters, created_at, id
 		FROM openboard_generation_jobs
 		WHERE tenant_id=$1 AND ($2='' OR user_id=$2) AND ($3='' OR project_id=$3)
 		  AND ($4='' OR kind=$4)
@@ -3009,8 +3071,45 @@ func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string,
 		    OR status=$5
 		  )
 		  AND ($6 OR status <> 'deleted')
-		ORDER BY created_at DESC, id DESC LIMIT $7 OFFSET $8`,
-		tenantID, query.UserID, query.ProjectID, query.Kind, query.Status, query.IncludeDeleted, query.PageSize, (query.Page-1)*query.PageSize)
+	), normalized AS (
+		SELECT `+generationJobCategoryExpression+` AS category, created_at, id
+		FROM scoped
+	)
+	SELECT category
+	FROM normalized
+	GROUP BY category
+	ORDER BY max(created_at) DESC, max(id) DESC`,
+		tenantID, query.UserID, query.ProjectID, query.Kind, query.Status, query.IncludeDeleted)
+	if err != nil {
+		return GenerationJobPage{}, err
+	}
+	defer categoryRows.Close()
+	categories := make([]string, 0)
+	for categoryRows.Next() {
+		var category string
+		if err := categoryRows.Scan(&category); err != nil {
+			return GenerationJobPage{}, err
+		}
+		categories = append(categories, category)
+	}
+	if err := categoryRows.Err(); err != nil {
+		return GenerationJobPage{}, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, user_id, COALESCE(project_id,''), kind, status, prompt,
+		provider_id, model, parameters, result, error, created_at, updated_at
+		FROM openboard_generation_jobs
+		WHERE tenant_id=$1 AND ($2='' OR user_id=$2) AND ($3='' OR project_id=$3)
+		  AND ($4='' OR kind=$4)
+		  AND ($5='' OR `+generationJobCategoryExpression+`=$5)
+		  AND (
+		    $6='' OR $6='all'
+		    OR ($6='succeeded' AND status IN ('succeeded', 'running', 'queued'))
+		    OR ($6='failed' AND status IN ('failed', 'cancelled'))
+		    OR status=$6
+		  )
+		  AND ($7 OR status <> 'deleted')
+		ORDER BY created_at DESC, id DESC LIMIT $8 OFFSET $9`,
+		tenantID, query.UserID, query.ProjectID, query.Kind, query.Category, query.Status, query.IncludeDeleted, query.PageSize, (query.Page-1)*query.PageSize)
 	if err != nil {
 		return GenerationJobPage{}, err
 	}
@@ -3030,7 +3129,7 @@ func (s *PostgresStore) ListGenerationJobs(ctx context.Context, tenantID string,
 	if err := rows.Err(); err != nil {
 		return GenerationJobPage{}, err
 	}
-	return GenerationJobPage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
+	return GenerationJobPage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total, Categories: categories}, nil
 }
 
 func (s *PostgresStore) GetGenerationJob(ctx context.Context, tenantID, id string) (GenerationJob, error) {
@@ -3101,6 +3200,43 @@ func (s *PostgresStore) PutGenerationJob(ctx context.Context, tenantID string, j
 		return ErrGone
 	}
 	return tx.Commit(ctx)
+}
+
+// FailGenerationJobIfUnchanged marks a browser-owned recovery candidate as
+// failed only when the caller still holds the same running version. This is a
+// compare-and-swap operation: a provider completion or another tab that
+// changed updated_at wins, and the stale recovery receives ErrConflict.
+func (s *PostgresStore) FailGenerationJobIfUnchanged(ctx context.Context, tenantID, id, expectedUpdatedAt, errorMessage string) (GenerationJob, error) {
+	tenantID = normalizeTenantID(tenantID)
+	expected, err := time.Parse(time.RFC3339Nano, expectedUpdatedAt)
+	if err != nil {
+		return GenerationJob{}, fmt.Errorf("invalid generation expected updatedAt: %w", err)
+	}
+	updated := time.Now().UTC()
+	var job GenerationJob
+	var created, changed time.Time
+	var leaseExpires *time.Time
+	err = s.pool.QueryRow(ctx, `UPDATE openboard_generation_jobs
+		SET status='failed', error=$4, updated_at=$5
+		WHERE tenant_id=$1 AND id=$2 AND status='running' AND updated_at=$3 AND deleted_at IS NULL
+		RETURNING id, user_id, COALESCE(project_id,''), kind, status, prompt,
+			provider_id, model, parameters, result, error, created_at, updated_at,
+			lease_owner, lease_expires_at`, tenantID, id, expected, errorMessage, updated).Scan(
+		&job.ID, &job.UserID, &job.ProjectID, &job.Kind, &job.Status, &job.Prompt,
+		&job.ProviderID, &job.Model, &job.Parameters, &job.Result, &job.Error,
+		&created, &changed, &job.LeaseOwner, &leaseExpires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GenerationJob{}, ErrConflict
+	}
+	if err != nil {
+		return GenerationJob{}, err
+	}
+	job.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+	job.UpdatedAt = changed.UTC().Format(time.RFC3339Nano)
+	if leaseExpires != nil {
+		job.LeaseExpiresAt = leaseExpires.UTC().Format(time.RFC3339Nano)
+	}
+	return job, nil
 }
 
 func (s *PostgresStore) CreateGenerationJob(ctx context.Context, tenantID string, job GenerationJob) error {
@@ -5160,6 +5296,11 @@ func isSerializationFailure(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "40001"
 }
 
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 func (s *PostgresStore) UpdateUser(ctx context.Context, tenantID, userID string, patch UserPatch) (AuthUser, error) {
 	var lastErr error
 	for range 3 {
@@ -5780,7 +5921,9 @@ func (s *PostgresStore) CreateMediaReference(ctx context.Context, tenantID, stor
 		return MediaReference{}, err
 	}
 	token := first + second
-	if _, err := s.pool.Exec(ctx, `INSERT INTO openboard_media_references (token, tenant_id, storage_key, expires_at) VALUES ($1,$2,$3,$4)`,
+	if _, err := s.pool.Exec(ctx, `INSERT INTO openboard_media_references
+		(token, tenant_id, storage_key, expires_at, token_hashed)
+		VALUES ($1,$2,$3,$4,true)`,
 		HashMediaReferenceToken(token), tenantID, storageKey, expiresAt.UTC()); err != nil {
 		return MediaReference{}, err
 	}
@@ -5792,23 +5935,47 @@ func (s *PostgresStore) GetMediaReference(ctx context.Context, token string) (Me
 	if token == "" {
 		return MediaReference{}, ErrNotFound
 	}
-	stored := HashMediaReferenceToken(token)
-	ref, err := s.lookupMediaReference(ctx, stored)
+	digest := HashMediaReferenceToken(token)
+	matchedToken := digest
+	matchedHashed := true
+	ref, err := s.lookupMediaReference(ctx, digest, true)
+	legacy := false
+	if errors.Is(err, ErrNotFound) {
+		// Releases before media-reference hashing stored the bearer token itself.
+		// Only rows explicitly marked as legacy may be read by plaintext token.
+		// This prevents a stored digest from becoming a second bearer token.
+		ref, err = s.lookupMediaReference(ctx, token, false)
+		legacy = err == nil
+		matchedToken = token
+		matchedHashed = false
+	}
 	if err != nil {
 		return MediaReference{}, err
 	}
 	if time.Now().UTC().After(ref.ExpiresAt) {
-		_, _ = s.pool.Exec(ctx, `DELETE FROM openboard_media_references WHERE token=$1`, stored)
+		_, _ = s.pool.Exec(ctx, `DELETE FROM openboard_media_references WHERE token=$1 AND token_hashed=$2`, matchedToken, matchedHashed)
 		return MediaReference{}, ErrNotFound
+	}
+	if legacy {
+		// The marker and digest update are one atomic statement. The NOT EXISTS
+		// guard leaves a legacy row readable if a concurrent migration already
+		// owns the digest; a unique-key race is likewise harmless to this read.
+		if _, migrateErr := s.pool.Exec(ctx, `UPDATE openboard_media_references AS legacy
+			SET token=$1, token_hashed=true
+			WHERE legacy.token=$2 AND legacy.token_hashed=false
+			  AND NOT EXISTS (SELECT 1 FROM openboard_media_references WHERE token=$1)`, digest, token); migrateErr != nil && !isUniqueViolation(migrateErr) {
+			return MediaReference{}, migrateErr
+		}
 	}
 	ref.Token = token
 	return ref, nil
 }
 
-func (s *PostgresStore) lookupMediaReference(ctx context.Context, storedToken string) (MediaReference, error) {
+func (s *PostgresStore) lookupMediaReference(ctx context.Context, storedToken string, tokenHashed bool) (MediaReference, error) {
 	var ref MediaReference
 	var expires time.Time
-	err := s.pool.QueryRow(ctx, `SELECT tenant_id, storage_key, expires_at FROM openboard_media_references WHERE token=$1`, storedToken).Scan(
+	err := s.pool.QueryRow(ctx, `SELECT tenant_id, storage_key, expires_at
+		FROM openboard_media_references WHERE token=$1 AND token_hashed=$2`, storedToken, tokenHashed).Scan(
 		&ref.TenantID, &ref.StorageKey, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return MediaReference{}, ErrNotFound

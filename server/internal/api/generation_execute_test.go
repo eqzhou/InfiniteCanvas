@@ -138,12 +138,27 @@ func TestServerImageJobCategoryIsBounded(t *testing.T) {
 		ID: "job-category", ProjectID: "board-1", Prompt: "draw", ProviderID: "image-main", Model: "image",
 		Parameters: createImageJobParameters{Size: "1024x1024", Count: 1, Category: "海报"},
 	}
-	if !validCreateImageJob(input) {
-		t.Fatal("expected bounded category to be valid")
+	tests := []struct {
+		name     string
+		category string
+		valid    bool
+	}{
+		{name: "unicode characters count by UTF16 not bytes", category: strings.Repeat("中", 60), valid: true},
+		{name: "trimmed category remains valid", category: "  海报  ", valid: true},
+		{name: "exact ASCII boundary", category: strings.Repeat("x", 100), valid: true},
+		{name: "exact surrogate boundary", category: strings.Repeat("😀", 50), valid: true},
+		{name: "surrogate over boundary", category: strings.Repeat("😀", 51), valid: false},
+		{name: "ASCII over boundary", category: strings.Repeat("x", 101), valid: false},
+		{name: "control character", category: "poster\ncopy", valid: false},
+		{name: "control character after trim", category: "\n", valid: false},
 	}
-	input.Parameters.Category = strings.Repeat("x", 101)
-	if validCreateImageJob(input) {
-		t.Fatal("expected oversized category to be rejected")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input.Parameters.Category = test.category
+			if got := validCreateImageJob(input); got != test.valid {
+				t.Fatalf("category %q valid = %v, want %v", test.category, got, test.valid)
+			}
+		})
 	}
 }
 

@@ -6,8 +6,12 @@ services:
       POSTGRES_DB: openboard_local
       POSTGRES_USER: openboard_local
       POSTGRES_PASSWORD: "${OPENBOARD_POSTGRES_PASSWORD:?Set OPENBOARD_POSTGRES_PASSWORD in .env}"
+      PGDATA: /var/lib/postgresql/18/docker
     volumes:
-      - openboard-postgres:/var/lib/postgresql/data
+      # PostgreSQL 18 stores PGDATA below this parent mount. Keep this volume
+      # name separate from the pre-18 openboard-postgres volume so an upgrade
+      # cannot boot against an incompatible PG17 data directory by accident.
+      - openboard-postgres18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U openboard_local -d openboard_local"]
       interval: 5s
@@ -115,5 +119,5 @@ services:
 
 volumes:
   openboard-data:
-  openboard-postgres:
+  openboard-postgres18:
   openboard-redis:

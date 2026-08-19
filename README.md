@@ -282,6 +282,94 @@ docker run --rm --read-only --cap-drop ALL \
 
 ### Deployment runbook: capability, backup, restore, and rollback
 
+#### PostgreSQL 17 → 18 volume migration
+
+PostgreSQL 18's official image changed both `PGDATA` and the declared volume:
+the data directory is `/var/lib/postgresql/18/docker`, and the Compose mount
+must target its parent `/var/lib/postgresql`. The Compose file therefore uses a
+new `openboard-postgres18` named volume. The old `openboard-postgres` PG17
+volume is intentionally left untouched until the restored database is verified.
+Do not point the PG18 container at the old `/var/lib/postgresql/data` mount.
+
+The supported migration is a logical dump/restore. It keeps the source volume
+recoverable and does not rely on copying PG17 files into a PG18 data directory:
+
+Media-reference tokens are SHA-256 digests at rest. Releases before the marker
+column was introduced may contain both verified plaintext legacy rows and
+already-hashed rows; a 64-character token cannot reliably identify which form
+is stored. The schema migration therefore treats unmarked rows as hashed and
+fails closed, so a database digest can never become a bearer token. Existing
+legacy plaintext references that must remain usable require an operator with a
+verified plaintext-token inventory to mark only those exact rows
+`token_hashed=false`; the first successful read atomically re-hashes the row.
+Never mass-mark rows based on token length or hexadecimal format. Unknown legacy
+plaintext references must be re-issued.
+
+```bash
+set -Eeuo pipefail
+
+# 1. Stop OpenBoard without deleting named volumes.
+docker compose down
+
+# 2. Resolve the existing Compose volume by its actual Docker name. Compose
+#    commonly prefixes the logical name with the project name. Require exactly
+#    one existing volume; do not guess or allow Docker to create an empty one.
+OPENBOARD_PG17_VOLUMES="$(docker volume ls --quiet --filter label=com.docker.compose.volume=openboard-postgres)"
+if [ "$(printf '%s\n' "$OPENBOARD_PG17_VOLUMES" | awk 'NF { count++ } END { print count + 0 }')" -ne 1 ]; then
+  echo "expected exactly one existing PG17 volume" >&2
+  exit 1
+fi
+OPENBOARD_PG17_VOLUME="$OPENBOARD_PG17_VOLUMES"
+docker volume inspect "$OPENBOARD_PG17_VOLUME" >/dev/null
+export OPENBOARD_PG17_VOLUME
+: "${OPENBOARD_POSTGRES_PASSWORD:?export OPENBOARD_POSTGRES_PASSWORD from the deployment .env}"
+
+# Keep the database password out of Docker's argv/process list. The temporary
+# file is removed by the EXIT trap after both success and failure.
+OPENBOARD_MIGRATION_ENV_FILE="$(mktemp)"
+chmod 600 "$OPENBOARD_MIGRATION_ENV_FILE"
+trap 'rm -f -- "$OPENBOARD_MIGRATION_ENV_FILE"; docker rm -f openboard-postgres17-migration >/dev/null 2>&1 || true' EXIT
+{
+  printf 'POSTGRES_DB=openboard_local\n'
+  printf 'POSTGRES_USER=openboard_local\n'
+  printf 'POSTGRES_PASSWORD=%s\n' "$OPENBOARD_POSTGRES_PASSWORD"
+} >"$OPENBOARD_MIGRATION_ENV_FILE"
+
+# 3. Start a temporary PG17 server against the existing named volume.
+docker run -d --rm --name openboard-postgres17-migration \
+  --env-file "$OPENBOARD_MIGRATION_ENV_FILE" \
+  -v "$OPENBOARD_PG17_VOLUME":/var/lib/postgresql/data \
+  postgres:17-alpine
+until docker exec openboard-postgres17-migration pg_isready -U openboard_local -d openboard_local; do sleep 2; done
+mkdir -p backup
+chmod 700 backup
+docker exec openboard-postgres17-migration pg_dump -U openboard_local -d openboard_local --format=custom \
+  > backup/openboard-pg17.dump
+test -s backup/openboard-pg17.dump
+docker run --rm -i postgres:18-alpine pg_restore --list - \
+  < backup/openboard-pg17.dump >/dev/null
+docker stop openboard-postgres17-migration
+
+# 4. Start PG18. This creates a fresh parent-mounted volume.
+docker compose up -d postgres
+until docker compose exec -T postgres pg_isready -U openboard_local -d openboard_local; do sleep 2; done
+
+# 5. Restore the dump into the fresh PG18 database, then start the app.
+docker compose exec -T postgres dropdb -U openboard_local --if-exists openboard_local
+docker compose exec -T postgres createdb -U openboard_local openboard_local
+docker compose exec -T postgres pg_restore --exit-on-error --single-transaction \
+  -U openboard_local -d openboard_local --no-owner --no-privileges \
+  < backup/openboard-pg17.dump
+docker compose up -d openboard
+```
+
+Verify `/healthz`, a representative project, generation history, and media
+before removing `openboard-postgres`. Keep `backup/openboard-pg17.dump` and the
+old volume until that verification and a rollback window have passed. If the
+restore fails, stop the deployment and inspect/restore the dump; the old PG17
+volume remains available. Never run `docker compose down --volumes` during this
+migration because it removes both the source and destination volumes.
+
 After every start or upgrade, check the base service and the optional Film media
 capability separately:
 

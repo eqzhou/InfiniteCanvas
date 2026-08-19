@@ -522,4 +522,6 @@ export type GenerationJobPage = {
   page: number;
   pageSize: number;
   total: number;
+  /** Categories observed in the complete project/kind/status scope. */
+  categories?: string[];
 };

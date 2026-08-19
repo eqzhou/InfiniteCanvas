@@ -3,9 +3,14 @@ import type { AssetItem, GenerationJob } from "@/types/board";
 import {
   filterWorkbenchJobs,
   formatWorkbenchBytes,
+  createWorkbenchRefreshCoordinator,
   normalizeWorkbenchCategory,
+  normalizeWorkbenchCategoryMetadata,
   normalizeWorkbenchLayout,
   workbenchCategories,
+  mergeWorkbenchCategories,
+  WORKBENCH_ALL_CATEGORIES,
+  WORKBENCH_ALL_CATEGORIES_LABEL,
   workbenchImageAssets,
   workbenchReferenceKeys,
   workbenchCardMedia,
@@ -26,9 +31,9 @@ describe("creative workbench history presentation", () => {
     expect(normalizeWorkbenchCategory(" x ")).toBe("x");
     expect(normalizeWorkbenchCategory(" ")).toBe("未分类");
     expect(normalizeWorkbenchCategory("x".repeat(101))).toBe("未分类");
-    expect(workbenchCategories(jobs)).toEqual(["全部", "海报", "角色", "未分类"]);
+    expect(workbenchCategories(jobs)).toEqual([WORKBENCH_ALL_CATEGORIES, "海报", "角色", "未分类"]);
     expect(filterWorkbenchJobs(jobs, "海报").map(({ id }) => id)).toEqual(["a", "d"]);
-    expect(filterWorkbenchJobs(jobs, "全部")).toEqual(jobs);
+    expect(filterWorkbenchJobs(jobs, WORKBENCH_ALL_CATEGORIES)).toEqual(jobs);
     expect(jobs[0]?.parameters.category).toBe("  海报  ");
 
     const mixedJobs: GenerationJob[] = [
@@ -38,9 +43,52 @@ describe("creative workbench history presentation", () => {
       { ...job("f1"), status: "failed" },
       { ...job("c1"), status: "cancelled" },
     ];
-    expect(filterWorkbenchJobs(mixedJobs, "全部", "succeeded").map(({ id }) => id)).toEqual(["s1", "r1", "q1"]);
-    expect(filterWorkbenchJobs(mixedJobs, "全部", "failed").map(({ id }) => id)).toEqual(["f1", "c1"]);
-    expect(filterWorkbenchJobs(mixedJobs, "全部", "all").map(({ id }) => id)).toEqual(["s1", "r1", "q1", "f1", "c1"]);
+    expect(filterWorkbenchJobs(mixedJobs, WORKBENCH_ALL_CATEGORIES, "succeeded").map(({ id }) => id)).toEqual(["s1", "r1", "q1"]);
+    expect(filterWorkbenchJobs(mixedJobs, WORKBENCH_ALL_CATEGORIES, "failed").map(({ id }) => id)).toEqual(["f1", "c1"]);
+    expect(filterWorkbenchJobs(mixedJobs, WORKBENCH_ALL_CATEGORIES, "all").map(({ id }) => id)).toEqual(["s1", "r1", "q1", "f1", "c1"]);
+  });
+
+  test("uses an internal all sentinel so the legal category 全部 remains selectable", () => {
+    expect(WORKBENCH_ALL_CATEGORIES).not.toBe(WORKBENCH_ALL_CATEGORIES_LABEL);
+    expect(workbenchCategories([job("literal-all", WORKBENCH_ALL_CATEGORIES_LABEL)])).toEqual([
+      WORKBENCH_ALL_CATEGORIES,
+      WORKBENCH_ALL_CATEGORIES_LABEL,
+    ]);
+    const jobs = [job("literal-all", WORKBENCH_ALL_CATEGORIES_LABEL), job("poster", "海报")];
+    expect(filterWorkbenchJobs(jobs, WORKBENCH_ALL_CATEGORIES).map(({ id }) => id)).toEqual(["literal-all", "poster"]);
+    expect(filterWorkbenchJobs(jobs, WORKBENCH_ALL_CATEGORIES_LABEL).map(({ id }) => id)).toEqual(["literal-all"]);
+  });
+
+  test("maps illegal legacy category values to unclassified and clears missing metadata", () => {
+    expect(normalizeWorkbenchCategory("poster\ncopy")).toBe("未分类");
+    expect(normalizeWorkbenchCategory("poster\u200bcopy")).toBe("未分类");
+    expect(normalizeWorkbenchCategoryMetadata(["海报", "全部"])).toEqual([
+      "海报", "全部",
+    ]);
+    expect(normalizeWorkbenchCategoryMetadata(undefined)).toBeUndefined();
+  });
+
+  test("keeps all and only categories observed from history pages", () => {
+    const known = ["海报"];
+    const next = mergeWorkbenchCategories(known, [job("new-character", " 角色")]);
+    expect(next).toEqual([WORKBENCH_ALL_CATEGORIES, "海报", "角色"]);
+    expect(mergeWorkbenchCategories(next, [job("uncategorized")])).toEqual([
+      WORKBENCH_ALL_CATEGORIES, "海报", "角色", "未分类",
+    ]);
+    expect(mergeWorkbenchCategories(next, [job("literal-all", "全部")])).toEqual([
+      WORKBENCH_ALL_CATEGORIES, "海报", "角色", "全部",
+    ]);
+    expect(mergeWorkbenchCategories(next, [])).toEqual([WORKBENCH_ALL_CATEGORIES, "海报", "角色"]);
+  });
+
+  test("rejects stale refresh commits after a newer request starts", () => {
+    const coordinator = createWorkbenchRefreshCoordinator();
+    const commits: string[] = [];
+    const old = coordinator.begin();
+    const current = coordinator.begin();
+    if (coordinator.isCurrent(old)) commits.push("old");
+    if (coordinator.isCurrent(current)) commits.push("current");
+    expect(commits).toEqual(["current"]);
   });
 
   test("formats media sizes and extracts only bounded durable references", () => {

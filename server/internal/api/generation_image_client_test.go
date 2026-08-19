@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -224,6 +225,125 @@ func TestOpenAIImageExecutorTrimsExtraResultsOnEachFanOutCall(t *testing.T) {
 	})
 	if err != nil || len(images) != 4 {
 		t.Fatalf("images = %#v, %v", images, err)
+	}
+}
+
+func TestOpenAIImageExecutorFanOutCancelsAtTotalLimitAndBoundsConcurrency(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	active := 0
+	maxActive := 0
+	cancelled := make(chan struct{})
+	var cancelOnce sync.Once
+	requestIndices := make(map[string]int)
+	for index := 0; index < 12; index++ {
+		requestIndices[providerRequestID("aggregate-limit-test:"+strconv.Itoa(index))] = index
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	startedAt := time.Now()
+	images, err := fanOutOpenAIImageGenerations(ctx, imageGenerationRequest{
+		BaseURL: "http://127.0.0.1:1/v1", Model: "gpt-image-1", Prompt: "aggregate limit",
+		Size: "1024x1024", Quality: "auto", Count: 12, RequestID: "aggregate-limit-test",
+	}, 10, func(requestContext context.Context, request imageGenerationRequest) ([]generatedImage, error) {
+		mu.Lock()
+		calls++
+		index, ok := requestIndices[request.RequestID]
+		if !ok {
+			mu.Unlock()
+			return nil, errors.New("missing fan-out request ID")
+		}
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			active--
+			mu.Unlock()
+		}()
+
+		// The first six images put the aggregate above the test limit. The next
+		// slot must still be in flight so the test observes prompt cancellation.
+		if index >= 6 {
+			<-requestContext.Done()
+			cancelOnce.Do(func() { close(cancelled) })
+			return nil, requestContext.Err()
+		}
+		delay := 25 * time.Millisecond
+		if index >= 4 {
+			delay = 100 * time.Millisecond
+		}
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-requestContext.Done():
+			cancelOnce.Do(func() { close(cancelled) })
+			return nil, requestContext.Err()
+		}
+		return []generatedImage{{Data: []byte{byte(index), byte(index)}}}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "total size limit") {
+		t.Fatalf("images=%d error=%v, want immediate total size limit error", len(images), err)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("fan-out cancellation took %s, want it before the context timeout", elapsed)
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("fan-out did not cancel the in-flight provider request")
+	}
+	mu.Lock()
+	gotMaxActive := maxActive
+	gotCalls := calls
+	mu.Unlock()
+	if gotMaxActive > 4 {
+		t.Fatalf("maximum concurrent provider requests = %d, want at most 4", gotMaxActive)
+	}
+	if gotCalls < 7 {
+		t.Fatalf("provider calls = %d, want a cancellation hole in flight", gotCalls)
+	}
+}
+
+func TestFanOutOpenAIImageGenerationsPreservesSlotOrder(t *testing.T) {
+	const requestID = "slot-order-test"
+	images, err := fanOutOpenAIImageGenerations(context.Background(), imageGenerationRequest{
+		RequestID: requestID,
+		Count:     8,
+	}, 8, func(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
+		index := -1
+		for candidate := 0; candidate < 8; candidate++ {
+			if request.RequestID == providerRequestID(requestID+":"+strconv.Itoa(candidate)) {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			return nil, errors.New("missing slot request ID")
+		}
+		timer := time.NewTimer(time.Duration(8-index) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return []generatedImage{{Data: []byte{byte(index)}}}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatalf("fan-out error = %v", err)
+	}
+	if len(images) != 8 {
+		t.Fatalf("images = %d, want 8", len(images))
+	}
+	for index, image := range images {
+		if len(image.Data) != 1 || image.Data[0] != byte(index) {
+			t.Fatalf("image slot %d = %v, want [%d]", index, image.Data, index)
+		}
 	}
 }
 

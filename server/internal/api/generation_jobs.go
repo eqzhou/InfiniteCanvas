@@ -49,6 +49,11 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid generation kind", http.StatusBadRequest)
 		return
 	}
+	category := r.URL.Query().Get("category")
+	if category != "" && !validGenerationJobCategory(category) {
+		http.Error(w, "invalid generation category", http.StatusBadRequest)
+		return
+	}
 	includeDeleted := r.URL.Query().Get("includeDeleted") == "1" || r.URL.Query().Get("includeDeleted") == "true"
 	userID, authorized := generationJobScopeUserID(r)
 	if !authorized {
@@ -63,7 +68,7 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.store.ListGenerationJobs(r.Context(), tenantIDFrom(r), store.GenerationJobQuery{
-		UserID: userID, ProjectID: projectID, Kind: kind, Status: status, Page: page, PageSize: pageSize, IncludeDeleted: includeDeleted,
+		UserID: userID, ProjectID: projectID, Kind: kind, Category: category, Status: status, Page: page, PageSize: pageSize, IncludeDeleted: includeDeleted,
 	})
 	if err != nil {
 		http.Error(w, "failed to list generation jobs", http.StatusInternalServerError)
@@ -73,6 +78,17 @@ func (s *Server) listGenerationJobs(w http.ResponseWriter, r *http.Request) {
 		result.Items[index] = s.filmStageGenerationView(r.Context(), tenantIDFrom(r), job)
 	}
 	writeJSON(w, publicGenerationJobPage(result))
+}
+
+func validGenerationJobCategory(category string) bool {
+	if store.TrimGenerationJobCategory(category) != category {
+		return false
+	}
+	return store.ValidGenerationJobCategory(category, false)
+}
+
+func validOptionalGenerationJobCategory(category string) bool {
+	return store.ValidGenerationJobCategory(category, true)
 }
 
 func (s *Server) createGenerationJob(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +269,69 @@ func (s *Server) updateGenerationJob(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if err != nil {
 		http.Error(w, "failed to update generation job", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, publicGenerationJob(job))
+}
+
+type recoverGenerationJobRequest struct {
+	ExpectedUpdatedAt string `json:"expectedUpdatedAt"`
+	Error             string `json:"error"`
+}
+
+// recoverGenerationJob is the narrow compare-and-swap endpoint used by
+// browser recovery. A stale tab may only transition the exact running version
+// it observed; provider completion or another tab wins with HTTP 409.
+func (s *Server) recoverGenerationJob(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "generation history requires PostgreSQL", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if !validProjectID(id) {
+		http.Error(w, "invalid generation job id", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input recoverGenerationJobRequest
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || len(input.Error) > 10_000 {
+		http.Error(w, "invalid generation recovery payload", http.StatusBadRequest)
+		return
+	}
+	if _, err := time.Parse(time.RFC3339Nano, input.ExpectedUpdatedAt); err != nil {
+		http.Error(w, "invalid generation recovery version", http.StatusBadRequest)
+		return
+	}
+	current, err := s.store.GetGenerationJob(r.Context(), tenantIDFrom(r), id)
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to read generation job", http.StatusInternalServerError)
+		return
+	}
+	if !requestOwnsGenerationJob(r, current) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if isServerGenerationJob(current) {
+		http.Error(w, "server generation jobs are read-only", http.StatusConflict)
+		return
+	}
+	job, err := s.store.FailGenerationJobIfUnchanged(r.Context(), tenantIDFrom(r), id, input.ExpectedUpdatedAt, input.Error)
+	if errors.Is(err, store.ErrConflict) {
+		http.Error(w, "generation job changed concurrently", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to recover generation job", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, publicGenerationJob(job))

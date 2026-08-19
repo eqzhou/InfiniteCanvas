@@ -16,17 +16,18 @@ import {
 import { generateImages, generateVideo, resolveMediaRefs } from "@/services/ai-client";
 import {
   createGenerationJob,
-	cancelServerGenerationJob,
-	createServerImageGenerationJob,
-	createServerVideoGenerationJob,
+  cancelServerGenerationJob,
+  createServerImageGenerationJob,
+  createServerVideoGenerationJob,
   deleteGenerationJob,
   deleteGenerationJobs,
+  failGenerationJobIfUnchanged,
   findInterruptedGenerationJobs,
+  isServerOwnedGenerationJob,
   listGenerationJobs,
-	isServerOwnedGenerationJob,
   updateGenerationJob,
-	usesServerGenerationJobs,
-	waitForGenerationJob,
+  usesServerGenerationJobs,
+  waitForGenerationJob,
 } from "@/services/generation-jobs";
 import {
   blobToDataUrl,
@@ -40,11 +41,14 @@ import { getRuntimeOwnerId } from "@/services/runtime-identity";
 import { uid } from "@/lib/id";
 import {
   filterWorkbenchJobs,
+  createWorkbenchRefreshCoordinator,
+  mergeWorkbenchCategories,
   normalizeWorkbenchCategory,
+  normalizeWorkbenchCategoryMetadata,
   normalizeWorkbenchLayout,
   WORKBENCH_ALL_CATEGORIES,
+  WORKBENCH_ALL_CATEGORIES_LABEL,
   WORKBENCH_UNCATEGORIZED,
-  workbenchCategories,
   workbenchImageAssets,
   upsertWorkbenchJobs,
   workbenchRefillAssetIds,
@@ -129,6 +133,8 @@ async function persistWorkbenchPreview(
 
 export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 	const { t } = useI18n();
+	const tRef = useRef(t);
+	tRef.current = t;
 	const auth = useOptionalAuth();
 	const tenantOwner = hasTenantOwnerCapability(auth);
 	const [searchParams] = useSearchParams();
@@ -191,14 +197,26 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     }
   });
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  const [knownCategories, setKnownCategories] = useState<string[]>([]);
+  const [categoryMetadata, setCategoryMetadata] = useState<string[] | undefined>(undefined);
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
   const [error, setError] = useState("");
   const [creditEstimate, setCreditEstimate] = useState<CreditEstimate | null>(null);
   const controllersRef = useRef(new Map<string, AbortController>());
   const activeServerJobIdsRef = useRef(new Map<string, string[]>());
+  const refreshCoordinatorRef = useRef(createWorkbenchRefreshCoordinator());
+  const pageRef = useRef(page);
+  const statusFilterRef = useRef(statusFilter);
+  const categoryFilterRef = useRef(categoryFilter);
+  pageRef.current = page;
+  statusFilterRef.current = statusFilter;
+  categoryFilterRef.current = categoryFilter;
   const reusableAssets = useMemo(() => workbenchImageAssets(assets), [assets]);
-  const categories = useMemo(() => workbenchCategories(jobs), [jobs]);
+  const categories = useMemo(
+    () => mergeWorkbenchCategories(categoryMetadata ?? knownCategories, jobs),
+    [categoryMetadata, jobs, knownCategories],
+  );
   const visibleJobs = useMemo(
     () => filterWorkbenchJobs(jobs, categoryFilter, statusFilter),
     [categoryFilter, jobs, statusFilter],
@@ -472,37 +490,61 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setError(unresolved ? t("creative.refillWarning", { count: unresolved }) : "");
   }, [category, channelChoices, channelId, count, frameMode, generateAudio, kind, model, prompt, quality, ratio, reusableAssets, resolution, seconds, setConfig, size, smartDuration, t, transparent, watermark]);
 
-  const refresh = useCallback(async (targetPage = page, targetStatus = statusFilter) => {
-    const res = await listGenerationJobs({
-      projectId: project?.id,
-      kind,
-      status: targetStatus,
-      page: targetPage,
-      pageSize: PAGE_SIZE,
-    });
-    const interrupted = findInterruptedGenerationJobs(
-      res.items,
-      getRuntimeOwnerId(),
-      new Set(getGenerationActivities().filter((item) => item.status === "running").map((item) => item.id)),
-    );
-    const recovered = new Map((await Promise.all(interrupted.map((job) =>
-      updateGenerationJob(job.id, {
-        status: "failed",
-        error: t("creative.interrupted"),
-      })))).map((job) => [job.id, job]));
-    const incoming = res.items.map((job) => recovered.get(job.id) ?? job);
-    const keepIds = new Set([...activeServerJobIdsRef.current.values()].flat());
-    setJobs((current) => {
-      if (current.length === 0 || keepIds.size === 0) return incoming;
-      const incomingIds = new Set(incoming.map((item) => item.id));
-      return upsertWorkbenchJobs(
-        current.filter((job) => incomingIds.has(job.id) || keepIds.has(job.id)),
-        incoming,
+  const refresh = useCallback(async (
+    targetPage = pageRef.current,
+    targetStatus = statusFilterRef.current,
+    targetCategory = categoryFilterRef.current,
+  ) => {
+    const requestId = refreshCoordinatorRef.current.begin();
+    try {
+      const res = await listGenerationJobs({
+        projectId: project?.id,
+        kind,
+        status: targetStatus,
+        ...(kind === "image" && targetCategory !== WORKBENCH_ALL_CATEGORIES
+          ? { category: targetCategory }
+          : {}),
+        page: targetPage,
+        pageSize: PAGE_SIZE,
+      });
+      if (!refreshCoordinatorRef.current.isCurrent(requestId)) return;
+      const interrupted = findInterruptedGenerationJobs(
+        res.items,
+        getRuntimeOwnerId(),
+        new Set(getGenerationActivities().filter((item) => item.status === "running").map((item) => item.id)),
       );
-    });
-    setTotalJobs(res.total);
-    setPage(res.page);
-  }, [kind, page, project?.id, statusFilter, t]);
+      const recovered = new Map<string, GenerationJob>();
+      for (const job of interrupted) {
+        const updated = await failGenerationJobIfUnchanged(job, tRef.current("creative.interrupted"));
+        if (updated) recovered.set(job.id, updated);
+      }
+      if (!refreshCoordinatorRef.current.isCurrent(requestId)) return;
+      const incoming = res.items.map((job) => recovered.get(job.id) ?? job);
+      const keepIds = new Set([...activeServerJobIdsRef.current.values()].flat());
+      const nextCategoryMetadata = normalizeWorkbenchCategoryMetadata(res.categories);
+      if (nextCategoryMetadata) {
+        setCategoryMetadata(nextCategoryMetadata);
+      } else {
+        setCategoryMetadata(undefined);
+        setKnownCategories((current) => mergeWorkbenchCategories(current, incoming)
+          .filter((value) => value !== WORKBENCH_ALL_CATEGORIES));
+      }
+      setJobs((current) => {
+        if (current.length === 0 || keepIds.size === 0) return incoming;
+        const incomingIds = new Set(incoming.map((item) => item.id));
+        return upsertWorkbenchJobs(
+          current.filter((job) => incomingIds.has(job.id) || keepIds.has(job.id)),
+          incoming,
+        );
+      });
+      setTotalJobs(res.total);
+      setPage(res.page);
+    } catch (cause) {
+      // A superseded request is expected to finish eventually, but must not
+      // surface an error after the newer query has already taken ownership.
+      if (refreshCoordinatorRef.current.isCurrent(requestId)) throw cause;
+    }
+  }, [kind, project?.id]);
 
   const selectedVisibleIds = useMemo(
     () => visibleJobs.map((job) => job.id).filter((id) => selectedJobIds.includes(id)),
@@ -587,11 +629,12 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   }, [refresh, t]);
 
 
-
-
   useEffect(() => {
-    void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, [refresh]);
+    setPage(1);
+    pageRef.current = 1;
+    void refresh(1, statusFilter, categoryFilter)
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, [categoryFilter, refresh, statusFilter]);
 
 	useEffect(() => {
 		if (!jobs.some((job) => isServerOwnedGenerationJob(job) && (job.status === "queued" || job.status === "running"))) {
@@ -603,7 +646,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		return () => window.clearInterval(timer);
 	}, [jobs, refresh]);
 
-	useEffect(() => () => {
+useEffect(() => () => {
+		refreshCoordinatorRef.current.invalidate();
 		for (const controller of controllersRef.current.values()) controller.abort();
 	}, []);
 
@@ -1724,7 +1768,6 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   const next = event.target.value;
                   setStatusFilter(next);
                   setPage(1);
-                  void refresh(1, next);
                 }}
               >
                 <option value="succeeded">{t("tasks.succeeded")}</option>
@@ -1736,9 +1779,14 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
                   aria-label={t("workbench.historyCategory")}
                   className="ob-field w-auto shrink-0 cursor-pointer py-1 px-2.5 text-xs"
                   value={categoryFilter}
-                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  onChange={(event) => {
+                    setCategoryFilter(event.target.value);
+                    setPage(1);
+                  }}
                 >
-                  {categories.map((value) => <option key={value} value={value}>{value}</option>)}
+                  {categories.map((value) => <option key={value} value={value}>
+                    {value === WORKBENCH_ALL_CATEGORIES ? WORKBENCH_ALL_CATEGORIES_LABEL : value}
+                  </option>)}
                 </select>
               ) : null}
               {tenantOwner ? (

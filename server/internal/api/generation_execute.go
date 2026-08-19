@@ -463,7 +463,7 @@ func validCreateImageJob(input createImageJobRequest) bool {
 		(input.Parameters.RequestedCount > 0 && input.Parameters.RequestedCount < input.Parameters.Count) ||
 		input.Parameters.BatchIndex < 0 || input.Parameters.BatchIndex > maxImageGenerationCount ||
 		(input.Parameters.BatchID != "" && !projectIDPattern.MatchString(input.Parameters.BatchID)) ||
-		len(strings.TrimSpace(input.Parameters.Category)) > 100 || len(input.Parameters.ReferenceStorageKeys) > 16 {
+		!validOptionalGenerationJobCategory(input.Parameters.Category) || len(input.Parameters.ReferenceStorageKeys) > 16 {
 		return false
 	}
 	for _, key := range input.Parameters.ReferenceStorageKeys {

@@ -60,7 +60,6 @@ func main() {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(redactRuntimeTicketLogs)
-	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(timeoutRequests(requestHandlingTimeout))
 	r.Use(cors(origins))
@@ -276,18 +275,32 @@ func isLoopbackAddress(addr string) bool {
 }
 
 func redactRuntimeTicketLogs(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/runtime/ws" && r.URL.Query().Get("ticket") != "" {
-			query := r.URL.Query()
-			query.Set("ticket", "redacted")
-			cloned := r.Clone(r.Context())
-			cloned.URL.RawQuery = query.Encode()
-			cloned.RequestURI = cloned.URL.RequestURI()
-			next.ServeHTTP(w, cloned)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	// Build the log entry from a redacted request, while RequestLogger forwards
+	// the original request to the downstream chain. Cloning before the logger
+	// (as the old middleware did) accidentally replaced the ticket consumed by
+	// the websocket handler with the literal string "redacted".
+	formatter := &middleware.DefaultLogFormatter{Logger: log.Default(), NoColor: true}
+	return middleware.RequestLogger(runtimeTicketLogFormatter{formatter: formatter})(next)
+}
+
+type runtimeTicketLogFormatter struct {
+	formatter *middleware.DefaultLogFormatter
+}
+
+func (f runtimeTicketLogFormatter) NewLogEntry(r *http.Request) middleware.LogEntry {
+	return f.formatter.NewLogEntry(redactedRuntimeTicketRequest(r))
+}
+
+func redactedRuntimeTicketRequest(r *http.Request) *http.Request {
+	if r.URL.Path != "/api/runtime/ws" || r.URL.Query().Get("ticket") == "" {
+		return r
+	}
+	query := r.URL.Query()
+	query.Set("ticket", "redacted")
+	cloned := r.Clone(r.Context())
+	cloned.URL.RawQuery = query.Encode()
+	cloned.RequestURI = cloned.URL.RequestURI()
+	return cloned
 }
 
 func requireToken(token string) func(http.Handler) http.Handler {
