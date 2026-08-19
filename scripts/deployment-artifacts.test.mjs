@@ -40,6 +40,9 @@ test("compose forwards media controls and bounds temporary storage", () => {
   assert.match(compose, /\/tmp:size=512m/);
   assert.match(compose, /mem_limit: 2g/);
   assert.match(compose, /pids_limit: 256/);
+  const ciCompose = read("compose.ci.yaml");
+  assert.match(ciCompose, /apparmor:unconfined/);
+  assert.match(ciCompose, /seccomp:unconfined/);
 });
 
 test("CI makes coverage, film Chromium, deployment, and container capability checks explicit", () => {
@@ -59,5 +62,7 @@ test("CI makes coverage, film Chromium, deployment, and container capability che
   assert.match(workflow, /"mp4Export":\[\[:space:\]\]\*true/);
   assert.match(workflow, /"pdfImport":\[\[:space:\]\]\*true/);
   assert.match(workflow, /cat film-capabilities\.json/);
+  assert.match(workflow, /apparmor_restrict_unprivileged_userns/);
+  assert.match(workflow, /compose\.ci\.yaml/);
   assert.doesNotMatch(workflow, /apk info -v ffmpeg/);
 });

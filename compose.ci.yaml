@@ -1,0 +1,8 @@
+# CI-only overlay. Ubuntu 24.04 runners restrict unprivileged user
+# namespaces (AppArmor + default Docker seccomp), which blocks bubblewrap
+# PDF isolation. Production compose.yaml stays unchanged.
+services:
+  openboard:
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
