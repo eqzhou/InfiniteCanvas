@@ -61,9 +61,9 @@ type scriptedImageExecutor struct {
 
 func newScriptedImageExecutor() *scriptedImageExecutor {
 	return &scriptedImageExecutor{
-		started:   make(chan imageGenerationRequest, 4),
-		release:   make(chan scriptedImageResult, 4),
-		cancelled: make(chan struct{}, 4),
+		started:   make(chan imageGenerationRequest, 8),
+		release:   make(chan scriptedImageResult, 8),
+		cancelled: make(chan struct{}, 8),
 	}
 }
 

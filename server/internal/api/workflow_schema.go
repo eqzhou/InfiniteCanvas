@@ -80,6 +80,7 @@ type workflowRunParameters struct {
 type workflowStepRunState struct {
 	Status      string   `json:"status"`
 	ChildJobID  string   `json:"childJobId,omitempty"`
+	ChildJobIDs []string `json:"childJobIds,omitempty"`
 	StorageKeys []string `json:"storageKeys,omitempty"`
 	Error       string   `json:"error,omitempty"`
 }

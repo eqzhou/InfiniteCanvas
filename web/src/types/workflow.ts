@@ -44,6 +44,7 @@ export type WorkflowValues = Record<string, WorkflowValue>;
 export type WorkflowStepRunState = {
   status: "pending" | "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
   childJobId?: string;
+  childJobIds?: string[];
   storageKeys?: string[];
   error?: string;
 };

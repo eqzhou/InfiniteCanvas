@@ -74,12 +74,14 @@ describe("panorama server generation", () => {
         size: "2048x1024",
         quality: "high",
         count: 1,
+        requestedCount: 1,
         category: "panorama",
         referenceStorageKeys: ["image:source-one"],
       },
     }]);
     expect(result).toEqual({
       jobId: "job-panorama",
+      jobIds: ["job-panorama"],
       media: [{
         content: "blob:panorama-one",
         storageKey: "image:panorama-one",
@@ -221,5 +223,50 @@ describe("panorama server generation", () => {
 
     expect(retryAttempts).toEqual([1]);
     expect(result[0]?.storageKey).toBe("image:panorama-one");
+  });
+
+  test("fans a count=2 panorama request into two n=1 server jobs", async () => {
+    const submitted: Array<{ id?: string; parameters: { count?: number; requestedCount?: number; batchIndex?: number } }> = [];
+    let created = 0;
+    const result = await runPanoramaServerGeneration({
+      projectId: "project-one",
+      prompt: "two worlds",
+      providerId: "channel-one",
+      model: "gpt-image-2",
+      size: "2048x1024",
+      quality: "high",
+      count: 2,
+      referenceStorageKeys: [],
+    }, {
+      createJob: async (input) => {
+        created += 1;
+        submitted.push({ parameters: input.parameters });
+        return job({
+          id: `job-panorama-${created}`,
+          status: "queued",
+          result: {},
+        });
+      },
+      waitForJob: async (id) => job({
+        id,
+        result: {
+          items: [{
+            storageKey: `image:${id}`,
+            mimeType: "image/png",
+            width: 2048,
+            height: 1024,
+            bytes: 24,
+          }],
+        },
+      }),
+      readBlob: async () => png(2048, 1024),
+      createObjectURL: (blob) => `blob:${blob.size}`,
+    });
+
+    expect(submitted.map((item) => item.parameters.count)).toEqual([1, 1]);
+    expect(submitted.map((item) => item.parameters.requestedCount)).toEqual([2, 2]);
+    expect(submitted.map((item) => item.parameters.batchIndex)).toEqual([1, 2]);
+    expect(result.jobIds).toEqual(["job-panorama-1", "job-panorama-2"]);
+    expect(result.media.map((item) => item.storageKey)).toEqual(["image:job-panorama-1", "image:job-panorama-2"]);
   });
 });

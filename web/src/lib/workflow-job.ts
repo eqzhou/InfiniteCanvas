@@ -38,6 +38,15 @@ function hash(value: string): string {
   return left.toString(16).padStart(8, "0") + right.toString(16).padStart(8, "0");
 }
 
+function parseChildJobIds(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 100 ||
+      value.some((id) => typeof id !== "string" || !ID.test(id))) {
+    throw new Error(`${label} is invalid`);
+  }
+  if (new Set(value).size !== value.length) throw new Error(`${label} contains duplicates`);
+  return [...value] as string[];
+}
+
 function parseStorageKeys(value: unknown, label: string, max: number): string[] {
   if (!Array.isArray(value) || value.length > max || value.some((key) => typeof key !== "string" || !STORAGE_KEY.test(key))) {
     throw new Error(`${label} is invalid`);
@@ -48,20 +57,25 @@ function parseStorageKeys(value: unknown, label: string, max: number): string[] 
 
 function parseStepState(value: unknown, label: string): WorkflowStepRunState {
   const input = plain(value, label);
-  exactKeys(input, ["status", "childJobId", "storageKeys", "error"], label);
+  exactKeys(input, ["status", "childJobId", "childJobIds", "storageKeys", "error"], label);
   if (!STEP_STATUSES.has(input.status as WorkflowStepRunState["status"])) throw new Error(`${label}.status is invalid`);
   const childJobId = input.childJobId;
   if (childJobId !== undefined && (typeof childJobId !== "string" || !ID.test(childJobId))) {
     throw new Error(`${label}.childJobId is invalid`);
   }
-  const storageKeys = input.storageKeys === undefined ? undefined : parseStorageKeys(input.storageKeys, `${label}.storageKeys`, 8);
+  const childJobIds = input.childJobIds === undefined ? undefined : parseChildJobIds(input.childJobIds, `${label}.childJobIds`);
+  const storageKeys = input.storageKeys === undefined ? undefined : parseStorageKeys(input.storageKeys, `${label}.storageKeys`, 100);
   const error = input.error;
   if (error !== undefined && (typeof error !== "string" || error.length > 10_000)) throw new Error(`${label}.error is invalid`);
-  if (input.status === "queued" && !childJobId) throw new Error(`${label} queued state is missing child job id`);
+  if (input.status === "queued" && !childJobId && !childJobIds?.length) throw new Error(`${label} queued state is missing child job id`);
+  if (childJobId && childJobIds?.length && childJobIds[0] !== childJobId) {
+    throw new Error(`${label} child job ids do not match`);
+  }
   if (input.status === "succeeded" && !storageKeys?.length) throw new Error(`${label} succeeded state is missing media`);
   return {
     status: input.status as WorkflowStepRunState["status"],
     ...(childJobId === undefined ? {} : { childJobId }),
+    ...(childJobIds === undefined ? {} : { childJobIds }),
     ...(storageKeys === undefined ? {} : { storageKeys }),
     ...(error === undefined ? {} : { error }),
   };
@@ -103,7 +117,7 @@ export function parseWorkflowRunResult(value: unknown, template: WorkflowTemplat
   ]));
   return {
     steps,
-    outputStorageKeys: parseStorageKeys(input.outputStorageKeys, "workflow outputStorageKeys", 64),
+    outputStorageKeys: parseStorageKeys(input.outputStorageKeys, "workflow outputStorageKeys", 1600),
   };
 }
 

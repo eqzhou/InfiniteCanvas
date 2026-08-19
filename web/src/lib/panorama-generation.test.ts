@@ -125,6 +125,18 @@ describe("panorama generation planning", () => {
     expect(children).toHaveLength(2);
     expect(children.every((node) => node.type === "panorama" && node.metadata.panoramaProjection === "equirectangular")).toBe(true);
     expect(children.every((node) => node.metadata.generationJobId === "job-panorama")).toBe(true);
+
+    const slotted = commitPanoramaGeneration(project, panorama.id, [media(0), media(1), media(2)], {
+      prompt: "quiet forest",
+      model: "image-model",
+      quality: "high",
+      referenceStorageKeys: ["image:reference"],
+      generationJobId: "job-a",
+      generationJobIds: ["job-a", "job-b", "job-c"],
+    });
+    const slottedChildren = slotted.nodes.filter((node) => node.metadata.batchRootId === panorama.id);
+    expect(slotted.nodes.find((node) => node.id === panorama.id)?.metadata.generationJobIds).toEqual(["job-a", "job-b", "job-c"]);
+    expect(slottedChildren.map((node) => node.metadata.generationJobId)).toEqual(["job-b", "job-c"]);
     expect(children[0]!.position.x + children[0]!.width).toBeLessThanOrEqual(children[1]!.position.x);
 
     const grouped = {

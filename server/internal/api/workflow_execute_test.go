@@ -147,6 +147,68 @@ func TestWorkflowChildIdentityMatchesBrowserContract(t *testing.T) {
 	if got := serverWorkflowChildJobID("workflow_server_story", "scene"); got != "wf_workflow_server_story_scene_41a06e742e5c5e30" {
 		t.Fatalf("child id = %s", got)
 	}
+	if got := serverWorkflowChildSlotJobID("workflow_server_story", "base", 0); got != "wf_workflow_server_story_base_5ae5a2896402cacd" {
+		t.Fatalf("first slot id changed: %s", got)
+	}
+	second := serverWorkflowChildSlotJobID("workflow_server_story", "base", 1)
+	if second == serverWorkflowChildJobID("workflow_server_story", "base") || !strings.HasPrefix(second, "wf_") {
+		t.Fatalf("second slot id = %s", second)
+	}
+}
+
+func TestServerWorkflowFansOutStepCountAsSingleImageJobs(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	_, backend, handler := imageExecutionHandler(t, executor)
+	var template map[string]any
+	if err := json.Unmarshal([]byte(validPersonalWorkflowTemplate), &template); err != nil {
+		t.Fatal(err)
+	}
+	steps, _ := template["steps"].([]any)
+	base, _ := steps[0].(map[string]any)
+	parameters, _ := base["parameters"].(map[string]any)
+	parameters["count"] = 2
+	body, err := json.Marshal(map[string]any{
+		"id": "workflow_count_two", "projectId": "board-1", "templateSnapshot": template,
+		"values": map[string]any{"subject": "一只纸雕老虎"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := request(t, handler, http.MethodPost, "/api/generation-jobs/workflow", body)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create workflow: %d %s", created.Code, created.Body.String())
+	}
+	png, err := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := make([]int, 0, 2)
+	for range 2 {
+		request := awaitExecutorStart(t, executor)
+		counts = append(counts, request.Count)
+		executor.release <- scriptedImageResult{images: []generatedImage{{Data: png, MIMEType: "image/png"}}}
+	}
+	if counts[0] != 1 || counts[1] != 1 {
+		t.Fatalf("slot counts = %#v, want 1 1", counts)
+	}
+	third := awaitExecutorStart(t, executor)
+	if third.Count != 1 || len(third.References) != 1 {
+		t.Fatalf("scene request = %#v", third)
+	}
+	executor.release <- scriptedImageResult{images: []generatedImage{{Data: png, MIMEType: "image/png"}}}
+	parent := waitForJobStatus(t, backend, "workflow_count_two", "succeeded")
+	var result workflowRunResult
+	if err := json.Unmarshal(parent.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Steps["base"].Status != "succeeded" || len(result.Steps["base"].StorageKeys) != 2 ||
+		len(result.Steps["base"].ChildJobIDs) != 2 {
+		t.Fatalf("base step = %#v", result.Steps["base"])
+	}
+	page, err := backend.ListGenerationJobs(t.Context(), store.DefaultTenantID, store.GenerationJobQuery{Kind: "image", Page: 1, PageSize: 10})
+	if err != nil || len(page.Items) != 3 {
+		t.Fatalf("child image history = %#v, %v", page, err)
+	}
 }
 
 func TestGenerationClaimsAreIsolatedAndCheckpointsRequireLeaseOwner(t *testing.T) {

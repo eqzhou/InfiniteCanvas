@@ -51,6 +51,7 @@ export type PanoramaGenerationDescriptor = {
   referenceStorageKeys: string[];
   derivedFromId?: string;
   generationJobId?: string;
+  generationJobIds?: string[];
 };
 
 export function getPanoramaReferenceInputs(
@@ -229,7 +230,8 @@ export function commitPanoramaGeneration(
         count: results.length,
         generationType: descriptor.referenceStorageKeys.length > 0 ? "image-to-image" : "text-to-image",
         referenceStorageKeys: [...descriptor.referenceStorageKeys],
-        generationJobId: descriptor.generationJobId,
+        generationJobId: descriptor.generationJobIds?.[index + 1] ?? descriptor.generationJobId,
+        generationJobIds: descriptor.generationJobIds ? [...descriptor.generationJobIds] : undefined,
         derivedFromId: descriptor.derivedFromId,
         panoramaProjection: "equirectangular",
         status: "success",
@@ -250,7 +252,8 @@ export function commitPanoramaGeneration(
       count: results.length,
       generationType: descriptor.referenceStorageKeys.length > 0 ? "image-to-image" as const : "text-to-image" as const,
       referenceStorageKeys: [...descriptor.referenceStorageKeys],
-      generationJobId: descriptor.generationJobId,
+      generationJobId: descriptor.generationJobIds?.[0] ?? descriptor.generationJobId,
+      generationJobIds: descriptor.generationJobIds ? [...descriptor.generationJobIds] : undefined,
       derivedFromId: descriptor.derivedFromId,
       panoramaProjection: "equirectangular" as const,
       status: "success" as const,

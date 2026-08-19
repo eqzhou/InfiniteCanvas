@@ -117,12 +117,40 @@ func allLowerHex(value string) bool {
 	return true
 }
 
+func workflowStateChildJobIDs(state workflowStepRunState) []string {
+	if len(state.ChildJobIDs) > 0 {
+		return append([]string(nil), state.ChildJobIDs...)
+	}
+	if state.ChildJobID != "" {
+		return []string{state.ChildJobID}
+	}
+	return nil
+}
+
+func validWorkflowChildJobIDs(state workflowStepRunState) bool {
+	ids := workflowStateChildJobIDs(state)
+	if len(ids) < 1 || len(ids) > maxImageGenerationCount {
+		return false
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if !workflowIDPattern.MatchString(id) {
+			return false
+		}
+		if _, exists := seen[id]; exists {
+			return false
+		}
+		seen[id] = struct{}{}
+	}
+	return state.ChildJobID == "" || state.ChildJobID == ids[0]
+}
+
 func validWorkflowStepState(state workflowStepRunState) bool {
 	switch state.Status {
 	case "pending", "skipped":
-		return state.ChildJobID == "" && len(state.StorageKeys) == 0 && len(state.Error) <= 10_000
+		return state.ChildJobID == "" && len(state.ChildJobIDs) == 0 && len(state.StorageKeys) == 0 && len(state.Error) <= 10_000
 	case "queued", "running":
-		return workflowIDPattern.MatchString(state.ChildJobID) && len(state.StorageKeys) == 0 && len(state.Error) <= 10_000
+		return validWorkflowChildJobIDs(state) && len(state.StorageKeys) == 0 && len(state.Error) <= 10_000
 	case "succeeded":
 		if len(state.StorageKeys) < 1 || len(state.StorageKeys) > maxImageGenerationCount || len(state.Error) > 10_000 {
 			return false
@@ -154,11 +182,13 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 	s.generationMu.Unlock()
 	watchDone := make(chan struct{})
 	go s.watchGenerationCancellation(ctx, cancel, watchDone, tenantID, job.ID, job.LeaseOwner)
-	activeChildID := ""
+	activeChildIDs := []string{}
 	defer func() {
 		close(watchDone)
-		if activeChildID != "" && ctx.Err() != nil {
-			s.cancelWorkflowChildIfParentCancelled(tenantID, job.ID, activeChildID)
+		if ctx.Err() != nil {
+			for _, childID := range activeChildIDs {
+				s.cancelWorkflowChildIfParentCancelled(tenantID, job.ID, childID)
+			}
 		}
 		s.generationMu.Lock()
 		delete(s.generationCancels, key)
@@ -182,71 +212,54 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 			return
 		}
 		step := steps[stepID]
-		childID := state.ChildJobID
-		if childID == "" {
-			childID = serverWorkflowChildJobID(job.ID, step.ID)
-			state = workflowStepRunState{Status: "queued", ChildJobID: childID}
+		childIDs := workflowStateChildJobIDs(state)
+		if len(childIDs) == 0 {
+			childIDs = workflowStepChildSlotIDs(job.ID, step.ID, step.Parameters.Count)
+			state = queuedWorkflowStepState(childIDs)
 			result.Steps[stepID] = state
 			if !s.checkpointWorkflowJob(tenantID, job, result) {
 				return
 			}
 		}
-		activeChildID = childID
-		child, err := s.ensureWorkflowChildJob(ctx, tenantID, job, parameters, result, step, childID)
-		if err != nil {
-			if ctx.Err() != nil {
+		activeChildIDs = childIDs
+		createdIDs := make([]string, 0, len(childIDs))
+		for index, childID := range childIDs {
+			if _, err := s.ensureWorkflowChildJob(ctx, tenantID, job, parameters, result, step, childID, index, len(childIDs)); err != nil {
+				s.cancelWorkflowChildren(tenantID, createdIDs)
+				if ctx.Err() != nil {
+					return
+				}
+				result.Steps[stepID] = failedWorkflowStepState(childIDs, "图片子任务创建失败")
+				status, finalResult := finalizeServerWorkflowResult(parameters.TemplateSnapshot, result)
+				s.completeWorkflowJob(tenantID, job, status, finalResult, "工作流步骤生成失败")
 				return
 			}
-			result.Steps[stepID] = workflowStepRunState{Status: "failed", ChildJobID: childID, Error: "图片子任务创建失败"}
-			status, finalResult := finalizeServerWorkflowResult(parameters.TemplateSnapshot, result)
-			s.completeWorkflowJob(tenantID, job, status, finalResult, "工作流步骤生成失败")
-			return
+			createdIDs = append(createdIDs, childID)
 		}
 		s.notifyGenerationWorkers()
 		markedRunning := state.Status == "running"
-		for {
+		children, err := s.waitForWorkflowChildren(ctx, tenantID, job, childIDs, func() bool {
+			if markedRunning {
+				return true
+			}
+			result.Steps[stepID] = runningWorkflowStepState(childIDs)
+			if !s.checkpointWorkflowJob(tenantID, job, result) {
+				return false
+			}
+			markedRunning = true
+			return true
+		})
+		if err != nil {
 			if ctx.Err() != nil {
-				s.cancelWorkflowChildIfParentCancelled(tenantID, job.ID, childID)
-				return
-			}
-			child, err = s.store.GetGenerationJob(ctx, tenantID, childID)
-			if err != nil {
-				return
-			}
-			if authMode() != "off" && (job.UserID == "" || child.UserID != job.UserID) {
-				return
-			}
-			switch child.Status {
-			case "queued", "running":
-				if child.Status == "running" && !markedRunning {
-					result.Steps[stepID] = workflowStepRunState{Status: "running", ChildJobID: childID}
-					if !s.checkpointWorkflowJob(tenantID, job, result) {
-						return
-					}
-					markedRunning = true
+				for _, childID := range childIDs {
+					s.cancelWorkflowChildIfParentCancelled(tenantID, job.ID, childID)
 				}
-				select {
-				case <-ctx.Done():
-				case <-time.After(100 * time.Millisecond):
-				}
-				continue
-			case "succeeded":
-				keys, err := imageResultStorageKeys(child.Result)
-				if err != nil {
-					result.Steps[stepID] = workflowStepRunState{Status: "failed", ChildJobID: childID, Error: "图片子任务结果无效"}
-				} else {
-					result.Steps[stepID] = workflowStepRunState{Status: "succeeded", ChildJobID: childID, StorageKeys: keys}
-				}
-			case "cancelled":
-				result.Steps[stepID] = workflowStepRunState{Status: "cancelled", ChildJobID: childID, Error: "已取消"}
-			case "failed":
-				result.Steps[stepID] = workflowStepRunState{Status: "failed", ChildJobID: childID, Error: "图片生成失败"}
-			default:
 				return
 			}
-			break
+			return
 		}
-		activeChildID = ""
+		result.Steps[stepID] = completeWorkflowStepFromChildren(childIDs, children)
+		activeChildIDs = nil
 		if !s.checkpointWorkflowJob(tenantID, job, result) {
 			return
 		}
@@ -303,8 +316,112 @@ func (s *Server) completeWorkflowJob(tenantID string, job store.GenerationJob, s
 	}
 }
 
+func queuedWorkflowStepState(childIDs []string) workflowStepRunState {
+	state := workflowStepRunState{Status: "queued", ChildJobIDs: append([]string(nil), childIDs...)}
+	if len(childIDs) > 0 {
+		state.ChildJobID = childIDs[0]
+	}
+	return state
+}
+
+func runningWorkflowStepState(childIDs []string) workflowStepRunState {
+	state := queuedWorkflowStepState(childIDs)
+	state.Status = "running"
+	return state
+}
+
+func failedWorkflowStepState(childIDs []string, message string) workflowStepRunState {
+	state := queuedWorkflowStepState(childIDs)
+	state.Status = "failed"
+	state.Error = message
+	return state
+}
+
+func completeWorkflowStepFromChildren(childIDs []string, children []store.GenerationJob) workflowStepRunState {
+	state := queuedWorkflowStepState(childIDs)
+	keys := make([]string, 0, len(children))
+	cancelled := false
+	failed := false
+	for _, child := range children {
+		switch child.Status {
+		case "succeeded":
+			itemKeys, err := imageResultStorageKeys(child.Result)
+			if err != nil {
+				failed = true
+				continue
+			}
+			keys = append(keys, itemKeys...)
+		case "cancelled":
+			cancelled = true
+		default:
+			failed = true
+		}
+	}
+	if failed {
+		state.Status = "failed"
+		state.Error = "图片生成失败"
+		return state
+	}
+	if cancelled {
+		state.Status = "cancelled"
+		state.Error = "已取消"
+		return state
+	}
+	state.Status = "succeeded"
+	state.StorageKeys = keys
+	return state
+}
+
+func (s *Server) waitForWorkflowChildren(ctx context.Context, tenantID string, parent store.GenerationJob,
+	childIDs []string, markRunning func() bool) ([]store.GenerationJob, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		children := make([]store.GenerationJob, 0, len(childIDs))
+		pending := false
+		for _, childID := range childIDs {
+			child, err := s.store.GetGenerationJob(ctx, tenantID, childID)
+			if err != nil {
+				return nil, err
+			}
+			if authMode() != "off" && (parent.UserID == "" || child.UserID != parent.UserID) {
+				return nil, store.ErrUnauthorized
+			}
+			switch child.Status {
+			case "queued", "running":
+				pending = true
+				if child.Status == "running" && !markRunning() {
+					return nil, errors.New("workflow running checkpoint failed")
+				}
+			case "succeeded", "failed", "cancelled", "deleted":
+			default:
+				return nil, errors.New("workflow child status is invalid")
+			}
+			children = append(children, child)
+		}
+		if !pending {
+			return children, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (s *Server) cancelWorkflowChildren(tenantID string, childIDs []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, childID := range childIDs {
+		_, _ = s.cancelServerGenerationJobWithSideEffectLock(ctx, tenantID, childID, time.Now().UTC())
+		s.cancelLocalGeneration(tenantID, childID)
+	}
+}
+
 func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, parent store.GenerationJob,
-	parameters workflowRunParameters, result workflowRunResult, step workflowStep, childID string) (store.GenerationJob, error) {
+	parameters workflowRunParameters, result workflowRunResult, step workflowStep, childID string, slot, total int) (store.GenerationJob, error) {
 	prompt, err := compileServerWorkflowPrompt(step, parameters.Values)
 	if err != nil {
 		return store.GenerationJob{}, err
@@ -317,17 +434,27 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	if err != nil {
 		return store.GenerationJob{}, err
 	}
+	if total < 1 {
+		total = 1
+	}
+	batchID := ""
+	batchIndex := 0
+	if total > 1 {
+		batchID = workflowChildBatchID(parent.ID, step.ID)
+		batchIndex = slot + 1
+	}
 	request := createImageJobRequest{
 		ID: childID, ProjectID: parent.ProjectID, Prompt: prompt, ProviderID: providerID, Model: model,
 		Parameters: createImageJobParameters{
-			Size: step.Parameters.Size, Quality: step.Parameters.Quality, Count: step.Parameters.Count,
+			Size: step.Parameters.Size, Quality: step.Parameters.Quality, Count: 1,
+			RequestedCount: total, BatchID: batchID, BatchIndex: batchIndex,
 			TransparentBackground: step.Parameters.TransparentBackground, ReferenceStorageKeys: references,
 		},
 	}
 	requestHash, _ := hashImageJobRequest(request)
 	if existing, err := s.store.GetGenerationJob(ctx, tenantID, childID); err == nil {
 		if authMode() != "off" && (parent.UserID == "" || existing.UserID != parent.UserID) ||
-			!isMatchingWorkflowChild(existing, requestHash, parent.ID, step.ID) {
+			!isResumableWorkflowChild(existing, parent.ID, step.ID) {
 			return store.GenerationJob{}, store.ErrConflict
 		}
 		return existing, nil
@@ -336,7 +463,7 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	}
 	childParameters, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, RequestHash: requestHash, Size: step.Parameters.Size,
-		Quality: step.Parameters.Quality, Count: step.Parameters.Count,
+		Quality: step.Parameters.Quality, Count: 1, RequestedCount: total, BatchID: batchID, BatchIndex: batchIndex,
 		TransparentBackground: step.Parameters.TransparentBackground, ReferenceStorageKeys: references,
 		WorkflowRunID: parent.ID, WorkflowStepID: step.ID,
 	})
@@ -351,9 +478,9 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 		CreatedAt: now, UpdatedAt: now,
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": child.ID, "kind": child.Kind, "workflowRunId": parent.ID, "workflowStepId": step.ID})
-	if err := s.store.CreateServerGenerationJob(ctx, tenantID, billingUserID, child, step.Parameters.Count, meta); errors.Is(err, store.ErrConflict) {
+	if err := s.store.CreateServerGenerationJob(ctx, tenantID, billingUserID, child, 1, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(ctx, tenantID, childID)
-		if getErr == nil && (authMode() == "off" || existing.UserID == billingUserID) && isMatchingWorkflowChild(existing, requestHash, parent.ID, step.ID) {
+		if getErr == nil && (authMode() == "off" || existing.UserID == billingUserID) && isResumableWorkflowChild(existing, parent.ID, step.ID) {
 			return existing, nil
 		}
 		return store.GenerationJob{}, store.ErrConflict
@@ -363,11 +490,17 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	return child, nil
 }
 
-func isMatchingWorkflowChild(job store.GenerationJob, requestHash, parentID, stepID string) bool {
+func isResumableWorkflowChild(job store.GenerationJob, parentID, stepID string) bool {
 	var parameters persistedImageJobParameters
 	return job.Kind == "image" && json.Unmarshal(job.Parameters, &parameters) == nil &&
-		parameters.Executor == serverExecutorMarker && parameters.RequestHash == requestHash &&
+		parameters.Executor == serverExecutorMarker &&
 		parameters.WorkflowRunID == parentID && parameters.WorkflowStepID == stepID
+}
+
+func isMatchingWorkflowChild(job store.GenerationJob, requestHash, parentID, stepID string) bool {
+	var parameters persistedImageJobParameters
+	return isResumableWorkflowChild(job, parentID, stepID) &&
+		json.Unmarshal(job.Parameters, &parameters) == nil && parameters.RequestHash == requestHash
 }
 
 func workflowChildJobIDs(value json.RawMessage) []string {
@@ -378,14 +511,13 @@ func workflowChildJobIDs(value json.RawMessage) []string {
 	seen := map[string]struct{}{}
 	ids := make([]string, 0, len(result.Steps))
 	for _, state := range result.Steps {
-		if state.ChildJobID == "" {
-			continue
+		for _, childID := range workflowStateChildJobIDs(state) {
+			if _, exists := seen[childID]; exists {
+				continue
+			}
+			seen[childID] = struct{}{}
+			ids = append(ids, childID)
 		}
-		if _, exists := seen[state.ChildJobID]; exists {
-			continue
-		}
-		seen[state.ChildJobID] = struct{}{}
-		ids = append(ids, state.ChildJobID)
 	}
 	return ids
 }
@@ -441,6 +573,35 @@ func imageResultStorageKeys(value json.RawMessage) ([]string, error) {
 		keys = append(keys, item.StorageKey)
 	}
 	return keys, nil
+}
+
+func workflowChildBatchID(runID, stepID string) string {
+	id := serverWorkflowChildJobID(runID, "batch-"+stepID)
+	if strings.HasPrefix(id, "wf_") {
+		return "wb_" + strings.TrimPrefix(id, "wf_")
+	}
+	return id
+}
+
+func workflowStepChildSlotIDs(runID, stepID string, count int) []string {
+	if count < 1 {
+		count = 1
+	}
+	if count > maxImageGenerationCount {
+		count = maxImageGenerationCount
+	}
+	ids := make([]string, count)
+	for index := 0; index < count; index++ {
+		ids[index] = serverWorkflowChildSlotJobID(runID, stepID, index)
+	}
+	return ids
+}
+
+func serverWorkflowChildSlotJobID(runID, stepID string, index int) string {
+	if index > 0 {
+		return serverWorkflowChildJobID(runID, fmt.Sprintf("%s:%d", stepID, index))
+	}
+	return serverWorkflowChildJobID(runID, stepID)
 }
 
 func serverWorkflowChildJobID(runID, stepID string) string {

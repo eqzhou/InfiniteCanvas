@@ -44,7 +44,7 @@ export function getReadyWorkflowStepIds(template: WorkflowTemplate, result: Work
 
 function validateNextStepState(previous: WorkflowStepRunState, next: WorkflowStepRunState): void {
   if (!TRANSITIONS[previous.status].has(next.status)) throw new Error("invalid workflow step transition");
-  if (next.status === "queued" && (!next.childJobId || next.childJobId.length > 128)) {
+  if (next.status === "queued" && workflowStateChildJobIds(next).length < 1) {
     throw new Error("queued workflow step requires a child job id");
   }
   if (next.status === "succeeded" && (!next.storageKeys?.length || next.storageKeys.length > 100 ||
@@ -116,9 +116,20 @@ function fnv32(value: string, seed: number): string {
   return hash.toString(16).padStart(8, "0");
 }
 
-export function workflowChildJobId(runId: string, stepId: string): string {
+export function workflowStateChildJobIds(state: Pick<WorkflowStepRunState, "childJobId" | "childJobIds">): string[] {
+  if (state.childJobIds?.length) return [...state.childJobIds];
+  return state.childJobId ? [state.childJobId] : [];
+}
+
+export function workflowChildJobId(runId: string, stepId: string, index = 0): string {
+  const identityStep = index > 0 ? `${stepId}:${index}` : stepId;
   const safeRun = runId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
-  const safeStep = stepId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
-  const identity = `${runId}\u0000${stepId}`;
+  const safeStep = identityStep.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
+  const identity = `${runId}\u0000${identityStep}`;
   return `wf_${safeRun}_${safeStep}_${fnv32(identity, 0x811c9dc5)}${fnv32(identity, 0x9e3779b9)}`.slice(0, 128);
+}
+
+export function workflowStepChildJobIds(runId: string, stepId: string, count: number): string[] {
+  const total = Math.min(100, Number.isSafeInteger(count) && count > 0 ? count : 1);
+  return Array.from({ length: total }, (_, index) => workflowChildJobId(runId, stepId, index));
 }

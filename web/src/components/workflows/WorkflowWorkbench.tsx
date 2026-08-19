@@ -308,7 +308,11 @@ export function WorkflowWorkbench() {
           workflowRunId: job.id,
           workflowStepId: step?.id,
           workflowTemplateId: parameters.templateId,
-          generationJobId: result.steps[step?.id ?? ""]?.childJobId,
+          generationJobId: (() => {
+            const state = result.steps[step?.id ?? ""];
+            const index = state?.storageKeys?.indexOf(storageKey) ?? -1;
+            return (index >= 0 ? state?.childJobIds?.[index] : undefined) || state?.childJobId;
+          })(),
         },
       }));
     }

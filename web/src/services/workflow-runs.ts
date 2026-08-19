@@ -5,7 +5,8 @@ import {
   advanceWorkflowStep,
   finalizeWorkflowRun,
   getReadyWorkflowStepIds,
-  workflowChildJobId,
+  workflowStateChildJobIds,
+  workflowStepChildJobIds,
 } from "@/lib/workflow-run";
 import { compileWorkflowPrompt } from "@/lib/workflow-dag";
 import { getProvider } from "@/lib/ai-config";
@@ -93,6 +94,14 @@ function cancelledResult(job: GenerationJob): WorkflowRunResult {
 
 export async function cancelWorkflowRun(job: GenerationJob): Promise<GenerationJob> {
   if (usesServerGenerationJobs()) return cancelServerGenerationJob(job.id);
+  const parameters = parseWorkflowRunParameters(job.parameters);
+  const result = parseWorkflowRunResult(job.result, parameters.templateSnapshot);
+  await Promise.allSettled(Object.values(result.steps).flatMap((state) =>
+    workflowStateChildJobIds(state).map((childId) => updateGenerationJob(childId, {
+      status: "cancelled",
+      error: "已取消",
+    }).catch(() => undefined)),
+  ));
   return updateGenerationJob(job.id, { status: "cancelled", error: "已取消", result: cancelledResult(job) });
 }
 
@@ -168,17 +177,22 @@ async function runBrowserStep(
 ): Promise<{ parent: GenerationJob; result: WorkflowRunResult }> {
   const parameters = parseWorkflowRunParameters(parent.parameters);
   const step = parameters.templateSnapshot.steps.find((candidate) => candidate.id === stepId)!;
-  const childId = workflowChildJobId(parent.id, step.id);
+  const existingState = result.steps[stepId];
+  const childIds = workflowStateChildJobIds(existingState ?? {}).length
+    ? workflowStateChildJobIds(existingState!)
+    : workflowStepChildJobIds(parent.id, step.id, step.parameters.count);
   let nextResult = advanceWorkflowStep(parameters.templateSnapshot, result, stepId, {
     status: "queued",
-    childJobId: childId,
+    childJobId: childIds[0],
+    childJobIds: childIds,
   });
   let nextParent = await persistParentState(parent, "running", nextResult, "", onUpdate);
   nextResult = advanceWorkflowStep(parameters.templateSnapshot, nextResult, stepId, { status: "running" });
   nextParent = await persistParentState(nextParent, "running", nextResult, "", onUpdate);
 
   const stagedKeys: string[] = [];
-  let child: GenerationJob | undefined;
+  const createdChildren: GenerationJob[] = [];
+  const succeededChildIds = new Set<string>();
   let childSucceededPersisted = false;
   let stage: "provider" | "media" | "child-history" | "parent-checkpoint" = "provider";
   try {
@@ -189,62 +203,77 @@ async function runBrowserStep(
     if (!channel || !provider?.baseUrl || !provider.apiKey) throw new Error("工作流图片渠道未配置");
     const model = step.model || provider.model;
     if (!model) throw new Error("工作流图片模型未配置");
+    const prompt = compileWorkflowPrompt(step, parameters.values);
+    const batchId = childIds.length > 1 ? `wb_${parent.id}_${step.id}` : "";
 
-    child = await getGenerationJob(childId);
-    if (!child) {
-      child = await createGenerationJob({
-        id: childId,
-        projectId: parent.projectId,
-        kind: "image",
-        status: "running",
-        prompt: compileWorkflowPrompt(step, parameters.values),
-        providerId: channel.id,
+    for (const [index, childId] of childIds.entries()) {
+      let child = await getGenerationJob(childId);
+      if (!child) {
+        child = await createGenerationJob({
+          id: childId,
+          projectId: parent.projectId,
+          kind: "image",
+          status: "running",
+          prompt,
+          providerId: channel.id,
+          model,
+          parameters: {
+            ...step.parameters,
+            count: 1,
+            requestedCount: childIds.length,
+            batchId: batchId || undefined,
+            batchIndex: childIds.length > 1 ? index + 1 : 0,
+            referenceStorageKeys,
+            workflowRunId: parent.id,
+            workflowStepId: step.id,
+            ownerClientId: "workflow-browser",
+          },
+          result: {},
+        });
+      }
+      createdChildren.push(child);
+    }
+
+    const succeededKeys: string[] = [];
+    for (const child of createdChildren) {
+      if (child.status === "succeeded") {
+        succeededChildIds.add(child.id);
+        succeededKeys.push(...workflowChildStorageKeys(child));
+        continue;
+      }
+      const urls = await generateImages({
+        channel,
         model,
-        parameters: {
-          ...step.parameters,
-          referenceStorageKeys,
-          workflowRunId: parent.id,
-          workflowStepId: step.id,
-          ownerClientId: "workflow-browser",
-        },
-        result: {},
+        prompt,
+        size: step.parameters.size,
+        quality: step.parameters.quality,
+        n: 1,
+        transparentBackground: step.parameters.transparentBackground,
+        referenceDataUrls: await referenceDataUrls(referenceStorageKeys),
+        systemPrompt: config.systemPrompt,
+        signal,
+        activityId: child.id,
+        activitySurface: "image-workbench",
+        deferActivitySuccess: true,
       });
+      stage = "media";
+      const items = [];
+      for (const url of urls) {
+        const uploaded = await uploadMedia(url, "image", { requirePersistent: true });
+        stagedKeys.push(uploaded.storageKey);
+        const { blob: _blob, ...persisted } = uploaded;
+        items.push(persisted);
+      }
+      stage = "child-history";
+      await updateGenerationJob(child.id, { status: "succeeded", result: { items }, error: undefined });
+      completeGenerationActivity(child.id, "succeeded");
+      succeededChildIds.add(child.id);
+      succeededKeys.push(...stagedKeys.splice(0, stagedKeys.length));
     }
-    if (child.status === "succeeded") {
-      const keys = workflowChildStorageKeys(child);
-      nextResult = advanceWorkflowStep(parameters.templateSnapshot, nextResult, stepId, { status: "succeeded", storageKeys: keys });
-      return { parent: await persistParentState(nextParent, "running", nextResult, "", onUpdate), result: nextResult };
-    }
-    const urls = await generateImages({
-      channel,
-      model,
-      prompt: compileWorkflowPrompt(step, parameters.values),
-      size: step.parameters.size,
-      quality: step.parameters.quality,
-      n: step.parameters.count,
-      transparentBackground: step.parameters.transparentBackground,
-      referenceDataUrls: await referenceDataUrls(referenceStorageKeys),
-      systemPrompt: config.systemPrompt,
-      signal,
-      activityId: child.id,
-      activitySurface: "image-workbench",
-      deferActivitySuccess: true,
-    });
-    stage = "media";
-    const items = [];
-    for (const url of urls) {
-      const uploaded = await uploadMedia(url, "image", { requirePersistent: true });
-      stagedKeys.push(uploaded.storageKey);
-      const { blob: _blob, ...persisted } = uploaded;
-      items.push(persisted);
-    }
-    stage = "child-history";
-    child = await updateGenerationJob(child.id, { status: "succeeded", result: { items }, error: undefined });
     childSucceededPersisted = true;
-    completeGenerationActivity(child.id, "succeeded");
     nextResult = advanceWorkflowStep(parameters.templateSnapshot, nextResult, stepId, {
       status: "succeeded",
-      storageKeys: stagedKeys,
+      storageKeys: succeededKeys,
     });
     stage = "parent-checkpoint";
     return { parent: await persistParentState(nextParent, "running", nextResult, "", onUpdate), result: nextResult };
@@ -253,12 +282,15 @@ async function runBrowserStep(
       return { parent: nextParent, result: nextResult };
     }
     const failure = signal?.aborted ? "已取消" : browserWorkflowFailure(error, stage);
-    if (child) completeGenerationActivity(child.id, signal?.aborted ? "cancelled" : "failed", failure);
-    if (!childSucceededPersisted && stagedKeys.length) await Promise.allSettled(stagedKeys.map(deleteStorageKey));
-    if (child && !childSucceededPersisted) await updateGenerationJob(child.id, {
-      status: signal?.aborted ? "cancelled" : "failed",
-      error: failure,
-    }).catch(() => undefined);
+    await Promise.allSettled(createdChildren.map(async (child) => {
+      if (succeededChildIds.has(child.id)) return;
+      completeGenerationActivity(child.id, signal?.aborted ? "cancelled" : "failed", failure);
+      await updateGenerationJob(child.id, {
+        status: signal?.aborted ? "cancelled" : "failed",
+        error: failure,
+      }).catch(() => undefined);
+    }));
+    if (stagedKeys.length) await Promise.allSettled(stagedKeys.map(deleteStorageKey));
     nextResult = advanceWorkflowStep(parameters.templateSnapshot, nextResult, stepId, {
       status: signal?.aborted ? "cancelled" : "failed",
       error: failure,
@@ -282,20 +314,32 @@ export async function executeBrowserWorkflowRun(
     let interrupted = false;
     const recoveredSteps = await Promise.all(Object.entries(result.steps).map(async ([id, state]) => {
       if (state.status !== "queued" && state.status !== "running") return [id, state] as const;
-      const child = state.childJobId ? await getGenerationJob(state.childJobId) : undefined;
-      if (child?.status === "succeeded") {
-        const storageKeys = workflowChildStorageKeys(child);
+      const childIds = workflowStateChildJobIds(state);
+      const children = await Promise.all(childIds.map((childId) => getGenerationJob(childId)));
+      if (children.length > 0 && children.every((child) => child?.status === "succeeded")) {
+        const storageKeys = children.flatMap((child) => child ? workflowChildStorageKeys(child) : []);
         if (storageKeys.length > 0) {
           return [id, { ...state, status: "succeeded" as const, storageKeys, error: undefined }] as const;
         }
       }
-      interrupted = true;
-      if (child && (child.status === "queued" || child.status === "running")) {
-        await updateGenerationJob(child.id, {
-          status: "failed",
-          error: "页面刷新后浏览器任务已中断，请按快照重试",
-        });
+      if (children.some((child) => child?.status === "succeeded")) {
+        return [id, {
+          ...state,
+          status: "pending" as const,
+          childJobId: childIds[0],
+          childJobIds: childIds,
+          error: undefined,
+        }] as const;
       }
+      interrupted = true;
+      await Promise.all(children.map(async (child) => {
+        if (child && (child.status === "queued" || child.status === "running")) {
+          await updateGenerationJob(child.id, {
+            status: "failed",
+            error: "页面刷新后浏览器任务已中断，请按快照重试",
+          });
+        }
+      }));
       return [id, {
         ...state,
         status: "failed" as const,

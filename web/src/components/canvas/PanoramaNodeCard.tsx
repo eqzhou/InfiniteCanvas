@@ -211,11 +211,12 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
           count: settings.count,
           referenceStorageKeys,
           signal: operation.signal,
-          onCreated: async (job) => {
+          onCreated: async (job, jobs) => {
             updateNode(currentNode.id, { metadata: {
               status: "loading",
               errorDetails: undefined,
               generationJobId: job.id,
+              generationJobIds: jobs.map((item) => item.id),
               prompt: currentNode.metadata.prompt ?? "",
               model,
               quality: settings.quality,
@@ -238,6 +239,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
             quality: settings.quality,
             referenceStorageKeys,
             generationJobId: result.jobId,
+            generationJobIds: result.jobIds,
           }, structuredClone(historyProject), false);
         } catch (cause) {
           result.media.forEach((media) => URL.revokeObjectURL(media.content));
@@ -308,11 +310,16 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
         const currentNode = historyProject.nodes.find((candidate) => candidate.id === node.id);
         if (!currentNode || currentNode.type !== "panorama") throw new Error(t("canvasNodes.panorama.nodeMissing"));
         const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
+        const storedJobIds = currentNode.metadata.generationJobIds?.length
+          ? currentNode.metadata.generationJobIds
+          : [jobId];
         const media = await resumePanoramaServerGeneration(
           jobId,
           historyProject.id,
-          settings.count,
+          storedJobIds.length,
           operation.signal,
+          undefined,
+          storedJobIds,
         );
         if (writeWasSuperseded(operation)) {
           media.forEach((item) => URL.revokeObjectURL(item.content));
@@ -325,6 +332,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
             quality: settings.quality,
             referenceStorageKeys: [...(currentNode.metadata.referenceStorageKeys ?? [])],
             generationJobId: jobId,
+            generationJobIds: currentNode.metadata.generationJobIds,
           }, structuredClone(historyProject), false);
         } catch (cause) {
           media.forEach((item) => URL.revokeObjectURL(item.content));
@@ -344,7 +352,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
       operation.abort(new DOMException("Panorama node closed", "AbortError"));
       finishWrite(operation);
     };
-  }, [node.id, node.metadata.generationJobId, node.metadata.status]);
+  }, [node.id, node.metadata.generationJobId, node.metadata.generationJobIds, node.metadata.status]);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-950 text-white" onPointerDown={(event) => event.stopPropagation()}>

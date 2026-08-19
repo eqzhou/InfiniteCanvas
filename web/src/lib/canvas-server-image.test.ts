@@ -149,6 +149,19 @@ describe("canvas server image placeholders", () => {
     expect(canvasInFlightGenerationJobIds(next, root.id)).toEqual(["job-a", "job-b", "job-c"]);
   });
 
+  test("treats panorama generationJobIds on a loading root as in-flight", () => {
+    const root = createNode("panorama", { x: 10, y: 20 }, {
+      metadata: {
+        status: "loading",
+        generationJobId: "job-a",
+        generationJobIds: ["job-a", "job-b"],
+      },
+    });
+    const project = { ...createProject("Board"), nodes: [root] };
+    expect(canvasGenerationJobIds(project, root.id)).toEqual(["job-a", "job-b"]);
+    expect(canvasInFlightGenerationJobIds(project, root.id)).toEqual(["job-a", "job-b"]);
+  });
+
   test("keeps config runs isolated when it is generated twice", () => {
     const root = createNode("config", { x: 30, y: 40 });
     const project = { ...createProject("Board"), nodes: [root] };

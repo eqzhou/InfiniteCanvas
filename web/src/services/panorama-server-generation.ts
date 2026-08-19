@@ -7,13 +7,18 @@ import {
 } from "@/services/generation-jobs";
 import { getBlob } from "@/services/storage";
 import {
+  imageGenerationBatchCount,
+  imageGenerationSlotParameters,
+} from "@/lib/image-generation-batch";
+import { uid } from "@/lib/id";
+import {
   MAX_PANORAMA_BATCH_BYTES,
   MAX_PANORAMA_BATCH_PIXELS,
   isSupportedPanoramaMimeType,
   readPanoramaBlobDimensions,
   validatePanoramaDimensions,
 } from "@/lib/panorama";
-import type { PanoramaGeneratedMedia } from "@/lib/panorama-generation";
+import { PANORAMA_MAX_RESULTS, type PanoramaGeneratedMedia } from "@/lib/panorama-generation";
 
 type PanoramaResultDependencies = {
   readBlob: (storageKey: string) => Promise<Blob | undefined>;
@@ -30,6 +35,7 @@ type PanoramaServerDependencies = PanoramaResultDependencies & {
 
 type PanoramaResumeDependencies = PanoramaResultDependencies & {
   waitForJob: (id: string, signal?: AbortSignal) => Promise<GenerationJob>;
+  cancelJob?: (id: string) => Promise<GenerationJob>;
   retryAfterFailure?: (attempt: number, signal?: AbortSignal) => Promise<void>;
 };
 
@@ -43,11 +49,12 @@ export type PanoramaServerGenerationInput = {
   count: number;
   referenceStorageKeys: string[];
   signal?: AbortSignal;
-  onCreated?: (job: GenerationJob) => void | Promise<void>;
+  onCreated?: (job: GenerationJob, jobs: GenerationJob[]) => void | Promise<void>;
 };
 
 type PanoramaServerGenerationResult = {
   jobId: string;
+  jobIds: string[];
   media: PanoramaGeneratedMedia[];
 };
 
@@ -208,32 +215,51 @@ export async function runPanoramaServerGeneration(
   input: PanoramaServerGenerationInput,
   dependencies: PanoramaServerDependencies = defaultDependencies,
 ): Promise<PanoramaServerGenerationResult> {
-  const job = await dependencies.createJob({
-    projectId: input.projectId,
-    prompt: input.prompt,
-    providerId: input.providerId,
-    model: input.model,
-    parameters: {
-      size: input.size,
-      quality: input.quality,
-      count: input.count,
-      category: "panorama",
-      referenceStorageKeys: [...input.referenceStorageKeys],
-    },
-  });
-  assertPanoramaJobScope(job, { jobId: job.id, projectId: input.projectId });
+  const total = imageGenerationBatchCount(input.count, PANORAMA_MAX_RESULTS);
+  const batchId = total > 1 ? uid("batch") : "";
+  const jobs: GenerationJob[] = [];
   try {
-    await input.onCreated?.(job);
+    for (let index = 0; index < total; index += 1) {
+      const slot = imageGenerationSlotParameters({
+        size: input.size,
+        quality: input.quality,
+        count: total,
+        category: "panorama",
+        referenceStorageKeys: [...input.referenceStorageKeys],
+      }, index, total, batchId);
+      const job = await dependencies.createJob({
+        projectId: input.projectId,
+        prompt: input.prompt,
+        providerId: input.providerId,
+        model: input.model,
+        parameters: {
+          size: slot.size,
+          quality: slot.quality,
+          count: 1,
+          requestedCount: slot.requestedCount,
+          batchId: slot.batchId || undefined,
+          batchIndex: slot.batchIndex || undefined,
+          category: "panorama",
+          referenceStorageKeys: [...input.referenceStorageKeys],
+        },
+      });
+      assertPanoramaJobScope(job, { jobId: job.id, projectId: input.projectId });
+      jobs.push(job);
+    }
   } catch (error) {
-    await dependencies.cancelJob?.(job.id).catch(() => undefined);
+    await Promise.allSettled(jobs.map((job) => dependencies.cancelJob?.(job.id) ?? Promise.resolve()));
     throw error;
   }
-  const completed = await waitForDurablePanoramaJob(job.id, input.signal, dependencies);
-  const media = await loadPanoramaServerResults(completed, input.count, dependencies, {
-    jobId: job.id,
-    projectId: input.projectId,
-  });
-  return { jobId: job.id, media };
+  const primary = jobs[0];
+  if (!primary) throw new Error("全景生成任务未创建");
+  try {
+    await input.onCreated?.(primary, jobs);
+  } catch (error) {
+    await Promise.allSettled(jobs.map((job) => dependencies.cancelJob?.(job.id) ?? Promise.resolve()));
+    throw error;
+  }
+  const media = await loadPanoramaJobs(jobs.map((job) => job.id), input.projectId, total, input.signal, dependencies);
+  return { jobId: primary.id, jobIds: jobs.map((job) => job.id), media };
 }
 
 export async function resumePanoramaServerGeneration(
@@ -242,7 +268,46 @@ export async function resumePanoramaServerGeneration(
   expectedCount: number,
   signal?: AbortSignal,
   dependencies: PanoramaResumeDependencies = defaultDependencies,
+  extraJobIds?: readonly string[],
 ): Promise<PanoramaGeneratedMedia[]> {
-  const completed = await waitForDurablePanoramaJob(jobId, signal, dependencies);
-  return loadPanoramaServerResults(completed, expectedCount, dependencies, { jobId, projectId });
+  const jobIds = extraJobIds?.length ? [...extraJobIds] : [jobId];
+  return loadPanoramaJobs(jobIds, projectId, expectedCount, signal, dependencies);
+}
+
+async function loadPanoramaJobs(
+  jobIds: string[],
+  projectId: string,
+  expectedCount: number,
+  signal: AbortSignal | undefined,
+  dependencies: PanoramaResumeDependencies,
+): Promise<PanoramaGeneratedMedia[]> {
+  const uniqueIds = [...new Set(jobIds.filter(Boolean))];
+  if (uniqueIds.length === 1) {
+    const completed = await waitForDurablePanoramaJob(uniqueIds[0]!, signal, dependencies);
+    return loadPanoramaServerResults(completed, expectedCount, dependencies, { jobId: completed.id, projectId });
+  }
+  if (uniqueIds.length !== expectedCount) {
+    throw new Error(`生成服务应返回 ${expectedCount} 张全景图片，实际返回 ${uniqueIds.length} 张`);
+  }
+  try {
+    const completed = await Promise.all(uniqueIds.map((id) => waitForDurablePanoramaJob(id, signal, dependencies)));
+    const media: PanoramaGeneratedMedia[] = [];
+    const createdURLs: string[] = [];
+    try {
+      for (const job of completed) {
+        const items = await loadPanoramaServerResults(job, 1, dependencies, { jobId: job.id, projectId });
+        createdURLs.push(...items.map((item) => item.content));
+        media.push(...items);
+      }
+      return media;
+    } catch (error) {
+      createdURLs.forEach((url) => dependencies.revokeObjectURL?.(url));
+      throw error;
+    }
+  } catch (error) {
+    if (!signal?.aborted) {
+      await Promise.allSettled(uniqueIds.map((id) => dependencies.cancelJob?.(id) ?? Promise.resolve()));
+    }
+    throw error;
+  }
 }

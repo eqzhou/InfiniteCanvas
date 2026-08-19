@@ -242,6 +242,7 @@ export type NodeMetadata = {
   workflowStepId?: string;
   workflowTemplateId?: string;
   generationJobId?: string;
+  generationJobIds?: string[];
   generationResultIndex?: number;
   /** Channel used for the original image request, so retries do not silently reroute. */
   generationChannelId?: string;

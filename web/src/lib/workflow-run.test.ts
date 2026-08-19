@@ -71,5 +71,7 @@ describe("workflow run state machine", () => {
     expect(first).toBe(workflowChildJobId("run_" + "x".repeat(120), "step_" + "y".repeat(120)));
     expect(first.length).toBeLessThanOrEqual(128);
     expect(first).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(workflowChildJobId("run_one", "base", 0)).toBe(workflowChildJobId("run_one", "base"));
+    expect(workflowChildJobId("run_one", "base", 1)).not.toBe(workflowChildJobId("run_one", "base"));
   });
 });

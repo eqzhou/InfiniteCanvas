@@ -102,6 +102,7 @@ export function canvasGenerationJobIds(project: BoardProject, rootId: string): s
   for (const source of [root, outputRoot]) {
     if (!source) continue;
     if (source.metadata.generationJobId) ids.push(source.metadata.generationJobId);
+    for (const jobId of source.metadata.generationJobIds ?? []) ids.push(jobId);
     for (const childId of source.metadata.batchChildIds ?? []) {
       const child = project.nodes.find((node) => node.id === childId);
       if (child?.metadata.generationJobId) ids.push(child.metadata.generationJobId);
@@ -112,7 +113,10 @@ export function canvasGenerationJobIds(project: BoardProject, rootId: string): s
 
 export function canvasInFlightGenerationJobIds(project: BoardProject, rootId: string): string[] {
   return canvasGenerationJobIds(project, rootId).filter((jobId) =>
-    project.nodes.some((node) => node.metadata.generationJobId === jobId && node.metadata.status === "loading"),
+    project.nodes.some((node) => node.metadata.status === "loading" && (
+      node.metadata.generationJobId === jobId ||
+      Boolean(node.metadata.generationJobIds?.includes(jobId))
+    )),
   );
 }
 

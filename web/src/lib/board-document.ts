@@ -258,12 +258,24 @@ function parseMetadata(value: unknown, path: string): NodeMetadata {
   ] as const) {
     if (input[key] !== undefined) id(input[key], `${path}.${key}`);
   }
+  const generationJobIds = input.generationJobIds === undefined ? undefined : (() => {
+    const ids = array(input.generationJobIds, `${path}.generationJobIds`, 100)
+      .map((value, index) => id(value, `${path}.generationJobIds[${index}]`));
+    if (new Set(ids).size !== ids.length) throw new Error(`${path}.generationJobIds contains duplicates`);
+    return ids;
+  })();
   if (input.generationResultIndex !== undefined &&
       (typeof input.generationResultIndex !== "number" || !Number.isSafeInteger(input.generationResultIndex) ||
         input.generationResultIndex < 0 || input.generationResultIndex > 7)) {
     throw new Error(`${path}.generationResultIndex is invalid`);
   }
-  return { ...input, directorScene, directorShot, cameraPrompt } as NodeMetadata;
+  return {
+    ...input,
+    directorScene,
+    directorShot,
+    cameraPrompt,
+    ...(generationJobIds === undefined ? {} : { generationJobIds }),
+  } as NodeMetadata;
 }
 
 function parseNode(value: unknown, index: number): BoardNode {
