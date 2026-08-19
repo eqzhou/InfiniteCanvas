@@ -178,9 +178,17 @@ async function runBrowserStep(
   const parameters = parseWorkflowRunParameters(parent.parameters);
   const step = parameters.templateSnapshot.steps.find((candidate) => candidate.id === stepId)!;
   const existingState = result.steps[stepId];
-  const childIds = workflowStateChildJobIds(existingState ?? {}).length
+  let childIds = workflowStateChildJobIds(existingState ?? {}).length
     ? workflowStateChildJobIds(existingState!)
     : workflowStepChildJobIds(parent.id, step.id, step.parameters.count);
+  if (childIds.length === 1 && step.parameters.count > 1) {
+    const existing = await getGenerationJob(childIds[0]!);
+    const existingCount = typeof existing?.parameters?.count === "number" ? existing.parameters.count : 0;
+    if (existingCount === 1) {
+      childIds = workflowStepChildJobIds(parent.id, step.id, step.parameters.count);
+    }
+  }
+  const splitSlots = childIds.length > 1;
   let nextResult = advanceWorkflowStep(parameters.templateSnapshot, result, stepId, {
     status: "queued",
     childJobId: childIds[0],
@@ -204,7 +212,7 @@ async function runBrowserStep(
     const model = step.model || provider.model;
     if (!model) throw new Error("工作流图片模型未配置");
     const prompt = compileWorkflowPrompt(step, parameters.values);
-    const batchId = childIds.length > 1 ? `wb_${parent.id}_${step.id}` : "";
+    const batchId = splitSlots ? `wb_${parent.id}_${step.id}` : "";
 
     for (const [index, childId] of childIds.entries()) {
       let child = await getGenerationJob(childId);
@@ -219,10 +227,10 @@ async function runBrowserStep(
           model,
           parameters: {
             ...step.parameters,
-            count: 1,
-            requestedCount: childIds.length,
+            count: splitSlots ? 1 : step.parameters.count,
+            requestedCount: splitSlots ? childIds.length : undefined,
             batchId: batchId || undefined,
-            batchIndex: childIds.length > 1 ? index + 1 : 0,
+            batchIndex: splitSlots ? index + 1 : 0,
             referenceStorageKeys,
             workflowRunId: parent.id,
             workflowStepId: step.id,
@@ -247,7 +255,7 @@ async function runBrowserStep(
         prompt,
         size: step.parameters.size,
         quality: step.parameters.quality,
-        n: 1,
+        n: splitSlots ? 1 : step.parameters.count,
         transparentBackground: step.parameters.transparentBackground,
         referenceDataUrls: await referenceDataUrls(referenceStorageKeys),
         systemPrompt: config.systemPrompt,

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -208,6 +209,83 @@ func TestServerWorkflowFansOutStepCountAsSingleImageJobs(t *testing.T) {
 	page, err := backend.ListGenerationJobs(t.Context(), store.DefaultTenantID, store.GenerationJobQuery{Kind: "image", Page: 1, PageSize: 10})
 	if err != nil || len(page.Items) != 3 {
 		t.Fatalf("child image history = %#v, %v", page, err)
+	}
+}
+
+func TestResolveWorkflowStepChildIDsKeepsLegacyCountNJob(t *testing.T) {
+	backend := newMemoryStore()
+	server := NewServerWithStore(t.TempDir(), backend)
+	t.Cleanup(server.Close)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	childID := serverWorkflowChildJobID("workflow_legacy", "base")
+	parameters, _ := json.Marshal(persistedImageJobParameters{
+		Executor: serverExecutorMarker, Size: "1024x1024", Count: 2,
+		WorkflowRunID: "workflow_legacy", WorkflowStepID: "base",
+	})
+	if err := backend.CreateGenerationJob(t.Context(), store.DefaultTenantID, store.GenerationJob{
+		ID: childID, Kind: "image", Status: "queued", Prompt: "legacy", Parameters: parameters,
+		Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := server.resolveWorkflowStepChildIDs(t.Context(), store.DefaultTenantID, "workflow_legacy",
+		workflowStep{ID: "base", Parameters: workflowStepParameters{Count: 2}},
+		workflowStepRunState{Status: "queued", ChildJobID: childID})
+	if err != nil || len(ids) != 1 || ids[0] != childID {
+		t.Fatalf("legacy ids = %#v, %v", ids, err)
+	}
+
+	n1, _ := json.Marshal(persistedImageJobParameters{
+		Executor: serverExecutorMarker, Size: "1024x1024", Count: 1,
+		WorkflowRunID: "workflow_legacy", WorkflowStepID: "scene",
+	})
+	slot0 := serverWorkflowChildSlotJobID("workflow_legacy", "scene", 0)
+	if err := backend.CreateGenerationJob(t.Context(), store.DefaultTenantID, store.GenerationJob{
+		ID: slot0, Kind: "image", Status: "queued", Prompt: "slot", Parameters: n1,
+		Result: json.RawMessage(`{}`), CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expanded, err := server.resolveWorkflowStepChildIDs(t.Context(), store.DefaultTenantID, "workflow_legacy",
+		workflowStep{ID: "scene", Parameters: workflowStepParameters{Count: 2}},
+		workflowStepRunState{Status: "queued", ChildJobID: slot0})
+	if err != nil || len(expanded) != 2 || expanded[0] != slot0 {
+		t.Fatalf("expanded ids = %#v, %v", expanded, err)
+	}
+}
+
+func TestWorkflowResultAcceptsLeafOutputsAboveLegacy64Cap(t *testing.T) {
+	keys := make([]string, 65)
+	for index := range keys {
+		keys[index] = fmt.Sprintf("image:out-%02d", index)
+	}
+	var template workflowTemplate
+	if err := json.Unmarshal([]byte(validPersonalWorkflowTemplate), &template); err != nil {
+		t.Fatal(err)
+	}
+	parameters, err := json.Marshal(workflowRunParameters{
+		Executor: workflowExecutorMarker, RequestHash: "0123456789abcdef",
+		TemplateID: template.ID, TemplateRevision: template.Revision, TemplateSnapshot: template,
+		Values: map[string]json.RawMessage{"subject": json.RawMessage(`"tiger"`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(workflowRunResult{
+		Steps: map[string]workflowStepRunState{
+			"base":  {Status: "succeeded", ChildJobID: "wf_child_base", StorageKeys: keys[:1]},
+			"scene": {Status: "succeeded", ChildJobID: "wf_child_scene", StorageKeys: keys},
+		},
+		OutputStorageKeys: keys,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = validatePersistedWorkflowJob(store.GenerationJob{
+		Kind: "workflow", Parameters: parameters, Result: result,
+	})
+	if err != nil {
+		t.Fatalf("65 output keys rejected: %v", err)
 	}
 }
 

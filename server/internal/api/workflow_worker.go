@@ -91,7 +91,7 @@ func validatePersistedWorkflowJob(job store.GenerationJob) (workflowRunParameter
 	resultDecoder := json.NewDecoder(bytes.NewReader(job.Result))
 	resultDecoder.DisallowUnknownFields()
 	if resultDecoder.Decode(&result) != nil || ensureJSONEOF(resultDecoder) != nil || result.Steps == nil ||
-		len(result.Steps) != len(parameters.TemplateSnapshot.Steps) || len(result.OutputStorageKeys) > 64 {
+		len(result.Steps) != len(parameters.TemplateSnapshot.Steps) || len(result.OutputStorageKeys) > maxImageGenerationCount*16 {
 		return workflowRunParameters{}, workflowRunResult{}, errors.New("invalid workflow result")
 	}
 	for _, step := range parameters.TemplateSnapshot.Steps {
@@ -212,9 +212,11 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 			return
 		}
 		step := steps[stepID]
-		childIDs := workflowStateChildJobIDs(state)
-		if len(childIDs) == 0 {
-			childIDs = workflowStepChildSlotIDs(job.ID, step.ID, step.Parameters.Count)
+		childIDs, err := s.resolveWorkflowStepChildIDs(ctx, tenantID, job.ID, step, state)
+		if err != nil {
+			return
+		}
+		if !sameStringSlice(childIDs, workflowStateChildJobIDs(state)) {
 			state = queuedWorkflowStepState(childIDs)
 			result.Steps[stepID] = state
 			if !s.checkpointWorkflowJob(tenantID, job, result) {
@@ -225,7 +227,7 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 		createdIDs := make([]string, 0, len(childIDs))
 		for index, childID := range childIDs {
 			if _, err := s.ensureWorkflowChildJob(ctx, tenantID, job, parameters, result, step, childID, index, len(childIDs)); err != nil {
-				s.cancelWorkflowChildren(tenantID, createdIDs)
+				s.cancelWorkflowChildren(tenantID, childIDs)
 				if ctx.Err() != nil {
 					return
 				}
@@ -411,6 +413,35 @@ func (s *Server) waitForWorkflowChildren(ctx context.Context, tenantID string, p
 	}
 }
 
+func workflowChildPersistedCount(job store.GenerationJob) int {
+	var parameters persistedImageJobParameters
+	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Count < 1 {
+		return 0
+	}
+	return parameters.Count
+}
+
+func (s *Server) resolveWorkflowStepChildIDs(ctx context.Context, tenantID, runID string, step workflowStep, state workflowStepRunState) ([]string, error) {
+	ids := workflowStateChildJobIDs(state)
+	if len(ids) == 0 {
+		return workflowStepChildSlotIDs(runID, step.ID, step.Parameters.Count), nil
+	}
+	if len(ids) != 1 || step.Parameters.Count <= 1 {
+		return ids, nil
+	}
+	existing, err := s.store.GetGenerationJob(ctx, tenantID, ids[0])
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ids, nil
+		}
+		return nil, err
+	}
+	if workflowChildPersistedCount(existing) == 1 {
+		return workflowStepChildSlotIDs(runID, step.ID, step.Parameters.Count), nil
+	}
+	return ids, nil
+}
+
 func (s *Server) cancelWorkflowChildren(tenantID string, childIDs []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -437,17 +468,22 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	if total < 1 {
 		total = 1
 	}
+	imageCount := 1
+	requestedCount := total
 	batchID := ""
 	batchIndex := 0
-	if total > 1 {
+	if total == 1 && step.Parameters.Count > 1 {
+		imageCount = step.Parameters.Count
+		requestedCount = 0
+	} else if total > 1 {
 		batchID = workflowChildBatchID(parent.ID, step.ID)
 		batchIndex = slot + 1
 	}
 	request := createImageJobRequest{
 		ID: childID, ProjectID: parent.ProjectID, Prompt: prompt, ProviderID: providerID, Model: model,
 		Parameters: createImageJobParameters{
-			Size: step.Parameters.Size, Quality: step.Parameters.Quality, Count: 1,
-			RequestedCount: total, BatchID: batchID, BatchIndex: batchIndex,
+			Size: step.Parameters.Size, Quality: step.Parameters.Quality, Count: imageCount,
+			RequestedCount: requestedCount, BatchID: batchID, BatchIndex: batchIndex,
 			TransparentBackground: step.Parameters.TransparentBackground, ReferenceStorageKeys: references,
 		},
 	}
@@ -463,7 +499,7 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	}
 	childParameters, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, RequestHash: requestHash, Size: step.Parameters.Size,
-		Quality: step.Parameters.Quality, Count: 1, RequestedCount: total, BatchID: batchID, BatchIndex: batchIndex,
+		Quality: step.Parameters.Quality, Count: imageCount, RequestedCount: requestedCount, BatchID: batchID, BatchIndex: batchIndex,
 		TransparentBackground: step.Parameters.TransparentBackground, ReferenceStorageKeys: references,
 		WorkflowRunID: parent.ID, WorkflowStepID: step.ID,
 	})
@@ -478,7 +514,7 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 		CreatedAt: now, UpdatedAt: now,
 	}
 	meta, _ := json.Marshal(map[string]any{"jobId": child.ID, "kind": child.Kind, "workflowRunId": parent.ID, "workflowStepId": step.ID})
-	if err := s.store.CreateServerGenerationJob(ctx, tenantID, billingUserID, child, 1, meta); errors.Is(err, store.ErrConflict) {
+	if err := s.store.CreateServerGenerationJob(ctx, tenantID, billingUserID, child, imageCount, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(ctx, tenantID, childID)
 		if getErr == nil && (authMode() == "off" || existing.UserID == billingUserID) && isResumableWorkflowChild(existing, parent.ID, step.ID) {
 			return existing, nil
