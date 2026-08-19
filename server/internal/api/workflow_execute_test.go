@@ -234,6 +234,12 @@ func TestResolveWorkflowStepChildIDsKeepsLegacyCountNJob(t *testing.T) {
 	if err != nil || len(ids) != 1 || ids[0] != childID {
 		t.Fatalf("legacy ids = %#v, %v", ids, err)
 	}
+	missing, err := server.resolveWorkflowStepChildIDs(t.Context(), store.DefaultTenantID, "workflow_legacy",
+		workflowStep{ID: "gone", Parameters: workflowStepParameters{Count: 2}},
+		workflowStepRunState{Status: "queued", ChildJobID: "wf_missing_child"})
+	if err != nil || len(missing) != 2 {
+		t.Fatalf("missing child should expand to n=1 slots: %#v, %v", missing, err)
+	}
 
 	n1, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, Size: "1024x1024", Count: 1,

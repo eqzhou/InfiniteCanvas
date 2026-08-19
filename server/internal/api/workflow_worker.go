@@ -224,10 +224,9 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 			}
 		}
 		activeChildIDs = childIDs
-		createdIDs := make([]string, 0, len(childIDs))
 		for index, childID := range childIDs {
 			if _, err := s.ensureWorkflowChildJob(ctx, tenantID, job, parameters, result, step, childID, index, len(childIDs)); err != nil {
-				s.cancelWorkflowChildren(tenantID, childIDs)
+				s.cancelWorkflowChildren(tenantID, job.ID, step.ID, childIDs)
 				if ctx.Err() != nil {
 					return
 				}
@@ -236,11 +235,10 @@ func (s *Server) executeClaimedWorkflowJob(claimed store.TenantGenerationJob) {
 				s.completeWorkflowJob(tenantID, job, status, finalResult, "工作流步骤生成失败")
 				return
 			}
-			createdIDs = append(createdIDs, childID)
 		}
 		s.notifyGenerationWorkers()
 		markedRunning := state.Status == "running"
-		children, err := s.waitForWorkflowChildren(ctx, tenantID, job, childIDs, func() bool {
+		children, err := s.waitForWorkflowChildren(ctx, tenantID, job, step.ID, childIDs, func() bool {
 			if markedRunning {
 				return true
 			}
@@ -375,13 +373,14 @@ func completeWorkflowStepFromChildren(childIDs []string, children []store.Genera
 }
 
 func (s *Server) waitForWorkflowChildren(ctx context.Context, tenantID string, parent store.GenerationJob,
-	childIDs []string, markRunning func() bool) ([]store.GenerationJob, error) {
+	stepID string, childIDs []string, markRunning func() bool) ([]store.GenerationJob, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		children := make([]store.GenerationJob, 0, len(childIDs))
 		pending := false
+		terminalFailure := false
 		for _, childID := range childIDs {
 			child, err := s.store.GetGenerationJob(ctx, tenantID, childID)
 			if err != nil {
@@ -396,11 +395,16 @@ func (s *Server) waitForWorkflowChildren(ctx context.Context, tenantID string, p
 				if child.Status == "running" && !markRunning() {
 					return nil, errors.New("workflow running checkpoint failed")
 				}
-			case "succeeded", "failed", "cancelled", "deleted":
+			case "failed", "cancelled", "deleted":
+				terminalFailure = true
+			case "succeeded":
 			default:
 				return nil, errors.New("workflow child status is invalid")
 			}
 			children = append(children, child)
+		}
+		if terminalFailure && pending {
+			s.cancelWorkflowChildren(tenantID, parent.ID, stepID, childIDs)
 		}
 		if !pending {
 			return children, nil
@@ -432,7 +436,7 @@ func (s *Server) resolveWorkflowStepChildIDs(ctx context.Context, tenantID, runI
 	existing, err := s.store.GetGenerationJob(ctx, tenantID, ids[0])
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return ids, nil
+			return workflowStepChildSlotIDs(runID, step.ID, step.Parameters.Count), nil
 		}
 		return nil, err
 	}
@@ -442,10 +446,14 @@ func (s *Server) resolveWorkflowStepChildIDs(ctx context.Context, tenantID, runI
 	return ids, nil
 }
 
-func (s *Server) cancelWorkflowChildren(tenantID string, childIDs []string) {
+func (s *Server) cancelWorkflowChildren(tenantID, parentID, stepID string, childIDs []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, childID := range childIDs {
+		existing, err := s.store.GetGenerationJob(ctx, tenantID, childID)
+		if err != nil || !isResumableWorkflowChild(existing, parentID, stepID) {
+			continue
+		}
 		_, _ = s.cancelServerGenerationJobWithSideEffectLock(ctx, tenantID, childID, time.Now().UTC())
 		s.cancelLocalGeneration(tenantID, childID)
 	}
