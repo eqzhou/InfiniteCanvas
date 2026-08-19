@@ -1,31 +1,50 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  agentAuthHeaders,
   closeCodexSession,
+  closeClaudeSession,
+  createClaudeSession,
   createCodexSession,
+  createCodexSkill,
   deleteCodexAttachment,
+  deleteCodexSkill,
   decideProjectSync,
   fetchAgentStatus,
+  getClaudeSession,
   getCodexHistory,
+  getCodexSkill,
   getCodexSession,
   interruptCodexTurn,
+  interruptClaudeTurn,
+  invokeCodexSkill,
+  listCodexSkills,
   normalizeAgentBaseUrl,
   parseCodexSseRecords,
   prewarmCodexSession,
+  pushProjectToAgent,
+  readAgentToken,
   resolveAgentBaseUrl,
   respondCodexApproval,
+  saveAgentToken,
   listCodexHistory,
   listCodexModels,
   deleteCodexHistory,
   bulkDeleteCodexHistory,
   restoreCodexHistory,
   revealCodexFile,
+  sendClaudeMessage,
   sendCodexMessage,
+  subscribeClaudeEvents,
   subscribeCodexEvents,
+  syncProjectWithAgent,
+  toggleCodexSkill,
   uploadCodexAttachments,
+  updateCodexSkill,
   updateCodexPreferences,
 } from "./local-agent";
 import { clearSessionToken, setSessionToken } from "./auth-session";
+import { createProject } from "@/lib/defaults";
 
 describe("local agent project synchronization", () => {
   test("newer remote projects are pulled", () => {
@@ -645,5 +664,241 @@ describe("local agent connection", () => {
     expect(attempts).toBe(2);
     expect(urls).toHaveLength(2);
     expect(urls[1]).not.toContain("afterSequence");
+  });
+});
+
+describe("local agent validation and persistence boundaries", () => {
+  const connection = { baseUrl: "http://127.0.0.1:8790", token: "agent-token" };
+  const version = "a".repeat(64);
+
+  function skill(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "review-code",
+      name: "Review code",
+      description: "Review the current change",
+      enabled: true,
+      updatedAt: "2026-08-01T00:00:00Z",
+      bytes: 12,
+      version,
+      content: "# Review\n",
+      ...overrides,
+    };
+  }
+
+  test("round-trips agent tokens and survives unavailable session storage", () => {
+    const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const priorSessionStorage = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+    const values = new Map<string, string>();
+    const windowTarget = new EventTarget();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget });
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => { values.set(key, value); },
+        removeItem: (key: string) => { values.delete(key); },
+      },
+    });
+    let events = 0;
+    windowTarget.addEventListener("openboard:agent-connection-change", () => { events += 1; });
+    try {
+      saveAgentToken("token-one");
+      expect(readAgentToken()).toBe("token-one");
+      saveAgentToken("");
+      expect(readAgentToken()).toBe("");
+      expect(events).toBe(2);
+
+      Object.defineProperty(globalThis, "sessionStorage", {
+        configurable: true,
+        value: {
+          getItem: () => { throw new Error("storage disabled"); },
+          setItem: () => { throw new Error("storage disabled"); },
+          removeItem: () => { throw new Error("storage disabled"); },
+        },
+      });
+      saveAgentToken("volatile-token");
+      expect(readAgentToken()).toBe("volatile-token");
+    } finally {
+      // Clear the module's process-local fallback while the fake window is still installed.
+      saveAgentToken("");
+      if (priorWindow) Object.defineProperty(globalThis, "window", priorWindow);
+      else delete (globalThis as { window?: Window }).window;
+      if (priorSessionStorage) Object.defineProperty(globalThis, "sessionStorage", priorSessionStorage);
+      else delete (globalThis as { sessionStorage?: Storage }).sessionStorage;
+    }
+  });
+
+  test("ignores malformed SSE records and enforces both stream limits", () => {
+    expect(parseCodexSseRecords(": ping\n\ndata: not-json\n\ndata: {\"type\":\"\"}\n\n", true))
+      .toEqual({ events: [], remainder: "" });
+    expect(() => parseCodexSseRecords("x".repeat(1_048_577))).toThrow("buffer exceeded");
+    expect(() => parseCodexSseRecords(`data: ${"x".repeat(262_145)}\n\n`)).toThrow("frame exceeded");
+    const valid = parseCodexSseRecords("data: {\"type\":\"notification\",\"sequence\":-1}\n\n", true);
+    expect(valid.events).toEqual([]);
+  });
+
+  test("validates and persists the complete Codex Skill lifecycle", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (init?.method === "DELETE") return new Response(null, { status: 404 });
+      if (url.endsWith("/api/codex/skills") && (init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify({ skills: [skill()] }), { headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify(url.endsWith("/invoke")
+        ? { id: "review-code", name: "Review code", content: "# Review" }
+        : skill()), { headers: { "content-type": "application/json" } });
+    };
+    expect(await listCodexSkills(connection, fetcher)).toEqual([expect.objectContaining({ id: "review-code", name: "Review code" })]);
+    expect(await getCodexSkill(connection, "review-code", fetcher)).toMatchObject({ id: "review-code", content: "# Review\n" });
+    expect(await createCodexSkill(connection, { id: "review-code", content: "# Review\n" }, fetcher)).toMatchObject({ id: "review-code" });
+    expect(await updateCodexSkill(connection, "review-code", "# Updated\n", version, fetcher)).toMatchObject({ id: "review-code" });
+    expect(await toggleCodexSkill(connection, "review-code", false, version, fetcher)).toMatchObject({ id: "review-code" });
+    expect(await invokeCodexSkill(connection, "review-code", fetcher)).toEqual({ id: "review-code", name: "Review code", content: "# Review" });
+    await deleteCodexSkill(connection, "review-code", version, fetcher);
+    expect(requests.map(({ url }) => url)).toEqual([
+      "http://127.0.0.1:8790/api/codex/skills",
+      "http://127.0.0.1:8790/api/codex/skills/review-code",
+      "http://127.0.0.1:8790/api/codex/skills",
+      "http://127.0.0.1:8790/api/codex/skills/review-code",
+      "http://127.0.0.1:8790/api/codex/skills/review-code/toggle",
+      "http://127.0.0.1:8790/api/codex/skills/review-code/invoke",
+      "http://127.0.0.1:8790/api/codex/skills/review-code",
+    ]);
+    expect(JSON.parse(String(requests[3]?.init?.body))).toEqual({ content: "# Updated\n" });
+    expect(new Headers(requests[3]?.init?.headers).get("If-Match")).toBe(version);
+    expect(JSON.parse(String(requests[4]?.init?.body))).toEqual({ enabled: false });
+  });
+
+  test("rejects invalid Skill payloads and bounded identifiers", async () => {
+    await expect(listCodexSkills(connection, async () => new Response(JSON.stringify({ skills: [skill({ bytes: 0 })] }), {
+      headers: { "content-type": "application/json" },
+    }))).rejects.toThrow("invalid Codex Skill");
+    await expect(getCodexSkill(connection, "../escape", async () => new Response())).rejects.toThrow("id is invalid");
+    await expect(getCodexSkill(connection, "review-code", async () => new Response("missing", { status: 404 }))).rejects.toThrow("not found");
+    await expect(createCodexSkill(connection, { id: "review-code", content: "  " }, async () => new Response()))
+      .rejects.toThrow("content is invalid");
+    await expect(updateCodexSkill(connection, "review-code", "# x", "bad", async () => new Response()))
+      .rejects.toThrow("version is invalid");
+    await expect(toggleCodexSkill(connection, "review-code", true, "bad", async () => new Response()))
+      .rejects.toThrow("version is invalid");
+    await expect(invokeCodexSkill(connection, "review-code", async () => new Response(JSON.stringify({ id: "review-code" }), {
+      headers: { "content-type": "application/json" },
+    }))).rejects.toThrow("invalid Codex Skill invocation");
+    await expect(deleteCodexSkill(connection, "review-code", version, async () => new Response("failed", { status: 500 })))
+      .rejects.toThrow("delete failed");
+  });
+});
+
+describe("local agent project and Claude boundaries", () => {
+  const connection = { baseUrl: "http://127.0.0.1:8790", token: "agent-token" };
+
+  test("pushes and synchronizes projects in every direction", async () => {
+    const local = { ...createProject("local"), updatedAt: "2026-08-01T00:00:00Z" };
+    const remote = { ...local, title: "remote", updatedAt: "2026-08-02T00:00:00Z" };
+    const requests: string[] = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes("remote-missing") && (init?.method ?? "GET") === "GET") return new Response(null, { status: 404 });
+      if (url.includes("remote-missing") && init?.method === "PUT") return new Response(null, { status: 204 });
+      if (url.includes("remote-newer")) return new Response(JSON.stringify(remote), {
+        headers: { "content-type": "application/json" },
+      });
+      if (url.includes("local-newer")) return new Response(JSON.stringify({
+        ...local, updatedAt: "2026-08-01T00:00:00Z",
+      }), { headers: { "content-type": "application/json" } });
+      return new Response(null, { status: 204 });
+    };
+    await pushProjectToAgent(local, connection, fetcher);
+    expect(await syncProjectWithAgent({ ...local, id: "remote-missing", updatedAt: local.updatedAt }, undefined, connection, fetcher))
+      .toEqual({ direction: "push" });
+    expect(await syncProjectWithAgent({ ...local, id: "remote-missing-2", updatedAt: local.updatedAt }, () => ({
+      ...local, id: "remote-missing-2", updatedAt: "2026-08-02T00:00:00Z",
+    }), connection, fetcher)).toEqual({ direction: "none" });
+    const pulled = await syncProjectWithAgent({ ...local, id: "remote-newer" }, undefined, connection, fetcher);
+    expect(pulled).toEqual({ direction: "pull", project: expect.objectContaining({ title: "remote" }) });
+    expect(await syncProjectWithAgent({ ...local, id: "local-newer", updatedAt: "2026-08-03T00:00:00Z" }, undefined, connection, fetcher))
+      .toEqual({ direction: "push" });
+    expect(requests.some((url) => url.includes("/api/projects/"))).toBe(true);
+  });
+
+  test("handles project sync races and request failures without overwriting newer local edits", async () => {
+    const project = createProject("sync");
+    const current = { ...project, updatedAt: "2026-08-03T00:00:00Z" };
+    await expect(syncProjectWithAgent(project, () => current, connection, async () => new Response(JSON.stringify(project), {
+      headers: { "content-type": "application/json" },
+    }))).resolves.toEqual({ direction: "none" });
+    await expect(pushProjectToAgent(project, connection, async () => new Response("offline", { status: 503 })))
+      .rejects.toThrow("push failed");
+    await expect(syncProjectWithAgent(project, undefined, connection, async () => new Response("offline", { status: 503 })))
+      .rejects.toThrow("read failed");
+  });
+
+  test("uses the correct auth header for same-origin and remote connections", () => {
+    const priorLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+    Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://agent.example.com/app") });
+    try {
+      const sameOrigin = agentAuthHeaders({ baseUrl: "https://agent.example.com", token: "remote", sessionToken: "session" });
+      expect(sameOrigin.get("Authorization")).toBeNull();
+      expect(sameOrigin.get("X-OpenBoard-Session")).toBe("session");
+      const remote = agentAuthHeaders({ baseUrl: "https://other.example.com", token: "remote" });
+      expect(remote.get("Authorization")).toBe("Bearer remote");
+      expect(remote.get("X-OpenBoard-Session")).toBeNull();
+    } finally {
+      if (priorLocation) Object.defineProperty(globalThis, "location", priorLocation);
+      else delete (globalThis as { location?: Location }).location;
+    }
+  });
+
+  test("supports Claude session commands and closes its event stream cleanly", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.includes("/api/claude/session?") && init?.method === "GET") return new Response(null, { status: 404 });
+      return new Response(JSON.stringify({ id: "claude-session", running: false }), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+    expect(await createClaudeSession(connection, { profile: "work", fresh: true, cwd: "/tmp" }, fetcher)).toMatchObject({ id: "claude-session" });
+    expect(await getClaudeSession(connection, "work", fetcher)).toBeNull();
+    await sendClaudeMessage(connection, "claude-session", "hello", fetcher, "runtime-one");
+    await interruptClaudeTurn(connection, "claude-session", fetcher);
+    await closeClaudeSession(connection, "claude-session", fetcher);
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({ profile: "work", fresh: true, cwd: "/tmp" });
+    await expect(createClaudeSession(connection, {}, async () => new Response("offline", { status: 503 }))).rejects.toThrow("offline");
+    await expect(sendClaudeMessage(connection, "claude-session", "hello", async () => new Response("offline", { status: 503 })))
+      .rejects.toThrow("offline");
+    await expect(closeClaudeSession(connection, "claude-session", async () => new Response("offline", { status: 503 })))
+      .rejects.toThrow("offline");
+
+    const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const fakeWindow = {
+      setTimeout: (handler: TimerHandler, timeout?: number) => globalThis.setTimeout(handler, timeout),
+      clearTimeout: (timer: number) => globalThis.clearTimeout(timer),
+    } as unknown as Window;
+    Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
+    try {
+      const events: unknown[] = [];
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"sequence":1,"type":"notification"}\n\n'));
+          controller.close();
+        },
+      });
+      const streamDone = new Promise<void>((resolve) => {
+        const unsubscribe = subscribeClaudeEvents(connection, "claude-session", {
+          onEvent: (event) => { events.push(event); unsubscribe(); resolve(); },
+        }, async () => new Response(stream));
+        void unsubscribe;
+      });
+      await streamDone;
+      expect(events).toHaveLength(1);
+    } finally {
+      if (priorWindow) Object.defineProperty(globalThis, "window", priorWindow);
+      else delete (globalThis as { window?: Window }).window;
+    }
   });
 });

@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { TenantConfigAdminRequiredError } from "@/services/server-storage";
-import { applyGenerationDefaultsToNode, adoptCommittedWorkspace, removeDirectorShotPlan, saveWorkspaceReplacementConfig, useBoardStore } from "./use-board-store";
+import { SecretAuthRequiredError, TenantConfigAdminRequiredError } from "@/services/server-storage";
+import {
+	adoptCommittedProject,
+	adoptCommittedWorkspace,
+	applyGenerationDefaultsToNode,
+	attachUploadedAudio,
+	attachUploadedImage,
+	attachUploadedVideo,
+	ensureChatSession,
+	ProjectCommitRollbackError,
+	removeDirectorShotPlan,
+	saveWorkspaceReplacementConfig,
+	useBoardStore,
+} from "./use-board-store";
 import { DEFAULT_GENERATION_DEFAULTS } from "@/lib/generation-defaults";
 import { createDefaultConfig, createNode, createProject } from "@/lib/defaults";
 import type { AssetItem, BoardProject, PromptItem } from "@/types/board";
@@ -733,5 +745,351 @@ describe("canvas persistence and catalog updates", () => {
 		useBoardStore.getState().addNode("text", { x: 0, y: 0 });
 		await expect(useBoardStore.getState().persistNow()).rejects.toThrow("Project save failed: HTTP 500");
 		expect(activeProject().nodes).toHaveLength(1);
+	});
+});
+
+describe("board store edge cases and transactional commits", () => {
+	test("handles scope-save permissions, chat initialization, and committed project adoption", async () => {
+		expect(await saveWorkspaceReplacementConfig(async () => {
+			throw new SecretAuthRequiredError();
+		})).toBe(false);
+		await expect(saveWorkspaceReplacementConfig(async () => { throw new Error("unexpected"); })).rejects.toThrow("unexpected");
+
+		const empty = { ...createProject("empty chat"), chatSessions: [], activeChatId: null };
+		const hydrated = ensureChatSession(empty);
+		expect(hydrated).not.toBe(empty);
+		expect(hydrated.chatSessions).toHaveLength(1);
+		expect(hydrated.activeChatId).toBe(hydrated.chatSessions[0]?.id);
+		const existing = createProject("existing chat");
+		expect(ensureChatSession(existing)).toBe(existing);
+
+		const retained = createProject("retained");
+		const committed = createProject("committed");
+		useBoardStore.setState({ projectsState: "idle", projects: [retained], activeProjectId: retained.id });
+		adoptCommittedProject(committed);
+		expect(useBoardStore.getState().projects.map((project) => project.id)).toEqual([committed.id]);
+		expect(useBoardStore.getState().exportActiveProject()).not.toBe(committed);
+		useBoardStore.setState({ projectsState: "loaded", projects: [retained], activeProjectId: retained.id });
+		adoptCommittedProject(committed);
+		expect(useBoardStore.getState().projects.map((project) => project.id)).toEqual([committed.id, retained.id]);
+		committed.title = "mutated source";
+		expect(useBoardStore.getState().projects[0]?.title).toBe("committed");
+	});
+
+	test("covers selection no-ops, every alignment mode, vertical distribution, and panorama binding", () => {
+		seedProject("selection", "idle");
+		useBoardStore.getState().setActiveProject(null);
+		useBoardStore.getState().selectAll();
+		useBoardStore.getState().captureHistory();
+		useBoardStore.getState().undo();
+		useBoardStore.getState().redo();
+		useBoardStore.getState().setSelected(["missing"]);
+		useBoardStore.getState().toggleSelect("missing");
+		expect(useBoardStore.getState().selectedIds).toEqual(["missing"]);
+		useBoardStore.getState().toggleSelect("missing", true);
+		expect(useBoardStore.getState().selectedIds).toEqual([]);
+
+		const project = seedProject("alignment", "idle");
+		const a = useBoardStore.getState().addNode("text", { x: 0, y: 0 });
+		const b = useBoardStore.getState().addNode("text", { x: 220, y: 120 });
+		const c = useBoardStore.getState().addNode("text", { x: 500, y: 300 });
+		useBoardStore.getState().setSelected([a, b, c]);
+		for (const mode of ["left", "right", "top", "bottom", "hcenter", "vcenter"] as const) {
+			useBoardStore.getState().alignSelected(mode);
+		}
+		useBoardStore.getState().distributeSelected("y");
+		const ys = [a, b, c].map((id) => activeProject().nodes.find((node) => node.id === id)!.position.y);
+		expect(ys[1]! - ys[0]!).toBe(ys[2]! - ys[1]!);
+		useBoardStore.getState().setSelected([a]);
+		useBoardStore.getState().alignSelected("left");
+		useBoardStore.getState().distributeSelected("x");
+
+		const panorama = useBoardStore.getState().addNode("panorama", { x: 600, y: 0 });
+		const director = useBoardStore.getState().addNode("director", { x: 1000, y: 0 });
+		useBoardStore.getState().connect(panorama, director);
+		expect(activeProject().nodes.find((node) => node.id === director)?.metadata.directorScene?.environment.sourceId)
+			.toBe(panorama);
+		useBoardStore.getState().setConnectingFrom(director);
+		useBoardStore.getState().deleteEdge(activeProject().edges[0]!.id);
+		expect(useBoardStore.getState().connectingFrom).toBe(director);
+		useBoardStore.getState().bindDirectorPanorama(director, null);
+		expect(activeProject().nodes.find((node) => node.id === director)?.metadata.directorScene?.environment.sourceId)
+			.toBeNull();
+		void project;
+	});
+
+	test("adds node assets for each media kind and inserts reusable media", async () => {
+		installFetch();
+		seedProject("assets", "loaded");
+		const text = useBoardStore.getState().addNode("text", { x: 0, y: 0 }, { title: "Copy", metadata: { content: "body" } });
+		const image = useBoardStore.getState().addNode("image", { x: 0, y: 400 }, {
+			title: "Image", metadata: { content: "blob:image", storageKey: "image:key", mimeType: "image/png" },
+		});
+		const video = useBoardStore.getState().addNode("video", { x: 0, y: 800 });
+		const audio = useBoardStore.getState().addNode("audio", { x: 0, y: 1100 }, {
+			title: "Audio", metadata: { content: "blob:audio", storageKey: "media:key", mimeType: "audio/mpeg" },
+		});
+		await useBoardStore.getState().addAssetFromNode("missing");
+		await useBoardStore.getState().addAssetFromNode(text);
+		await useBoardStore.getState().addAssetFromNode(image);
+		await useBoardStore.getState().addAssetFromNode(video);
+		await useBoardStore.getState().addAssetFromNode(audio);
+		expect(useBoardStore.getState().assets.map((asset) => asset.kind)).toEqual(["audio", "image", "text"]);
+
+		await useBoardStore.getState().insertAsset(useBoardStore.getState().assets.find((asset) => asset.kind === "image")!.id, { x: 20, y: 20 });
+		await useBoardStore.getState().insertAsset(useBoardStore.getState().assets.find((asset) => asset.kind === "audio")!.id, { x: 40, y: 40 });
+		const panoramaAsset: AssetItem = {
+			id: "panorama-asset", kind: "image", title: "Pano", tags: ["panorama"], notes: "panoramaProjection:equirectangular",
+			createdAt: "t", updatedAt: "t",
+		};
+		useBoardStore.getState().setAssets([...useBoardStore.getState().assets, panoramaAsset]);
+		await useBoardStore.getState().insertAsset(panoramaAsset.id, { x: 60, y: 60 });
+		expect(activeProject().nodes.some((node) => node.type === "panorama")).toBe(true);
+		await useBoardStore.getState().insertAsset("missing", { x: 0, y: 0 });
+	});
+
+	test("commits director captures and rolls back failed persistence", async () => {
+		installFetch();
+		const project = seedProject("capture", "loaded");
+		const director = createNode("director", { x: 0, y: 0 }, { id: "director-capture" });
+		useBoardStore.setState({ projects: [{ ...project, nodes: [director] }], activeProjectId: project.id });
+		const capture = createNode("image", { x: 100, y: 0 }, { id: "capture-one" });
+		await useBoardStore.getState().commitDirectorCaptureNodes(project.id, director.id, [capture]);
+		expect(activeProject().nodes.map((node) => node.id)).toEqual([director.id, capture.id]);
+		expect(useBoardStore.getState().selectedIds).toEqual([capture.id]);
+
+		await expect(useBoardStore.getState().commitDirectorCaptureNodes("missing", director.id, [capture]))
+			.rejects.toThrow("不存在");
+		await expect(useBoardStore.getState().commitDirectorCaptureNodes(project.id, director.id, []))
+			.rejects.toThrow("无效");
+		await expect(useBoardStore.getState().commitDirectorCaptureNodes(project.id, director.id, [createNode("text", { x: 0, y: 0 })]))
+			.rejects.toThrow("无效");
+		await expect(useBoardStore.getState().commitDirectorCaptureNodes(project.id, director.id, [capture, capture]))
+			.rejects.toThrow("冲突");
+
+		let writes = 0;
+		installFetch((url, init) => {
+			if (url.includes("/projects/") && init.method === "PUT") {
+				writes += 1;
+				if (writes === 1) return new Response("offline", { status: 500 });
+			}
+			return new Response(null, { status: 204 });
+		});
+		const rollbackCapture = createNode("image", { x: 200, y: 0 }, { id: "capture-rollback" });
+		await expect(useBoardStore.getState().commitDirectorCaptureNodes(project.id, director.id, [rollbackCapture]))
+			.rejects.toThrow("Project save failed");
+		expect(activeProject().nodes.some((node) => node.id === rollbackCapture.id)).toBe(false);
+
+		writes = 0;
+		installFetch((url, init) => {
+			if (url.includes("/projects/") && init.method === "PUT") return new Response("offline", { status: 500 });
+			return new Response(null, { status: 204 });
+		});
+		await expect(useBoardStore.getState().commitDirectorCaptureNodes(project.id, director.id, [
+			createNode("image", { x: 250, y: 0 }, { id: "capture-double-fail" }),
+		])).rejects.toBeInstanceOf(ProjectCommitRollbackError);
+	});
+
+	test("commits workflow results and rejects stale or malformed batches", async () => {
+		installFetch();
+		const project = seedProject("workflow", "loaded");
+		const result = createNode("image", { x: 0, y: 0 }, {
+			id: "workflow-result", metadata: { workflowRunId: "run-one", storageKey: "image:workflow", content: "blob:workflow" },
+		});
+		await useBoardStore.getState().commitWorkflowResultNodes(project.id, "run-one", [result]);
+		expect(activeProject().nodes.some((node) => node.id === result.id)).toBe(true);
+		expect(useBoardStore.getState().selectedIds).toEqual([result.id]);
+		await expect(useBoardStore.getState().commitWorkflowResultNodes(project.id, "", [result])).rejects.toThrow("无效");
+		await expect(useBoardStore.getState().commitWorkflowResultNodes(project.id, "run-one", [result, result])).rejects.toThrow("重复");
+		await expect(useBoardStore.getState().commitWorkflowResultNodes(project.id, "run-one", [createNode("text", { x: 0, y: 0 })]))
+			.rejects.toThrow("无效");
+		useBoardStore.setState({ activeProjectId: null });
+		await expect(useBoardStore.getState().commitWorkflowResultNodes(project.id, "run-one", [createNode("image", { x: 0, y: 0 }, {
+			id: "workflow-stale", metadata: { workflowRunId: "run-one", storageKey: "image:stale", content: "blob:stale" },
+		})])).rejects.toThrow("变化");
+	});
+
+	test("commits a panorama result batch and rejects missing roots", async () => {
+		installFetch();
+		const project = seedProject("panorama", "loaded");
+		const root = createNode("panorama", { x: 0, y: 0 }, {
+			id: "panorama-root",
+			metadata: { content: "blob:root", storageKey: "image:root", bytes: 10, mimeType: "image/png", naturalWidth: 2048, naturalHeight: 1024 },
+		});
+		useBoardStore.setState({ projects: [{ ...project, nodes: [root] }], activeProjectId: project.id });
+		const results = [1, 2].map((index) => ({
+			content: `blob:result-${index}`,
+			storageKey: `image:result-${index}`,
+			naturalWidth: 2048,
+			naturalHeight: 1024,
+			bytes: 10,
+			mimeType: "image/png",
+		}));
+		await useBoardStore.getState().commitPanoramaBatch(project.id, root.id, results, {
+			prompt: "sunset", model: "pano", quality: "high", referenceStorageKeys: [], generationJobId: "job-1",
+		}, { ...activeProject() }, false);
+		expect(activeProject().nodes).toHaveLength(2);
+		expect(activeProject().nodes[0]?.metadata.batchChildIds).toHaveLength(1);
+		await expect(useBoardStore.getState().commitPanoramaBatch(project.id, "missing", results, {
+			prompt: "sunset", model: "pano", quality: "high", referenceStorageKeys: [],
+		}, { ...activeProject() }, false)).rejects.toThrow("不存在");
+	});
+
+	test("commits a validated formal director shot chain", async () => {
+		installFetch();
+		const project = seedProject("formal shot", "loaded");
+		const director = createNode("director", { x: 0, y: 0 }, { id: "director-formal" });
+		const scene = director.metadata.directorScene!;
+		useBoardStore.setState({ projects: [{ ...project, nodes: [director] }], activeProjectId: project.id });
+		const snapshot = {
+			version: 1 as const,
+			directorNodeId: director.id,
+			camera: scene.cameras[0]!,
+			background: scene.background,
+			environment: scene.environment,
+			objects: [],
+			omittedObjectCount: 0,
+		};
+		const capture = createNode("image", { x: 100, y: 0 }, {
+			id: "formal-capture",
+			metadata: { content: "blob:formal-capture", storageKey: "image:formal-capture", bytes: 10, mimeType: "image/png", directorShot: {
+				version: 1, role: "capture", directorNodeId: director.id, captureId: "capture-id",
+				capturedAt: "2026-08-01T00:00:00Z", snapshot,
+			} },
+		});
+		const config = createNode("config", { x: 500, y: 0 }, {
+			id: "formal-config",
+			metadata: { referenceStorageKeys: ["image:formal-capture"], directorShot: {
+				version: 1, role: "config", directorNodeId: director.id, captureId: "capture-id",
+				capturedAt: "2026-08-01T00:00:00Z", snapshot,
+			} },
+		});
+		const result = createNode("image", { x: 900, y: 0 }, {
+			id: "formal-result", metadata: { generationConfigId: config.id, generationRunId: "formal-run" },
+		});
+		const planned = {
+			...activeProject(),
+			nodes: [director, capture, config, result],
+			edges: [
+				{ id: "formal-edge-1", from: director.id, to: capture.id },
+				{ id: "formal-edge-2", from: capture.id, to: config.id },
+				{ id: "formal-edge-3", from: config.id, to: result.id },
+			],
+		};
+		await useBoardStore.getState().commitDirectorShotRun(project.id, director.id, activeProject().updatedAt, planned);
+		expect(activeProject().nodes).toHaveLength(4);
+		expect(useBoardStore.getState().selectedIds).toEqual([config.id, result.id]);
+		await expect(useBoardStore.getState().commitDirectorShotRun(project.id, director.id, "stale", planned))
+			.rejects.toThrow("变化");
+		await expect(useBoardStore.getState().commitDirectorShotRun(project.id, director.id, activeProject().updatedAt, {
+			...planned, nodes: planned.nodes.slice(0, 1),
+		})).rejects.toThrow("计划无效");
+	});
+
+	test("cleans staged panorama storage after a failed transactional commit", async () => {
+		const project = seedProject("panorama cleanup", "loaded");
+		const root = createNode("panorama", { x: 0, y: 0 }, { id: "cleanup-root" });
+		useBoardStore.setState({ projects: [{ ...project, nodes: [root] }], activeProjectId: project.id });
+		const result = {
+			content: "blob:cleanup", storageKey: "image:unretained", naturalWidth: 2048,
+			naturalHeight: 1024, bytes: 10, mimeType: "image/png",
+		};
+		const deleted: string[] = [];
+		installFetch((url, init) => {
+			if (url.includes("/generation-jobs?") && (init.method ?? "GET") === "GET") {
+				return jsonResponse({ items: [], page: 1, pageSize: 100, total: 0 });
+			}
+			if (init.method === "DELETE") {
+				deleted.push(url);
+				return new Response(null, { status: 204 });
+			}
+			return new Response(null, { status: 204 });
+		});
+		await expect(useBoardStore.getState().commitPanoramaBatch(project.id, "missing", [result], {
+			prompt: "p", model: "m", quality: "q", referenceStorageKeys: [],
+		}, { ...activeProject() }, true)).rejects.toThrow("不存在");
+		expect(deleted.some((url) => decodeURIComponent(url).includes("image:unretained"))).toBe(true);
+	});
+
+	test("pastes grouped selections with remapped child membership", () => {
+		seedProject("group paste", "idle");
+		const first = useBoardStore.getState().addNode("text", { x: 0, y: 0 });
+		const second = useBoardStore.getState().addNode("text", { x: 200, y: 0 });
+		useBoardStore.getState().setSelected([first, second]);
+		useBoardStore.getState().groupSelected();
+		const groupId = useBoardStore.getState().selectedIds[0]!;
+		useBoardStore.getState().copySelected();
+		useBoardStore.getState().pasteClipboard();
+		const pastedGroup = activeProject().nodes.find((node) => node.id === useBoardStore.getState().selectedIds[0]);
+		expect(pastedGroup?.type).toBe("group");
+		expect(pastedGroup?.metadata.childIds?.length).toBe(2);
+		expect(pastedGroup?.metadata.childIds).not.toContain(first);
+		expect(pastedGroup?.metadata.childIds).not.toContain(second);
+		expect(pastedGroup?.id).not.toBe(groupId);
+	});
+
+	test("attaches uploaded image, video, and audio nodes through media storage", async () => {
+		installFetch();
+		seedProject("uploads", "idle");
+		const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+		const priorDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+		const priorImage = Object.getOwnPropertyDescriptor(globalThis, "Image");
+		const fakeWindow = {
+			setTimeout: (handler: TimerHandler, timeout?: number) => globalThis.setTimeout(handler, timeout),
+			clearTimeout: (timer: number) => globalThis.clearTimeout(timer),
+		};
+		class FakeImage {
+			naturalWidth = 1024;
+			naturalHeight = 512;
+			onload: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+		}
+		const fakeDocument = {
+			createElement: (tag: string) => {
+				if (tag === "canvas") {
+					return {
+						width: 0, height: 0,
+						getContext: () => ({ imageSmoothingEnabled: false, imageSmoothingQuality: "low", drawImage: () => undefined }),
+						toBlob: (callback: (blob: Blob | null) => void) => callback(new Blob(["preview"], { type: "image/png" })),
+					};
+				}
+				if (tag === "video") {
+					const video = {
+						muted: false, playsInline: false, preload: "", duration: 1, videoWidth: 640, videoHeight: 360,
+						onloadeddata: null as (() => void) | null,
+						onerror: null as (() => void) | null,
+						onseeked: null as (() => void) | null,
+						_src: "",
+						set src(value: string) { this._src = value; queueMicrotask(() => this.onloadData()); },
+						get src() { return this._src; },
+						set currentTime(_value: number) { queueMicrotask(() => this.onseeked?.()); },
+						onloadData() { this.onloadeddata?.(); },
+						removeAttribute: () => undefined,
+						load: () => undefined,
+					};
+					return video;
+				}
+				throw new Error(`unsupported element ${tag}`);
+			},
+		};
+		Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
+		Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
+		Object.defineProperty(globalThis, "Image", { configurable: true, value: FakeImage });
+		try {
+			const imageId = await attachUploadedImage(new Blob(["image"], { type: "image/png" }), { x: 1, y: 2 }, { mode: "image" });
+			const videoId = await attachUploadedVideo(new Blob(["video"], { type: "video/mp4" }), { x: 3, y: 4 });
+			const audioId = await attachUploadedAudio(new Blob(["audio"], { type: "audio/mpeg" }), { x: 5, y: 6 });
+			expect(activeProject().nodes.find((node) => node.id === imageId)?.type).toBe("image");
+			expect(activeProject().nodes.find((node) => node.id === videoId)?.type).toBe("video");
+			expect(activeProject().nodes.find((node) => node.id === audioId)?.type).toBe("audio");
+		} finally {
+			if (priorWindow) Object.defineProperty(globalThis, "window", priorWindow);
+			else delete (globalThis as { window?: Window }).window;
+			if (priorDocument) Object.defineProperty(globalThis, "document", priorDocument);
+			else delete (globalThis as { document?: Document }).document;
+			if (priorImage) Object.defineProperty(globalThis, "Image", priorImage);
+			else delete (globalThis as { Image?: typeof Image }).Image;
+		}
 	});
 });
