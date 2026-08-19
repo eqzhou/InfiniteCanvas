@@ -246,8 +246,8 @@ jobs:
             /usr/bin/bwrap --version | grep -q '0\.11\.0'
           '
           curl --fail --silent http://127.0.0.1:8080/api/film/capabilities > film-capabilities.json
-          grep -q '"mp4Export":true' film-capabilities.json
-          grep -q '"pdfImport":true' film-capabilities.json
+          grep -Eq '"mp4Export":[[:space:]]*true' film-capabilities.json
+          grep -Eq '"pdfImport":[[:space:]]*true' film-capabilities.json
           docker compose exec -T postgres psql -U openboard_local -d openboard_local -Atc \
             "select count(*) from information_schema.tables where table_schema='public'" | grep -Eq '^(1[2-9]|[2-9][0-9]+)$'
           docker compose exec -T redis redis-cli -a "$OPENBOARD_REDIS_PASSWORD" ping | grep -q PONG

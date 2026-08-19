@@ -101,7 +101,14 @@ export async function copyImageSourceToClipboard(
     if (!resolved) throw new Error("没有可复制的图片");
     const response = await fetch(resolved);
     if (!response.ok) throw new Error(`读取图片失败（${response.status}）`);
-    return response.blob();
+    return blobWithDeclaredImageType(await response.blob(), response.headers.get("content-type"));
   });
   return writeImageBlobToClipboard(blob, dependencies);
+}
+
+function blobWithDeclaredImageType(blob: Blob, contentTypeHeader: string | null): Blob {
+  if (blob.type.startsWith("image/")) return blob;
+  const headerType = (contentTypeHeader ?? "").split(";")[0].trim();
+  if (!headerType.startsWith("image/")) return blob;
+  return new Blob([blob], { type: headerType });
 }

@@ -84,8 +84,14 @@ describe("image clipboard", () => {
   });
 
   test("copies a blob URL source and validates its MIME type", async () => {
-    const source = URL.createObjectURL(new Blob(["png"], { type: "image/png" }));
+    const png = new Blob(["png"], { type: "image/png" });
+    const source = URL.createObjectURL(png);
     let copied: Blob | undefined;
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== source) return priorFetch(input, init);
+      return new Response(png, { headers: { "Content-Type": png.type } });
+    }) as typeof fetch;
     try {
       await copyImageSourceToClipboard(source, {
         clipboard: { write: async (items) => {
@@ -95,7 +101,31 @@ describe("image clipboard", () => {
         convertToPng: mock(async (blob) => blob),
       });
     } finally {
+      globalThis.fetch = priorFetch;
       URL.revokeObjectURL(source);
+    }
+    expect(copied?.type).toBe("image/png");
+  });
+
+  test("uses the Content-Type header when fetch returns an untyped blob", async () => {
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "Content-Type": "image/png" }),
+      blob: async () => new Blob(["png"]),
+    })) as unknown as typeof fetch;
+    let copied: Blob | undefined;
+    try {
+      await copyImageSourceToClipboard("https://example.invalid/untyped.png", {
+        clipboard: { write: async (items) => {
+          copied = await (items[0] as { items: Record<string, Promise<Blob>> }).items["image/png"];
+        } },
+        ClipboardItemCtor: class { constructor(readonly items: Record<string, Promise<Blob>>) {} },
+        convertToPng: mock(async (blob) => blob),
+      });
+    } finally {
+      globalThis.fetch = priorFetch;
     }
     expect(copied?.type).toBe("image/png");
   });

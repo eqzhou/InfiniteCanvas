@@ -1,34 +1,42 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-const reported: { kind: string; status: string }[] = [];
-
-mock.module("@/services/ai-call-logs", () => ({
-  getAICallLogClientReport: async () => ({ enabled: true }),
-  reportAICallLog: async (entry: { kind: string; status: string }) => {
-    reported.push({ kind: entry.kind, status: entry.status });
-  },
-}));
-
-const { clearSessionToken, setSessionToken } = await import("./auth-session");
-const {
+import { clearSessionToken, setSessionToken } from "./auth-session";
+import {
   clearGenerationActivities,
   completeGenerationActivity,
   invalidateAICallLogClientReportCache,
   runTrackedGeneration,
-} = await import("./generation-activity");
+} from "./generation-activity";
+
+const reported: { kind: string; status: string }[] = [];
+const originalFetch = globalThis.fetch;
 
 /** Let the fire-and-forget report task settle. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("client AI call audit reporting", () => {
-  // `mock.module` replaces a module for the whole test process, so stubbing
-  // `auth-session` here would break every later file that drives real session
-  // tokens. Back the real implementation with a throwaway store instead.
+  // Stub fetch and a throwaway session store instead of replacing
+  // `ai-call-logs` for the whole test process.
   const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const priorStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
   beforeEach(() => {
     reported.length = 0;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/ai-call-logs/client-report") && method === "GET") {
+        return new Response(JSON.stringify({ enabled: true }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/ai-call-logs/report") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { kind: string; status: string };
+        reported.push({ kind: body.kind, status: body.status });
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    }) as typeof fetch;
     const values = new Map<string, string>();
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
@@ -48,6 +56,8 @@ describe("client AI call audit reporting", () => {
   });
 
   afterEach(() => {
+    globalThis.fetch = originalFetch;
+    mock.restore();
     clearSessionToken();
     invalidateAICallLogClientReportCache();
     if (priorStorage) Object.defineProperty(globalThis, "localStorage", priorStorage);

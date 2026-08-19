@@ -39,13 +39,21 @@ func TestPostgresVoiceIdentitySnapshotsAreTenantScopedAndImmutable(t *testing.T)
 	t.Cleanup(backend.Close)
 	tenantID := fmt.Sprintf("voice-store-%d", time.Now().UnixNano())
 	projectID := "voice-film"
+	if _, err := backend.pool.Exec(t.Context(), `
+INSERT INTO openboard_tenants (id,name) VALUES ($1,$2)
+ON CONFLICT (id) DO NOTHING`, tenantID, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = backend.pool.Exec(context.Background(), `DELETE FROM openboard_tenants WHERE id=$1`, tenantID)
+	})
 	if err := backend.PutProject(t.Context(), tenantID, projectID, []byte(`{"title":"Voice Film","updatedAt":"2026-08-11T00:00:00Z"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := backend.CreateFilmProject(t.Context(), tenantID, projectID, []byte(completeFilmProjectionDocument)); err != nil {
 		t.Fatal(err)
 	}
-	userID := "voice-owner"
+	userID := "voice-owner-" + tenantID
 	if _, err := backend.pool.Exec(t.Context(), `INSERT INTO openboard_users
 		(id,tenant_id,email,password_hash,display_name,role,credits,status)
 		VALUES ($1,$2,$3,'','Voice owner','owner',100,'active')`, userID, tenantID, tenantID+"@example.invalid"); err != nil {

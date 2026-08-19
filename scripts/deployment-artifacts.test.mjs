@@ -51,5 +51,7 @@ test("CI makes coverage, film Chromium, deployment, and container capability che
   assert.match(workflow, /OPENBOARD_PDFTOTEXT_PATH/);
   assert.match(workflow, /apk list --installed ffmpeg/);
   assert.match(workflow, /apk list --installed poppler-utils/);
+  assert.match(workflow, /"mp4Export":\[\[:space:\]\]\*true/);
+  assert.match(workflow, /"pdfImport":\[\[:space:\]\]\*true/);
   assert.doesNotMatch(workflow, /apk info -v ffmpeg/);
 });

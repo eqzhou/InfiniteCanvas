@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 
 const runId = process.env.OPENBOARD_E2E_RUN_ID ?? `${Date.now()}-${process.pid}`;
+const filmStatus = {
+  needsReview: "待审核",
+  approved: "已通过",
+  failed: "失败",
+} as const;
 function pdfFixture(text?: string): Buffer {
   const content = text ? `BT\n(${text.replaceAll("(", "\\(").replaceAll(")", "\\)").replaceAll("\n", "\\n")}) Tj\nET` : "q\nQ";
   const objects = [
@@ -63,9 +68,9 @@ test("creates a film, imports a manuscript, approves decomposition, validates, a
   await page.getByRole("button", { name: "采用确定性拆解" }).click();
 
   const decompose = page.getByTestId("film-stage-decompose");
-  await expect(decompose).toContainText("needs_review");
+  await expect(decompose).toContainText(filmStatus.needsReview);
   await decompose.getByRole("button", { name: "批准" }).click();
-  await expect(decompose).toContainText("approved");
+  await expect(decompose).toContainText(filmStatus.approved);
 
   const projectId = page.url().split("/").pop()!;
   await page.getByRole("button", { name: "刷新到真实画布" }).click();
@@ -79,7 +84,7 @@ test("creates a film, imports a manuscript, approves decomposition, validates, a
   await expect(page.getByText(/个问题，/)).toBeVisible();
   await page.getByRole("button", { name: "请求导出" }).click();
   await expect(page.getByText("Production manifest")).toBeVisible();
-  await expect(page.getByText("manifest · approved")).toBeVisible();
+  await expect(page.getByText("项目清单 · 已通过")).toBeVisible();
   await expect(page.getByRole("link", { name: "下载" })).toBeVisible();
 });
 
@@ -93,7 +98,7 @@ test("preflights imports, edits a multitrack timeline, and surfaces revision con
       mimeType: "application/pdf",
       buffer: textLayerPDF,
     });
-    await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
+    await expect(page.getByTestId("film-stage-decompose")).toContainText(filmStatus.needsReview);
 
     await page.getByTestId("film-manuscript-file").setInputFiles({
       name: "scan.pdf",
@@ -112,15 +117,15 @@ test("preflights imports, edits a multitrack timeline, and surfaces revision con
   });
   await expect(page.getByRole("region", { name: "原稿预检结果" })).toContainText("预检完成");
   await page.getByRole("button", { name: "采用确定性拆解" }).click();
-  await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
+  await expect(page.getByTestId("film-stage-decompose")).toContainText(filmStatus.needsReview);
 
-  await page.getByRole("button", { name: "添加 video 片段" }).click();
-  await page.getByRole("button", { name: "添加 subtitle 片段" }).click();
+  await page.getByRole("button", { name: "向视频轨添加片段" }).click();
+  await page.getByRole("button", { name: "向字幕轨添加片段" }).click();
   const subtitle = page.getByTestId("timeline-track-subtitle").getByTestId("timeline-clip").first();
   await subtitle.getByLabel("字幕文本").fill("Mix ready");
-  await subtitle.getByLabel("出点").fill("0");
+  await subtitle.getByLabel("结束").fill("0");
   await expect(page.getByRole("alert").filter({ hasText: "入点必须早于出点" })).toBeVisible();
-  await subtitle.getByLabel("出点").fill("2");
+  await subtitle.getByLabel("结束").fill("2");
   await page.getByRole("button", { name: "保存时间线" }).click();
   await expect(page.getByRole("status")).toContainText("时间线已保存");
 
@@ -148,7 +153,7 @@ test("runs a scoped generation pass and retries one failed shot job", async ({ p
   await page.getByRole("button", { name: "预检原稿" }).click();
   await expect(page.getByRole("region", { name: "原稿预检结果" })).toContainText("预检完成");
   await page.getByRole("button", { name: "采用确定性拆解" }).click();
-  await expect(page.getByTestId("film-stage-decompose")).toContainText("needs_review");
+  await expect(page.getByTestId("film-stage-decompose")).toContainText(filmStatus.needsReview);
   const projectId = page.url().split("/").pop()!;
   const response = await page.evaluate(async (id) => (await fetch(`/api/film/projects/${id}/status`)).json(), projectId);
   const capable = {
@@ -214,8 +219,8 @@ test("runs a scoped generation pass and retries one failed shot job", async ({ p
   await startGeneration.click();
   await expect.poll(() => runBody?.providerId).toBe("studio-provider");
   const child = page.getByTestId("generation-job-child-1");
-  await expect(child).toContainText("failed");
+  await expect(child).toContainText(filmStatus.failed);
   await child.getByRole("button", { name: "重试镜头" }).click();
-  await expect(child).toContainText("needs_review");
-  await expect(child).not.toContainText("approved");
+  await expect(child).toContainText(filmStatus.needsReview);
+  await expect(child).not.toContainText(filmStatus.approved);
 });

@@ -1,10 +1,19 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { applyTheme, getStoredTheme, resolveEffectiveTheme, setupCrossTabThemeListener } from "./theme";
 
+function installGlobal(name: string, value: unknown): void {
+  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+}
+
+function restoreGlobal(name: string, prior: PropertyDescriptor | undefined): void {
+  if (prior) Object.defineProperty(globalThis, name, prior);
+  else delete (globalThis as Record<string, unknown>)[name];
+}
+
 describe("theme management", () => {
-  let originalStorage: any;
-  let originalWindow: any;
-  let originalDocument: any;
+  const priorStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const priorDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 
   let mockStorage: Record<string, string> = {};
   let mockClassList: Set<string> = new Set();
@@ -13,37 +22,32 @@ describe("theme management", () => {
   let eventListeners: Record<string, ((e: any) => void)[]> = {};
 
   beforeEach(() => {
-    originalStorage = globalThis.localStorage;
-    originalWindow = globalThis.window;
-    originalDocument = globalThis.document;
-
     mockStorage = {};
     mockClassList = new Set();
     mockAttributes = {};
     mockStyle = {};
     eventListeners = {};
 
-    globalThis.localStorage = {
+    installGlobal("localStorage", {
       getItem: (k: string) => mockStorage[k] ?? null,
       setItem: (k: string, v: string) => { mockStorage[k] = v; },
       removeItem: (k: string) => { delete mockStorage[k]; },
       clear: () => { mockStorage = {}; },
       length: 0,
       key: () => null,
-    } as unknown as Storage;
+    } as unknown as Storage);
 
-    globalThis.window = {
-      ...((originalWindow || {}) as any),
-      addEventListener: (type: string, listener: any) => {
+    installGlobal("window", {
+      addEventListener: (type: string, listener: (e: unknown) => void) => {
         if (!eventListeners[type]) eventListeners[type] = [];
         eventListeners[type].push(listener);
       },
-      removeEventListener: (type: string, listener: any) => {
+      removeEventListener: (type: string, listener: (e: unknown) => void) => {
         if (eventListeners[type]) {
           eventListeners[type] = eventListeners[type].filter((l) => l !== listener);
         }
       },
-      dispatchEvent: (event: any) => {
+      dispatchEvent: (event: { type: string }) => {
         const listeners = eventListeners[event.type] ?? [];
         for (const l of listeners) l(event);
         return true;
@@ -55,10 +59,9 @@ describe("theme management", () => {
         addListener: () => {},
         removeListener: () => {},
       }),
-    } as unknown as Window & typeof globalThis;
+    } as unknown as Window & typeof globalThis);
 
-    globalThis.document = {
-      ...((originalDocument || {}) as any),
+    installGlobal("document", {
       documentElement: {
         classList: {
           toggle: (cls: string, force?: boolean) => {
@@ -77,13 +80,13 @@ describe("theme management", () => {
         getAttribute: (k: string) => mockAttributes[k] ?? null,
         style: mockStyle as unknown as CSSStyleDeclaration,
       },
-    } as unknown as Document;
+    } as unknown as Document);
   });
 
   afterEach(() => {
-    globalThis.localStorage = originalStorage;
-    globalThis.window = originalWindow;
-    globalThis.document = originalDocument;
+    restoreGlobal("localStorage", priorStorage);
+    restoreGlobal("window", priorWindow);
+    restoreGlobal("document", priorDocument);
   });
 
   test("resolves explicit light and dark themes", () => {
