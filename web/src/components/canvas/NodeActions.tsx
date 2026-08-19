@@ -113,7 +113,7 @@ import {
   type MediaCapabilityCatalog,
 } from "@/services/media-capabilities";
 
-function nodeVideoControls(node: BoardNode, channel: AiChannel, capability?: MediaCapability) {
+export function nodeVideoControls(node: BoardNode, channel: AiChannel, capability?: MediaCapability) {
   const provider = getProvider(channel, "video");
   const model = node.metadata.model || provider.model;
   const requestedRatio = node.metadata.videoRatio || "16:9";

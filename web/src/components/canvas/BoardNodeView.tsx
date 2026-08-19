@@ -73,7 +73,7 @@ const PanoramaNodeCard = lazy(() => import("@/components/canvas/PanoramaNodeCard
 // The image action strip can wrap to two rows and normally extends above the node.
 const NODE_ACTIONS_TOP_SAFE_AREA = 180;
 
-function moveInput(order: readonly string[], index: number, offset: -1 | 1): string[] {
+export function moveInput(order: readonly string[], index: number, offset: -1 | 1): string[] {
   const target = index + offset;
   return order.map((id, current) => {
     if (current === index) return order[target] ?? id;

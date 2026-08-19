@@ -1195,7 +1195,7 @@ export function BoardCanvas() {
   );
 }
 
-function backgroundStyle(
+export function backgroundStyle(
   mode: "dots" | "lines" | "blank",
   viewport: { x: number; y: number; k: number },
 ): React.CSSProperties {
