@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   IMAGE_GENERATION_MAX_COUNT,
+  firstSucceededGenerationJob,
   imageGenerationBatchCount,
   imageGenerationSlotParameters,
   workbenchImageCountFromParameters,
@@ -40,6 +41,15 @@ describe("image generation batch fan-out", () => {
     expect(imageGenerationBatchCount(IMAGE_GENERATION_MAX_COUNT + 1)).toBe(IMAGE_GENERATION_MAX_COUNT);
     expect(imageGenerationBatchCount(0)).toBe(1);
     expect(imageGenerationBatchCount("nope")).toBe(1);
+  });
+
+  test("adopts only the first succeeded film slot", () => {
+    expect(firstSucceededGenerationJob([
+      { status: "failed" },
+      { status: "succeeded", id: "job-a" },
+      { status: "succeeded", id: "job-b" },
+    ])).toEqual({ status: "succeeded", id: "job-a" });
+    expect(firstSucceededGenerationJob([{ status: "failed" }, { status: "cancelled" }])).toBeUndefined();
   });
 
   test("restores the original requested count from a split history card", () => {

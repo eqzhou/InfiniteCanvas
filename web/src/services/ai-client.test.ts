@@ -258,6 +258,44 @@ describe("generateVideo provider contracts", () => {
     expect(calls).toBe(1);
   });
 
+  test("fans a template n=2 request out into two count=1 calls", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return json({ output: { images: ["https://cdn.example/template.png"] } });
+    }) as typeof fetch;
+    const c = channel("https://legacy.example/v1");
+    c.providers = {
+      ...defaultProvidersForTest(c),
+      image: {
+        baseUrl: "https://relay.example/api",
+        apiKey: fixtureCredential,
+        model: "relay-image",
+        protocol: "template",
+        template: {
+          method: "POST",
+          path: "/generate",
+          auth: "bearer",
+          request: { prompt: "{{prompt}}", count: "{{count}}" },
+          responsePath: "output.images",
+        },
+      },
+    };
+    await expect(generateImages({
+      channel: c,
+      model: "relay-image",
+      prompt: "two variants",
+      n: 2,
+    })).resolves.toEqual([
+      "https://cdn.example/template.png",
+      "https://cdn.example/template.png",
+    ]);
+    expect(bodies).toEqual([
+      { prompt: "two variants", count: 1 },
+      { prompt: "two variants", count: 1 },
+    ]);
+  });
+
   test("maps transparent background to OpenAI image generation", async () => {
     let body: Record<string, unknown> = {};
     globalThis.fetch = mock(async (_input, init) => {

@@ -23,13 +23,14 @@ import (
 )
 
 const (
-	maxGeneratedImageBytes  = 24 << 20
-	maxGeneratedTotalBytes  = 24 << 20
-	maxGeneratedPixels      = 12_000_000
-	maxReferenceImagePixels = 100_000_000
-	serverExecutorMarker    = "server"
-	generationLeaseDuration = 2 * time.Minute
-	generationLeaseRenewal  = 10 * time.Second
+	maxGeneratedImageBytes    = 24 << 20
+	maxGeneratedTotalBytes    = 256 << 20
+	maxComfyUIImageTotalBytes = 24 << 20
+	maxGeneratedPixels        = 12_000_000
+	maxReferenceImagePixels   = 100_000_000
+	serverExecutorMarker      = "server"
+	generationLeaseDuration   = 2 * time.Minute
+	generationLeaseRenewal    = 10 * time.Second
 )
 
 var imageSizePattern = regexp.MustCompile(`^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$`)

@@ -756,7 +756,7 @@ func TestAPIMartImageCapabilityRejectsUnsupportedPaidParametersBeforeCreate(t *t
 		Model: "gpt-image-1-official", Prompt: "draw", Size: "1:1", Quality: "auto", Count: 1,
 	}
 	for name, mutate := range map[string]func(*imageGenerationRequest){
-		"count":   func(value *imageGenerationRequest) { value.Count = 5 },
+		"count":   func(value *imageGenerationRequest) { value.Count = 0 },
 		"size":    func(value *imageGenerationRequest) { value.Size = "16:9" },
 		"quality": func(value *imageGenerationRequest) { value.Quality = "ultra" },
 		"model":   func(value *imageGenerationRequest) { value.Model = "seedream-5-pro" },
@@ -793,7 +793,7 @@ func TestAPIMartSerializesSeedreamAndGeminiLiteExactImageFields(t *testing.T) {
 	executor.apimartMaxDuration = time.Second
 	for _, request := range []imageGenerationRequest{
 		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "21:9", Quality: "1K", Count: 1},
-		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "nano-banana-2-lite", Prompt: "draw", Size: "5:4", Quality: "auto", Count: 2},
+		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "nano-banana-2-lite", Prompt: "draw", Size: "5:4", Quality: "auto", Count: 1},
 	} {
 		_, _ = executor.GenerateResumable(context.Background(), request, nil, func(videoProviderCheckpoint) error { return nil })
 	}
@@ -803,8 +803,43 @@ func TestAPIMartSerializesSeedreamAndGeminiLiteExactImageFields(t *testing.T) {
 	if !reflect.DeepEqual(bodies[0], map[string]any{"model": "doubao-seedream-5-0-pro", "prompt": "draw", "size": "21:9", "resolution": "1K"}) {
 		t.Fatalf("Seedream body = %#v", bodies[0])
 	}
-	if !reflect.DeepEqual(bodies[1], map[string]any{"model": "nano-banana-2-lite", "prompt": "draw", "size": "5:4", "resolution": "1K", "n": float64(2)}) {
+	if !reflect.DeepEqual(bodies[1], map[string]any{"model": "nano-banana-2-lite", "prompt": "draw", "size": "5:4", "resolution": "1K", "n": float64(1)}) {
 		t.Fatalf("Gemini Lite body = %#v", bodies[1])
+	}
+}
+
+func TestAPIMartFansOutSeedreamCountAsSingleImageTasks(t *testing.T) {
+	var creates atomic.Int32
+	var upstream *httptest.Server
+	pixel := apimartPNG(t)
+	upstream = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/images/generations"):
+			creates.Add(1)
+			_, _ = io.WriteString(w, fmt.Sprintf(`{"code":200,"data":[{"task_id":"task_seedream_%d"}]}`, creates.Load()))
+		case strings.Contains(r.URL.Path, "/tasks/"):
+			_, _ = io.WriteString(w, `{"code":200,"data":{"status":"completed","result":{"images":[{"url":"`+upstream.URL+`/out.png"}]}}}`)
+		case r.URL.Path == "/out.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(pixel)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	executor := newOpenAIImageExecutor()
+	executor.client = upstream.Client()
+	executor.apimartPollInterval = 0
+	executor.apimartMaxDuration = 5 * time.Second
+	images, err := executor.GenerateResumable(context.Background(), imageGenerationRequest{
+		Protocol: "apimart", BaseURL: upstream.URL, APIKey: "token",
+		Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "1:1", Quality: "2K", Count: 2,
+	}, nil, func(videoProviderCheckpoint) error { return nil })
+	if err != nil || len(images) != 2 {
+		t.Fatalf("images = %#v, %v", images, err)
+	}
+	if creates.Load() != 2 {
+		t.Fatalf("creates = %d, want 2", creates.Load())
 	}
 }
 
@@ -812,7 +847,6 @@ func TestAPIMartCurrentImageContractsRejectUnsupportedParametersBeforeCreate(t *
 	executor := newOpenAIImageExecutor()
 	base := imageGenerationRequest{Protocol: "apimart", BaseURL: "https://api.apimart.ai", APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "1:1", Quality: "2K", Count: 1}
 	for name, mutate := range map[string]func(*imageGenerationRequest){
-		"Seedream count":         func(value *imageGenerationRequest) { value.Count = 2 },
 		"Seedream resolution":    func(value *imageGenerationRequest) { value.Quality = "4K" },
 		"empty prompt":           func(value *imageGenerationRequest) { value.Prompt = " " },
 		"transparent background": func(value *imageGenerationRequest) { value.TransparentBackground = true },

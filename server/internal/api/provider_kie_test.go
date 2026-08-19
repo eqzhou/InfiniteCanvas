@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -192,6 +193,53 @@ func TestKIEImageCreateUploadPollDownloadAndResume(t *testing.T) {
 		return nil
 	}); err != nil || creates.Load() != 1 || uploads.Load() != 1 || polls.Load() != 2 {
 		t.Fatalf("creates=%d uploads=%d polls=%d err=%v", creates.Load(), uploads.Load(), polls.Load(), err)
+	}
+}
+
+func TestKIEFansOutCountAsSingleImageTasks(t *testing.T) {
+	png, _ := base64.StdEncoding.DecodeString(onePixelPNGBase64())
+	var creates atomic.Int32
+	var upstream *httptest.Server
+	upstream = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/jobs/createTask":
+			creates.Add(1)
+			var body map[string]any
+			if json.NewDecoder(r.Body).Decode(&body) != nil {
+				t.Fatal("invalid create JSON")
+			}
+			input, _ := body["input"].(map[string]any)
+			if _, ok := input["num_images"]; ok {
+				t.Fatalf("fan-out still sent num_images: %#v", body)
+			}
+			_, _ = io.WriteString(w, fmt.Sprintf(`{"code":200,"data":{"taskId":"task_kie_image_%d"}}`, creates.Load()))
+		case "/api/v1/jobs/recordInfo":
+			taskID := r.URL.Query().Get("taskId")
+			result, _ := json.Marshal(map[string]any{"resultUrls": []string{upstream.URL + "/result.png"}})
+			payload, _ := json.Marshal(map[string]any{"code": 200, "data": map[string]any{"taskId": taskID, "state": "success", "resultJson": string(result)}})
+			_, _ = w.Write(payload)
+		case "/result.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(png)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	executor := newOpenAIImageExecutor()
+	executor.client = noRedirectClient(upstream.Client())
+	executor.kiePollInterval = 0
+	executor.kieMaxDuration = 5 * time.Second
+	images, err := executor.Generate(context.Background(), imageGenerationRequest{
+		Protocol: "kie", BaseURL: upstream.URL, APIKey: "token",
+		Model: "seedream-v4-text-to-image", Prompt: "draw", Size: "1024x1024", Count: 2,
+	})
+	if err != nil || len(images) != 2 {
+		t.Fatalf("images=%#v err=%v", images, err)
+	}
+	if creates.Load() != 2 {
+		t.Fatalf("creates=%d, want 2", creates.Load())
 	}
 }
 

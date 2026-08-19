@@ -525,6 +525,36 @@ func TestImageExecutorRunsRestrictedTemplateWithInlineResult(t *testing.T) {
 	}
 }
 
+func TestImageExecutorTemplateFansOutCountAsSingleRequests(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["count"] != float64(1) {
+			t.Fatalf("template count = %#v, want 1", body["count"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"output":{"images":["data:image/png;base64,`+onePixelPNGBase64()+`"]}}`)
+	}))
+	defer upstream.Close()
+
+	images, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
+		Protocol: "template", BaseURL: upstream.URL + "/v1", APIKey: "token",
+		Model: "relay-image", Prompt: "draw two", Count: 2,
+		Template: &imageProviderTemplate{
+			Method: http.MethodPost, Path: "/render", Auth: "bearer",
+			Request:      json.RawMessage(`{"prompt":"{{prompt}}","count":"{{count}}"}`),
+			ResponsePath: "output.images",
+		},
+	})
+	if err != nil || requests != 2 || len(images) != 2 {
+		t.Fatalf("requests=%d images=%#v err=%v", requests, images, err)
+	}
+}
+
 func TestImageExecutorRejectsUnsafeTemplateBeforeProviderRequest(t *testing.T) {
 	requests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))

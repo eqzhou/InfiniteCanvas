@@ -1,8 +1,17 @@
 import type { BoardProject } from "@/types/board";
 import { createNode } from "@/lib/defaults";
 import { uid } from "@/lib/id";
-import { IMAGE_GENERATION_MAX_COUNT } from "@/lib/image-generation-batch";
+import {
+  IMAGE_GENERATION_MAX_COUNT,
+  imageGenerationBatchCount,
+  imageGenerationSlotParameters,
+} from "@/lib/image-generation-batch";
 import type { createImageGenerationMetadata } from "@/lib/image-generation";
+import {
+  cancelServerGenerationJob,
+  createServerImageGenerationJob,
+  type ServerImageGenerationInput,
+} from "@/services/generation-jobs";
 
 type ImageGenerationMetadata = ReturnType<typeof createImageGenerationMetadata>;
 
@@ -38,17 +47,92 @@ export async function submitServerImageGeneration<T>(input: ServerImageGeneratio
   return job;
 }
 
+function canvasImageJobIds(jobId: string | readonly string[]): string[] {
+  return typeof jobId === "string" ? [jobId] : [...jobId];
+}
+
+export async function createCanvasImageGenerationSlots(
+  input: Omit<ServerImageGenerationInput, "id" | "parameters"> & {
+    parameters: Omit<ServerImageGenerationInput["parameters"], "count" | "requestedCount" | "batchId" | "batchIndex"> & {
+      count: number;
+    };
+  },
+): Promise<{ jobIds: string[]; jobs: Awaited<ReturnType<typeof createServerImageGenerationJob>>[] }> {
+  const total = imageGenerationBatchCount(input.parameters.count);
+  const jobIds = Array.from({ length: total }, () => uid("job"));
+  const batchId = total > 1 ? uid("batch") : "";
+  const jobs: Awaited<ReturnType<typeof createServerImageGenerationJob>>[] = [];
+  try {
+    for (let index = 0; index < total; index += 1) {
+      const slot = imageGenerationSlotParameters({
+        ...input.parameters,
+        count: total,
+      }, index, total, batchId);
+      jobs.push(await createServerImageGenerationJob({
+        ...input,
+        id: jobIds[index],
+        parameters: {
+          ...input.parameters,
+          count: 1,
+          requestedCount: slot.requestedCount,
+          batchId: slot.batchId || undefined,
+          batchIndex: slot.batchIndex || undefined,
+        },
+      }));
+    }
+  } catch (error) {
+    await Promise.allSettled(jobs.map((job) => cancelServerGenerationJob(job.id)));
+    throw error;
+  }
+  const accepted = jobs[0];
+  if (!accepted || jobs.length !== total) {
+    await Promise.allSettled(jobs.map((job) => cancelServerGenerationJob(job.id)));
+    throw new Error("Canvas image generation did not create the requested jobs");
+  }
+  return { jobIds: jobs.map((job) => job.id), jobs };
+}
+
+export function canvasGenerationJobIds(project: BoardProject, rootId: string): string[] {
+  const root = project.nodes.find((node) => node.id === rootId);
+  if (!root) return [];
+  const outputRoot = typeof root.metadata.generationOutputRootId === "string"
+    ? project.nodes.find((node) => node.id === root.metadata.generationOutputRootId)
+    : undefined;
+  const ids: string[] = [];
+  for (const source of [root, outputRoot]) {
+    if (!source) continue;
+    if (source.metadata.generationJobId) ids.push(source.metadata.generationJobId);
+    for (const childId of source.metadata.batchChildIds ?? []) {
+      const child = project.nodes.find((node) => node.id === childId);
+      if (child?.metadata.generationJobId) ids.push(child.metadata.generationJobId);
+    }
+  }
+  return [...new Set(ids)];
+}
+
+export function canvasInFlightGenerationJobIds(project: BoardProject, rootId: string): string[] {
+  return canvasGenerationJobIds(project, rootId).filter((jobId) =>
+    project.nodes.some((node) => node.metadata.generationJobId === jobId && node.metadata.status === "loading"),
+  );
+}
+
 export function applyServerImagePlaceholders(
   project: BoardProject,
   rootId: string,
-  jobId: string,
+  jobId: string | readonly string[],
   generation: ImageGenerationMetadata,
   options: { replaceExisting?: boolean } = {},
 ): BoardProject {
+  const jobIds = canvasImageJobIds(jobId);
   const root = project.nodes.find((node) => node.id === rootId);
-  if (!root || (root.type !== "image" && root.type !== "config") || generation.count < 1 || generation.count > IMAGE_GENERATION_MAX_COUNT) {
+  if (!root || (root.type !== "image" && root.type !== "config") || generation.count < 1 || generation.count > IMAGE_GENERATION_MAX_COUNT || jobIds.length < 1) {
     throw new Error("Server image placeholder root is invalid");
   }
+  const sharedJob = jobIds.length === 1;
+  if (jobIds.length > 1 && jobIds.length !== generation.count) {
+    throw new Error("Server image placeholder jobs do not match the requested count");
+  }
+  const primaryJobId = jobIds[0]!;
   if (root.type === "image" && generation.count === 1 &&
       ((!root.metadata.content && !root.metadata.storageKey) || options.replaceExisting)) {
     return {
@@ -60,7 +144,7 @@ export function applyServerImagePlaceholders(
           ...generation,
           status: "loading",
           errorDetails: undefined,
-          generationJobId: jobId,
+          generationJobId: primaryJobId,
           generationResultIndex: 0,
         },
       } : node),
@@ -81,7 +165,7 @@ export function applyServerImagePlaceholders(
         ...generation,
         status: "loading",
         ...(!isBatch ? {
-          generationJobId: jobId,
+          generationJobId: primaryJobId,
           generationResultIndex: 0,
         } : {}),
         generationRunId: runId,
@@ -100,8 +184,8 @@ export function applyServerImagePlaceholders(
       metadata: {
         ...generation,
         status: "loading",
-        generationJobId: jobId,
-        generationResultIndex: index,
+        generationJobId: sharedJob ? primaryJobId : jobIds[index]!,
+        generationResultIndex: sharedJob ? index : 0,
         generationRunId: runId,
         batchRootId: runRoot.id,
         ...(root.type === "config" ? { generationConfigId: root.id } : {}),
@@ -116,11 +200,11 @@ export function applyServerImagePlaceholders(
         ...node,
         metadata: {
           ...node.metadata,
+          generationOutputRootId: runRoot.id,
           ...(root.type === "config" ? {
             status: "loading" as const,
             errorDetails: undefined,
-            generationJobId: jobId,
-            generationOutputRootId: runRoot.id,
+            generationJobId: primaryJobId,
           } : {}),
         },
       } : node),

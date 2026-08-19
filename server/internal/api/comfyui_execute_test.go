@@ -215,7 +215,7 @@ func TestComfyUICancelDoesNotInterruptSharedExecutor(t *testing.T) {
 func TestComfyUIExecutorEnforcesAggregateOutputLimit(t *testing.T) {
 	fixture := newComfyFixture(t)
 	fixture.history = `{"prompt-1":{"status":{"status_str":"success","completed":true},"outputs":{"save":{"images":[{"filename":"result.png","subfolder":"final","type":"output"},{"filename":"result.png","subfolder":"final","type":"output"}]}}}}`
-	fixture.output = bytes.Repeat([]byte{0}, maxGeneratedTotalBytes/2+1)
+	fixture.output = bytes.Repeat([]byte{0}, maxComfyUIImageTotalBytes/2+1)
 	manifest := comfyImageManifest(t, fixture.server.URL)
 	executor, err := newComfyUIExecutor(fixture.server.URL, false)
 	if err != nil {

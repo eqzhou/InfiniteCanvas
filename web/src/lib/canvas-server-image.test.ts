@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { createNode, createProject } from "./defaults";
-import { applyServerImagePlaceholders, submitServerImageGeneration } from "./canvas-server-image";
+import {
+  applyServerImagePlaceholders,
+  canvasGenerationJobIds,
+  canvasInFlightGenerationJobIds,
+  submitServerImageGeneration,
+} from "./canvas-server-image";
 import { createImageGenerationMetadata } from "./image-generation";
 import { parseBoardProject } from "./board-document";
 
@@ -109,6 +114,39 @@ describe("canvas server image placeholders", () => {
     expect(project).not.toEqual(next);
     expect(root.metadata.batchChildIds).toBeUndefined();
     expect(parseBoardProject(next)).toMatchObject({ id: project.id });
+  });
+
+  test("rejects a job-id list that does not match the requested count", () => {
+    const root = createNode("config", { x: 30, y: 40 });
+    const project = { ...createProject("Board"), nodes: [root] };
+    expect(() => applyServerImagePlaceholders(project, root.id, ["job-a", "job-b"], generation)).toThrow(
+      /jobs do not match the requested count/i,
+    );
+  });
+
+  test("binds each batch slot to its own n=1 job", () => {
+    const root = createNode("config", { x: 30, y: 40 });
+    const project = { ...createProject("Board"), nodes: [root] };
+    const next = applyServerImagePlaceholders(project, root.id, ["job-a", "job-b", "job-c"], generation);
+    const runRoot = next.nodes.find((node) => node.metadata.generationConfigId === root.id)!;
+    const children = next.nodes.filter((node) => node.metadata.batchRootId === runRoot.id);
+
+    expect(children.map((node) => node.metadata.generationJobId)).toEqual(["job-a", "job-b", "job-c"]);
+    expect(children.every((node) => node.metadata.generationResultIndex === 0)).toBe(true);
+    expect(canvasGenerationJobIds(next, root.id)).toEqual(["job-a", "job-b", "job-c"]);
+    expect(canvasInFlightGenerationJobIds(next, root.id)).toEqual(["job-a", "job-b", "job-c"]);
+  });
+
+  test("tracks in-flight jobs from an image source that created a batch", () => {
+    const root = createNode("image", { x: 10, y: 20 }, { metadata: { content: "data:image/png;base64,aa" } });
+    const project = { ...createProject("Board"), nodes: [root] };
+    const next = applyServerImagePlaceholders(project, root.id, ["job-a", "job-b", "job-c"], generation);
+    const updatedRoot = next.nodes.find((node) => node.id === root.id)!;
+
+    expect(updatedRoot.metadata.status).not.toBe("loading");
+    expect(updatedRoot.metadata.generationOutputRootId).toBeDefined();
+    expect(canvasGenerationJobIds(next, root.id)).toEqual(["job-a", "job-b", "job-c"]);
+    expect(canvasInFlightGenerationJobIds(next, root.id)).toEqual(["job-a", "job-b", "job-c"]);
   });
 
   test("keeps config runs isolated when it is generated twice", () => {

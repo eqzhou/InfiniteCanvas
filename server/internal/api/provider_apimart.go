@@ -534,6 +534,11 @@ func (e *openAIImageExecutor) generateAPIMart(ctx context.Context, request image
 }
 
 func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request imageGenerationRequest, existing *videoProviderCheckpoint, save func(videoProviderCheckpoint) error) ([]generatedImage, error) {
+	if request.Count > 1 && existing == nil {
+		return fanOutImageGenerations(ctx, request, func(ctx context.Context, single imageGenerationRequest) ([]generatedImage, error) {
+			return e.GenerateResumable(ctx, single, nil, func(videoProviderCheckpoint) error { return nil })
+		})
+	}
 	if request.Protocol == "kie" {
 		return e.generateKIEImageResumable(ctx, request, existing, save)
 	}

@@ -9,6 +9,7 @@ import { normalizeVideoFrameMode } from "@/lib/video-generation";
 import { assertResolvedImageReferences } from "@/lib/image-generation";
 import {
   IMAGE_GENERATION_MAX_COUNT,
+  firstSucceededGenerationJob,
   imageGenerationBatchCount,
   imageGenerationSlotParameters,
 } from "@/lib/image-generation-batch";
@@ -64,7 +65,7 @@ import {
   type MediaCapability,
   type MediaCapabilityCatalog,
 } from "@/services/media-capabilities";
-import { adoptFilmCanvasMedia } from "@/services/film-client";
+import { adoptFilmCanvasMedia, resolveFilmEntityRevision } from "@/services/film-client";
 import { resolveWorkbenchRunChannel } from "@/lib/workbench-provider";
 import {
   estimateCredits,
@@ -122,6 +123,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		assetId: searchParams.get("assetId") ?? "",
 		revision: Number(searchParams.get("assetRevision") ?? 0),
 	} : null;
+	const filmRevisionRef = useRef(filmAssetTarget?.revision ?? 0);
   const config = useBoardStore((state) => state.config);
   const assets = useBoardStore((state) => state.assets);
   const { ready, projectsState, projectsError, loadProjectsOnDemand } = useLazyProjects();
@@ -246,12 +248,21 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		if (!filmAssetTarget?.projectId || !filmAssetTarget.assetId || !Number.isSafeInteger(filmAssetTarget.revision) || filmAssetTarget.revision < 1) return;
 		const first = items.find((item) => item.storageKey);
 		if (!first?.storageKey) throw new Error(t("creative.adoptMediaMissing"));
-		await adoptFilmCanvasMedia(filmAssetTarget.projectId, {
+		const expectedRevision = Number.isSafeInteger(filmRevisionRef.current) && filmRevisionRef.current > 0
+			? filmRevisionRef.current
+			: filmAssetTarget.revision;
+		const status = await adoptFilmCanvasMedia(filmAssetTarget.projectId, {
 			targetType: "asset", targetId: filmAssetTarget.assetId, targetField: "media",
-			expectedRevision: filmAssetTarget.revision, sourceNodeId: `workbench-${completedJob.id.slice(0, 100)}`,
+			expectedRevision, sourceNodeId: `workbench-${completedJob.id.slice(0, 100)}`,
 			storageKey: first.storageKey, generationJobId: completedJob.id,
 		});
+		const nextRevision = resolveFilmEntityRevision(status.document, "asset", filmAssetTarget.assetId);
+		if (typeof nextRevision === "number" && nextRevision > 0) filmRevisionRef.current = nextRevision;
 	}, [filmAssetTarget?.assetId, filmAssetTarget?.projectId, filmAssetTarget?.revision, t]);
+
+	useEffect(() => {
+		filmRevisionRef.current = filmAssetTarget?.revision ?? 0;
+	}, [filmAssetTarget?.assetId, filmAssetTarget?.projectId, filmAssetTarget?.revision]);
 
 	useEffect(() => {
 		let active = true;
@@ -807,6 +818,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 			if (kind === "image") {
 				const total = imageGenerationBatchCount(parameters.count ?? count);
 				const batchId = total > 1 ? uid("batch") : "";
+				try {
 				for (let index = 0; index < total; index += 1) {
 					if (controller.signal.aborted) break;
 					const slot = imageGenerationSlotParameters({
@@ -839,6 +851,10 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					activeServerJobIdsRef.current.set(runToken, createdJobs.map((item) => item.id));
 					setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]);
 				}
+				} catch (error) {
+					await Promise.allSettled(createdJobs.map((item) => cancelServerGenerationJob(item.id)));
+					throw error;
+				}
 				if (controller.signal.aborted) {
 					await Promise.allSettled(createdJobs.map((item) => cancelServerGenerationJob(item.id)));
 					return;
@@ -850,6 +866,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				})));
 				if (controller.signal.aborted) return;
 				const completedJobs = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+				const previewByJob = new Map<string, WorkbenchResultItem[]>();
 				for (const completed of completedJobs) {
 					if (completed.status !== "succeeded") continue;
 					const completedItems = Array.isArray(completed.result.items) ? completed.result.items as WorkbenchResultItem[] : [];
@@ -857,14 +874,24 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					if (previewItems.some((item, index) => item.thumbnailStorageKey !== completedItems[index]?.thumbnailStorageKey)) {
 						await updateGenerationJob(completed.id, { result: { ...completed.result, items: previewItems } });
 					}
-					await adoptAssetResult(completed, previewItems);
+					previewByJob.set(completed.id, previewItems);
+				}
+				const adopted = firstSucceededGenerationJob(completedJobs);
+				let adoptedOk = false;
+				if (adopted) {
+					try {
+						await adoptAssetResult(adopted, previewByJob.get(adopted.id) ?? []);
+						adoptedOk = true;
+					} catch (cause) {
+						setError(cause instanceof Error ? cause.message : String(cause));
+					}
 				}
 				const failed = completedJobs.filter((item) => item.status === "failed");
 				const rejected = settled.filter((result) => result.status === "rejected").length;
 				if (failed.length + rejected === created.length) {
 					throw new Error(failed[0]?.error || t("creative.generationFailed", { kind: t("common.image") }));
 				}
-				if (failed.length || rejected) {
+				if ((failed.length || rejected) && !adoptedOk) {
 					setError(t("creative.generationFailed", { kind: t("common.image") }));
 				}
 				await refresh();
@@ -912,6 +939,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 		if (kind === "image") {
 			const total = imageGenerationBatchCount(parameters.count ?? count);
 			const batchId = total > 1 ? uid("batch") : "";
+			try {
 			for (let index = 0; index < total; index += 1) {
 				if (controller.signal.aborted) break;
 				const slot = imageGenerationSlotParameters(parameters, index, total, batchId);
@@ -928,6 +956,13 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				createdJobs.push(next);
 				job = createdJobs[0];
 				setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)]);
+			}
+			} catch (error) {
+				await Promise.allSettled(createdJobs.map((item) => updateGenerationJob(item.id, {
+					status: "cancelled",
+					error: t("creative.cancelled"),
+				})));
+				throw error;
 			}
 			if (controller.signal.aborted) {
 				await Promise.allSettled(createdJobs.map((item) => updateGenerationJob(item.id, {
@@ -965,8 +1000,8 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 					}
 					if (!items.length) throw new Error(t("creative.resultsMissing"));
 					const completedJob = await updateGenerationJob(next.id, { status: "succeeded", result: { items } });
-					await adoptAssetResult(completedJob, items);
 					completeGenerationActivity(next.id, "succeeded");
+					return { job: completedJob, items };
 				} catch (cause) {
 					const cancelled = controller.signal.aborted;
 					completeGenerationActivity(
@@ -982,11 +1017,23 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
 				}
 			}));
 			if (controller.signal.aborted) return;
+			const succeeded = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+			const adopted = firstSucceededGenerationJob(succeeded.map((item) => item.job));
+			let adoptedOk = false;
+			if (adopted) {
+				const preview = succeeded.find((item) => item.job.id === adopted.id);
+				try {
+					await adoptAssetResult(adopted, preview?.items ?? []);
+					adoptedOk = true;
+				} catch (cause) {
+					setError(cause instanceof Error ? cause.message : String(cause));
+				}
+			}
 			const failed = settled.filter((result) => result.status === "rejected");
 			if (failed.length === created.length) {
 				throw failed[0]?.status === "rejected" ? failed[0].reason : new Error(t("creative.generationFailed", { kind: t("common.image") }));
 			}
-			if (failed.length) {
+			if (failed.length && !adoptedOk) {
 				setError(t("creative.generationFailed", { kind: t("common.image") }));
 			}
 			await refresh();

@@ -68,13 +68,55 @@ func (e *openAIImageExecutor) Generate(ctx context.Context, request imageGenerat
 	case "apimart":
 		return e.generateAPIMart(ctx, request)
 	case "kie":
-		return e.generateKIEImageResumable(ctx, request, nil, func(videoProviderCheckpoint) error { return nil })
+		return e.GenerateResumable(ctx, request, nil, func(videoProviderCheckpoint) error { return nil })
 	default:
 		return nil, errors.New("unsupported image provider protocol")
 	}
 }
 
+func fanOutImageGenerations(
+	ctx context.Context,
+	request imageGenerationRequest,
+	once func(context.Context, imageGenerationRequest) ([]generatedImage, error),
+) ([]generatedImage, error) {
+	if request.Count <= 1 {
+		return once(ctx, request)
+	}
+	images := make([]generatedImage, 0, request.Count)
+	totalBytes := 0
+	for index := 0; index < request.Count; index++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		single := request
+		single.Count = 1
+		if request.RequestID != "" {
+			single.RequestID = providerRequestID(request.RequestID + ":" + strconv.Itoa(index))
+		}
+		batch, err := once(ctx, single)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) != 1 {
+			return nil, errors.New("image provider returned an invalid result")
+		}
+		totalBytes += len(batch[0].Data)
+		if totalBytes > maxGeneratedTotalBytes {
+			return nil, errors.New("image provider results exceed total size limit")
+		}
+		images = append(images, batch[0])
+	}
+	return images, nil
+}
+
 func (e *openAIImageExecutor) generateTemplate(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
+	if request.Count > 1 {
+		return fanOutImageGenerations(ctx, request, e.generateTemplateOnce)
+	}
+	return e.generateTemplateOnce(ctx, request)
+}
+
+func (e *openAIImageExecutor) generateTemplateOnce(ctx context.Context, request imageGenerationRequest) ([]generatedImage, error) {
 	if request.TransparentBackground && (request.Template == nil || !request.Template.SupportsTransparentBackground) {
 		return nil, errors.New("image provider template does not support transparent background")
 	}

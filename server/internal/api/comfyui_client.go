@@ -289,7 +289,7 @@ func comfyUITotalOutputLimit(kind string) int {
 	case "audio":
 		return maxGeneratedAudioBytes
 	default:
-		return maxGeneratedTotalBytes
+		return maxComfyUIImageTotalBytes
 	}
 }
 

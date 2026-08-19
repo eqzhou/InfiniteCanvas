@@ -15,7 +15,6 @@ import { displayMediaNodeFields, uploadDisplayMedia } from "@/services/media-pre
 import {
   cancelServerGenerationJob,
   createServerAudioGenerationJob,
-  createServerImageGenerationJob,
   createServerVideoGenerationJob,
   usesServerGenerationJobs,
 } from "@/services/generation-jobs";
@@ -55,7 +54,12 @@ import {
   resolveVideoDurationForProvider,
 } from "@/lib/video-generation-options";
 import { applyCameraPrompt, createDefaultCameraPrompt } from "@/lib/camera-prompt";
-import { applyServerImagePlaceholders, submitServerImageGeneration } from "@/lib/canvas-server-image";
+import {
+  applyServerImagePlaceholders,
+  canvasInFlightGenerationJobIds,
+  createCanvasImageGenerationSlots,
+  submitServerImageGeneration,
+} from "@/lib/canvas-server-image";
 import { resolveConfigPrompt } from "@/lib/config-generation";
 import { placeImageGenerationRun } from "@/lib/image-generation-run";
 import { directorShotGenerationContext } from "@/lib/director-shot-generation";
@@ -208,43 +212,61 @@ export function NodeActions({
 			throw new Error(t("canvasNodes.templateTransparentUnsupported"));
 		}
 		const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
-		const jobId = uid("job");
 		const source = directorShotGenerationContext(project, rootId)?.source;
+		let createdJobIds: string[] = [];
 		return submitServerImageGeneration({
-			createJob: () => createServerImageGenerationJob({
-				id: jobId,
-				projectId: project?.id,
-				prompt,
-				providerId: selectedChannel.id,
-				model: normalizedGeneration.model,
-				parameters: {
-					size: normalizedGeneration.size,
-					quality: normalizedGeneration.quality,
-					count: normalizedGeneration.count,
-					transparentBackground: normalizedGeneration.transparentBackground,
-					referenceStorageKeys,
-					source,
-				},
-			}),
-			applyPlaceholders: () => updateActive((current) => applyServerImagePlaceholders(current, rootId, jobId, normalizedGeneration, options)),
+			createJob: async () => {
+				const created = await createCanvasImageGenerationSlots({
+					projectId: project?.id,
+					prompt,
+					providerId: selectedChannel.id,
+					model: normalizedGeneration.model,
+					parameters: {
+						size: normalizedGeneration.size,
+						quality: normalizedGeneration.quality,
+						count: normalizedGeneration.count,
+						transparentBackground: normalizedGeneration.transparentBackground,
+						referenceStorageKeys,
+						source,
+					},
+				});
+				const job = created.jobs[0];
+				if (!job) throw new Error(t("canvasNodes.imageResultMissing"));
+				createdJobIds = created.jobs.map((item) => item.id);
+				return job;
+			},
+			applyPlaceholders: () => updateActive((current) => applyServerImagePlaceholders(current, rootId, createdJobIds, normalizedGeneration, options)),
 			persist: persistNow,
-			cancelJob: () => cancelServerGenerationJob(jobId),
+			cancelJob: () => Promise.allSettled(createdJobIds.map((id) => cancelServerGenerationJob(id))),
 			onPersistError: (error) => console.error("Image job created but canvas persistence is pending", error),
 		});
 	};
 	const cancelNodeGeneration = async () => {
-		const jobId = node.metadata.generationJobId;
-		if (!jobId) return;
-		try {
-			const job = await cancelServerGenerationJob(jobId);
-			updateNode(node.id, { metadata: {
-				status: "error",
-				errorDetails: job.error || t("canvasNodes.cancelled"),
-				generationJobId: job.id,
-			} });
-		} catch (cause) {
-			updateNode(node.id, { metadata: { status: "error", errorDetails: cause instanceof Error ? cause.message : String(cause) } });
-		}
+		const jobIds = project ? canvasInFlightGenerationJobIds(project, node.id) : [];
+		if (!jobIds.length) return;
+		const cancelled = await Promise.allSettled(jobIds.map((id) => cancelServerGenerationJob(id)));
+		const fulfilled = cancelled.find((result) => result.status === "fulfilled");
+		const rejected = cancelled.find((result) => result.status === "rejected");
+		const message = fulfilled?.status === "fulfilled"
+			? fulfilled.value.error || t("canvasNodes.cancelled")
+			: rejected?.status === "rejected"
+				? rejected.reason instanceof Error ? rejected.reason.message : String(rejected.reason)
+				: t("canvasNodes.cancelled");
+		updateActive((current) => ({
+			...current,
+			nodes: current.nodes.map((candidate) => {
+				const matchesJob = Boolean(candidate.metadata.generationJobId && jobIds.includes(candidate.metadata.generationJobId));
+				if (!matchesJob && candidate.id !== node.id) return candidate;
+				return {
+					...candidate,
+					metadata: {
+						...candidate.metadata,
+						status: "error",
+						errorDetails: message,
+					},
+				};
+			}),
+		}));
 	};
   const transformRegistry = useMemo(() => {
     const providers = [createLocalCanvasTransformProvider()];
@@ -1190,6 +1212,7 @@ export function NodeActions({
 
   const imageToolbarPreferences = normalizeImageToolbarPreferences(config.imageToolbar);
   const imageHasSource = hasImageSource(node);
+  const inFlightGeneration = Boolean(project && canvasInFlightGenerationJobIds(project, node.id).length);
   const imageToolbarActions = orderedVisibleImageActions(imageToolbarPreferences).filter(
     (action) => action !== "generate" || shouldShowImageGenerationAction(node),
   );
@@ -1198,7 +1221,7 @@ export function NodeActions({
   const renderImageToolbarAction = (action: ImageToolbarAction) => {
     switch (action) {
       case "generate":
-        return <IconBtn key={action} label={imageToolLabel(imageHasSource ? t("canvasNodes.continueShort") : t("canvasNodes.generate"))} title={node.metadata.status === "loading" && node.metadata.generationJobId ? t("canvasNodes.cancelGeneration") : imageHasSource ? t("canvasNodes.continueImage") : t("canvasNodes.generateImage")} onClick={() => void (node.metadata.status === "loading" && node.metadata.generationJobId ? cancelNodeGeneration() : openImageGenerationDialog())}>{node.metadata.status === "loading" && node.metadata.generationJobId ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
+        return <IconBtn key={action} label={imageToolLabel(imageHasSource ? t("canvasNodes.continueShort") : t("canvasNodes.generate"))} title={inFlightGeneration ? t("canvasNodes.cancelGeneration") : imageHasSource ? t("canvasNodes.continueImage") : t("canvasNodes.generateImage")} onClick={() => void (inFlightGeneration ? cancelNodeGeneration() : openImageGenerationDialog())}>{inFlightGeneration ? <Square size={14} /> : <Sparkles size={14} />}</IconBtn>;
       case "video":
         return <IconBtn key={action} label={imageToolLabel(t("canvasNodes.video"))} title={t("canvasNodes.generateVideo")} onClick={openVideoGenerationDialog}><span className="text-[10px] font-semibold">{t("canvasNodes.video")}</span></IconBtn>;
       case "reverse":
@@ -1233,8 +1256,8 @@ export function NodeActions({
 
   if (inlineConfigOnly) {
     if (node.type !== "config") return null;
-    const loading = configGenerating || node.metadata.status === "loading";
-    const cancellable = loading && Boolean(node.metadata.generationJobId);
+    const loading = configGenerating || node.metadata.status === "loading" || inFlightGeneration;
+    const cancellable = inFlightGeneration;
     return (
       <button
         type="button"

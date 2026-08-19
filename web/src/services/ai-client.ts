@@ -368,17 +368,26 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     const batches = await Promise.all(Array.from({ length: n }, () =>
       generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, references, signal),
     ));
-    return batches.flat().slice(0, n);
+    return batches.map((urls) => {
+      if (urls.length < 1) throw new Error("Image provider returned an invalid result count");
+      return urls[0]!;
+    });
   }
   if (provider.protocol === "template") {
     if (!provider.template) throw new Error("Image template configuration is missing");
     if (transparentBackground && !provider.template.supportsTransparentBackground) {
       throw new Error("This image template does not support transparent background");
     }
-    return generateTemplateImages(provider, {
-      prompt: effectivePrompt, model, size, quality, count: n, transparentBackground,
-      referenceImages: [...referenceDataUrls, ...await encodedBlobReferences()],
+    const referenceImages = [...referenceDataUrls, ...await encodedBlobReferences()];
+    const generateOneTemplate = async (): Promise<string[]> => generateTemplateImages(provider, {
+      prompt: effectivePrompt, model, size, quality, count: 1, transparentBackground, referenceImages,
     }, signal);
+    if (n === 1) return generateOneTemplate();
+    const batches = await Promise.all(Array.from({ length: n }, () => generateOneTemplate()));
+    return batches.map((urls) => {
+      if (urls.length < 1) throw new Error("Image provider returned an invalid result count");
+      return urls[0]!;
+    });
   }
   if (provider.protocol !== "openai") {
     throw new Error(`${provider.protocol} does not support image generation`);

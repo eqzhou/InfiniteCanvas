@@ -37,7 +37,12 @@ import {
   normalizeImageGenerationForProvider,
 } from "@/lib/image-generation";
 import { applyCameraPrompt } from "@/lib/camera-prompt";
-import { applyServerImagePlaceholders, submitServerImageGeneration } from "@/lib/canvas-server-image";
+import {
+  applyServerImagePlaceholders,
+  canvasInFlightGenerationJobIds,
+  createCanvasImageGenerationSlots,
+  submitServerImageGeneration,
+} from "@/lib/canvas-server-image";
 import { normalizeVideoFrameMode } from "@/lib/video-generation";
 import {
   normalizeVideoRatioForProvider,
@@ -47,7 +52,6 @@ import {
 import {
   cancelServerGenerationJob,
   createServerAudioGenerationJob,
-  createServerImageGenerationJob,
   createServerVideoGenerationJob,
   usesServerGenerationJobs,
 } from "@/services/generation-jobs";
@@ -182,7 +186,8 @@ export function NodePromptBar({
 
   const generationBusy =
     busy ||
-    (node.metadata.status === "loading" && Boolean(node.metadata.generationJobId));
+    (node.metadata.status === "loading" && Boolean(node.metadata.generationJobId)) ||
+    Boolean(project && canvasInFlightGenerationJobIds(project, node.id).length);
   const effectivePrompt = text.trim() || (!hasImageContent && node.type === "image" ? upstream.texts.join("\n\n") : "");
   const regenerateImageInPlace = canRegenerateImageFromPrompt(node, inheritsUpstreamPrompt);
 
@@ -300,7 +305,8 @@ export function NodePromptBar({
         const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
         const requestPrompt = applyCameraPrompt(normalizedGeneration.prompt, normalizedGeneration.cameraPrompt);
         if (usesServerGenerationJobs() && (provider.protocol === "openai" || provider.protocol === "gemini" ||
-            (provider.protocol === "template" && Boolean(provider.template))) &&
+            (provider.protocol === "template" && Boolean(provider.template)) ||
+            provider.protocol === "apimart" || provider.protocol === "kie") &&
             uniqueImageReferences.every((reference) => Boolean(reference.storageKey))) {
           if (provider.protocol === "gemini" && normalizedGeneration.transparentBackground) {
             throw new Error(t("canvasNodes.geminiTransparentUnsupported"));
@@ -308,31 +314,36 @@ export function NodePromptBar({
           if (provider.protocol === "template" && normalizedGeneration.transparentBackground && !provider.template?.supportsTransparentBackground) {
             throw new Error(t("canvasNodes.templateTransparentUnsupported"));
           }
-          const jobId = uid("job");
+          let createdJobIds: string[] = [];
           await submitServerImageGeneration({
-            createJob: () => createServerImageGenerationJob({
-              id: jobId,
-              projectId: project?.id,
-              prompt: requestPrompt,
-              providerId: requestChannel.id,
-              model: normalizedGeneration.model,
-              parameters: {
-                size: normalizedGeneration.size,
-                quality: normalizedGeneration.quality,
-                count: normalizedGeneration.count,
-                transparentBackground: normalizedGeneration.transparentBackground,
-                referenceStorageKeys,
-              },
-            }),
+            createJob: async () => {
+              const created = await createCanvasImageGenerationSlots({
+                projectId: project?.id,
+                prompt: requestPrompt,
+                providerId: requestChannel.id,
+                model: normalizedGeneration.model,
+                parameters: {
+                  size: normalizedGeneration.size,
+                  quality: normalizedGeneration.quality,
+                  count: normalizedGeneration.count,
+                  transparentBackground: normalizedGeneration.transparentBackground,
+                  referenceStorageKeys,
+                },
+              });
+              const job = created.jobs[0];
+              if (!job) throw new Error(t("canvasNodes.imageResultMissing"));
+              createdJobIds = created.jobs.map((item) => item.id);
+              return job;
+            },
             applyPlaceholders: () => updateActive((current) => applyServerImagePlaceholders(
               current,
               node.id,
-              jobId,
+              createdJobIds,
               normalizedGeneration,
               { replaceExisting: regenerateImageInPlace },
             )),
             persist: persistNow,
-            cancelJob: () => cancelServerGenerationJob(jobId),
+            cancelJob: () => Promise.allSettled(createdJobIds.map((id) => cancelServerGenerationJob(id))),
             onPersistError: (error) => console.error("Image job created but canvas persistence is pending", error),
           });
           return;

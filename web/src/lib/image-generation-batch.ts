@@ -34,6 +34,12 @@ export function imageGenerationSlotParameters<T extends Record<string, unknown>>
   };
 }
 
+export function firstSucceededGenerationJob<T extends { status: string }>(
+  jobs: readonly T[],
+): T | undefined {
+  return jobs.find((job) => job.status === "succeeded");
+}
+
 export function workbenchImageCountFromParameters(
   parameters: Record<string, unknown> | undefined,
   fallback?: number,
