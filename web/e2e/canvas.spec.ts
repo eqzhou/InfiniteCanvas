@@ -239,6 +239,39 @@ async function openMobileNavigation(page: Page) {
   return navigation;
 }
 
+function isMobileViewport(page: Page) {
+  return (page.viewportSize()?.width ?? 1440) < 768;
+}
+
+async function navigateTopNavPage(page: Page, path: string, linkName: string) {
+  if (isMobileViewport(page)) {
+    // AssetsPage intentionally lazy-loads its own catalog and does not load
+    // projects. Keep the hydrated active board when an asset action needs to
+    // insert back into the canvas; the compact drawer link is the equivalent
+    // client-side navigation on mobile.
+    if (path === "/assets") {
+      const navigation = await openMobileNavigation(page);
+      await navigation.getByRole("link", { name: linkName, exact: true }).click();
+      await expect(page).toHaveURL(/\/assets$/);
+      return;
+    }
+    await page.goto(path);
+    return;
+  }
+  await page.getByRole("link", { name: linkName, exact: true }).click();
+}
+
+async function openCanvasPage(page: Page) {
+  if (isMobileViewport(page)) {
+    // Reuse the board bootstrap so the responsive project tab is selected and
+    // the active project is hydrated before an asset page action.
+    await openFreshBoard(page);
+    return;
+  }
+  await navigateTopNavPage(page, "/", "画布页面");
+  await expect(page.getByRole("button", { name: /我的第一个画布/ })).toBeVisible();
+}
+
 async function openLocalAgentPanel(page: Page) {
   const desktopButton = page.getByRole("group", { name: "全局工具" })
     .getByRole("button", { name: "画布 Agent", exact: true });
@@ -3127,7 +3160,7 @@ test("image split supports draggable guides and persists normalized lineage", as
 
 test("a sandboxed plugin node persists its state across reloads", async ({ page }) => {
   await openFreshBoard(page);
-  await page.getByRole("link", { name: "插件页面" }).click();
+  await navigateTopNavPage(page, "/plugins", "插件页面");
 
   const stickyCard = page.locator("article").filter({ hasText: "openboard.sticky-note" });
   await stickyCard.getByRole("button", { name: "添加到画布" }).click();
@@ -3257,7 +3290,7 @@ test("Three.js panorama renders nonblank pixels on desktop and mobile", async ({
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+eN3oAAAAAElFTkSuQmCC", "base64"),
   });
   await expect(page.locator('img[alt="图片"]')).toBeVisible();
-  await page.getByRole("link", { name: "插件页面" }).click();
+  await navigateTopNavPage(page, "/plugins", "插件页面");
   const card = page.locator("article").filter({ hasText: "openboard.panorama" });
   await card.getByRole("button", { name: "添加到画布" }).click();
   const canvas = page.locator('canvas[data-panorama-canvas="true"]');
@@ -3396,7 +3429,7 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(3);
 
-  await page.getByRole("link", { name: "素材页面" }).click();
+  await navigateTopNavPage(page, "/assets", "素材页面");
   let asset = page.locator("article").filter({ hasText: "图片" });
   await expect(asset).toBeVisible();
   await expect.poll(async () => {
@@ -3405,9 +3438,8 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   }).toBe(1);
   await page.reload();
   await expect(asset).toBeVisible();
-  await page.getByRole("link", { name: "画布页面" }).click();
-  await expect(page.getByRole("button", { name: /我的第一个画布/ })).toBeVisible();
-  await page.getByRole("link", { name: "素材页面" }).click();
+  await openCanvasPage(page);
+  await navigateTopNavPage(page, "/assets", "素材页面");
   asset = page.locator("article").filter({ hasText: "图片" });
   const persisted = page.waitForResponse((response) =>
     response.request().method() === "PUT" &&
@@ -3416,7 +3448,7 @@ test("image nodes support replacement, resize mode, download, crop, and asset re
   );
   await asset.getByRole("button", { name: "插入画布" }).click();
   await persisted;
-  await page.getByRole("link", { name: "画布页面" }).click();
+  await openCanvasPage(page);
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(4);
 });
@@ -3794,7 +3826,7 @@ test("prompt details can insert their content into the active canvas", async ({ 
   await expect(page.getByPlaceholder("写下提示词或说明…")).toHaveValue(
     /Studio product photo/,
   );
-  await page.getByRole("link", { name: "素材页面" }).click();
+  await navigateTopNavPage(page, "/assets", "素材页面");
   await expect(page.locator("article").filter({ hasText: "产品棚拍" })).toBeVisible();
   await expect.poll(async () => {
     const assets = await readServerState<any[]>(page, "assets");
@@ -4402,9 +4434,8 @@ test("asset library uploads, persists, previews, and inserts video media", async
   await expect(card).toBeVisible();
   // Re-open the canvas after a hard reload so the active project is hydrated
   // before the asset-page action reads it from the board store.
-  await page.goto("/");
-  await expect(page.getByRole("button", { name: /我的第一个画布/ })).toBeVisible();
-  await page.getByRole("link", { name: "素材页面" }).click();
+  await openCanvasPage(page);
+  await navigateTopNavPage(page, "/assets", "素材页面");
   card = page.locator("article").filter({ hasText: "campaign-loop.mp4" });
   const insertVideo = card.getByRole("button", { name: "插入画布" });
   const persisted = page.waitForResponse((response) =>
@@ -4497,7 +4528,7 @@ test("canvas asset panel can drag assets onto the canvas", async ({ page }) => {
 
 test("asset library supports persistence, search, type filters, pagination, copy, download, insert, and delete", async ({ page, browserName }) => {
   await openFreshBoard(page);
-  await page.getByRole("link", { name: "素材页面" }).click();
+  await navigateTopNavPage(page, "/assets", "素材页面");
   for (let index = 1; index <= 13; index += 1) {
     await page.getByRole("button", { name: "新增文本" }).click();
     const dialog = page.getByRole("dialog", { name: "新增素材" });
@@ -4518,9 +4549,8 @@ test("asset library supports persistence, search, type filters, pagination, copy
   }).toBe(14);
   await page.reload();
   await expect(page.getByText("1 / 2 · 共 14", { exact: true }).first()).toBeVisible();
-  await page.goto("/");
-  await expect(page.getByRole("button", { name: /我的第一个画布/ })).toBeVisible();
-  await page.getByRole("link", { name: "素材页面" }).click();
+  await openCanvasPage(page);
+  await navigateTopNavPage(page, "/assets", "素材页面");
   await expect(page.getByText("1 / 2 · 共 14", { exact: true }).first()).toBeVisible();
 
   const search = page.getByRole("textbox", { name: "搜索素材" });
@@ -4581,7 +4611,7 @@ test("asset library supports persistence, search, type filters, pagination, copy
   await expect(page.locator("article").filter({ hasText: "Text Asset 01" })).toHaveCount(0, { timeout: 10_000 });
   await expect(page.getByText(/共 13/, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("link", { name: "画布页面" }).click();
+  await openCanvasPage(page);
   await page.getByTitle("适应").click();
   await expect(page.locator('[data-node-type="image"]')).toHaveCount(1);
 });

@@ -213,12 +213,16 @@ export function applyServerImagePlaceholders(
         ...node,
         metadata: {
           ...node.metadata,
-          generationOutputRootId: runRoot.id,
           ...(root.type === "config" ? {
+            generationOutputRootId: runRoot.id,
             status: "loading" as const,
             errorDetails: undefined,
             generationJobId: primaryJobId,
-          } : {}),
+          } : {
+            generationOutputRootId: undefined,
+            generationJobId: undefined,
+            generationJobIds: [...jobIds],
+          }),
         },
       } : node),
       ...[

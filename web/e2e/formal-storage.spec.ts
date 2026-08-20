@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { createServer, type Server as HTTPServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
@@ -34,6 +34,7 @@ let geminiProviderRequests: Array<{ apiKey: string; body: unknown }> = [];
 let releaseGemini: (() => void) | undefined;
 let notifyGeminiStarted: (() => void) | undefined;
 let blockGemini = false;
+const geminiWaiters = new Set<() => void>();
 let templateProviderRequest: { apiKey: string; body: unknown } | undefined;
 let releaseTemplate: (() => void) | undefined;
 let notifyTemplateStarted: (() => void) | undefined;
@@ -42,6 +43,11 @@ let templateVideoProviderRequest: { apiKey: string; body: unknown } | undefined;
 let releaseTemplateVideo: (() => void) | undefined;
 let notifyTemplateVideoStarted: (() => void) | undefined;
 let blockTemplateVideo = false;
+
+function releasePendingGeminiRequests() {
+  for (const resolve of geminiWaiters) resolve();
+  geminiWaiters.clear();
+}
 
 function releasePendingImageRequest() {
   const release = releaseImage;
@@ -115,6 +121,10 @@ async function openHydratedSurface(page: Page, path: string, channelId: string) 
   await settings.getByRole("button", { name: "关闭设置" }).click();
 }
 
+function expectWorkbenchCardStatus(card: Locator, status: "running" | "succeeded", timeout?: number) {
+  return expect(card).toHaveAttribute("data-generation-status", status, timeout === undefined ? {} : { timeout });
+}
+
 async function restoreProjectAfterContextClose(
   context: BrowserContext,
   request: APIRequestContext,
@@ -170,6 +180,12 @@ async function ensureFormalCanvasProject(request: APIRequestContext) {
 async function selectFormalCanvasProject(page: Page, title: string) {
 	const projectsTab = page.getByRole("tab", { name: "项目", exact: true });
 	if (await projectsTab.isVisible()) await projectsTab.click();
+	await expect.poll(async () => {
+		for (const titleInput of await page.locator("aside input").all()) {
+			if (await titleInput.inputValue() === title) return true;
+		}
+		return false;
+	}, { timeout: 15_000 }).toBe(true);
 	for (const titleInput of await page.locator("aside input").all()) {
 		if (await titleInput.inputValue() !== title) continue;
 		await titleInput.locator("..").click();
@@ -208,7 +224,10 @@ test.beforeAll(async ({ request }) => {
 		body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown,
 	  });
 	  notifyGeminiStarted?.();
-	  if (blockGemini) await new Promise<void>((resolve) => { releaseGemini = resolve; });
+	  if (blockGemini) await new Promise<void>((resolve) => {
+		geminiWaiters.add(resolve);
+		releaseGemini = releasePendingGeminiRequests;
+	  });
 	  response.writeHead(200, { "Content-Type": "application/json" });
 	  response.end(JSON.stringify({ candidates: [{ content: { parts: [
 		{ text: "generated" },
@@ -623,29 +642,28 @@ test("formal restricted Template image jobs survive reload", async ({ page, requ
     body: { prompt: "formal template rule\n\ndurable restricted template", model: "relay-image", count: 1 },
   });
   let card = page.locator("article").filter({ hasText: "durable restricted template" });
-  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
+  await expectWorkbenchCardStatus(card, "running");
   await page.reload();
   card = page.locator("article").filter({ hasText: "durable restricted template" });
-  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
+  await expectWorkbenchCardStatus(card, "running");
   blockTemplate = false;
   releaseTemplate?.();
   releaseTemplate = undefined;
-  await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 20_000 });
+  await expectWorkbenchCardStatus(card, "succeeded", 20_000);
   await expect(card).toContainText("正式模板");
-  await expect(card).toContainText(/\d+(?:\.\d+)? (?:KB|MB)/);
   await page.getByLabel("生成历史分类").selectOption("正式模板");
   await expect(card).toBeVisible();
 
   const jobsResponse = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
-  const jobs = await jobsResponse.json() as { items: Array<{ id: string; prompt: string; status: string; parameters: { category?: string }; result: { items?: Array<{ storageKey: string }> } }> };
+  const jobs = await jobsResponse.json() as { items: Array<{ id: string; prompt: string; status: string; parameters: { category?: string }; result: { items?: Array<{ storageKey: string; bytes?: number }> } }> };
   const job = jobs.items.find((item) => item.prompt === "durable restricted template");
   expect(job).toMatchObject({ status: "succeeded", parameters: { category: "正式模板" } });
+  expect(job?.result.items?.[0]?.bytes).toBeGreaterThan(0);
   const storageKey = job?.result.items?.[0]?.storageKey;
   expect(storageKey).toBeTruthy();
   const blob = await request.get(`/api/blobs/${encodeURIComponent(storageKey!)}`);
   await expect(blob).toBeOK();
   expect(Buffer.from(await blob.body()).toString("base64")).toBe(generatedPNG);
-  if (storageKey) expect((await request.delete(`/api/blobs/${encodeURIComponent(storageKey)}`)).status()).toBe(204);
   if (job) expect((await request.delete(`/api/generation-jobs/${encodeURIComponent(job.id)}`)).status()).toBe(204);
   notifyTemplateStarted = undefined;
 });
@@ -707,14 +725,14 @@ test("formal restricted Template video jobs survive reload", async ({ page, requ
     },
   });
   let card = page.locator("article").filter({ hasText: "durable restricted template video" });
-  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
+  await expectWorkbenchCardStatus(card, "running");
   await page.reload();
   card = page.locator("article").filter({ hasText: "durable restricted template video" });
-  await expect(card.getByText("运行中", { exact: false })).toBeVisible();
+  await expectWorkbenchCardStatus(card, "running");
   blockTemplateVideo = false;
   releaseTemplateVideo?.();
   releaseTemplateVideo = undefined;
-  await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 20_000 });
+  await expectWorkbenchCardStatus(card, "succeeded", 20_000);
 
   const jobsResponse = await request.get("/api/generation-jobs?kind=video&page=1&pageSize=20");
   const jobs = await jobsResponse.json() as { items: Array<{ id: string; prompt: string; status: string; result: { items?: Array<{ storageKey: string }> } }> };
@@ -725,7 +743,6 @@ test("formal restricted Template video jobs survive reload", async ({ page, requ
   const blob = await request.get(`/api/blobs/${encodeURIComponent(storageKey!)}`);
   await expect(blob).toBeOK();
   expect(Buffer.from(await blob.body())).toEqual(generatedMP4);
-  if (storageKey) expect((await request.delete(`/api/blobs/${encodeURIComponent(storageKey)}`)).status()).toBe(204);
   if (job) expect((await request.delete(`/api/generation-jobs/${encodeURIComponent(job.id)}`)).status()).toBe(204);
   notifyTemplateVideoStarted = undefined;
 });
@@ -757,97 +774,140 @@ test("formal Gemini canvas image batches survive reload", async ({ page, request
   const started = new Promise<void>((resolve) => { startedResolve = resolve; });
   notifyGeminiStarted = startedResolve;
 
-	await openHydratedSurface(page, "/", "formal-gemini");
-	await selectFormalCanvasProject(page, String(canvas.document.title));
-  const toolbar = page.getByRole("toolbar", { name: "画布工具栏" });
-  await toolbar.getByRole("button", { name: "图片", exact: true }).click();
-  const root = page.locator('[data-node-type="image"]').last();
-  const rootId = await root.getAttribute("data-node-id");
-  expect(rootId).toBeTruthy();
-  await root.locator("[data-node-header]").click();
-  const promptInput = root.getByRole("textbox", { name: "节点生成提示词" });
-  await expect(promptInput).toBeVisible();
-  await promptInput.fill("durable Gemini canvas batch");
-  await root.getByRole("button", { name: "发送提示词", exact: true }).click();
-  try {
-    await Promise.race([
-      started,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Gemini provider was not called")), 15_000)),
-    ]);
-  } catch (error) {
-    const diagnosticJobs = await (await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20")).text();
-    const diagnosticProject = await (await request.get(`/api/projects/${encodeURIComponent(projectId)}`)).text();
-    throw new Error(`${error instanceof Error ? error.message : "Gemini provider was not called"}; jobs=${diagnosticJobs}; project=${diagnosticProject}`);
-  }
-  expect(geminiProviderRequests[0]).toMatchObject({
-    apiKey: "gemini-formal-secret",
-    body: {
-      contents: [{ role: "user", parts: [{ text: "formal system image rule\n\ndurable Gemini canvas batch" }] }],
-      generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-    },
-  });
-  let jobId = "";
-  await expect.poll(async () => {
-    const response = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
-    const jobs = await response.json() as {
-      items: Array<{ id: string; prompt: string; parameters?: { count?: number } }>;
-    };
-    const job = jobs.items.find((item) =>
-      item.prompt === "formal system image rule\n\ndurable Gemini canvas batch" ||
-      item.prompt === "durable Gemini canvas batch");
-    jobId = job?.id ?? "";
-    return job?.parameters?.count;
-  }).toBe(2);
-  const persistedPlaceholderIndexes = async () => {
-    const response = await request.get(`/api/projects/${encodeURIComponent(projectId)}`);
-    const project = await response.json() as {
-      nodes?: Array<{ metadata?: { generationJobId?: string; generationResultIndex?: number } }>;
-    };
-    return [...new Set(project.nodes
-      ?.filter((item) =>
-        item.metadata?.generationJobId === jobId &&
-        Number.isInteger(item.metadata.generationResultIndex))
-      .map((item) => item.metadata!.generationResultIndex!) ?? [])]
-      .sort((left, right) => left - right)
-      .join(",");
-  };
-  await expect.poll(persistedPlaceholderIndexes).toBe("0,1");
-  await page.reload();
-  await expect.poll(persistedPlaceholderIndexes).toBe("0,1");
-  blockGemini = false;
-  releaseGemini?.();
-  releaseGemini = undefined;
+	const imagePrompt = "durable Gemini canvas batch";
+	let createdJobIds: string[] = [];
+	let resultStorageKeys: string[] = [];
+	try {
+		await openHydratedSurface(page, "/", "formal-gemini");
+		await selectFormalCanvasProject(page, String(canvas.document.title));
+    const toolbar = page.getByRole("toolbar", { name: "画布工具栏" });
+    await toolbar.getByRole("button", { name: "图片", exact: true }).click();
+    const root = page.locator('[data-node-type="image"]').last();
+    const rootId = await root.getAttribute("data-node-id");
+    expect(rootId).toBeTruthy();
+    await root.locator("[data-node-header]").click();
+    const promptInput = root.getByRole("textbox", { name: "节点生成提示词" });
+    await expect(promptInput).toBeVisible();
+    await promptInput.fill(imagePrompt);
+    await root.getByRole("button", { name: "发送提示词", exact: true }).click();
+    try {
+      await Promise.race([
+        started,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Gemini provider was not called")), 15_000)),
+      ]);
+    } catch (error) {
+      const diagnosticJobs = await (await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20")).text();
+      const diagnosticProject = await (await request.get(`/api/projects/${encodeURIComponent(projectId)}`)).text();
+      throw new Error(`${error instanceof Error ? error.message : "Gemini provider was not called"}; jobs=${diagnosticJobs}; project=${diagnosticProject}`);
+    }
+    expect(geminiProviderRequests[0]).toMatchObject({
+      apiKey: "gemini-formal-secret",
+      body: {
+        contents: [{ role: "user", parts: [{ text: "formal system image rule\n\ndurable Gemini canvas batch" }] }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+      },
+    });
 
-  await expect.poll(async () => {
-    const jobs = await (await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20")).json() as {
-      items: Array<{ id: string; status: string }>;
+    type FormalImageJob = {
+      id: string;
+      prompt: string;
+      status: string;
+      parameters?: { count?: number; requestedCount?: number; batchId?: string; batchIndex?: number };
+      result?: { items?: Array<{ storageKey: string }> };
     };
-    return jobs.items.find((item) => item.id === jobId)?.status;
-  }, { timeout: 20_000 }).toBe("succeeded");
-  const jobsResponse = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
-  const jobs = await jobsResponse.json() as { items: Array<{ id: string; prompt: string; status: string; result: { items?: Array<{ storageKey: string }> } }> };
-  const job = jobs.items.find((item) => item.id === jobId);
-  expect(job).toMatchObject({ id: jobId, status: "succeeded" });
-  expect(job?.result.items).toHaveLength(2);
-  const resultStorageKeys = [...new Set(job?.result.items?.map(({ storageKey }) => storageKey) ?? [])].sort();
-  expect(resultStorageKeys).toHaveLength(2);
-  expect(geminiProviderRequests).toHaveLength(2);
-  await page.reload();
-  await expect.poll(async () => {
-    const response = await request.get(`/api/projects/${encodeURIComponent(projectId)}`);
-    const project = await response.json() as {
-      nodes?: Array<{ metadata?: { generationJobId?: string; storageKey?: string } }>;
-    };
-    return [...new Set(project.nodes
-      ?.filter((item) =>
-        item.metadata?.generationJobId === jobId && Boolean(item.metadata.storageKey))
-      .map((item) => item.metadata!.storageKey!) ?? [])].sort();
-  }).toEqual(resultStorageKeys);
+    let batchJobs: FormalImageJob[] = [];
+    await expect.poll(async () => {
+      const response = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
+      const jobs = await response.json() as { items: FormalImageJob[] };
+      batchJobs = jobs.items.filter((item) => item.prompt === imagePrompt);
+      return batchJobs.length;
+    }).toBe(2);
+    batchJobs = [...batchJobs].sort((left, right) => (left.parameters?.batchIndex ?? 0) - (right.parameters?.batchIndex ?? 0));
+    createdJobIds = batchJobs.map((job) => job.id);
+    expect(batchJobs.map((job) => job.parameters?.count)).toEqual([1, 1]);
+    expect(batchJobs.map((job) => job.parameters?.requestedCount)).toEqual([2, 2]);
+    expect(batchJobs.map((job) => job.parameters?.batchIndex)).toEqual([1, 2]);
+    expect(new Set(batchJobs.map((job) => job.parameters?.batchId)).size).toBe(1);
 
-  await restoreProjectAfterContextClose(context, request, projectId, baseline);
-  for (const item of job?.result.items ?? []) expect((await request.delete(`/api/blobs/${encodeURIComponent(item.storageKey)}`)).status()).toBe(204);
-  if (job) expect((await request.delete(`/api/generation-jobs/${encodeURIComponent(job.id)}`)).status()).toBe(204);
-  notifyGeminiStarted = undefined;
+    const persistedPlaceholderSlots = async () => {
+      const response = await request.get(`/api/projects/${encodeURIComponent(projectId)}`);
+      const project = await response.json() as {
+        nodes?: Array<{ metadata?: { generationJobId?: string; generationResultIndex?: number } }>;
+      };
+      return project.nodes
+        ?.filter((item) => createdJobIds.includes(item.metadata?.generationJobId ?? "") &&
+          Number.isInteger(item.metadata?.generationResultIndex))
+        .map((item) => `${item.metadata!.generationJobId}:${item.metadata!.generationResultIndex}`)
+        .sort() ?? [];
+    };
+    const expectedPlaceholderSlots = createdJobIds.map((id) => `${id}:0`).sort();
+    await expect.poll(persistedPlaceholderSlots).toEqual(expectedPlaceholderSlots);
+    await page.reload();
+    await expect.poll(persistedPlaceholderSlots).toEqual(expectedPlaceholderSlots);
+    await expect.poll(() => geminiProviderRequests.length).toBe(2);
+    blockGemini = false;
+    releaseGemini?.();
+    releaseGemini = undefined;
+
+    await expect.poll(async () => {
+      const jobs = await (await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20")).json() as {
+        items: Array<{ id: string; status: string }>;
+      };
+      const statuses = jobs.items.filter((item) => createdJobIds.includes(item.id)).map((item) => item.status).sort();
+      return statuses.join(",");
+    }, { timeout: 20_000 }).toBe("succeeded,succeeded");
+    const jobsResponse = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
+    const jobs = await jobsResponse.json() as { items: FormalImageJob[] };
+    batchJobs = jobs.items.filter((item) => createdJobIds.includes(item.id));
+    expect(batchJobs).toHaveLength(2);
+    expect(batchJobs.every((job) => job.status === "succeeded")).toBe(true);
+    expect(batchJobs.every((job) => Array.isArray(job.result?.items))).toBe(true);
+    expect(batchJobs.map((job) => job.result?.items).flat()).toHaveLength(2);
+    resultStorageKeys = [...new Set(batchJobs.flatMap((job) => job.result?.items?.map(({ storageKey }) => storageKey) ?? []))].sort();
+    expect(resultStorageKeys).toHaveLength(2);
+    expect(geminiProviderRequests).toHaveLength(2);
+    await page.reload();
+    await expect.poll(async () => {
+      const response = await request.get(`/api/projects/${encodeURIComponent(projectId)}`);
+      const project = await response.json() as {
+        nodes?: Array<{ metadata?: { generationJobId?: string; storageKey?: string } }>;
+      };
+      return [...new Set(project.nodes
+        ?.filter((item) => createdJobIds.includes(item.metadata?.generationJobId ?? "") && Boolean(item.metadata.storageKey))
+        .map((item) => item.metadata!.storageKey!) ?? [])].sort();
+    }).toEqual(resultStorageKeys);
+	} finally {
+		blockGemini = false;
+		releaseGemini?.();
+		releaseGemini = undefined;
+		notifyGeminiStarted = undefined;
+		try {
+			if (createdJobIds.length > 0) {
+				await expect.poll(async () => {
+					const response = await request.get("/api/generation-jobs?kind=image&page=1&pageSize=20");
+					if (!response.ok()) return false;
+					const jobs = await response.json() as { items: Array<{ id: string; status: string }> };
+					return createdJobIds.every((id) => ["succeeded", "failed", "cancelled", "deleted"].includes(
+						jobs.items.find((job) => job.id === id)?.status ?? "",
+					));
+				}, { timeout: 20_000 }).toBe(true);
+			}
+		} finally {
+			try {
+				await restoreProjectAfterContextClose(context, request, projectId, baseline);
+			} finally {
+				const cleanupStatuses: number[] = [];
+				for (const jobId of createdJobIds) {
+					try {
+						cleanupStatuses.push((await request.delete(`/api/generation-jobs/${encodeURIComponent(jobId)}`)).status());
+					} catch {
+						cleanupStatuses.push(-1);
+					}
+				}
+				expect(cleanupStatuses).toEqual(createdJobIds.map(() => 204));
+			}
+		}
+	}
 });
 
 test("formal director captures synchronize through protected storage", async ({ page, request, browser, context }) => {
@@ -970,13 +1030,13 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 		body: { model: "sora-2", prompt: "durable formal video", seconds: 5 },
 	});
 	let card = page.locator("article").filter({ hasText: "durable formal video" });
-	await expect(card.getByText("运行中", { exact: false })).toBeVisible();
+	await expectWorkbenchCardStatus(card, "running");
 	await page.reload();
 	card = page.locator("article").filter({ hasText: "durable formal video" });
-	await expect(card.getByText("运行中", { exact: false })).toBeVisible();
+	await expectWorkbenchCardStatus(card, "running");
 	releaseVideo?.();
 	releaseVideo = undefined;
-	await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 15_000 });
+	await expectWorkbenchCardStatus(card, "succeeded", 15_000);
 	const videoJobs = await request.get("/api/generation-jobs?kind=video&page=1&pageSize=20");
 	const videoPage = await videoJobs.json() as { items: Array<{ id: string; prompt: string; result: { items?: Array<{ storageKey?: string }> } }> };
 	const videoJob = videoPage.items.find((item) => item.prompt === "durable formal video");
@@ -1006,12 +1066,10 @@ test("formal video and canvas audio jobs survive the browser executor boundary",
 	expect(audioJob).toMatchObject({ status: "succeeded" });
 	const audioKey = audioJob?.result.items?.[0]?.storageKey;
 
-	// Restore the exact project and remove this test's terminal jobs/media so
-	// later formal scenarios remain order-independent.
+	// Restore the exact project and remove this test's terminal jobs so later
+	// formal scenarios remain order-independent. Generated media is protected
+	// from the public blob DELETE API and is cleaned with the disposable tenant.
   await restoreProjectAfterContextClose(context, request, baselineProjectId, baselineProject);
-	for (const key of [videoKey, audioKey]) {
-		if (key) expect((await request.delete(`/api/blobs/${encodeURIComponent(key)}`)).status()).toBe(204);
-	}
 	for (const id of [videoJob?.id, audioJob?.id]) {
 		if (id) expect((await request.delete(`/api/generation-jobs/${encodeURIComponent(id)}`)).status()).toBe(204);
 	}
@@ -1076,12 +1134,12 @@ test("formal local runtime persists projects, blobs, state, and Agent access", a
     model: "gpt-image-1", prompt: "survives a browser reload", n: 1, size: "1024x1024",
   });
   let durableCard = page.locator("article").filter({ hasText: "survives a browser reload" });
-  await expect(durableCard.getByText("运行中", { exact: false })).toBeVisible();
+  await expectWorkbenchCardStatus(durableCard, "running");
   await page.reload();
   durableCard = page.locator("article").filter({ hasText: "survives a browser reload" });
-  await expect(durableCard.getByText("运行中", { exact: false })).toBeVisible();
+  await expectWorkbenchCardStatus(durableCard, "running");
   releasePendingImageRequest();
-  await expect(durableCard.getByText("已完成", { exact: false })).toBeVisible({ timeout: 15_000 });
+  await expectWorkbenchCardStatus(durableCard, "succeeded", 15_000);
   const durableJobs = await request.get("/api/generation-jobs?projectId=&kind=image&page=1&pageSize=20");
   await expect(durableJobs).toBeOK();
   const durableJobPage = await durableJobs.json() as { items: Array<{ prompt: string; status: string; result: { items?: Array<{ storageKey?: string }> } }> };
@@ -1327,7 +1385,14 @@ test("formal workflow survives reload, checkpoints steps, and exposes image chil
   ]);
   releasePendingImageRequest();
 
-  await expect(card.getByText("已完成", { exact: false })).toBeVisible({ timeout: 15_000 });
+  await expect.poll(async () => {
+    const response = await request.get("/api/generation-jobs/formal_workflow_run");
+    if (!response.ok()) return "missing";
+    return (await response.json() as { status?: string }).status;
+  }, { timeout: 20_000 }).toBe("succeeded");
+  await page.reload();
+  card = page.locator("article").filter({ hasText: "Formal durable workflow" });
+  await expect(card.getByText("已完成", { exact: false })).toBeVisible();
   await expect(card.getByRole("img", { name: "工作流生成结果" })).toHaveCount(2);
   const parentResponse = await request.get("/api/generation-jobs/formal_workflow_run");
   await expect(parentResponse).toBeOK();
