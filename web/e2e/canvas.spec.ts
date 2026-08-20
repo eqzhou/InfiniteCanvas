@@ -5377,7 +5377,13 @@ for (const viewport of [
     // Canvas shares horizontal space with the docked project panel.
     expect(surfaceBox!.width).toBeLessThan(viewport.width);
     expect(surfaceBox!.height).toBeGreaterThan(500);
-    expect(assistantBox!.x + assistantBox!.width).toBeLessThanOrEqual(viewport.width + 1);
+    // The drawer enters with a short translateX animation, and mobile
+    // Chromium can report a fractional right edge. Poll until it settles,
+    // then allow at most two CSS pixels for device-scale rounding.
+    await expect.poll(async () => {
+      const box = await assistant.boundingBox();
+      return box ? Math.ceil(box.x + box.width) : Number.POSITIVE_INFINITY;
+    }).toBeLessThanOrEqual(viewport.width + 2);
 
     await assistant.getByTitle("关闭画布 Agent").click();
     await expect(assistant).toHaveCount(0);
