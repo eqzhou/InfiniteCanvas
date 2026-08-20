@@ -27,6 +27,8 @@ test("container pins distro media and PDF tools and exposes exact executable pat
   assert.match(sandbox, /--clearenv/);
   assert.match(sandbox, /--ro-bind \/usr \/usr/);
   assert.match(sandbox, /--ro-bind-try \/lib \/lib/);
+  assert.equal((sandbox.match(/--dir \/proc/g) ?? []).length, 2);
+  assert.doesNotMatch(sandbox, /--proc \/proc/);
   assert.match(sandbox, /\/usr\/bin\/true/);
   assert.doesNotMatch(sandbox, /--unshare-all/);
   assert.doesNotMatch(sandbox, /--ro-bind \/bin \/bin/);

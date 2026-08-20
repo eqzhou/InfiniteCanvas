@@ -204,6 +204,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const [error, setError] = useState("");
   const [creditEstimate, setCreditEstimate] = useState<CreditEstimate | null>(null);
   const controllersRef = useRef(new Map<string, AbortController>());
+  const activeJobIdsRef = useRef(new Map<string, string[]>());
   const activeServerJobIdsRef = useRef(new Map<string, string[]>());
   const refreshCoordinatorRef = useRef(createWorkbenchRefreshCoordinator());
   const pageRef = useRef(page);
@@ -916,6 +917,7 @@ useEffect(() => () => {
 					createdJobs.push(next);
 					job = createdJobs[0];
 					activeServerJobIdsRef.current.set(runToken, createdJobs.map((item) => item.id));
+					activeJobIdsRef.current.set(runToken, createdJobs.map((item) => item.id));
 					setJobs((current) => upsertWorkbenchJobs(current, createdJobs));
 				}
 				} catch (error) {
@@ -923,7 +925,10 @@ useEffect(() => () => {
 					throw error;
 				}
 				if (controller.signal.aborted) {
-					await Promise.allSettled(createdJobs.map((item) => cancelServerGenerationJob(item.id)));
+					const cancelledJobs = (await Promise.all(createdJobs.map((item) =>
+						cancelServerGenerationJob(item.id).catch(() => undefined))))
+						.filter((item): item is GenerationJob => item !== undefined);
+					setJobs((current) => upsertWorkbenchJobs(current, cancelledJobs));
 					return;
 				}
 				const created = createdJobs;
@@ -988,7 +993,13 @@ useEffect(() => () => {
 				},
 			});
 			activeServerJobIdsRef.current.set(runToken, [job.id]);
+			activeJobIdsRef.current.set(runToken, [job.id]);
 			setJobs((current) => upsertWorkbenchJobs(current, [job!]));
+			if (controller.signal.aborted) {
+				const cancelled = await cancelServerGenerationJob(job.id).catch(() => undefined);
+				if (cancelled) setJobs((current) => upsertWorkbenchJobs(current, [cancelled]));
+				return;
+			}
 			const completed = await waitForGenerationJob(job.id, {
 				signal: controller.signal,
 				onUpdate: (next) => setJobs((current) => upsertWorkbenchJobs(current, [next])),
@@ -1024,6 +1035,7 @@ useEffect(() => () => {
 				});
 				createdJobs.push(next);
 				job = createdJobs[0];
+				activeJobIdsRef.current.set(runToken, createdJobs.map((item) => item.id));
 				setJobs((current) => upsertWorkbenchJobs(current, createdJobs));
 			}
 			} catch (error) {
@@ -1034,10 +1046,12 @@ useEffect(() => () => {
 				throw error;
 			}
 			if (controller.signal.aborted) {
-				await Promise.allSettled(createdJobs.map((item) => updateGenerationJob(item.id, {
+				const cancelledJobs = (await Promise.all(createdJobs.map((item) => updateGenerationJob(item.id, {
 					status: "cancelled",
 					error: t("creative.cancelled"),
-				})));
+				}).catch(() => undefined))))
+					.filter((item): item is GenerationJob => item !== undefined);
+				setJobs((current) => upsertWorkbenchJobs(current, cancelledJobs));
 				return;
 			}
 			const created = createdJobs;
@@ -1058,17 +1072,26 @@ useEffect(() => () => {
 						activitySurface: "image-workbench",
 						deferActivitySuccess: true,
 					});
+					if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
 					const items: WorkbenchResultItem[] = [];
 					for (const url of urls) {
 						const media = await uploadDisplayMedia(url, "image");
+						if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
 						items.push({
-							url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
-							bytes: media.bytes, mimeType: media.mimeType,
-							thumbnailUrl: media.thumbnailUrl, thumbnailStorageKey: media.thumbnailStorageKey,
+							url: media.url,
+							storageKey: media.storageKey,
+							...(media.width === undefined ? {} : { width: media.width }),
+							...(media.height === undefined ? {} : { height: media.height }),
+							...(media.bytes === undefined ? {} : { bytes: media.bytes }),
+							...(media.mimeType === undefined ? {} : { mimeType: media.mimeType }),
+							...(media.thumbnailUrl === undefined ? {} : { thumbnailUrl: media.thumbnailUrl }),
+							...(media.thumbnailStorageKey === undefined ? {} : { thumbnailStorageKey: media.thumbnailStorageKey }),
 						});
 					}
 					if (!items.length) throw new Error(t("creative.resultsMissing"));
+					if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
 					const completedJob = await updateGenerationJob(next.id, { status: "succeeded", result: { items } });
+					if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
 					completeGenerationActivity(next.id, "succeeded");
 					return { job: completedJob, items };
 				} catch (cause) {
@@ -1078,10 +1101,11 @@ useEffect(() => () => {
 						cancelled ? "cancelled" : "failed",
 						cancelled ? t("creative.cancelled") : cause instanceof Error ? cause.message : String(cause),
 					);
-					await updateGenerationJob(next.id, {
+					const updated = await updateGenerationJob(next.id, {
 						status: cancelled ? "cancelled" : "failed",
 						error: cancelled ? t("creative.cancelled") : cause instanceof Error ? cause.message : String(cause),
 					}).catch(() => undefined);
+					if (updated) setJobs((current) => upsertWorkbenchJobs(current, [updated]));
 					throw cause;
 				}
 			}));
@@ -1118,6 +1142,7 @@ useEffect(() => () => {
 			parameters,
 			result: {},
 		});
+		activeJobIdsRef.current.set(runToken, [job.id]);
       setJobs((current) => upsertWorkbenchJobs(current, [job!]));
       const items: WorkbenchResultItem[] = [];
       {
@@ -1146,21 +1171,32 @@ useEffect(() => () => {
           activitySurface: "video-workbench",
           deferActivitySuccess: true,
         });
+        if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
         if (!output.url) throw new Error(t("creative.videoUrlMissing"));
         try {
           const media = await uploadDisplayMedia(output.url, "media", { previewKind: "video" });
+          if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
           items.push({
-            url: media.url, storageKey: media.storageKey, width: media.width, height: media.height,
-            bytes: media.bytes, mimeType: media.mimeType,
-            thumbnailUrl: media.thumbnailUrl, thumbnailStorageKey: media.thumbnailStorageKey,
+            url: media.url,
+            storageKey: media.storageKey,
+            ...(media.width === undefined ? {} : { width: media.width }),
+            ...(media.height === undefined ? {} : { height: media.height }),
+            ...(media.bytes === undefined ? {} : { bytes: media.bytes }),
+            ...(media.mimeType === undefined ? {} : { mimeType: media.mimeType }),
+            ...(media.thumbnailUrl === undefined ? {} : { thumbnailUrl: media.thumbnailUrl }),
+            ...(media.thumbnailStorageKey === undefined ? {} : { thumbnailStorageKey: media.thumbnailStorageKey }),
           });
-        } catch {
+        } catch (cause) {
+          if (controller.signal.aborted) throw cause;
           items.push({ url: output.url, mimeType: "video/mp4" });
         }
       }
       if (!items.length) throw new Error(t("creative.resultsMissing"));
+		if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
 		const completedJob = await updateGenerationJob(job.id, { status: "succeeded", result: { items } });
+		if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
 		await adoptAssetResult(completedJob, items);
+		if (controller.signal.aborted) throw new Error(t("creative.cancelled"));
       completeGenerationActivity(job.id, "succeeded");
       await refresh();
     } catch (cause) {
@@ -1183,14 +1219,23 @@ useEffect(() => () => {
       await refresh().catch(() => undefined);
     } finally {
       controllersRef.current.delete(runToken);
+		activeJobIdsRef.current.delete(runToken);
 			activeServerJobIdsRef.current.delete(runToken);
       setActiveRuns((value) => Math.max(0, value - 1));
     }
   };
 
 	const stopActiveJobs = async () => {
-		const jobIds = [...new Set([...activeServerJobIdsRef.current.values()].flat())];
-		const cancelled = await Promise.allSettled(jobIds.map(cancelServerGenerationJob));
+		const jobIds = [...new Set([...activeJobIdsRef.current.values()].flat())];
+		const serverJobIds = [...new Set([...activeServerJobIdsRef.current.values()].flat())];
+		const cancellingIds = new Set(jobIds);
+		// Abort provider requests immediately. Waiting for remote cancellation first
+		// leaves local work running when that request is slow or unavailable.
+		for (const controller of controllersRef.current.values()) controller.abort();
+		setJobs((current) => current.map((job) => cancellingIds.has(job.id)
+			? { ...job, status: "cancelled", error: t("creative.cancelled"), updatedAt: new Date().toISOString() }
+			: job));
+		const cancelled = await Promise.allSettled(serverJobIds.map(cancelServerGenerationJob));
 		for (const result of cancelled) {
 			if (result.status === "fulfilled") {
 				setJobs((current) => upsertWorkbenchJobs(current, [result.value]));
@@ -1198,7 +1243,6 @@ useEffect(() => () => {
 				setError(result.reason instanceof Error ? result.reason.message : String(result.reason));
 			}
 		}
-		for (const controller of controllersRef.current.values()) controller.abort();
 		activeServerJobIdsRef.current.clear();
 	};
 

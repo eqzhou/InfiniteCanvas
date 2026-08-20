@@ -3,6 +3,49 @@ import { describe, expect, test } from "bun:test";
 import { resolveE2EEnvironment } from "../e2e/environment";
 import { createAgentServerCommand, createWebServerCommand } from "../playwright.config";
 
+async function loadPlaywrightConfig(ci: boolean) {
+  const previousCi = process.env.CI;
+  const previousFormal = process.env.OPENBOARD_E2E_FORMAL;
+
+  if (ci) {
+    process.env.CI = "1";
+  } else {
+    delete process.env.CI;
+  }
+  delete process.env.OPENBOARD_E2E_FORMAL;
+
+  try {
+    return (await import(`../playwright.config.ts?ci=${ci ? "1" : "0"}`)).default;
+  } finally {
+    if (previousCi === undefined) {
+      delete process.env.CI;
+    } else {
+      process.env.CI = previousCi;
+    }
+    if (previousFormal === undefined) {
+      delete process.env.OPENBOARD_E2E_FORMAL;
+    } else {
+      process.env.OPENBOARD_E2E_FORMAL = previousFormal;
+    }
+  }
+}
+
+describe("Playwright retry limits", () => {
+  test("retries one time and caps failures in CI", async () => {
+    const config = await loadPlaywrightConfig(true);
+
+    expect(config.retries).toBe(1);
+    expect(config.maxFailures).toBe(5);
+  });
+
+  test("does not cap failures locally", async () => {
+    const config = await loadPlaywrightConfig(false);
+
+    expect(config.retries).toBe(0);
+    expect(config.maxFailures).toBe(0);
+  });
+});
+
 describe("Playwright E2E environment", () => {
   test("rejects formal and production mode being enabled together", () => {
     expect(() => resolveE2EEnvironment({

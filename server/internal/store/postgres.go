@@ -117,6 +117,7 @@ const tombstoneRetention = 7 * 24 * time.Hour
 
 const defaultStorageQuotaBytes int64 = 1 << 30
 const defaultGenerationQuotaMonthly int64 = 0
+const e2eGenerationQuotaMonthly int64 = 1_000
 
 type PostgresStore struct {
 	pool  *pgxpool.Pool
@@ -1530,8 +1531,8 @@ func (s *PostgresStore) EnsureE2ETenant(ctx context.Context, tenantID string) er
 	if _, err := tx.Exec(ctx, `
 INSERT INTO openboard_tenants (id, name, plan, storage_quota_bytes, generation_quota_monthly)
 VALUES ($1, 'Browser E2E', 'free', $2, $3)
-ON CONFLICT (id) DO NOTHING`,
-		tenantID, defaultStorageQuotaBytes, defaultGenerationQuotaMonthly); err != nil {
+ON CONFLICT (id) DO UPDATE SET generation_quota_monthly = EXCLUDED.generation_quota_monthly`,
+		tenantID, defaultStorageQuotaBytes, e2eGenerationQuotaMonthly); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `

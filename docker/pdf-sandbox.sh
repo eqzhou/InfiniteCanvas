@@ -16,7 +16,7 @@ if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
     --ro-bind /usr /usr \
     --ro-bind-try /lib /lib \
     --ro-bind-try /usr/lib /usr/lib \
-    --proc /proc \
+    --dir /proc \
     --dev /dev \
     --tmpfs /tmp \
     -- /usr/bin/true
@@ -59,7 +59,7 @@ exec /usr/bin/bwrap \
   --dir /etc \
   --ro-bind-try /etc/fonts /etc/fonts \
   --ro-bind "$input_dir" /input \
-  --proc /proc \
+  --dir /proc \
   --dev /dev \
   --tmpfs /tmp \
   --setenv HOME /tmp \

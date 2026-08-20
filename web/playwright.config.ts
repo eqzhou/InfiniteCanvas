@@ -59,7 +59,8 @@ export default defineConfig({
   outputDir: "./node_modules/.cache/playwright-test-results",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-	retries: formal ? 0 : process.env.CI ? 2 : 0,
+	retries: formal ? 0 : process.env.CI ? 1 : 0,
+	maxFailures: process.env.CI ? 5 : 0,
   workers: 1,
   reporter: process.env.CI ? "github" : "list",
   use: {
