@@ -19,7 +19,7 @@ if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
     --dir /proc \
     --dev /dev \
     --tmpfs /tmp \
-    -- /usr/bin/true
+    -- /usr/bin/pdftotext -v
 fi
 
 if [ "$#" -ne 7 ] || [ "$1" != "/usr/bin/pdftotext" ] || [ "$2" != "-layout" ] || \
