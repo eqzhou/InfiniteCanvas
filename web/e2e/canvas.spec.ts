@@ -106,6 +106,19 @@ async function openFreshBoard(
   }
 }
 
+async function expectImageWorkbenchReady(page: Page) {
+  const heading = page.getByRole("heading", { name: "图片创作工作台" });
+  if ((page.viewportSize()?.width ?? 1440) >= 768) {
+    await expect(heading).toBeVisible();
+    return;
+  }
+
+  // The compact header can collapse its title on a narrow viewport. Verify
+  // the controls that are actually visible and usable in the mobile layout.
+  await expect(page.getByRole("textbox", { name: "提示词", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成", exact: true })).toBeVisible();
+}
+
 async function readServerProjects(page: Page): Promise<any[]> {
   return page.evaluate(async () => {
     const summariesResponse = await fetch("/api/projects");
@@ -2547,7 +2560,7 @@ test("image workbench persists history and inserts a result into the canvas", as
   await closeSettings(page);
 
   await page.goto("/workbench/image");
-  await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
+  await expectImageWorkbenchReady(page);
   await page.getByText("提示词", { exact: true }).locator("..").locator("textarea").fill("workbench square");
   await page.getByRole("button", { name: "生成", exact: true }).click();
   const history = page.locator("article").filter({ hasText: "workbench square" });
@@ -2811,7 +2824,7 @@ test("Agent sees one unified running generation task from the image workbench", 
   expect(await completed.json()).toMatchObject({ task: { id: taskId, status: "succeeded" } });
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
+  await expectImageWorkbenchReady(page);
   await expect.poll(async () => {
     const afterReload = await request.post(`${agentUrl}/api/runtime/command`, {
       headers: e2eAgentHeaders(),
@@ -2874,7 +2887,7 @@ test("image workbench refuses retry when a recorded reference is missing", async
   await closeSettings(page);
 
   await page.goto("/workbench/image");
-  await expect(page.getByRole("heading", { name: "图片创作工作台" })).toBeVisible();
+  await expectImageWorkbenchReady(page);
   await page.evaluate(async () => {
     const projectsResponse = await fetch("/api/projects");
     const configResponse = await fetch("/api/config");
