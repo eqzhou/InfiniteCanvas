@@ -552,7 +552,15 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 	quality := strings.TrimSpace(request.Quality)
 	resolution := ""
 	if currentImageModel {
-		resolution = strings.ToUpper(quality)
+		// Current APIMart image models expose resolution independently from
+		// OpenAI-style quality. Keep quality out of this mapping so an old or
+		// provider-specific quality value cannot silently select a resolution.
+		resolution = strings.ToUpper(strings.TrimSpace(request.Resolution))
+		if resolution == "" {
+			// Keep direct callers and pre-migration jobs compatible with the
+			// historical APIMart contract where quality carried 1K/2K.
+			resolution = legacyImageResolution(request.Quality)
+		}
 		if resolution == "" || resolution == "AUTO" {
 			if capability.Family == "seedream-5.0-pro" {
 				resolution = "2K"
@@ -566,7 +574,7 @@ func (e *openAIImageExecutor) GenerateResumable(ctx context.Context, request ima
 	if request.Count < 1 || request.Count > capability.MaxOutputs || len(request.References) > capability.MaxImageReferences ||
 		!containsAPIMartString(capability.Sizes, size) ||
 		(currentImageModel && (strings.TrimSpace(request.Prompt) == "" || !containsAPIMartString(capability.Resolutions, resolution) || request.TransparentBackground)) ||
-		(!currentImageModel && !containsAPIMartString(capability.Qualities, quality)) {
+		(!currentImageModel && (!containsAPIMartString(capability.Qualities, quality) || strings.TrimSpace(request.Resolution) != "")) {
 		return nil, errors.New("invalid APIMart image parameters")
 	}
 	if capability.Family == "gemini-3.1-flash-lite-image" {

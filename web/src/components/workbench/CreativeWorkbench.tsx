@@ -88,8 +88,11 @@ import {
   imageAspectOptionsFor,
   imageOutputLimitFor,
   imageQualityOptionsFor,
+  imageResolutionOptionsFor,
+  legacyImageResolutionFromQuality,
   normalizeImageAspectForProvider,
   normalizeImageQualityForProvider,
+  normalizeImageResolutionForProvider,
   normalizeImageSizeForProvider,
   imageSizeOptionsFor,
   optionsWithCurrentValue,
@@ -168,6 +171,9 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
   const [imageAspect, setImageAspect] = useState<ImageAspectSelection>(() => imageAspectForSize(config.imageSize));
   const [customImageSize, setCustomImageSize] = useState(config.imageSize);
   const [quality, setQuality] = useState(config.imageQuality);
+  const [imageResolution, setImageResolution] = useState(
+    config.imageResolution ?? legacyImageResolutionFromQuality(config.imageQuality) ?? "",
+  );
   const [count, setCount] = useState(config.imageCount);
   const [transparent, setTransparent] = useState(false);
   const [seconds, setSeconds] = useState(5);
@@ -267,10 +273,17 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
       ? models.filter((candidate) => intersectMediaCapabilities(eligible.filter((item) => item.model === candidate)))
       : models;
   }, [channelId, estimateGenerationMode, sharedCapabilities]);
-  const sharedCapability = useMemo(() => {
+	const sharedCapability = useMemo(() => {
     const matching = sharedCapabilities.filter((item) => item.model === model && item.modes.includes(estimateGenerationMode));
     return channelId === "shared-auto" ? intersectMediaCapabilities(matching) : matching[0];
   }, [channelId, estimateGenerationMode, model, sharedCapabilities]);
+	const imageResolutionOptions = useMemo(() => {
+		if (kind !== "image") return [];
+		if (sharedChannelSelected && sharedCapability) {
+			return sharedCapability.resolutions.map((value) => ({ value, label: `${value} 分辨率` }));
+		}
+		return imageResolutionOptionsFor(provider?.protocol, model);
+	}, [kind, model, provider?.protocol, sharedCapability, sharedChannelSelected]);
   const availableVideoDurations = useMemo(() => {
     if (sharedCapability?.durations.length) return sharedCapability.durations;
     return videoDurationOptionsFor(provider?.protocol, model);
@@ -368,6 +381,14 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     setQuality((current) => normalizeImageQualityForProvider(current, provider?.protocol, model));
   }, [kind, model, provider?.protocol]);
 
+	useEffect(() => {
+		if (kind !== "image") return;
+		const next = sharedChannelSelected && sharedCapability
+			? sharedCapability.resolutions.includes(imageResolution) ? imageResolution : sharedCapability.resolutions[0] ?? ""
+			: normalizeImageResolutionForProvider(imageResolution, provider?.protocol, model);
+		if (next !== imageResolution) setImageResolution(next);
+	}, [imageResolution, kind, model, provider?.protocol, sharedCapability, sharedChannelSelected]);
+
   useEffect(() => {
     if (kind !== "image") return;
     setCount((current) => Math.min(Math.max(1, current), imageOutputLimit));
@@ -433,7 +454,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
    */
   const refill = useCallback((job: GenerationJob) => {
     const restored = workbenchRefillForm(job, {
-      prompt, model, providerId: channelId, size, quality, count,
+      prompt, model, providerId: channelId, size, quality, resolution: imageResolution, count,
       transparentBackground: transparent,
       category,
       referenceStorageKeys: [],
@@ -444,6 +465,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     // Legacy jobs only record a size, not whether it came from a preset.
     setImageAspect("custom");
     setQuality(restored.quality);
+    setImageResolution(restored.resolution);
     setCount(restored.count);
     setTransparent(restored.transparentBackground);
     setCategory(restored.category === WORKBENCH_UNCATEGORIZED ? "" : restored.category);
@@ -489,7 +511,7 @@ export function CreativeWorkbench({ kind }: { kind: "image" | "video" }) {
     // rather than letting the user believe the references came back.
     setReferences([]);
     setError(unresolved ? t("creative.refillWarning", { count: unresolved }) : "");
-  }, [category, channelChoices, channelId, count, frameMode, generateAudio, kind, model, prompt, quality, ratio, reusableAssets, resolution, seconds, setConfig, size, smartDuration, t, transparent, watermark]);
+  }, [category, channelChoices, channelId, count, frameMode, generateAudio, imageResolution, kind, model, prompt, quality, ratio, reusableAssets, resolution, seconds, setConfig, size, smartDuration, t, transparent, watermark]);
 
   const refresh = useCallback(async (
     targetPage = pageRef.current,
@@ -693,6 +715,16 @@ useEffect(() => () => {
 		}
 		const requestedVideoRatio = String(source?.parameters.ratio ?? ratio);
 		const requestedVideoResolution = String(source?.parameters.resolution ?? resolution);
+		const requestedImageResolution = String(
+			source?.parameters.resolution ??
+			legacyImageResolutionFromQuality(typeof source?.parameters.quality === "string" ? source.parameters.quality : undefined) ??
+			imageResolution,
+		);
+		const effectiveImageResolution = kind === "image"
+			? runSharedChannelSelected && runSharedCapability
+				? runSharedCapability.resolutions.includes(requestedImageResolution) ? requestedImageResolution : runSharedCapability.resolutions[0] ?? ""
+				: normalizeImageResolutionForProvider(requestedImageResolution, runProvider?.protocol, runModel)
+			: "";
 		const effectiveVideoRatio = kind === "video"
 			? runSharedCapability?.ratios.length
 				? runSharedCapability.ratios.includes(requestedVideoRatio) ? requestedVideoRatio : runSharedCapability.ratios[0]!
@@ -810,7 +842,7 @@ useEffect(() => () => {
 		const rawParameters: Record<string, unknown> = {
         ...(source?.parameters ?? (kind === "image"
         ? {
-            size, quality, count, transparentBackground: transparent,
+            size, quality, resolution: imageResolution, count, transparentBackground: transparent,
             category: normalizeWorkbenchCategory(category), referenceStorageKeys,
           }
         : {
@@ -838,6 +870,7 @@ useEffect(() => () => {
 			resolution: effectiveVideoResolution,
 			size: String(source?.parameters.size ?? "") || effectiveVideoSize,
 		} : {}),
+		...(kind === "image" ? { resolution: effectiveImageResolution } : {}),
         ...(ownerClientId ? { ownerClientId } : {}),
       };
       const parameters: Record<string, unknown> = kind === "image"
@@ -847,10 +880,11 @@ useEffect(() => () => {
               ...rawParameters,
               size: normalizeImageSizeForProvider(String(rawParameters.size ?? size)),
               quality: normalizeImageQualityForProvider(
-                String(rawParameters.quality ?? quality),
+                legacyImageResolutionFromQuality(String(rawParameters.quality ?? quality)) ? "auto" : String(rawParameters.quality ?? quality),
                 runProvider?.protocol,
                 runModel,
               ),
+              resolution: effectiveImageResolution,
               count: Math.min(
                 Math.max(1, Number.isFinite(requestedCount) ? Math.floor(requestedCount) : 1),
                 imageOutputLimitFor(runProvider?.protocol, runModel),
@@ -892,6 +926,7 @@ useEffect(() => () => {
 					const slot = imageGenerationSlotParameters({
 						size: String(parameters.size ?? size),
 						quality: String(parameters.quality ?? quality),
+						resolution: String(parameters.resolution ?? effectiveImageResolution),
 						count: total,
 						category: normalizeWorkbenchCategory(parameters.category),
 						transparentBackground: Boolean(parameters.transparentBackground),
@@ -905,6 +940,7 @@ useEffect(() => () => {
 						parameters: {
 							size: slot.size,
 							quality: slot.quality,
+							resolution: slot.resolution,
 							count: 1,
 							requestedCount: slot.requestedCount,
 							batchId: slot.batchId || undefined,
@@ -1063,6 +1099,7 @@ useEffect(() => () => {
 						prompt: runPrompt.trim(),
 						size: String(parameters.size ?? size),
 						quality: String(parameters.quality ?? quality),
+						resolution: String(parameters.resolution ?? effectiveImageResolution),
 						n: 1,
 						transparentBackground: Boolean(parameters.transparentBackground),
 						referenceDataUrls: referenceData.filter((value) => value.startsWith("data:image/")),
@@ -1491,19 +1528,36 @@ useEffect(() => () => {
                     />
                   </label>
                 ) : null}
-                <label className="block">
-                  <span className="ob-label">{t("workbench.quality")}</span>
-                  <select
-                    aria-label={t("workbench.imageQuality")}
-                    className="ob-field cursor-pointer"
-                    value={quality}
-                    onChange={(event) => setQuality(event.target.value)}
-                  >
-                    {optionsWithCurrentValue(qualityOptions, quality).map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
+                {qualityOptions.length ? (
+                  <label className="block">
+                    <span className="ob-label">{t("workbench.quality")}</span>
+                    <select
+                      aria-label={t("workbench.imageQuality")}
+                      className="ob-field cursor-pointer"
+                      value={quality}
+                      onChange={(event) => setQuality(event.target.value)}
+                    >
+                      {optionsWithCurrentValue(qualityOptions, quality).map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {imageResolutionOptions.length ? (
+                  <label className="block">
+                    <span className="ob-label">{t("workbench.imageResolution")}</span>
+                    <select
+                      aria-label={t("workbench.imageResolution")}
+                      className="ob-field cursor-pointer"
+                      value={imageResolution}
+                      onChange={(event) => setImageResolution(event.target.value)}
+                    >
+                      {imageResolutionOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <label className="block">
                   <span className="ob-label">{t("workbench.count")}</span>
                   <input

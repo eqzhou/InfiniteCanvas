@@ -14,6 +14,7 @@ describe("image generation lineage", () => {
       model: "image-model",
       size: "1024x1024",
       quality: "high",
+      resolution: "2K",
       count: 3,
       transparentBackground: true,
       referenceStorageKeys,
@@ -25,6 +26,7 @@ describe("image generation lineage", () => {
       model: "image-model",
       size: "1024x1024",
       quality: "high",
+      resolution: "2K",
       count: 3,
       transparentBackground: true,
       generationType: "image-to-image",
@@ -52,15 +54,32 @@ describe("image generation lineage", () => {
       model: "doubao-seedream-5-0-pro",
       size: "3:2",
       quality: "high",
+      resolution: "2K",
       count: 8,
       transparentBackground: false,
       referenceStorageKeys: [],
     });
     const normalized = normalizeImageGenerationForProvider(source, "apimart");
 
-    expect(normalized).toMatchObject({ size: "1536x1024", quality: "auto", count: 8 });
+    expect(normalized).toMatchObject({ size: "1536x1024", quality: "high", resolution: "2K", count: 8 });
     expect(normalized).not.toBe(source);
     expect(normalized.referenceStorageKeys).not.toBe(source.referenceStorageKeys);
+  });
+
+  test("migrates legacy resolution values stored in quality", () => {
+    const source = createImageGenerationMetadata({
+      prompt: "poster",
+      model: "doubao-seedream-5-0-pro",
+      size: "1024x1024",
+      quality: "2K",
+      count: 1,
+      transparentBackground: false,
+      referenceStorageKeys: [],
+    });
+    expect(source).toMatchObject({ quality: "auto", resolution: "2K" });
+    expect(normalizeImageGenerationForProvider(source, "apimart")).toMatchObject({
+      quality: "auto", resolution: "2K",
+    });
   });
 
   test("rejects a retry when any recorded reference cannot be restored", () => {

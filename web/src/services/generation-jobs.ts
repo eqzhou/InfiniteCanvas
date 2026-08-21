@@ -39,6 +39,7 @@ export type ServerImageGenerationInput = {
 	parameters: {
 		size: string;
 		quality?: string;
+		resolution?: string;
 		count: number;
 		requestedCount?: number;
 		batchId?: string;

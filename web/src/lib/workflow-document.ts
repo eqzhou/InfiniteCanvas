@@ -4,6 +4,7 @@ import type {
   WorkflowTemplate,
   WorkflowVariable,
 } from "@/types/workflow";
+import { legacyImageResolutionFromQuality } from "@/lib/image-generation-options";
 
 export const WORKFLOW_MAX_DOCUMENT_BYTES = 256 * 1024;
 export const WORKFLOW_MAX_VARIABLES = 32;
@@ -120,7 +121,7 @@ function parseStep(value: unknown, index: number): WorkflowStep {
   const input = object(value, label);
   exactKeys(input, ["id", "title", "promptTemplate", "providerId", "model", "parameters", "references"], label);
   const parameters = object(input.parameters, `${label}.parameters`);
-  exactKeys(parameters, ["size", "quality", "count", "transparentBackground"], `${label}.parameters`);
+  exactKeys(parameters, ["size", "quality", "resolution", "count", "transparentBackground"], `${label}.parameters`);
   const size = text(parameters.size, `${label}.parameters.size`, 50);
   if (!SIZE.test(size)) throw new Error(`${label}.parameters.size is invalid`);
   const count = finite(parameters.count, `${label}.parameters.count`);
@@ -129,7 +130,13 @@ function parseStep(value: unknown, index: number): WorkflowStep {
     throw new Error(`${label}.references exceeds limit`);
   }
   const model = input.model === undefined ? undefined : text(input.model, `${label}.model`, 500, true);
-  const quality = parameters.quality === undefined ? undefined : text(parameters.quality, `${label}.parameters.quality`, 50, true);
+  const qualityValue = parameters.quality === undefined ? undefined : text(parameters.quality, `${label}.parameters.quality`, 50, true);
+  const legacyResolution = legacyImageResolutionFromQuality(qualityValue);
+  const quality = legacyResolution ? "auto" : qualityValue;
+  const resolutionValue = parameters.resolution === undefined
+    ? legacyResolution
+    : text(parameters.resolution, `${label}.parameters.resolution`, 50, true);
+  const resolution = resolutionValue?.trim() || undefined;
   const transparentBackground = parameters.transparentBackground === undefined
     ? undefined
     : boolean(parameters.transparentBackground, `${label}.parameters.transparentBackground`);
@@ -143,6 +150,7 @@ function parseStep(value: unknown, index: number): WorkflowStep {
       size,
       count,
       ...(quality === undefined ? {} : { quality }),
+      ...(resolution === undefined ? {} : { resolution }),
       ...(transparentBackground === undefined ? {} : { transparentBackground }),
     },
     references: input.references.map((reference, referenceIndex) => parseReference(reference, index, referenceIndex)),

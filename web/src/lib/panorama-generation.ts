@@ -48,6 +48,7 @@ export type PanoramaGenerationDescriptor = {
   prompt: string;
   model: string;
   quality: string;
+  resolution?: string;
   referenceStorageKeys: string[];
   derivedFromId?: string;
   generationJobId?: string;
@@ -122,16 +123,19 @@ export async function loadPanoramaReferenceBlobs(
 }
 
 export function getPanoramaGenerationSettings(
-  metadata: Pick<NodeMetadata, "count" | "quality">,
+  metadata: Pick<NodeMetadata, "count" | "quality" | "resolution">,
   defaultQuality: string,
-): { count: number; quality: string; size: typeof PANORAMA_GENERATION_SIZE } {
+  resolvedResolution?: string,
+): { count: number; quality: string; resolution: string; size: typeof PANORAMA_GENERATION_SIZE } {
   const count = metadata.count ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > PANORAMA_MAX_RESULTS) {
     throw new Error(`全景生成张数必须在 1-${PANORAMA_MAX_RESULTS} 之间`);
   }
   const quality = (metadata.quality ?? defaultQuality).trim();
   if (!quality || quality.length > 100) throw new Error("全景生成质量无效");
-  return { count, quality, size: PANORAMA_GENERATION_SIZE };
+  const resolution = (resolvedResolution ?? metadata.resolution ?? "").trim();
+  if (resolution.length > 20) throw new Error("全景生成分辨率无效");
+  return { count, quality, resolution, size: PANORAMA_GENERATION_SIZE };
 }
 
 function validateGeneratedMedia(result: PanoramaGeneratedMedia, index: number): void {
@@ -227,6 +231,7 @@ export function commitPanoramaGeneration(
         prompt: descriptor.prompt,
         model: descriptor.model,
         quality: descriptor.quality,
+        ...(descriptor.resolution ? { resolution: descriptor.resolution } : {}),
         count: results.length,
         generationType: descriptor.referenceStorageKeys.length > 0 ? "image-to-image" : "text-to-image",
         referenceStorageKeys: [...descriptor.referenceStorageKeys],
@@ -249,6 +254,7 @@ export function commitPanoramaGeneration(
       prompt: descriptor.prompt,
       model: descriptor.model,
       quality: descriptor.quality,
+      ...(descriptor.resolution ? { resolution: descriptor.resolution } : {}),
       count: results.length,
       generationType: descriptor.referenceStorageKeys.length > 0 ? "image-to-image" as const : "text-to-image" as const,
       referenceStorageKeys: [...descriptor.referenceStorageKeys],

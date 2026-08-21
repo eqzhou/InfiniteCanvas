@@ -99,10 +99,12 @@ export function mergeConfigSecrets(
 	session: ConfigSecrets,
 	persisted: ConfigSecrets,
 ): ConfigSecrets {
+	const sessionApiKeys = session?.apiKeys ?? {};
+	const persistedApiKeys = persisted?.apiKeys ?? {};
 	const apiKeys: Record<string, Record<string, string>> = Object.fromEntries(
-		Object.entries(session.apiKeys).map(([id, keys]) => [id, { ...keys }]),
+		Object.entries(sessionApiKeys).map(([id, keys]) => [id, { ...keys }]),
 	);
-	for (const [id, keys] of Object.entries(persisted.apiKeys)) {
+	for (const [id, keys] of Object.entries(persistedApiKeys)) {
 		const nonEmpty = Object.fromEntries(Object.entries(keys).filter(([, key]) => key !== ""));
 		if (Object.keys(nonEmpty).length > 0) {
 			apiKeys[id] = { ...(apiKeys[id] ?? {}), ...nonEmpty };
@@ -110,10 +112,10 @@ export function mergeConfigSecrets(
 	}
 	return {
 		apiKeys,
-		webdavPass: persisted.webdavPass || session.webdavPass,
-		objectStorageAccessKeyId: persisted.objectStorageAccessKeyId || session.objectStorageAccessKeyId || "",
-		objectStorageSecretAccessKey: persisted.objectStorageSecretAccessKey || session.objectStorageSecretAccessKey || "",
-		objectStorageSessionToken: persisted.objectStorageSessionToken || session.objectStorageSessionToken || "",
+		webdavPass: persisted?.webdavPass || session?.webdavPass || "",
+		objectStorageAccessKeyId: persisted?.objectStorageAccessKeyId || session?.objectStorageAccessKeyId || "",
+		objectStorageSecretAccessKey: persisted?.objectStorageSecretAccessKey || session?.objectStorageSecretAccessKey || "",
+		objectStorageSessionToken: persisted?.objectStorageSessionToken || session?.objectStorageSessionToken || "",
 	};
 }
 

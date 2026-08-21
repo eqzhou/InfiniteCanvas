@@ -145,6 +145,8 @@ const (
 )
 
 var adminMediaSizePattern = regexp.MustCompile(`^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|\d{3,4}p|[1248][kK]|auto|adaptive)$`)
+var adminMediaImageSizePattern = regexp.MustCompile(`^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|auto)$`)
+var adminMediaResolutionPattern = regexp.MustCompile(`^(?:\d{3,4}p|[1248][kK]|auto)$`)
 
 func normalizeAdminChannel(item adminChannelPublic) (adminChannelPublic, string) {
 	item.ID = strings.TrimSpace(item.ID)
@@ -239,6 +241,34 @@ func normalizeAdminMediaCapabilities(channel adminChannelPublic) ([]adminMediaCa
 		if message != "" {
 			return nil, "invalid media capability sizes"
 		}
+		if capability.Kind == "image" {
+			// Versions before the independent field was introduced stored 1K/2K
+			// beside aspect/size values. Read those records without exposing the
+			// legacy values as pixel sizes, while keeping the migration immutable.
+			legacyResolutions := make([]string, 0, len(capability.Sizes))
+			imageSizes := make([]string, 0, len(capability.Sizes))
+			for _, value := range capability.Sizes {
+				if strings.HasSuffix(strings.ToLower(value), "k") {
+					legacyResolutions = append(legacyResolutions, value)
+					continue
+				}
+				if !adminMediaImageSizePattern.MatchString(value) {
+					return nil, "invalid media capability sizes"
+				}
+				imageSizes = append(imageSizes, value)
+			}
+			capability.Sizes = imageSizes
+			capability.Resolutions, message = normalizeAdminMediaStringsWithPattern(raw.Resolutions, adminMediaResolutionPattern)
+			if message != "" {
+				return nil, "invalid media capability resolutions"
+			}
+			capability.Resolutions = appendUniqueAdminMediaStrings(legacyResolutions, capability.Resolutions)
+		} else {
+			capability.Resolutions, message = normalizeAdminMediaStrings(raw.Resolutions)
+		}
+		if message != "" {
+			return nil, "invalid media capability resolutions"
+		}
 		capability.Durations, message = normalizeAdminMediaDurations(raw.Durations)
 		if message != "" {
 			return nil, message
@@ -291,6 +321,10 @@ func normalizeAdminMediaModes(values []string, kind string) ([]string, string) {
 }
 
 func normalizeAdminMediaStrings(values []string) ([]string, string) {
+	return normalizeAdminMediaStringsWithPattern(values, adminMediaSizePattern)
+}
+
+func normalizeAdminMediaStringsWithPattern(values []string, pattern *regexp.Regexp) ([]string, string) {
 	if len(values) == 0 {
 		return nil, ""
 	}
@@ -302,7 +336,7 @@ func normalizeAdminMediaStrings(values []string) ([]string, string) {
 	for _, raw := range values {
 		value := strings.TrimSpace(raw)
 		value = strings.ReplaceAll(value, "X", "x")
-		if value == "" || len(value) > maxAdminMediaCapabilityValueSize || !adminMediaSizePattern.MatchString(value) {
+		if value == "" || len(value) > maxAdminMediaCapabilityValueSize || !pattern.MatchString(value) {
 			return nil, "invalid value"
 		}
 		key := strings.ToLower(value)
@@ -313,6 +347,31 @@ func normalizeAdminMediaStrings(values []string) ([]string, string) {
 		clean = append(clean, value)
 	}
 	return clean, ""
+}
+
+func appendUniqueAdminMediaStrings(first []string, rest ...[]string) []string {
+	seen := make(map[string]struct{}, len(first))
+	result := make([]string, 0, len(first))
+	appendValue := func(value string) {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	for _, value := range first {
+		appendValue(value)
+	}
+	for _, values := range rest {
+		for _, value := range values {
+			appendValue(value)
+		}
+	}
+	return result
 }
 
 func normalizeAdminMediaDurations(values []int) ([]int, string) {

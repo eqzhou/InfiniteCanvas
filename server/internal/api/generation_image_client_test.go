@@ -142,7 +142,7 @@ func TestOpenAIImageExecutorGenerationsRequestAndBase64Result(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["model"] != "gpt-image-1" || body["prompt"] != "draw a square" || body["n"] != float64(1) || body["background"] != "transparent" {
+		if body["model"] != "custom-image-model" || body["prompt"] != "draw a square" || body["n"] != float64(1) || body["background"] != "transparent" || body["resolution"] != "4K" {
 			t.Errorf("request body = %#v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -151,8 +151,8 @@ func TestOpenAIImageExecutorGenerationsRequestAndBase64Result(t *testing.T) {
 	defer upstream.Close()
 
 	images, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
-		BaseURL: upstream.URL + "/v1", APIKey: "sk-test", Model: "gpt-image-1",
-		Prompt: "draw a square", Size: "1024x1024", Quality: "high", Count: 1,
+		BaseURL: upstream.URL + "/v1", APIKey: "sk-test", Model: "custom-image-model",
+		Prompt: "draw a square", Size: "1024x1024", Resolution: "4K", Quality: "high", Count: 1,
 		TransparentBackground: true,
 	})
 	if err != nil || len(images) != 1 || images[0].MIMEType != "image/png" {
@@ -433,8 +433,8 @@ func TestOpenAIImageExecutorEditsUseMultipartReferences(t *testing.T) {
 				fields[part.FormName()] = string(value)
 			}
 		}
-		if fields["prompt"] != "edit it" || fields["model"] != "gpt-image-1.5" ||
-			fields["background"] != "transparent" || imageArrayParts != 2 || legacyImageParts != 0 {
+		if fields["prompt"] != "edit it" || fields["model"] != "custom-image-model" ||
+			fields["background"] != "transparent" || fields["resolution"] != "4K" || imageArrayParts != 2 || legacyImageParts != 0 {
 			t.Errorf("fields = %#v, image[] parts = %d, legacy image parts = %d", fields, imageArrayParts, legacyImageParts)
 		}
 		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+onePixelPNGBase64()+`"}]}`)
@@ -442,8 +442,8 @@ func TestOpenAIImageExecutorEditsUseMultipartReferences(t *testing.T) {
 	defer upstream.Close()
 
 	images, err := newOpenAIImageExecutor().Generate(context.Background(), imageGenerationRequest{
-		BaseURL: upstream.URL + "/v1", APIKey: "sk-test", Model: "gpt-image-1.5",
-		Prompt: "edit it", Size: "1024x1024", Quality: "auto", Count: 1,
+		BaseURL: upstream.URL + "/v1", APIKey: "sk-test", Model: "custom-image-model",
+		Prompt: "edit it", Size: "1024x1024", Resolution: "4K", Quality: "auto", Count: 1,
 		TransparentBackground: true,
 		References: []generatedImage{
 			{Data: png, MIMEType: "image/png"},
@@ -542,6 +542,9 @@ func TestImageExecutorGeneratesGeminiImagesWithInlineReferences(t *testing.T) {
 			} `json:"contents"`
 			GenerationConfig struct {
 				ResponseModalities []string `json:"responseModalities"`
+				ImageConfig        struct {
+					ImageSize string `json:"imageSize"`
+				} `json:"imageConfig"`
 			} `json:"generationConfig"`
 		}
 		if json.NewDecoder(r.Body).Decode(&body) != nil || len(body.Contents) != 1 || len(body.Contents[0].Parts) != 2 {
@@ -555,6 +558,9 @@ func TestImageExecutorGeneratesGeminiImagesWithInlineReferences(t *testing.T) {
 		if strings.Join(body.GenerationConfig.ResponseModalities, ",") != "TEXT,IMAGE" {
 			t.Fatalf("modalities=%v", body.GenerationConfig.ResponseModalities)
 		}
+		if body.GenerationConfig.ImageConfig.ImageSize != "4K" {
+			t.Fatalf("imageSize=%q", body.GenerationConfig.ImageConfig.ImageSize)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"done"},{"inlineData":{"mimeType":"image/png","data":"`+onePixelPNGBase64()+`"}}]}}]}`)
 	}))
@@ -563,7 +569,7 @@ func TestImageExecutorGeneratesGeminiImagesWithInlineReferences(t *testing.T) {
 	executor := newOpenAIImageExecutor()
 	images, err := executor.Generate(context.Background(), imageGenerationRequest{
 		Protocol: "gemini", BaseURL: upstream.URL + "/v1beta", APIKey: "gemini-secret",
-		Model: "gemini-2.5-flash-image", Prompt: "draw a lighthouse", Count: 2,
+		Model: "gemini-2.5-flash-image", Prompt: "draw a lighthouse", Resolution: "4K", Count: 2,
 		References: []generatedImage{{Data: pngBytes, MIMEType: "image/png"}},
 	})
 	if err != nil {

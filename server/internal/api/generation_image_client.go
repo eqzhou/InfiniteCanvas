@@ -332,7 +332,7 @@ func (e *openAIImageExecutor) generateOpenAIOnce(ctx context.Context, request im
 		writer := multipart.NewWriter(buffer)
 		for key, value := range map[string]string{
 			"model": request.Model, "prompt": request.Prompt, "n": "1",
-			"size": request.Size, "quality": request.Quality,
+			"size": request.Size, "quality": request.Quality, "resolution": request.Resolution,
 		} {
 			if value != "" {
 				if err := writer.WriteField(key, value); err != nil {
@@ -371,24 +371,19 @@ func (e *openAIImageExecutor) generateOpenAIOnce(ctx context.Context, request im
 		body = buffer
 		contentType = writer.FormDataContentType()
 	} else {
-		value, err := json.Marshal(map[string]any{
+		payload := map[string]any{
 			"model": request.Model, "prompt": request.Prompt, "n": 1,
 			"size": request.Size, "quality": request.Quality,
-			"background": func() string {
-				if request.TransparentBackground {
-					return "transparent"
-				}
-				return ""
-			}(),
-		})
+		}
+		if request.Resolution != "" {
+			payload["resolution"] = request.Resolution
+		}
+		if request.TransparentBackground {
+			payload["background"] = "transparent"
+		}
+		value, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
-		}
-		if !request.TransparentBackground {
-			var payload map[string]any
-			_ = json.Unmarshal(value, &payload)
-			delete(payload, "background")
-			value, _ = json.Marshal(payload)
 		}
 		body = bytes.NewReader(value)
 	}
@@ -480,9 +475,13 @@ func (e *openAIImageExecutor) generateGemini(ctx context.Context, request imageG
 			"data":     base64.StdEncoding.EncodeToString(reference.Data),
 		}})
 	}
+	generationConfig := map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}}
+	if request.Resolution != "" {
+		generationConfig["imageConfig"] = map[string]any{"imageSize": request.Resolution}
+	}
 	body, err := json.Marshal(map[string]any{
 		"contents":         []any{map[string]any{"role": "user", "parts": parts}},
-		"generationConfig": map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}},
+		"generationConfig": generationConfig,
 	})
 	if err != nil {
 		return nil, err

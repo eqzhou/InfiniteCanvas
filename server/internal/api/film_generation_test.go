@@ -369,6 +369,44 @@ func TestFilmGenerationJobViewsAggregateWithoutMutatingParentOnRead(t *testing.T
 	}
 }
 
+func TestFilmImageStagePersistsConfiguredResolutionOnChildJobs(t *testing.T) {
+	backend, handler := filmAPIHandler(t)
+	document := prepareFilmGenerationStage(t, handler)
+	body, err := json.Marshal(map[string]any{
+		"revision":       document.Stages[2].Revision,
+		"shotIds":        []string{document.Shots[0].ID},
+		"providerId":     "provider-a",
+		"model":          "model-a",
+		"idempotencyKey": "image-resolution-child",
+		"config":         map[string]any{"size": "1024x1024", "quality": "high", "resolution": "4K"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := decodeFilmResponse(t, request(t, handler, http.MethodPost, "/api/film/projects/film-api/stages/storyboard/run", body))
+	task := created.Tasks[len(created.Tasks)-1]
+	child, err := backend.GetGenerationJob(t.Context(), store.DefaultTenantID, task.GenerationJobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parameters persistedImageJobParameters
+	if err := json.Unmarshal(child.Parameters, &parameters); err != nil {
+		t.Fatal(err)
+	}
+	if parameters.Resolution != "4K" {
+		t.Fatalf("child image job lost configured resolution: %#v", parameters)
+	}
+}
+
+func TestFilmImageStageRejectsMalformedResolution(t *testing.T) {
+	if err := validateFilmGenerationConfig("storyboard", filmGenerationConfig{Size: "1024x1024", Resolution: "ultra-wide"}); err == nil {
+		t.Fatal("malformed image resolution was accepted")
+	}
+	if err := validateFilmGenerationConfig("storyboard", filmGenerationConfig{Size: "1024x1024", Resolution: " 2k "}); err != nil {
+		t.Fatalf("canonicalizable image resolution was rejected: %v", err)
+	}
+}
+
 func TestCancelFilmStageParentCascadesAndCannotBeRevivedByAggregation(t *testing.T) {
 	backend, handler := filmAPIHandler(t)
 	document := prepareFilmGenerationStage(t, handler)

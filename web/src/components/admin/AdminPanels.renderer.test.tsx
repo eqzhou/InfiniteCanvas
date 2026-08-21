@@ -45,7 +45,7 @@ const channel: AdminChannel = {
   weight: 2,
   timeoutSeconds: 60,
   models: ["gpt-image-1", "video-pro"],
-  mediaCapabilities: [{ model: "gpt-image-1", kind: "image", modes: ["text_to_image"], sizes: ["1024x1024"], durations: [], maxReferences: 2 }],
+  mediaCapabilities: [{ model: "gpt-image-1", kind: "image", modes: ["text_to_image"], sizes: ["1024x1024"], resolutions: [], durations: [], maxReferences: 2 }],
   defaultTextModel: "gpt-4.1",
   defaultImageModel: "gpt-image-1",
   defaultVideoModel: "video-pro",

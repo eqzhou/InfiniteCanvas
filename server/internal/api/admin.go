@@ -30,6 +30,7 @@ type adminMediaCapability struct {
 	Kind          string   `json:"kind"`
 	Modes         []string `json:"modes"`
 	Sizes         []string `json:"sizes,omitempty"`
+	Resolutions   []string `json:"resolutions,omitempty"`
 	Durations     []int    `json:"durations,omitempty"`
 	MaxReferences int      `json:"maxReferences"`
 }

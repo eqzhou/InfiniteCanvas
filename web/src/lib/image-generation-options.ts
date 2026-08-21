@@ -86,6 +86,21 @@ export const IMAGE_QUALITY_OPTIONS: readonly ImageGenerationOption[] = immutable
   { value: "high", label: "高质量 · 更慢" },
 ]);
 
+const LEGACY_IMAGE_RESOLUTION_VALUES = new Set(["1K", "2K", "4K"]);
+
+function canonicalImageResolution(value: string): string {
+  const trimmed = value.trim();
+  const match = [...LEGACY_IMAGE_RESOLUTION_VALUES].find((candidate) => candidate.toLowerCase() === trimmed.toLowerCase());
+  return match ?? trimmed;
+}
+
+/** Values formerly persisted in image `quality` and now carried by `resolution`. */
+export function legacyImageResolutionFromQuality(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = canonicalImageResolution(value);
+  return LEGACY_IMAGE_RESOLUTION_VALUES.has(normalized) ? normalized : undefined;
+}
+
 const QUALITY_LABELS: Readonly<Record<string, string>> = Object.freeze({
   auto: "自动（推荐）",
   low: "低质量 · 更快",
@@ -95,30 +110,55 @@ const QUALITY_LABELS: Readonly<Record<string, string>> = Object.freeze({
 
 /**
  * Return the quality control values accepted by the selected provider/model.
- * APIMart's current Seedream/Gemini image contracts call this field
- * `resolution` and accept 1K/2K, while GPT Image uses auto/low/medium/high.
+ * Resolution values are intentionally not mixed into this list. A known
+ * contract with no quality field returns an empty list so the UI does not
+ * invent controls that the provider did not declare.
  */
 export function imageQualityOptionsFor(
   protocol: string | undefined,
   model: string | undefined,
 ): readonly ImageGenerationOption[] {
   const capability = resolveProviderCapability(protocol ?? "", "image", model ?? "");
-  if (capability?.resolutions?.length) {
-    return immutableOptions([
-      { value: "auto", label: "自动（模型默认）" },
-      ...capability.resolutions.map((value) => ({
-        value,
-        label: `${value} 分辨率`,
-      })),
-    ]);
-  }
   if (capability?.qualities?.length) {
     return immutableOptions(capability.qualities.map((value) => ({
       value,
       label: QUALITY_LABELS[value] ?? value,
     })));
   }
+  if (capability) return [];
   return IMAGE_QUALITY_OPTIONS;
+}
+
+/** Return only resolutions explicitly declared by a known image contract. */
+export function imageResolutionOptionsFor(
+  protocol: string | undefined,
+  model: string | undefined,
+): readonly ImageGenerationOption[] {
+  const capability = resolveProviderCapability(protocol ?? "", "image", model ?? "");
+  if (!capability?.resolutions?.length) return [];
+  return immutableOptions(capability.resolutions.map((value) => ({
+    value,
+    label: `${value} 分辨率`,
+  })));
+}
+
+/** Normalize a resolution without adding values to a provider's contract. */
+export function normalizeImageResolutionForProvider(
+  value: string | undefined,
+  protocol: string | undefined,
+  model: string | undefined,
+): string {
+  const current = canonicalImageResolution(value ?? "");
+  const capability = resolveProviderCapability(protocol ?? "", "image", model ?? "");
+  if (!capability) return current;
+  const options = capability.resolutions ?? [];
+  if (!current) {
+    // Keep the UI's explicit default aligned with the protected server
+    // adapter. Seedream defaults to 2K while Gemini Lite only exposes 1K.
+    if (capability.family === "seedream-5.0-pro" && options.includes("2K")) return "2K";
+    return options[0] ?? "";
+  }
+  return options.includes(current) ? current : options[0] ?? "";
 }
 
 /** Keep legacy custom values for unknown providers, but fail closed for known contracts. */
@@ -133,6 +173,11 @@ export function normalizeImageQualityForProvider(
   if (options.some((option) => option.value === current)) return current;
   const capability = resolveProviderCapability(protocol ?? "", "image", model ?? "");
   if (!capability) return current;
+  // A resolution-only contract has no verified quality vocabulary. Preserve
+  // legacy quality values in saved records instead of silently changing their
+  // meaning; the request layer can omit the field when the provider declares
+  // no qualities.
+  if (!capability.qualities?.length) return current;
   if (capability.qualities?.length && !capability.qualities.includes("auto")) {
     return capability.qualities.includes("medium") ? "medium" : capability.qualities[0] ?? "auto";
   }

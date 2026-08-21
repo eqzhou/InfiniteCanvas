@@ -531,6 +531,7 @@ func (s *Server) cancelWorkflowChildren(tenantID, parentID, stepID string, child
 
 func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, parent store.GenerationJob,
 	parameters workflowRunParameters, result workflowRunResult, step workflowStep, childID string, slot, total int) (store.GenerationJob, error) {
+	migrateWorkflowStepImageResolution(&step)
 	prompt, err := compileServerWorkflowPrompt(step, parameters.Values)
 	if err != nil {
 		return store.GenerationJob{}, err
@@ -560,7 +561,7 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	request := createImageJobRequest{
 		ID: childID, ProjectID: parent.ProjectID, Prompt: prompt, ProviderID: providerID, Model: model,
 		Parameters: createImageJobParameters{
-			Size: step.Parameters.Size, Quality: step.Parameters.Quality, Count: imageCount,
+			Size: step.Parameters.Size, Resolution: step.Parameters.Resolution, Quality: step.Parameters.Quality, Count: imageCount,
 			RequestedCount: requestedCount, BatchID: batchID, BatchIndex: batchIndex,
 			TransparentBackground: step.Parameters.TransparentBackground, ReferenceStorageKeys: references,
 		},
@@ -578,7 +579,7 @@ func (s *Server) ensureWorkflowChildJob(ctx context.Context, tenantID string, pa
 	}
 	childParameters, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, RequestHash: requestHash, Size: step.Parameters.Size,
-		Quality: step.Parameters.Quality, Count: imageCount, RequestedCount: requestedCount, BatchID: batchID, BatchIndex: batchIndex,
+		Resolution: step.Parameters.Resolution, Quality: step.Parameters.Quality, Count: imageCount, RequestedCount: requestedCount, BatchID: batchID, BatchIndex: batchIndex,
 		TransparentBackground: step.Parameters.TransparentBackground, ReferenceStorageKeys: references,
 		WorkflowRunID: parent.ID, WorkflowStepID: step.ID,
 	})

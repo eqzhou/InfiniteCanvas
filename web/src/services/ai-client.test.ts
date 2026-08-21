@@ -217,7 +217,7 @@ describe("generateVideo provider contracts", () => {
     };
 
     await expect(generateText({ channel: c, model: c.providers.text.model, prompt: "hello", systemPrompt: "Be concise" })).resolves.toBe("gemini text");
-    await expect(generateImages({ channel: c, model: c.providers.image.model, prompt: "draw", systemPrompt: "Use clean lines", n: 2 })).resolves.toEqual([
+    await expect(generateImages({ channel: c, model: c.providers.image.model, prompt: "draw", systemPrompt: "Use clean lines", resolution: "4K", n: 2 })).resolves.toEqual([
       "data:image/png;base64,YWJj",
       "data:image/png;base64,YWJj",
     ]);
@@ -225,6 +225,7 @@ describe("generateVideo provider contracts", () => {
     expect(requests[0]?.url).toBe("/api/provider-text");
     expect(requests[0]?.body).toMatchObject({ channelId: c.id, systemPromptProfile: "global" });
     expect(requests[1]?.body).toMatchObject({ contents: [{ parts: [{ text: "Use clean lines\n\ndraw" }] }] });
+		expect(requests[1]?.body).toMatchObject({ generationConfig: { imageConfig: { imageSize: "4K" } } });
     expect(requests[2]?.body).toMatchObject({ contents: [{ parts: [{ text: "Use clean lines\n\ndraw" }] }] });
   });
 
@@ -233,7 +234,7 @@ describe("generateVideo provider contracts", () => {
     globalThis.fetch = mock(async (_input, init) => {
       calls += 1;
       expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${fixtureCredential}`);
-      expect(JSON.parse(String(init?.body))).toEqual({ prompt: "draw", model: "relay-image", transparent: false });
+      expect(JSON.parse(String(init?.body))).toEqual({ prompt: "draw", model: "relay-image", resolution: "4K", transparent: false });
       return json({ output: { images: ["https://cdn.example/template.png"] } });
     }) as typeof fetch;
     const c = channel("https://legacy.example/v1");
@@ -248,12 +249,12 @@ describe("generateVideo provider contracts", () => {
           method: "POST",
           path: "/generate",
           auth: "bearer",
-          request: { prompt: "{{prompt}}", model: "{{model}}", transparent: "{{transparentBackground}}" },
+          request: { prompt: "{{prompt}}", model: "{{model}}", resolution: "{{resolution}}", transparent: "{{transparentBackground}}" },
           responsePath: "output.images",
         },
       },
     };
-    await expect(generateImages({ channel: c, model: "relay-image", prompt: "draw" })).resolves.toEqual(["https://cdn.example/template.png"]);
+    await expect(generateImages({ channel: c, model: "relay-image", prompt: "draw", resolution: "4K" })).resolves.toEqual(["https://cdn.example/template.png"]);
     await expect(generateImages({ channel: c, model: "relay-image", prompt: "draw", transparentBackground: true })).rejects.toThrow("transparent");
     expect(calls).toBe(1);
   });
@@ -378,10 +379,11 @@ describe("generateVideo provider contracts", () => {
 
     await expect(generateImages({
       channel: channel("https://api.example/v1"),
-      model: "gpt-image-1",
+			model: "custom-image-model",
       prompt: "four variants",
       size: "1024x1024",
       quality: "auto",
+			resolution: "4K",
       n: 4,
     })).resolves.toEqual([
       "https://cdn.example/generated.png",
@@ -395,11 +397,12 @@ describe("generateVideo provider contracts", () => {
       url: "https://api.example/v1/images/generations",
       method: "POST",
       body: {
-        model: "gpt-image-1",
+				model: "custom-image-model",
         prompt: "four variants",
         n: 1,
         size: "1024x1024",
         quality: "auto",
+				resolution: "4K",
       },
     });
   });
@@ -481,10 +484,11 @@ describe("generateVideo provider contracts", () => {
 
     await expect(generateImages({
       channel: channel("https://api.example/v1"),
-      model: "gpt-image-1",
+			model: "custom-image-model",
       prompt: "add a rainbow",
       size: "1024x1024",
       quality: "medium",
+			resolution: "4K",
       referenceDataUrls: ["data:image/jpeg;base64,cGl4ZWw="],
       referenceBlobs: [new Blob(["second reference"], { type: "image/webp" })],
       transparentBackground: true,
@@ -496,11 +500,12 @@ describe("generateVideo provider contracts", () => {
 
     const body = requests[0]?.body;
     expect(body).toBeInstanceOf(FormData);
-    expect(body?.get("model")).toBe("gpt-image-1");
+		expect(body?.get("model")).toBe("custom-image-model");
     expect(body?.get("prompt")).toBe("add a rainbow");
     expect(body?.get("n")).toBe("1");
     expect(body?.get("size")).toBe("1024x1024");
     expect(body?.get("quality")).toBe("medium");
+		expect(body?.get("resolution")).toBe("4K");
     expect(body?.get("background")).toBe("transparent");
     const references = body?.getAll("image[]") as File[];
     expect(references).toHaveLength(2);

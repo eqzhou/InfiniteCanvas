@@ -138,7 +138,8 @@ func TestMediaCapabilityUsesRegisteredProviderModelLimits(t *testing.T) {
 	}
 	channel := adminChannelPublic{ID: "apimart", Name: "API Mart", Protocol: "apimart"}
 	image := capabilityForChannelDefault(channel, "image", "doubao-seedream-5-0-pro")
-	if image.MaxReferences != 10 || !reflect.DeepEqual(image.Sizes, []string{"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "auto"}) {
+	if image.MaxReferences != 10 || !reflect.DeepEqual(image.Sizes, []string{"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3", "21:9", "auto"}) ||
+		!reflect.DeepEqual(image.Resolutions, []string{"1K", "2K"}) {
 		t.Fatalf("image capability ignored provider registry: %#v", image)
 	}
 	video := capabilityForChannelDefault(channel, "video", "doubao-seedance-2.0")
@@ -362,5 +363,33 @@ func TestMediaCapabilityRequestEnforcesConfiguredLimits(t *testing.T) {
 				t.Fatal("capability limit was bypassed")
 			}
 		})
+	}
+}
+
+func TestExplicitImageCapabilitySeparatesLegacyResolutionValuesFromSizes(t *testing.T) {
+	channel := adminChannelPublic{
+		ID: "image-capability", Name: "Image", BaseURL: "https://image.example/v1", Protocol: "apimart",
+		Enabled: true, AllowUserUse: true, Weight: 1, TimeoutSeconds: 30,
+		DefaultImageModel: "doubao-seedream-5-0-pro", Models: []string{"doubao-seedream-5-0-pro"},
+		MediaCapabilities: []adminMediaCapability{{
+			Model: "doubao-seedream-5-0-pro", Kind: "image", Modes: []string{"text_to_image"},
+			Sizes: []string{"1:1", "1024x1024", "1K", "2K", "4K"},
+		}},
+	}
+	capability := capabilityForExplicitChannelModel(channel, channel.MediaCapabilities[0])
+	if !reflect.DeepEqual(capability.Sizes, []string{"1:1", "1024x1024"}) {
+		t.Fatalf("image sizes = %#v", capability.Sizes)
+	}
+	if !reflect.DeepEqual(capability.Resolutions, []string{"1K", "2K", "4K"}) {
+		t.Fatalf("image resolutions = %#v", capability.Resolutions)
+	}
+	if err := validateImageCapabilityRequest(capability, "text_to_image", "1024x1024", "2K", 0); err != nil {
+		t.Fatalf("valid image capability request rejected: %v", err)
+	}
+	if err := validateImageCapabilityRequest(capability, "text_to_image", "2048x1024", "2K", 0); err != nil {
+		t.Fatalf("provider-native panorama size should be left to the adapter: %v", err)
+	}
+	if err := validateImageCapabilityRequest(capability, "text_to_image", "1024x1024", "8K", 0); err == nil {
+		t.Fatal("unsupported image resolution accepted")
 	}
 }

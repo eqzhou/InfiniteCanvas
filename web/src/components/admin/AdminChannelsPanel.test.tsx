@@ -99,6 +99,7 @@ describe("AdminChannelModelDiffReview", () => {
           kind: "image",
           modes: ["text_to_image", "image_to_image"],
           sizes: ["1024x1024"],
+          resolutions: ["1K", "2K"],
           durations: [],
           maxReferences: 4,
         }]}
@@ -110,8 +111,10 @@ describe("AdminChannelModelDiffReview", () => {
     expect(html).toContain("gpt-image-1");
     expect(html).toContain("图生图");
     expect(html).toContain("1024x1024");
-    expect(html).toContain("尺寸 / 画幅 / 清晰度");
-    expect(html).toContain("如 1024x1024、16:9、720p");
+    expect(html).toContain("尺寸 / 画幅");
+    expect(html).toContain("分辨率");
+    expect(html).toContain("1K,2K");
+    expect(html).toContain("如 1024x1024、16:9");
     expect(html).toContain("添加能力");
     expect(html).not.toContain("apiKey");
   });
@@ -138,6 +141,7 @@ describe("AdminChannelModelDiffReview", () => {
           kind: "image",
           modes: ["text_to_image"],
           sizes: [],
+          resolutions: [],
           durations: [],
           maxReferences: 0,
         }]}

@@ -244,6 +244,9 @@ func validateFilmGenerationConfig(stage string, config filmGenerationConfig) err
 	if (stage == "storyboard" || stage == "first_frame" || stage == "last_frame") && config.Size != "" && !imageSizePattern.MatchString(config.Size) {
 		return errors.New("storyboard size is invalid")
 	}
+	if (stage == "storyboard" || stage == "first_frame" || stage == "last_frame") && !validImageResolution(config.Resolution) {
+		return errors.New("storyboard resolution is invalid")
+	}
 	if stage == "video" && (config.Seconds < 0 || config.Seconds > 15) {
 		return errors.New("video seconds is invalid")
 	}
@@ -552,7 +555,7 @@ func buildFilmGenerationTargetJob(stage string, shot filmShot, dialogue *filmDia
 		if size == "" {
 			size = "1024x1024"
 		}
-		parameters, err := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, RequestHash: requestHash, Size: size, Quality: config.Quality, Count: 1, ReferenceStorageKeys: append([]string(nil), config.ReferenceStorageKeys...), SharedChannel: shared, Film: binding})
+		parameters, err := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, RequestHash: requestHash, Size: size, Resolution: config.Resolution, Quality: config.Quality, Count: 1, ReferenceStorageKeys: append([]string(nil), config.ReferenceStorageKeys...), SharedChannel: shared, Film: binding})
 		if err != nil {
 			return store.GenerationJob{}, err
 		}
@@ -851,6 +854,9 @@ func (s *Server) runFilmGenerationStage(w http.ResponseWriter, r *http.Request) 
 	}
 	if !requireAllowedModel(input.Model) {
 		return
+	}
+	if stage == "storyboard" || stage == "first_frame" || stage == "last_frame" {
+		input.Config.Resolution = canonicalImageResolution(input.Config.Resolution)
 	}
 	if err := validateFilmGenerationConfig(stage, input.Config); err != nil {
 		writeFilmOperationError(w, err)

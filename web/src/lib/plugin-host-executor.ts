@@ -22,7 +22,7 @@ export type PluginHostContext = {
   listAssets: (query: string) => AssetOutput[];
   createAsset: (asset: AssetInput) => AssetOutput | Promise<AssetOutput>;
   generateText: (options: { prompt: string; model?: string; images?: string[] }) => Promise<{ text: string }>;
-  generateImage: (options: { prompt: string; model?: string; size?: string; count?: number }) => Promise<{ images: string[] }>;
+  generateImage: (options: { prompt: string; model?: string; size?: string; quality?: string; resolution?: string; count?: number }) => Promise<{ images: string[] }>;
   generateVideo: (options: { prompt: string; model?: string; ratio?: string; seconds?: number }) => Promise<{ id: string; url?: string }>;
   setPanelOpen: (open: boolean) => { open: boolean };
 };
@@ -103,6 +103,8 @@ export async function executePluginHostRequest(
       return context.generateImage({
         ...promptOptions(params),
         size: stringParam(params, "size", 50),
+        quality: stringParam(params, "quality", 50),
+        resolution: stringParam(params, "resolution", 20),
         count,
       });
     }

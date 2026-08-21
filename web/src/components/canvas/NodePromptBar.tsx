@@ -77,6 +77,7 @@ import {
 import { useI18n } from "@/i18n/I18nProvider";
 import {
   resolveMediaCapabilityForRequest,
+  normalizeImageResolutionForCapability,
   type MediaCapability,
   type MediaCapabilityCatalog,
 } from "@/services/media-capabilities";
@@ -127,6 +128,36 @@ export function NodePromptBar({
     (config.activeSharedChannelId
       ? channelChoices.find((c) => c.id === config.activeSharedChannelId)
       : config.channels.find((c) => c.id === config.activeChannelId) ?? config.channels[0]);
+  const resolveImageModelForChannel = (selectedChannel: AiChannel | undefined): string => {
+    if (!selectedChannel) return "";
+    const providerModel = getProvider(selectedChannel, "image").model.trim();
+    if (providerModel) return providerModel;
+    const candidates = mediaCatalog?.models.filter((item) =>
+      item.kind === "image" && (selectedChannel.id === "shared-auto" || item.channelId === selectedChannel.id),
+    ) ?? [];
+    const models = [...new Set(candidates.map((item) => item.model))];
+    return models.find((model) => resolveMediaCapabilityForRequest(
+      mediaCatalog, selectedChannel.id, "image", model, "text_to_image",
+    )) ?? models[0] ?? "";
+  };
+  const normalizeImageGenerationForChannel = (
+    generation: ReturnType<typeof createImageGenerationMetadata>,
+    providerProtocol: string,
+    selectedChannel: AiChannel | undefined,
+    referenceCount: number,
+  ) => {
+    const normalized = normalizeImageGenerationForProvider(generation, providerProtocol);
+    const mode = referenceCount > 0 ? "image_to_image" : "text_to_image";
+    const capability = selectedChannel
+      ? resolveMediaCapabilityForRequest(mediaCatalog, selectedChannel.id, "image", normalized.model, mode)
+      : undefined;
+    if (mediaCatalog && selectedChannel && sharedChannels.some((candidate) => candidate.id === selectedChannel.id) && !capability) {
+      throw new Error(t("creative.sharedCapabilityMissing"));
+    }
+    return capability
+      ? { ...normalized, resolution: normalizeImageResolutionForCapability(capability, normalized.resolution ?? "") }
+      : normalized;
+  };
   const references = buildPromptReferences(project, node.id);
   const hasImageContent = node.type === "image" && Boolean(node.metadata.content || node.metadata.storageKey);
   const upstream = useMemo(() => {
@@ -293,16 +324,22 @@ export function NodePromptBar({
         const provider = getProvider(requestChannel, "image");
         const generation = createImageGenerationMetadata({
           prompt: rawPrompt,
-          model: node.metadata.model || provider.model,
+          model: node.metadata.model || resolveImageModelForChannel(requestChannel),
           size: regenerateImageInPlace ? node.metadata.size || config.imageSize : config.imageSize,
           quality: regenerateImageInPlace ? node.metadata.quality || config.imageQuality : config.imageQuality,
+          resolution: regenerateImageInPlace ? node.metadata.resolution || config.imageResolution : config.imageResolution,
           count: regenerateImageInPlace ? 1 : config.imageCount,
           transparentBackground: Boolean(node.metadata.transparentBackground),
           referenceStorageKeys,
           generationChannelId: requestChannel.id,
           cameraPrompt: node.metadata.cameraPrompt,
         });
-        const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
+        const normalizedGeneration = normalizeImageGenerationForChannel(
+          generation,
+          provider.protocol,
+          requestChannel,
+          uniqueImageReferences.length,
+        );
         const requestPrompt = applyCameraPrompt(normalizedGeneration.prompt, normalizedGeneration.cameraPrompt);
         if (usesServerGenerationJobs() && (provider.protocol === "openai" || provider.protocol === "gemini" ||
             (provider.protocol === "template" && Boolean(provider.template)) ||
@@ -325,6 +362,7 @@ export function NodePromptBar({
                 parameters: {
                   size: normalizedGeneration.size,
                   quality: normalizedGeneration.quality,
+                  resolution: normalizedGeneration.resolution,
                   count: normalizedGeneration.count,
                   transparentBackground: normalizedGeneration.transparentBackground,
                   referenceStorageKeys,
@@ -354,6 +392,7 @@ export function NodePromptBar({
           prompt: requestPrompt,
           size: normalizedGeneration.size,
           quality: normalizedGeneration.quality,
+          resolution: normalizedGeneration.resolution,
           n: normalizedGeneration.count,
           referenceDataUrls: refs,
           transparentBackground: normalizedGeneration.transparentBackground,

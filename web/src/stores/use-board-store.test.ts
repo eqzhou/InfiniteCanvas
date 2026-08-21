@@ -490,7 +490,7 @@ describe("lazy workspace writes", () => {
 });
 
 describe("workspace catalog loading boundaries", () => {
-	test("hydrates config once per scope and normalizes the loaded value", async () => {
+  test("hydrates config once per scope and normalizes the loaded value", async () => {
 		installFetch((url, init) => {
 			if (url.endsWith("/config") && (init.method ?? "GET") === "GET") {
 				const config = createDefaultConfig();
@@ -511,8 +511,25 @@ describe("workspace catalog loading boundaries", () => {
 		expect(useBoardStore.getState().ready).toBe(true);
 		expect(useBoardStore.getState().config.systemPrompt).toBe("loaded prompt");
 		expect(useBoardStore.getState().config.disabledPluginIds).toEqual(["plugin-a"]);
-		expect(fetchCalls.filter((call) => call.url.endsWith("/config"))).toHaveLength(1);
-	});
+    expect(fetchCalls.filter((call) => call.url.endsWith("/config"))).toHaveLength(1);
+  });
+
+  test("migrates legacy image resolution before defaults can mask the missing field", async () => {
+    installFetch(async (url, init) => {
+      if (url.endsWith("/config") && (init.method ?? "GET") === "GET") {
+        const legacy = createDefaultConfig();
+        legacy.imageQuality = "1K";
+        delete legacy.imageResolution;
+        return jsonResponse({ config: legacy, secrets: {} }, 200, { ETag: '"hydrate-resolution-v1"' });
+      }
+      return new Response(null, { status: 404 });
+    });
+
+    await useBoardStore.getState().hydrate(`hydrate-resolution-${crypto.randomUUID()}`);
+
+    expect(useBoardStore.getState().config.imageResolution).toBe("1K");
+    expect(useBoardStore.getState().config.imageQuality).toBe("auto");
+  });
 
 	test("keeps the app usable with default config when hydration fails", async () => {
 		installFetch(async (url) => {

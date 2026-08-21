@@ -54,6 +54,10 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
   const rawDisabled = (config as AppConfig & { disabledPluginIds?: unknown }).disabledPluginIds;
 	const rawSharedChannelID = (config as AppConfig & { activeSharedChannelId?: unknown }).activeSharedChannelId;
   const rawLegacyAudioRoles = (config as AppConfig & { audioRoles?: unknown }).audioRoles;
+  const rawImageResolution = (config as AppConfig & { imageResolution?: unknown }).imageResolution;
+  const legacyQuality = typeof config.imageQuality === "string" ? config.imageQuality : "";
+  const legacyResolutionValue = /^(?:1k|2k|4k)$/i.test(legacyQuality) ? legacyQuality.toUpperCase() : "";
+  const explicitResolution = typeof rawImageResolution === "string" ? rawImageResolution.trim() : "";
   const disabledPluginIds = Array.isArray(rawDisabled)
     ? [...new Set(rawDisabled.filter((id): id is string => typeof id === "string" && id.length > 0))]
     : [];
@@ -65,6 +69,8 @@ export function normalizeAppConfig(config: AppConfig): AppConfig {
     systemPrompt: typeof rawSystemPrompt === "string"
       ? rawSystemPrompt.slice(0, SYSTEM_PROMPT_MAX_LENGTH)
       : "",
+    imageResolution: explicitResolution || legacyResolutionValue,
+    imageQuality: legacyResolutionValue ? "auto" : config.imageQuality,
     canvasPanelWidth: typeof rawPanelWidth === "number" && Number.isFinite(rawPanelWidth)
       ? Math.min(420, Math.max(240, Math.round(rawPanelWidth)))
       : 256,

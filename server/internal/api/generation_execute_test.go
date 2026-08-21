@@ -162,6 +162,58 @@ func TestServerImageJobCategoryIsBounded(t *testing.T) {
 	}
 }
 
+func TestRegisteredImageResolutionValidationFailsClosed(t *testing.T) {
+	tests := []struct {
+		name     string
+		protocol string
+		model    string
+		value    string
+		valid    bool
+	}{
+		{name: "seedream 2K", protocol: "apimart", model: "doubao-seedream-5-0-pro", value: "2K", valid: true},
+		{name: "seedream canonicalizes lowercase 2k", protocol: "apimart", model: "doubao-seedream-5-0-pro", value: "2k", valid: true},
+		{name: "seedream rejects 4K", protocol: "apimart", model: "doubao-seedream-5-0-pro", value: "4K", valid: false},
+		{name: "OpenAI has no image resolution", protocol: "openai", model: "gpt-image-1", value: "2K", valid: false},
+		{name: "custom channel remains extensible", protocol: "openai", model: "custom-image-model", value: "4K", valid: true},
+		{name: "empty remains default", protocol: "openai", model: "gpt-image-1", value: "", valid: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRegisteredImageResolution(test.protocol, test.model, test.value)
+			if (err == nil) != test.valid {
+				t.Fatalf("resolution %q valid = %v, want %v (err=%v)", test.value, err == nil, test.valid, err)
+			}
+		})
+	}
+}
+
+func TestImageResolutionNormalizationPreservesLegacyIdempotencyHash(t *testing.T) {
+	input := createImageJobRequest{
+		ID: "legacy-resolution-job", ProjectID: "board-1", Prompt: "draw", ProviderID: "image-main", Model: "custom-image-model",
+		Parameters: createImageJobParameters{Size: "1024x1024", Quality: "auto", Resolution: " 2k ", Count: 1},
+	}
+	normalizeCreateImageJobParameters(&input.Parameters)
+	if input.Parameters.Resolution != "2K" {
+		t.Fatalf("normalized resolution = %q", input.Parameters.Resolution)
+	}
+	hashes, err := compatibleImageJobRequestHashes(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := input
+	legacy.Parameters.Resolution = ""
+	legacy.Parameters.Quality = "2K"
+	legacyHash, err := hashImageJobRequest(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, _ := json.Marshal(persistedImageJobParameters{Executor: serverExecutorMarker, RequestHash: legacyHash})
+	job := store.GenerationJob{Kind: "image", Parameters: parameters}
+	if !isMatchingServerImageJob(job, hashes...) {
+		t.Fatalf("legacy hash %q was not accepted in %#v", legacyHash, hashes)
+	}
+}
+
 func TestServerImageJobAcceptsFanOutCountAndBatchMetadata(t *testing.T) {
 	input := createImageJobRequest{
 		ID: "job-batch-slot", ProjectID: "board-1", Prompt: "draw", ProviderID: "image-main", Model: "image",
@@ -386,6 +438,40 @@ func TestServerImageJobIsIdempotentAndPersistsResult(t *testing.T) {
 	if stored.Code != http.StatusOK || !bytes.Equal(stored.Body.Bytes(), png) || stored.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("stored result: %d %#v", stored.Code, stored.Header())
 	}
+}
+
+func TestServerImageJobPersistsAndResolvesResolutionSeparately(t *testing.T) {
+	executor := newScriptedImageExecutor()
+	server, backend, handler := imageExecutionHandler(t, executor)
+	body, err := json.Marshal(map[string]any{
+		"id": "job-image-resolution", "projectId": "board-1", "prompt": "a red square",
+		"providerId": "image-main", "model": "custom-image-model",
+		"parameters": map[string]any{"size": "1024x1024", "quality": "high", "resolution": "2K", "count": 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := request(t, handler, http.MethodPost, "/api/generation-jobs/image", body)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create = %d %s", created.Code, created.Body.String())
+	}
+	job, err := backend.GetGenerationJob(context.Background(), store.DefaultTenantID, "job-image-resolution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parameters persistedImageJobParameters
+	if err := json.Unmarshal(job.Parameters, &parameters); err != nil {
+		t.Fatal(err)
+	}
+	if parameters.Size != "1024x1024" || parameters.Quality != "high" || parameters.Resolution != "2K" {
+		t.Fatalf("image parameters lost size/quality/resolution separation: %#v", parameters)
+	}
+	resolved := awaitExecutorStart(t, executor)
+	if resolved.Size != "1024x1024" || resolved.Quality != "high" || resolved.Resolution != "2K" {
+		t.Fatalf("resolved image request lost resolution: %#v", resolved)
+	}
+	executor.release <- scriptedImageResult{err: errors.New("stop test worker")}
+	server.generationWG.Wait()
 }
 
 func TestServerImageJobResolvesGeminiProtocolWithoutExposingSecret(t *testing.T) {

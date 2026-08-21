@@ -38,6 +38,7 @@ type workflowStepReference struct {
 
 type workflowStepParameters struct {
 	Size                  string `json:"size"`
+	Resolution            string `json:"resolution,omitempty"`
 	Quality               string `json:"quality,omitempty"`
 	Count                 int    `json:"count"`
 	TransparentBackground bool   `json:"transparentBackground,omitempty"`
@@ -90,6 +91,21 @@ type workflowRunResult struct {
 	OutputStorageKeys []string                        `json:"outputStorageKeys"`
 }
 
+func migrateWorkflowStepImageResolution(step *workflowStep) {
+	if step == nil {
+		return
+	}
+	if strings.TrimSpace(step.Parameters.Resolution) != "" {
+		step.Parameters.Resolution = canonicalImageResolution(step.Parameters.Resolution)
+		return
+	}
+	switch strings.ToUpper(strings.TrimSpace(step.Parameters.Quality)) {
+	case "1K", "2K", "4K":
+		step.Parameters.Resolution = strings.ToUpper(strings.TrimSpace(step.Parameters.Quality))
+		step.Parameters.Quality = "auto"
+	}
+}
+
 func decodeWorkflowTemplate(value []byte) (workflowTemplate, error) {
 	if len(value) == 0 || len(value) > maxWorkflowTemplateBytes {
 		return workflowTemplate{}, errors.New("workflow template exceeds size limit")
@@ -99,6 +115,9 @@ func decodeWorkflowTemplate(value []byte) (workflowTemplate, error) {
 	var template workflowTemplate
 	if err := decoder.Decode(&template); err != nil || ensureJSONEOF(decoder) != nil {
 		return workflowTemplate{}, errors.New("invalid workflow template json")
+	}
+	for index := range template.Steps {
+		migrateWorkflowStepImageResolution(&template.Steps[index])
 	}
 	if err := validateWorkflowTemplate(template); err != nil {
 		return workflowTemplate{}, err
@@ -135,7 +154,7 @@ func validateWorkflowTemplate(template workflowTemplate) error {
 		if !workflowIDPattern.MatchString(step.ID) || strings.TrimSpace(step.Title) == "" || len(step.Title) > 500 ||
 			strings.TrimSpace(step.PromptTemplate) == "" || len(step.PromptTemplate) > 100_000 ||
 			len(step.ProviderID) > 128 || len(step.Model) > 500 || !imageSizePattern.MatchString(step.Parameters.Size) ||
-			len(step.Parameters.Quality) > 50 || step.Parameters.Count < 1 || step.Parameters.Count > maxImageGenerationCount || len(step.References) > 16 {
+			!validImageResolution(step.Parameters.Resolution) || len(step.Parameters.Quality) > 50 || step.Parameters.Count < 1 || step.Parameters.Count > maxImageGenerationCount || len(step.References) > 16 {
 			return errors.New("invalid workflow step")
 		}
 		if _, exists := steps[step.ID]; exists {

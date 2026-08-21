@@ -22,7 +22,7 @@ const template = () => ({
       promptTemplate: "{{subject}} 的电影主视觉",
       providerId: "channel_main",
       model: "image-model",
-      parameters: { size: "1024x1024", quality: "high", count: 1 },
+      parameters: { size: "1024x1024", quality: "high", resolution: "2K", count: 1 },
       references: [{ source: "variable", variableId: "reference" }],
     },
     {
@@ -45,6 +45,13 @@ describe("workflow template document", () => {
     expect(parsed).toEqual(input);
     expect(parsed).not.toBe(input);
     expect(parsed.steps[0]).not.toBe(input.steps[0]);
+  });
+
+  test("migrates legacy resolution values stored in workflow quality", () => {
+    const input = template();
+    input.steps[0]!.parameters = { size: "1024x1024", quality: "2K", count: 1 };
+    const parsed = parseWorkflowTemplate(input);
+    expect(parsed.steps[0]?.parameters).toMatchObject({ quality: "auto", resolution: "2K" });
   });
 
   test("rejects duplicate ids, dangling references, cycles, and unsafe placeholders", () => {

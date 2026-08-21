@@ -51,6 +51,7 @@ export function createDefaultConfig(): AppConfig {
     systemPrompt: "",
     imageSize: "1024x1024",
     imageQuality: "auto",
+    imageResolution: "",
     imageCount: 1,
     preferredModels: {},
     theme: "system",

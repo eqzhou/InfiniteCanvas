@@ -1,5 +1,6 @@
 import type { AssetItem, GenerationJob } from "@/types/board";
 import { workbenchImageCountFromParameters } from "@/lib/image-generation-batch";
+import { legacyImageResolutionFromQuality } from "@/lib/image-generation-options";
 
 export type WorkbenchLayout = "side" | "bottom";
 
@@ -144,6 +145,7 @@ export type WorkbenchRefillForm = {
   providerId: string;
   size: string;
   quality: string;
+  resolution: string;
   count: number;
   transparentBackground: boolean;
   category: string;
@@ -173,13 +175,17 @@ export function workbenchRefillForm(
   const count = parameters.count;
   const transparent = parameters.transparentBackground;
   const category = parameters.category;
+  const legacyResolution = legacyImageResolutionFromQuality(
+    typeof parameters.quality === "string" ? parameters.quality : undefined,
+  );
   const references = workbenchReferenceKeys(job);
   return {
     prompt: refillText(job.prompt, current.prompt),
     model: refillText(job.model, current.model),
     providerId: refillText(job.providerId, current.providerId),
     size: refillText(parameters.size, current.size),
-    quality: refillText(parameters.quality, current.quality),
+    quality: legacyResolution ? "auto" : refillText(parameters.quality, current.quality),
+    resolution: refillText(parameters.resolution, current.resolution) || legacyResolution || current.resolution,
     count: typeof parameters.requestedCount === "number" || typeof count === "number"
       ? workbenchImageCountFromParameters(parameters as Record<string, unknown>, current.count)
       : current.count,

@@ -154,7 +154,7 @@ func TestKIEImageCreateUploadPollDownloadAndResume(t *testing.T) {
 			}
 			input, _ := body["input"].(map[string]any)
 			refs, _ := input["image_urls"].([]any)
-			if body["model"] != "seedream-v4-text-to-image" || input["prompt"] != "draw" || input["aspect_ratio"] != "1:1" || len(refs) != 1 {
+			if body["model"] != "seedream-v4-text-to-image" || input["prompt"] != "draw" || input["aspect_ratio"] != "1:1" || input["resolution"] != "2K" || len(refs) != 1 {
 				t.Fatalf("create body = %#v", body)
 			}
 			_, _ = io.WriteString(w, `{"code":200,"msg":"success","data":{"taskId":"task_kie_image_1"}}`)
@@ -179,7 +179,7 @@ func TestKIEImageCreateUploadPollDownloadAndResume(t *testing.T) {
 	executor.client = noRedirectClient(upstream.Client())
 	executor.kiePollInterval = 0
 	executor.kieMaxDuration = time.Second
-	request := imageGenerationRequest{Protocol: "kie", BaseURL: upstream.URL, APIKey: "kie-secret", Model: "seedream-v4-text-to-image", Prompt: "draw", Size: "1024x1024", Count: 1, References: []generatedImage{{Data: png, MIMEType: "image/png"}}}
+	request := imageGenerationRequest{Protocol: "kie", BaseURL: upstream.URL, APIKey: "kie-secret", Model: "seedream-v4-text-to-image", Prompt: "draw", Size: "1024x1024", Resolution: "2K", Count: 1, References: []generatedImage{{Data: png, MIMEType: "image/png"}}}
 	var checkpoint videoProviderCheckpoint
 	images, err := executor.GenerateResumable(context.Background(), request, nil, func(value videoProviderCheckpoint) error {
 		checkpoint = value

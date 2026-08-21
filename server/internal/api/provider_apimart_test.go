@@ -792,8 +792,8 @@ func TestAPIMartSerializesSeedreamAndGeminiLiteExactImageFields(t *testing.T) {
 	executor.apimartPollInterval = 0
 	executor.apimartMaxDuration = time.Second
 	for _, request := range []imageGenerationRequest{
-		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "21:9", Quality: "1K", Count: 1},
-		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "nano-banana-2-lite", Prompt: "draw", Size: "5:4", Quality: "auto", Count: 1},
+		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "21:9", Quality: "high", Resolution: "1K", Count: 1},
+		{Protocol: "apimart", BaseURL: server.URL, APIKey: "token", Model: "nano-banana-2-lite", Prompt: "draw", Size: "5:4", Quality: "4K", Resolution: "1K", Count: 1},
 	} {
 		_, _ = executor.GenerateResumable(context.Background(), request, nil, func(videoProviderCheckpoint) error { return nil })
 	}
@@ -833,7 +833,7 @@ func TestAPIMartFansOutSeedreamCountAsSingleImageTasks(t *testing.T) {
 	executor.apimartMaxDuration = 5 * time.Second
 	images, err := executor.GenerateResumable(context.Background(), imageGenerationRequest{
 		Protocol: "apimart", BaseURL: upstream.URL, APIKey: "token",
-		Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "1:1", Quality: "2K", Count: 2,
+		Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "1:1", Resolution: "2K", Count: 2,
 	}, nil, func(videoProviderCheckpoint) error { return nil })
 	if err != nil || len(images) != 2 {
 		t.Fatalf("images = %#v, %v", images, err)
@@ -845,9 +845,9 @@ func TestAPIMartFansOutSeedreamCountAsSingleImageTasks(t *testing.T) {
 
 func TestAPIMartCurrentImageContractsRejectUnsupportedParametersBeforeCreate(t *testing.T) {
 	executor := newOpenAIImageExecutor()
-	base := imageGenerationRequest{Protocol: "apimart", BaseURL: "https://api.apimart.ai", APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "1:1", Quality: "2K", Count: 1}
+	base := imageGenerationRequest{Protocol: "apimart", BaseURL: "https://api.apimart.ai", APIKey: "token", Model: "doubao-seedream-5-0-pro", Prompt: "draw", Size: "1:1", Resolution: "2K", Count: 1}
 	for name, mutate := range map[string]func(*imageGenerationRequest){
-		"Seedream resolution":    func(value *imageGenerationRequest) { value.Quality = "4K" },
+		"Seedream resolution":    func(value *imageGenerationRequest) { value.Resolution = "4K" },
 		"empty prompt":           func(value *imageGenerationRequest) { value.Prompt = " " },
 		"transparent background": func(value *imageGenerationRequest) { value.TransparentBackground = true },
 		"too many references":    func(value *imageGenerationRequest) { value.References = make([]generatedImage, 11) },
@@ -859,7 +859,7 @@ func TestAPIMartCurrentImageContractsRejectUnsupportedParametersBeforeCreate(t *
 		}
 	}
 	gemini := base
-	gemini.Model, gemini.Quality = "gemini-3.1-flash-lite-image", "2K"
+	gemini.Model, gemini.Resolution = "gemini-3.1-flash-lite-image", "2K"
 	if _, err := executor.GenerateResumable(context.Background(), gemini, nil, func(videoProviderCheckpoint) error { return nil }); err == nil {
 		t.Fatal("Gemini Lite accepted a non-1K resolution")
 	}

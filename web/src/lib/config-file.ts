@@ -156,6 +156,7 @@ function parsePortableConfig(value: Record<string, unknown>, current: AppConfig)
     systemPrompt: readString(value.systemPrompt, 20_000, "系统提示词", true),
     imageSize: readString(value.imageSize, 128, "图片尺寸"),
     imageQuality: readString(value.imageQuality, 128, "图片质量"),
+    imageResolution: typeof value.imageResolution === "string" ? readString(value.imageResolution, 128, "图片分辨率", true) : undefined,
     imageCount: Number(imageCount),
     theme,
     webdavUrl: optionalString(value.webdavUrl, 8 * 1024, "WebDAV URL"),

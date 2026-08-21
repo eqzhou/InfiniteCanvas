@@ -50,6 +50,11 @@ func (s *Server) applyFilmRegenerativeRepair(w http.ResponseWriter, r *http.Requ
 	if !s.requireAllowedModel(w, r, strings.TrimSpace(input.Model)) {
 		return
 	}
+	if repair.RegenerationStage == "storyboard" || repair.RegenerationStage == "first_frame" || repair.RegenerationStage == "last_frame" {
+		normalized := *input.Config
+		normalized.Resolution = canonicalImageResolution(normalized.Resolution)
+		input.Config = &normalized
+	}
 	if err := validateFilmGenerationConfig(repair.RegenerationStage, *input.Config); err != nil {
 		writeFilmOperationError(w, err)
 		return

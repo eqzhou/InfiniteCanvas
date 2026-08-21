@@ -381,6 +381,7 @@ func imageRequestAuditPayload(request imageGenerationRequest) map[string]any {
 		"model":                 request.Model,
 		"prompt":                request.Prompt,
 		"size":                  request.Size,
+		"resolution":            request.Resolution,
 		"quality":               request.Quality,
 		"count":                 request.Count,
 		"transparentBackground": request.TransparentBackground,

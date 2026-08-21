@@ -109,6 +109,7 @@ import { toast } from "@/components/common/toast";
 import { useI18n } from "@/i18n/I18nProvider";
 import {
   resolveMediaCapabilityForRequest,
+  normalizeImageResolutionForCapability,
   type MediaCapability,
   type MediaCapabilityCatalog,
 } from "@/services/media-capabilities";
@@ -182,9 +183,39 @@ export function NodeActions({
     : config.activeSharedChannelId
       ? channelChoices.find((candidate) => candidate.id === config.activeSharedChannelId)
       : config.channels.find((candidate) => candidate.id === config.activeChannelId) ?? config.channels[0];
+  const resolveImageModelForChannel = (selectedChannel: AiChannel | undefined): string => {
+    if (!selectedChannel) return "";
+    const providerModel = getProvider(selectedChannel, "image").model.trim();
+    if (providerModel) return providerModel;
+    const candidates = mediaCatalog?.models.filter((item) =>
+      item.kind === "image" && (selectedChannel.id === "shared-auto" || item.channelId === selectedChannel.id),
+    ) ?? [];
+    const models = [...new Set(candidates.map((item) => item.model))];
+    return models.find((model) => resolveMediaCapabilityForRequest(
+      mediaCatalog, selectedChannel.id, "image", model, "text_to_image",
+    )) ?? models[0] ?? "";
+  };
   const cameraAvailable = node.type === "image" || node.type === "video" ||
     (node.type === "config" && (node.metadata.generationMode ?? "image") !== "text");
   const promptForGeneration = (prompt: string) => applyCameraPrompt(prompt, node.metadata.cameraPrompt);
+  const normalizeImageGenerationForChannel = (
+    generation: ReturnType<typeof createImageGenerationMetadata>,
+    providerProtocol: string,
+    selectedChannel: AiChannel | undefined,
+    referenceCount: number,
+  ) => {
+    const normalized = normalizeImageGenerationForProvider(generation, providerProtocol);
+    const mode = referenceCount > 0 ? "image_to_image" : "text_to_image";
+    const capability = selectedChannel
+      ? resolveMediaCapabilityForRequest(mediaCatalog, selectedChannel.id, "image", normalized.model, mode)
+      : undefined;
+    if (mediaCatalog && selectedChannel && sharedChannels.some((candidate) => candidate.id === selectedChannel.id) && !capability) {
+      throw new Error(t("creative.sharedCapabilityMissing"));
+    }
+    return capability
+      ? { ...normalized, resolution: normalizeImageResolutionForCapability(capability, normalized.resolution ?? "") }
+      : normalized;
+  };
   const serverProviderSupported = (kind: "image" | "video" | "audio", selectedChannel = channel) => {
 		if (!selectedChannel || !usesServerGenerationJobs()) return false;
 		const provider = getProvider(selectedChannel, kind);
@@ -212,7 +243,7 @@ export function NodeActions({
 		if (provider.protocol === "template" && generation.transparentBackground && !provider.template?.supportsTransparentBackground) {
 			throw new Error(t("canvasNodes.templateTransparentUnsupported"));
 		}
-		const normalizedGeneration = normalizeImageGenerationForProvider(generation, provider.protocol);
+    const normalizedGeneration = normalizeImageGenerationForChannel(generation, provider.protocol, selectedChannel, referenceStorageKeys.length);
 		const source = directorShotGenerationContext(project, rootId)?.source;
 		let createdJobIds: string[] = [];
 		return submitServerImageGeneration({
@@ -225,6 +256,7 @@ export function NodeActions({
 					parameters: {
 						size: normalizedGeneration.size,
 						quality: normalizedGeneration.quality,
+						resolution: normalizedGeneration.resolution,
 						count: normalizedGeneration.count,
 						transparentBackground: normalizedGeneration.transparentBackground,
 						referenceStorageKeys,
@@ -425,12 +457,13 @@ export function NodeActions({
         placeRight(created);
       } else if (mode === "image") {
         const imageProvider = getProvider(channel, "image");
-        const imageModel = node.metadata.model || imageProvider.model;
+        const imageModel = node.metadata.model || imageProvider.model || resolveImageModelForChannel(channel);
         const generation = createImageGenerationMetadata({
           prompt,
           model: imageModel,
           size: node.metadata.size || config.imageSize,
           quality: node.metadata.quality || config.imageQuality,
+          resolution: node.metadata.resolution || config.imageResolution,
           count: Math.min(
             Math.max(1, node.metadata.count || config.imageCount || 1),
             imageOutputLimitFor(imageProvider.protocol, imageModel),
@@ -440,7 +473,7 @@ export function NodeActions({
           generationChannelId: channel.id,
           cameraPrompt: node.metadata.cameraPrompt,
         });
-        const normalizedGeneration = normalizeImageGenerationForProvider(generation, imageProvider.protocol);
+        const normalizedGeneration = normalizeImageGenerationForChannel(generation, imageProvider.protocol, channel, imageKeys.length);
         const requestPrompt = promptForGeneration(normalizedGeneration.prompt);
         const materializedImages = images.filter((image) => image.storageKey || image.content);
         if (serverProviderSupported("image") &&
@@ -456,6 +489,7 @@ export function NodeActions({
           prompt: requestPrompt,
           size: normalizedGeneration.size,
           quality: normalizedGeneration.quality,
+          resolution: normalizedGeneration.resolution,
           n: normalizedGeneration.count,
           referenceDataUrls: refs,
           transparentBackground: normalizedGeneration.transparentBackground,
@@ -606,9 +640,10 @@ export function NodeActions({
         metadata: {
           generationMode: "image",
           prompt: "",
-          model: channel ? getProvider(channel, "image").model : undefined,
+          model: channel ? (getProvider(channel, "image").model || resolveImageModelForChannel(channel)) : undefined,
           status: "idle",
           size: config.imageSize,
+          resolution: config.imageResolution,
           count: config.imageCount,
         },
       },
@@ -669,9 +704,10 @@ export function NodeActions({
       const referenceStorageKeys = node.metadata.storageKey ? [node.metadata.storageKey] : [];
       const generation = createImageGenerationMetadata({
         prompt,
-        model: node.metadata.model || getProvider(channel, "image").model,
+          model: node.metadata.model || resolveImageModelForChannel(channel),
         size: config.imageSize,
         quality: config.imageQuality,
+        resolution: config.imageResolution,
         count: config.imageCount,
         transparentBackground: Boolean(node.metadata.transparentBackground),
         referenceStorageKeys,
@@ -679,7 +715,7 @@ export function NodeActions({
         cameraPrompt: node.metadata.cameraPrompt,
       });
       const imageProvider = getProvider(channel, "image");
-      const normalizedGeneration = normalizeImageGenerationForProvider(generation, imageProvider.protocol);
+      const normalizedGeneration = normalizeImageGenerationForChannel(generation, imageProvider.protocol, channel, referenceStorageKeys.length);
       const requestPrompt = promptForGeneration(normalizedGeneration.prompt);
       if (serverProviderSupported("image") && (!node.metadata.content || referenceStorageKeys.length === 1)) {
         await startServerImageGeneration(node.id, normalizedGeneration, requestPrompt, referenceStorageKeys);
@@ -687,12 +723,13 @@ export function NodeActions({
       }
       const refs = await resolveNodeImageDataUrls(referenceStorageKeys);
       assertResolvedImageReferences(referenceStorageKeys, refs);
-        const urls = await generateImages({
+      const urls = await generateImages({
         channel,
         model: normalizedGeneration.model,
         prompt: requestPrompt,
         size: normalizedGeneration.size,
         quality: normalizedGeneration.quality,
+        resolution: normalizedGeneration.resolution,
         n: normalizedGeneration.count,
         referenceDataUrls: refs,
         transparentBackground: normalizedGeneration.transparentBackground,
@@ -753,9 +790,10 @@ export function NodeActions({
     const referenceStorageKeys = [...(node.metadata.referenceStorageKeys ?? [])];
     const generation = createImageGenerationMetadata({
       prompt,
-      model: node.metadata.model || getProvider(retryChannel, "image").model,
+      model: node.metadata.model || resolveImageModelForChannel(retryChannel),
       size: node.metadata.size || config.imageSize,
       quality: node.metadata.quality || config.imageQuality,
+      resolution: node.metadata.resolution || config.imageResolution,
       count: 1,
       transparentBackground: Boolean(node.metadata.transparentBackground),
       referenceStorageKeys,
@@ -763,7 +801,7 @@ export function NodeActions({
       cameraPrompt: node.metadata.cameraPrompt,
     });
     const retryProvider = getProvider(retryChannel, "image");
-    const normalizedGeneration = normalizeImageGenerationForProvider(generation, retryProvider.protocol);
+    const normalizedGeneration = normalizeImageGenerationForChannel(generation, retryProvider.protocol, retryChannel, referenceStorageKeys.length);
     const requestPrompt = promptForGeneration(normalizedGeneration.prompt);
     try {
       updateNode(node.id, { metadata: { status: "loading", errorDetails: undefined } });
@@ -779,6 +817,7 @@ export function NodeActions({
         prompt: requestPrompt,
         size: normalizedGeneration.size,
         quality: normalizedGeneration.quality,
+        resolution: normalizedGeneration.resolution,
         n: normalizedGeneration.count,
         referenceDataUrls: refs,
         transparentBackground: normalizedGeneration.transparentBackground,

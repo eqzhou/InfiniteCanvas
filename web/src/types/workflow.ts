@@ -18,6 +18,7 @@ export type WorkflowStep = {
   parameters: {
     size: string;
     quality?: string;
+    resolution?: string;
     count: number;
     transparentBackground?: boolean;
   };

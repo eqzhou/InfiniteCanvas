@@ -34,6 +34,7 @@ const (
 )
 
 var imageSizePattern = regexp.MustCompile(`^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$`)
+var imageResolutionPattern = regexp.MustCompile(`^(?:\d{3,4}p|[1248][kK]|auto)$`)
 var geminiImageModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,499}$`)
 var networkURLPattern = regexp.MustCompile(`(?i)https?://[^\s"]+`)
 var networkHostnamePattern = regexp.MustCompile(`(?i)(?:[a-z0-9-]+\.)+[a-z]{2,}|(?:[0-9]{1,3}\.){3}[0-9]{1,3}`)
@@ -176,6 +177,7 @@ type imageGenerationRequest struct {
 	RequestID             string
 	Prompt                string
 	Size                  string
+	Resolution            string
 	Quality               string
 	Count                 int
 	TransparentBackground bool
@@ -219,6 +221,7 @@ type createImageJobRequest struct {
 
 type createImageJobParameters struct {
 	Size                  string                 `json:"size"`
+	Resolution            string                 `json:"resolution,omitempty"`
 	Quality               string                 `json:"quality,omitempty"`
 	Count                 int                    `json:"count"`
 	RequestedCount        int                    `json:"requestedCount,omitempty"`
@@ -242,6 +245,7 @@ type persistedImageJobParameters struct {
 	Executor              string                     `json:"executor"`
 	RequestHash           string                     `json:"requestHash"`
 	Size                  string                     `json:"size"`
+	Resolution            string                     `json:"resolution,omitempty"`
 	Quality               string                     `json:"quality,omitempty"`
 	Count                 int                        `json:"count"`
 	RequestedCount        int                        `json:"requestedCount,omitempty"`
@@ -258,6 +262,34 @@ type persistedImageJobParameters struct {
 	CapabilityVersion     string                     `json:"capabilityVersion,omitempty"`
 	GenerationMode        string                     `json:"generationMode,omitempty"`
 	EstimatedCredits      int                        `json:"estimatedCredits,omitempty"`
+}
+
+// migrateLegacyImageResolution keeps server jobs written before image size
+// and output resolution were separate. The old APIMart image path encoded
+// 1K/2K in quality, while current requests carry those values in resolution.
+// Only the values that were part of that legacy contract are migrated; a
+// normal quality such as high/medium remains quality and is never re-used as
+// a resolution.
+func migrateLegacyImageResolution(parameters *persistedImageJobParameters) {
+	if parameters == nil {
+		return
+	}
+	if strings.TrimSpace(parameters.Resolution) != "" {
+		parameters.Resolution = canonicalImageResolution(parameters.Resolution)
+		return
+	}
+	if resolution := legacyImageResolution(parameters.Quality); resolution != "" {
+		parameters.Resolution = resolution
+		parameters.Quality = ""
+	}
+}
+
+func legacyImageResolution(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "1K", "2K", "4K":
+		return strings.ToUpper(strings.TrimSpace(value))
+	}
+	return ""
 }
 
 type storedImageProvider struct {
@@ -329,7 +361,12 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var input createImageJobRequest
-	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || !validCreateImageJob(input) {
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil {
+		http.Error(w, "invalid image generation job", http.StatusBadRequest)
+		return
+	}
+	normalizeCreateImageJobParameters(&input.Parameters)
+	if !validCreateImageJob(input) {
 		http.Error(w, "invalid image generation job", http.StatusBadRequest)
 		return
 	}
@@ -345,13 +382,14 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	input.Parameters.Category = strings.TrimSpace(input.Parameters.Category)
 
 	tenantID := tenantIDFrom(r)
-	requestHash, err := hashImageJobRequest(input)
+	requestHashes, err := compatibleImageJobRequestHashes(input)
 	if err != nil {
 		http.Error(w, "invalid image generation job", http.StatusBadRequest)
 		return
 	}
+	requestHash := requestHashes[0]
 	if existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID); getErr == nil {
-		if requestOwnsGenerationJob(r, existing) && isMatchingServerImageJob(existing, requestHash) {
+		if requestOwnsGenerationJob(r, existing) && isMatchingServerImageJob(existing, requestHashes...) {
 			writeJSON(w, publicGenerationJob(existing))
 			return
 		}
@@ -389,7 +427,7 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	}
 	capabilityVersion := ""
 	if sharedSnapshot != nil {
-		capabilityVersion, err = s.verifySharedMediaCapability(r.Context(), tenantID, sharedSnapshot.ProviderID, "image", input.Model, generationMode)
+		capabilityVersion, err = s.verifySharedImageCapabilityRequest(r.Context(), tenantID, sharedSnapshot.ProviderID, input.Model, generationMode, input.Parameters)
 		if err != nil {
 			http.Error(w, "shared image capability is unavailable", http.StatusUnprocessableEntity)
 			return
@@ -397,7 +435,7 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	}
 	parameters, _ := json.Marshal(persistedImageJobParameters{
 		Executor: serverExecutorMarker, RequestHash: requestHash,
-		Size: input.Parameters.Size, Quality: input.Parameters.Quality, Count: input.Parameters.Count,
+		Size: input.Parameters.Size, Resolution: input.Parameters.Resolution, Quality: input.Parameters.Quality, Count: input.Parameters.Count,
 		RequestedCount:        input.Parameters.RequestedCount,
 		BatchID:               input.Parameters.BatchID,
 		BatchIndex:            input.Parameters.BatchIndex,
@@ -418,7 +456,7 @@ func (s *Server) createServerImageJob(w http.ResponseWriter, r *http.Request) {
 	meta, _ := json.Marshal(map[string]any{"jobId": job.ID, "kind": job.Kind, "executor": serverExecutorMarker})
 	if err := s.store.CreateServerGenerationJob(r.Context(), tenantID, userIDFrom(r), job, input.Parameters.Count, meta); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, input.ID)
-		if getErr == nil && requestOwnsGenerationJob(r, existing) && isMatchingServerImageJob(existing, requestHash) {
+		if getErr == nil && requestOwnsGenerationJob(r, existing) && isMatchingServerImageJob(existing, requestHashes...) {
 			w.WriteHeader(http.StatusOK)
 			writeJSON(w, publicGenerationJob(existing))
 			return
@@ -458,7 +496,7 @@ func validCreateImageJob(input createImageJobRequest) bool {
 	}
 	prompt := strings.TrimSpace(input.Prompt)
 	if prompt == "" || len(prompt) > 100_000 || !imageSizePattern.MatchString(input.Parameters.Size) ||
-		len(input.Parameters.Quality) > 50 || input.Parameters.Count < 1 || input.Parameters.Count > maxImageGenerationCount ||
+		!validImageResolution(input.Parameters.Resolution) || len(input.Parameters.Quality) > 50 || input.Parameters.Count < 1 || input.Parameters.Count > maxImageGenerationCount ||
 		input.Parameters.RequestedCount < 0 || input.Parameters.RequestedCount > maxImageGenerationCount ||
 		(input.Parameters.RequestedCount > 0 && input.Parameters.RequestedCount < input.Parameters.Count) ||
 		input.Parameters.BatchIndex < 0 || input.Parameters.BatchIndex > maxImageGenerationCount ||
@@ -480,6 +518,52 @@ func validCreateImageJob(input createImageJobRequest) bool {
 		}
 	}
 	return true
+}
+
+func validImageResolution(value string) bool {
+	return strings.TrimSpace(value) == "" || imageResolutionPattern.MatchString(strings.TrimSpace(value))
+}
+
+func canonicalImageResolution(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if resolution := legacyImageResolution(trimmed); resolution != "" {
+		return resolution
+	}
+	if strings.EqualFold(trimmed, "auto") {
+		return "auto"
+	}
+	if strings.HasSuffix(trimmed, "p") {
+		return strings.ToLower(trimmed)
+	}
+	return trimmed
+}
+
+func normalizeCreateImageJobParameters(parameters *createImageJobParameters) {
+	if parameters == nil {
+		return
+	}
+	parameters.Resolution = canonicalImageResolution(parameters.Resolution)
+	if parameters.Resolution == "" {
+		if resolution := legacyImageResolution(parameters.Quality); resolution != "" {
+			parameters.Resolution = resolution
+			parameters.Quality = ""
+		}
+	}
+}
+
+// Known provider contracts are stricter than the generic server boundary. A
+// custom channel may advertise its own resolution vocabulary, but a built-in
+// model with no declared resolution must not silently accept and discard one.
+func validateRegisteredImageResolution(protocol, model, value string) error {
+	requested := strings.TrimSpace(value)
+	if requested == "" {
+		return nil
+	}
+	capability, registered := resolveProviderModelCapability(protocol, "image", model)
+	if !registered || (len(capability.Resolutions) > 0 && containsCaseInsensitive(capability.Resolutions, requested)) {
+		return nil
+	}
+	return errors.New("image resolution is not supported by the selected model")
 }
 
 func (s *Server) validDirectorImageSource(r *http.Request, input createImageJobRequest) bool {
@@ -609,10 +693,40 @@ func hashImageJobRequest(input createImageJobRequest) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func isMatchingServerImageJob(job store.GenerationJob, requestHash string) bool {
+func compatibleImageJobRequestHashes(input createImageJobRequest) ([]string, error) {
+	current, err := hashImageJobRequest(input)
+	if err != nil {
+		return nil, err
+	}
+	resolution := legacyImageResolution(input.Parameters.Resolution)
+	quality := strings.TrimSpace(input.Parameters.Quality)
+	if resolution == "" || (quality != "" && !strings.EqualFold(quality, "auto")) {
+		return []string{current}, nil
+	}
+	legacy := input
+	legacy.Parameters.Resolution = ""
+	legacy.Parameters.Quality = resolution
+	old, err := hashImageJobRequest(legacy)
+	if err != nil {
+		return nil, err
+	}
+	if old == current {
+		return []string{current}, nil
+	}
+	return []string{current, old}, nil
+}
+
+func isMatchingServerImageJob(job store.GenerationJob, requestHashes ...string) bool {
 	var parameters persistedImageJobParameters
-	return job.Kind == "image" && json.Unmarshal(job.Parameters, &parameters) == nil &&
-		parameters.Executor == serverExecutorMarker && parameters.RequestHash == requestHash
+	if job.Kind != "image" || json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Executor != serverExecutorMarker {
+		return false
+	}
+	for _, requestHash := range requestHashes {
+		if parameters.RequestHash == requestHash {
+			return true
+		}
+	}
+	return false
 }
 
 func isServerGenerationJob(job store.GenerationJob) bool {
@@ -975,6 +1089,7 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	if json.Unmarshal(job.Parameters, &parameters) != nil || parameters.Executor != serverExecutorMarker {
 		return imageGenerationRequest{}, errors.New("invalid server job parameters")
 	}
+	migrateLegacyImageResolution(&parameters)
 	_, secretKey, err := generationCredentialStorageKeys(job.UserID)
 	if err != nil {
 		return imageGenerationRequest{}, err
@@ -1099,10 +1214,13 @@ func (s *Server) resolveImageGenerationRequest(ctx context.Context, tenantID str
 	if model == "" {
 		return imageGenerationRequest{}, errors.New("missing image model")
 	}
+	if err := validateRegisteredImageResolution(provider.Protocol, model, parameters.Resolution); err != nil {
+		return imageGenerationRequest{}, err
+	}
 	return imageGenerationRequest{
 		Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: apiKey, Model: model, Prompt: prompt,
 		RequestID: providerRequestID(job.ID),
-		Size:      parameters.Size, Quality: parameters.Quality, Count: parameters.Count,
+		Size:      parameters.Size, Resolution: parameters.Resolution, Quality: parameters.Quality, Count: parameters.Count,
 		TransparentBackground: parameters.TransparentBackground, References: references,
 		ReferenceStorageKeys: append([]string(nil), parameters.ReferenceStorageKeys...), Template: provider.Template,
 		Source:          parameters.Source,

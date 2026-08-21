@@ -5,7 +5,7 @@
   "name": "OpenBoard web dependency inventory",
   "documentNamespace": "https://openboard.local/spdx/openboard-web-0.1.0",
   "creationInfo": {
-    "created": "2026-08-11T09:44:57.978Z",
+    "created": "2026-08-21T01:11:41.488Z",
     "creators": [
       "Tool: OpenBoard audit-licenses.mjs"
     ]
@@ -330,6 +330,13 @@
       "SPDXID": "SPDXRef--types-react-dom-19.2.3",
       "name": "@types/react-dom",
       "versionInfo": "19.2.3",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef--types-react-test-renderer-19.1.0",
+      "name": "@types/react-test-renderer",
+      "versionInfo": "19.1.0",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },
@@ -1139,6 +1146,13 @@
       "downloadLocation": "NOASSERTION"
     },
     {
+      "SPDXID": "SPDXRef-react-is-19.2.8",
+      "name": "react-is",
+      "versionInfo": "19.2.8",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
       "SPDXID": "SPDXRef-react-markdown-10.1.0",
       "name": "react-markdown",
       "versionInfo": "10.1.0",
@@ -1156,6 +1170,13 @@
       "SPDXID": "SPDXRef-react-router-8.3.0",
       "name": "react-router",
       "versionInfo": "8.3.0",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-react-test-renderer-19.1.0",
+      "name": "react-test-renderer",
+      "versionInfo": "19.1.0",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },
@@ -1195,9 +1216,9 @@
       "downloadLocation": "NOASSERTION"
     },
     {
-      "SPDXID": "SPDXRef-scheduler-0.27.0",
+      "SPDXID": "SPDXRef-scheduler-0.26.0",
       "name": "scheduler",
-      "versionInfo": "0.27.0",
+      "versionInfo": "0.26.0",
       "licenseConcluded": "MIT",
       "downloadLocation": "NOASSERTION"
     },

@@ -95,11 +95,12 @@ func (s *Server) createServerWorkflowJob(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	requestHash, err := hashWorkflowRequest(input.ProjectID, template, values)
+	requestHashes, err := compatibleWorkflowRequestHashes(input.ProjectID, template, values)
 	if err != nil {
 		http.Error(w, "invalid workflow generation job", http.StatusBadRequest)
 		return
 	}
+	requestHash := requestHashes[0]
 	actorID := strings.TrimSpace(userIDFrom(r))
 	if authMode() != "off" && actorID == "" {
 		http.Error(w, "login required", http.StatusUnauthorized)
@@ -124,7 +125,7 @@ func (s *Server) createServerWorkflowJob(w http.ResponseWriter, r *http.Request)
 	}
 	if err := s.store.CreateGenerationJob(r.Context(), tenantID, job); errors.Is(err, store.ErrConflict) {
 		existing, getErr := s.store.GetGenerationJob(r.Context(), tenantID, job.ID)
-		if getErr == nil && requestOwnsGenerationJob(r, existing) && matchingWorkflowRequest(existing, requestHash) {
+		if getErr == nil && requestOwnsGenerationJob(r, existing) && matchingWorkflowRequest(existing, requestHashes...) {
 			writeJSON(w, publicGenerationJob(existing))
 			return
 		}
@@ -156,13 +157,50 @@ func hashWorkflowRequest(projectID string, template workflowTemplate, values map
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func matchingWorkflowRequest(job store.GenerationJob, requestHash string) bool {
+func compatibleWorkflowRequestHashes(projectID string, template workflowTemplate, values map[string]json.RawMessage) ([]string, error) {
+	current, err := hashWorkflowRequest(projectID, template, values)
+	if err != nil {
+		return nil, err
+	}
+	legacy := template
+	legacy.Steps = append([]workflowStep(nil), template.Steps...)
+	changed := false
+	for index := range legacy.Steps {
+		resolution := legacyImageResolution(legacy.Steps[index].Parameters.Resolution)
+		if resolution == "" {
+			continue
+		}
+		legacy.Steps[index].Parameters.Resolution = ""
+		legacy.Steps[index].Parameters.Quality = resolution
+		changed = true
+	}
+	if !changed {
+		return []string{current}, nil
+	}
+	old, err := hashWorkflowRequest(projectID, legacy, values)
+	if err != nil {
+		return nil, err
+	}
+	if old == current {
+		return []string{current}, nil
+	}
+	return []string{current, old}, nil
+}
+
+func matchingWorkflowRequest(job store.GenerationJob, requestHashes ...string) bool {
 	if job.Kind != "workflow" {
 		return false
 	}
 	var parameters workflowRunParameters
 	decoder := json.NewDecoder(bytes.NewReader(job.Parameters))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(&parameters) == nil && ensureJSONEOF(decoder) == nil &&
-		parameters.Executor == "workflow" && parameters.RequestHash == requestHash
+	if decoder.Decode(&parameters) != nil || ensureJSONEOF(decoder) != nil || parameters.Executor != "workflow" {
+		return false
+	}
+	for _, requestHash := range requestHashes {
+		if parameters.RequestHash == requestHash {
+			return true
+		}
+	}
+	return false
 }

@@ -11,7 +11,7 @@ describe("image generation batch fan-out", () => {
   test("treats each requested image as its own n=1 slot", () => {
     const slots = [0, 1, 2, 3].map((index) =>
       imageGenerationSlotParameters(
-        { size: "1024x1024", quality: "auto", count: 4, category: "角色" },
+        { size: "1024x1024", quality: "auto", resolution: "2K", count: 4, category: "角色" },
         index,
         4,
         "batch_test",
@@ -24,6 +24,7 @@ describe("image generation batch fan-out", () => {
     expect(new Set(slots.map((slot) => slot.batchId))).toEqual(new Set(["batch_test"]));
     expect(slots[0]?.requestedCount).toBe(4);
     expect(slots[0]?.size).toBe("1024x1024");
+    expect(slots.every((slot) => slot.resolution === "2K")).toBe(true);
   });
 
   test("does not invent a batch id for a single image", () => {

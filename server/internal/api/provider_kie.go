@@ -334,6 +334,9 @@ func kieImageInput(request imageGenerationRequest, references kieUploadedReferen
 	if request.Quality != "" {
 		input["quality"] = request.Quality
 	}
+	if request.Resolution != "" {
+		input["resolution"] = request.Resolution
+	}
 	if request.Count > 1 {
 		input["num_images"] = request.Count
 	}

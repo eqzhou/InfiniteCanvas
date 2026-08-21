@@ -142,7 +142,7 @@ describe("creative workbench history refill", () => {
     id: "hist-1", kind: "image", status: "succeeded", prompt: "  一只纸雕老虎  ",
     providerId: "channel-b", model: "gpt-image-1",
     parameters: {
-      size: "1536x1024", quality: "high", count: 3, transparentBackground: true,
+      size: "1536x1024", quality: "high", resolution: "2K", count: 3, transparentBackground: true,
       category: " 海报 ", referenceStorageKeys: ["image:ref-a", "image:ref-b"],
     },
     result: {}, createdAt: "2026-07-25T00:00:00.000Z", updatedAt: "2026-07-25T00:00:00.000Z",
@@ -151,6 +151,7 @@ describe("creative workbench history refill", () => {
   const currentForm = {
     prompt: "草稿", model: "current-model", providerId: "channel-a",
     size: "1024x1024", quality: "auto", count: 1, transparentBackground: false,
+    resolution: "",
     category: "", referenceStorageKeys: [] as string[],
   };
 
@@ -163,6 +164,7 @@ describe("creative workbench history refill", () => {
       providerId: "channel-b",
       size: "1536x1024",
       quality: "high",
+      resolution: "2K",
       count: 3,
       transparentBackground: true,
       category: "海报",
@@ -175,6 +177,13 @@ describe("creative workbench history refill", () => {
       ...imageJob, prompt: "   ", model: "", providerId: "", parameters: {},
     };
     expect(workbenchRefillForm(sparse, currentForm)).toEqual(currentForm);
+  });
+
+  test("migrates legacy quality resolution values while preserving normal quality", () => {
+    const legacy = { ...imageJob, parameters: { ...imageJob.parameters, quality: "1K", resolution: undefined } };
+    expect(workbenchRefillForm(legacy, currentForm)).toMatchObject({ quality: "auto", resolution: "1K" });
+    const qualityOnly = { ...imageJob, parameters: { ...imageJob.parameters, quality: "high", resolution: undefined } };
+    expect(workbenchRefillForm(qualityOnly, currentForm)).toMatchObject({ quality: "high", resolution: currentForm.resolution });
   });
 
   test("rejects out-of-range and malformed record values", () => {

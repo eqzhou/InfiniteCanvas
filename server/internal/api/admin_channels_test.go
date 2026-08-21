@@ -178,6 +178,22 @@ func TestSharedGenerationChannelSnapshotSurvivesAdminChanges(t *testing.T) {
 	}
 }
 
+func TestResolveImageGenerationRequestMigratesLegacyResolutionQuality(t *testing.T) {
+	server, _, _ := imageExecutionHandler(t, newScriptedImageExecutor())
+	parameters, _ := json.Marshal(persistedImageJobParameters{
+		Executor: serverExecutorMarker, Size: "1024x1024", Quality: "2K", Count: 1,
+	})
+	resolved, err := server.resolveImageGenerationRequest(context.Background(), store.DefaultTenantID, store.GenerationJob{
+		ID: "legacy-resolution-job", Kind: "image", ProviderID: "image-main", Model: "custom-image-model", Prompt: "draw", Parameters: parameters,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Resolution != "2K" {
+		t.Fatalf("legacy quality was not migrated to resolution: %#v", resolved)
+	}
+}
+
 func TestSharedGenerationSnapshotRejectsTimeoutOutsideAdminBounds(t *testing.T) {
 	server, backend, _ := sharedChannelHandler(t)
 	if err := backend.PutState(context.Background(), store.DefaultTenantID, "config", []byte(`{"channels":[]}`)); err != nil {

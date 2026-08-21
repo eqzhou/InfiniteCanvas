@@ -6,8 +6,11 @@ import {
   clampImageCountForProvider,
   imageOutputLimitFor,
   imageQualityOptionsFor,
+  imageResolutionOptionsFor,
+  legacyImageResolutionFromQuality,
   imageSizeOptionsFor,
   normalizeImageQualityForProvider,
+  normalizeImageResolutionForProvider,
   normalizeImageSizeForProvider,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
@@ -23,6 +26,7 @@ export function SettingsGenerationSection() {
   const workflowAgentSystemPrompt = useBoardStore((state) => state.config.workflowAgentSystemPrompt);
   const imageSizeValue = useBoardStore((state) => state.config.imageSize);
   const imageQualityValue = useBoardStore((state) => state.config.imageQuality);
+  const imageResolutionValue = useBoardStore((state) => state.config.imageResolution);
   const imageCount = useBoardStore((state) => state.config.imageCount);
   const generationDefaults = useBoardStore((state) => state.config.generationDefaults);
   const channels = useBoardStore((state) => state.config.channels);
@@ -42,6 +46,12 @@ export function SettingsGenerationSection() {
   const imageQualityOptions = imageQualityOptionsFor(imageProvider?.protocol, imageProvider?.model);
   const imageQuality = normalizeImageQualityForProvider(
     imageQualityValue,
+    imageProvider?.protocol,
+    imageProvider?.model,
+  );
+  const imageResolutionOptions = imageResolutionOptionsFor(imageProvider?.protocol, imageProvider?.model);
+  const imageResolution = normalizeImageResolutionForProvider(
+    imageResolutionValue ?? legacyImageResolutionFromQuality(imageQualityValue) ?? "",
     imageProvider?.protocol,
     imageProvider?.model,
   );
@@ -102,17 +112,32 @@ export function SettingsGenerationSection() {
               ))}
             </select>
           </SettingsField>
-          <SettingsField label={t("settings.imageQuality")}>
-            <select
-              className="ob-field"
-              value={imageQuality}
-              onChange={(event) => setConfig({ ...useBoardStore.getState().config, imageQuality: event.target.value })}
-            >
-              {optionsWithCurrentValue(imageQualityOptions, imageQuality).map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </SettingsField>
+          {imageQualityOptions.length ? (
+            <SettingsField label={t("settings.imageQuality")}>
+              <select
+                className="ob-field"
+                value={imageQuality}
+                onChange={(event) => setConfig({ ...useBoardStore.getState().config, imageQuality: event.target.value })}
+              >
+                {optionsWithCurrentValue(imageQualityOptions, imageQuality).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </SettingsField>
+          ) : null}
+          {imageResolutionOptions.length || imageResolution ? (
+            <SettingsField label={t("settings.imageResolution")}>
+              <select
+                className="ob-field"
+                value={imageResolution}
+                onChange={(event) => setConfig({ ...useBoardStore.getState().config, imageResolution: event.target.value })}
+              >
+                {optionsWithCurrentValue(imageResolutionOptions, imageResolution).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </SettingsField>
+          ) : null}
           <SettingsField label={t("settings.defaultCount")}>
             <input
               className="ob-field"

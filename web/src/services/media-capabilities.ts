@@ -21,6 +21,7 @@ const modes = new Set<MediaGenerationMode>(["text_to_image", "image_to_image", "
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 const modelPattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const sizePattern = /^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|\d{3,4}p|[1248][Kk]|auto|adaptive)$/;
+const imageSizePattern = /^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|auto)$/;
 const ratioPattern = /^(?:\d{1,2}:\d{1,2}|auto|adaptive)$/;
 const resolutionPattern = /^(?:\d{3,4}p|[1248][Kk]|auto)$/;
 
@@ -33,7 +34,8 @@ function parseCapability(value: unknown): MediaCapability | null {
   const ratios = item.ratios ?? [];
   const resolutions = item.resolutions ?? [];
   const durations = item.durations ?? [];
-  if (!Array.isArray(sizes) || !sizes.every((size) => typeof size === "string" && sizePattern.test(size)) ||
+  const acceptedSizePattern = kind === "image" ? imageSizePattern : sizePattern;
+  if (!Array.isArray(sizes) || !sizes.every((size) => typeof size === "string" && acceptedSizePattern.test(size)) ||
     !Array.isArray(ratios) || !ratios.every((ratio) => typeof ratio === "string" && ratioPattern.test(ratio)) ||
     !Array.isArray(resolutions) || !resolutions.every((resolution) => typeof resolution === "string" && resolutionPattern.test(resolution)) ||
     !Array.isArray(durations) || !durations.every((duration) => Number.isInteger(duration) && duration > 0 && duration <= 900)) return null;
@@ -69,10 +71,13 @@ export function intersectMediaCapabilities(items: readonly MediaCapability[]): M
   const ratios = common((item) => item.ratios);
   const resolutions = common((item) => item.resolutions);
   const durations = common((item) => item.durations);
+  const imageResolutionDeclared = items.some((item) => item.kind === "image" && item.resolutions.length > 0);
+  const imageResolutionMissing = items.some((item) => item.kind === "image" && item.resolutions.length === 0);
   if (!modes.length ||
     (items.some((item) => item.sizes.length) && !sizes.length) ||
     (items.some((item) => item.ratios.length) && !ratios.length) ||
     (items.some((item) => item.resolutions.length) && !resolutions.length) ||
+    (imageResolutionDeclared && imageResolutionMissing) ||
     (items.some((item) => item.durations.length) && !durations.length)) return undefined;
   return {
     ...first,
@@ -99,4 +104,20 @@ export function resolveMediaCapabilityForRequest(
     (channelId === "shared-auto" || item.channelId === channelId),
   ) ?? [];
   return channelId === "shared-auto" ? intersectMediaCapabilities(matching) : matching[0];
+}
+
+/**
+ * Normalize an image resolution only against a declared capability snapshot.
+ * An explicit capability with no resolutions is intentionally resolution-less
+ * instead of falling back to a guessed provider preset.
+ */
+export function normalizeImageResolutionForCapability(
+  capability: MediaCapability | undefined,
+  requested: string,
+): string {
+  if (!capability) return requested;
+  if (!capability.resolutions.length) return "";
+  return capability.resolutions.includes(requested)
+    ? requested
+    : capability.resolutions[0] ?? "";
 }

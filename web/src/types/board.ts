@@ -469,6 +469,8 @@ export type AppConfig = {
   systemPrompt: string;
   imageSize: string;
   imageQuality: string;
+  /** Optional for backwards-compatible workspace/config imports. */
+  imageResolution?: string;
   imageCount: number;
   /** Last model selected for each channel and generation kind. */
   preferredModels?: PreferredModels;

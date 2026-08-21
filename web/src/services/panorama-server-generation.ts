@@ -46,6 +46,7 @@ export type PanoramaServerGenerationInput = {
   model: string;
   size: string;
   quality: string;
+  resolution?: string;
   count: number;
   referenceStorageKeys: string[];
   signal?: AbortSignal;
@@ -223,6 +224,7 @@ export async function runPanoramaServerGeneration(
       const slot = imageGenerationSlotParameters({
         size: input.size,
         quality: input.quality,
+        ...(input.resolution ? { resolution: input.resolution } : {}),
         count: total,
         category: "panorama",
         referenceStorageKeys: [...input.referenceStorageKeys],
@@ -235,6 +237,7 @@ export async function runPanoramaServerGeneration(
         parameters: {
           size: slot.size,
           quality: slot.quality,
+          ...(slot.resolution ? { resolution: slot.resolution } : {}),
           count: 1,
           requestedCount: slot.requestedCount,
           batchId: slot.batchId || undefined,

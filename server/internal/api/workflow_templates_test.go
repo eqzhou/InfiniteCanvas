@@ -119,3 +119,40 @@ func TestWorkflowTemplateEnforcesAggregateOutputsAndReferenceIndexes(t *testing.
 		t.Fatalf("72 aggregate results should be valid after n=1 fan-out: %v", err)
 	}
 }
+
+func TestWorkflowTemplateMigratesLegacyImageResolutionQuality(t *testing.T) {
+	legacy := bytes.Replace([]byte(validPersonalWorkflowTemplate), []byte(`"parameters":{"size":"1024x1024","count":1}`), []byte(`"parameters":{"size":"1024x1024","quality":"2K","count":1}`), 1)
+	template, err := decodeWorkflowTemplate(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if template.Steps[0].Parameters.Resolution != "2K" || template.Steps[0].Parameters.Quality != "auto" {
+		t.Fatalf("legacy image resolution was not migrated: %#v", template.Steps[0].Parameters)
+	}
+}
+
+func TestWorkflowResolutionMigrationPreservesLegacyIdempotencyHash(t *testing.T) {
+	legacyJSON := bytes.Replace([]byte(validPersonalWorkflowTemplate), []byte(`"parameters":{"size":"1024x1024","count":1}`), []byte(`"parameters":{"size":"1024x1024","quality":"2K","count":1}`), 1)
+	current, err := decodeWorkflowTemplate(legacyJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy workflowTemplate
+	if err := json.Unmarshal(legacyJSON, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]json.RawMessage{"subject": json.RawMessage(`"castle"`)}
+	legacyHash, err := hashWorkflowRequest("board-1", legacy, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashes, err := compatibleWorkflowRequestHashes("board-1", current, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, _ := json.Marshal(workflowRunParameters{Executor: "workflow", RequestHash: legacyHash})
+	job := store.GenerationJob{Kind: "workflow", Parameters: parameters}
+	if !matchingWorkflowRequest(job, hashes...) {
+		t.Fatalf("legacy workflow hash %q was not accepted in %#v", legacyHash, hashes)
+	}
+}

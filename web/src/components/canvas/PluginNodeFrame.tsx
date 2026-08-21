@@ -216,6 +216,8 @@ function SandboxedPluginNodeFrame({ node, manifest }: Props) {
           model: options.model || getProvider(channel, "image").model,
           prompt: options.prompt,
           size: options.size || state.config.imageSize,
+          quality: options.quality || state.config.imageQuality,
+          resolution: options.resolution || state.config.imageResolution,
           n: options.count ?? 1,
           systemPrompt: state.config.systemPrompt,
         });

@@ -26,7 +26,7 @@ export function createPersonalWorkflowTemplate(
       title: "生成图片",
       promptTemplate: "{{subject}}",
       providerId: "",
-      parameters: { size: "1024x1024", quality: "auto", count: 1 },
+      parameters: { size: "1024x1024", quality: "auto", count: 1, resolution: "" },
       references: [],
     }],
     createdAt: timestamp,

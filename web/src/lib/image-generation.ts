@@ -1,7 +1,9 @@
 import type { CameraPromptConfig, NodeMetadata } from "@/types/board";
 import {
   imageOutputLimitFor,
+  legacyImageResolutionFromQuality,
   normalizeImageQualityForProvider,
+  normalizeImageResolutionForProvider,
   normalizeImageSizeForProvider,
 } from "@/lib/image-generation-options";
 
@@ -10,6 +12,8 @@ export type ImageGenerationRequest = {
   model: string;
   size: string;
   quality: string;
+  /** Provider-declared image resolution, independent from pixel size and quality. */
+  resolution?: string;
   count: number;
   transparentBackground: boolean;
   referenceStorageKeys: readonly string[];
@@ -22,6 +26,7 @@ export type ImageGenerationMetadata = {
   model: string;
   size: string;
   quality: string;
+  resolution?: string;
   count: number;
   transparentBackground: boolean;
   generationType: NonNullable<NodeMetadata["generationType"]>;
@@ -34,11 +39,14 @@ export function createImageGenerationMetadata(
   request: ImageGenerationRequest,
 ): ImageGenerationMetadata {
   const referenceStorageKeys = [...request.referenceStorageKeys];
+  const legacyResolution = legacyImageResolutionFromQuality(request.quality);
+  const resolution = request.resolution?.trim() || legacyResolution;
   return {
     prompt: request.prompt,
     model: request.model,
     size: normalizeImageSizeForProvider(request.size),
-    quality: request.quality,
+    quality: legacyResolution ? "auto" : request.quality,
+    ...(resolution ? { resolution } : {}),
     count: request.count,
     transparentBackground: request.transparentBackground,
     generationType: referenceStorageKeys.length ? "image-to-image" : "text-to-image",
@@ -63,10 +71,21 @@ export function normalizeImageGenerationForProvider(
     Math.max(1, Number.isFinite(requestedCount) ? Math.floor(requestedCount) : 1),
     imageOutputLimitFor(protocol, generation.model),
   );
+  const legacyResolution = legacyImageResolutionFromQuality(generation.quality);
+  const resolution = normalizeImageResolutionForProvider(
+    generation.resolution ?? legacyResolution,
+    protocol,
+    generation.model,
+  );
   return {
     ...generation,
     size: normalizeImageSizeForProvider(generation.size),
-    quality: normalizeImageQualityForProvider(generation.quality, protocol, generation.model),
+    quality: normalizeImageQualityForProvider(
+      legacyResolution ? "auto" : generation.quality,
+      protocol,
+      generation.model,
+    ),
+    ...(resolution ? { resolution } : {}),
     count,
     referenceStorageKeys: [...generation.referenceStorageKeys],
     cameraPrompt: generation.cameraPrompt ? { ...generation.cameraPrompt } : undefined,

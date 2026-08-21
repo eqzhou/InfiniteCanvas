@@ -21,6 +21,7 @@ import { providerFetch, providerFetchUrl, ProviderHttpError } from "@/services/p
 import { IMAGE_GENERATION_MAX_COUNT } from "@/lib/image-generation-batch";
 import {
   imageOutputLimitFor,
+  legacyImageResolutionFromQuality,
   normalizeImageQualityForProvider,
   normalizeImageSizeForProvider,
 } from "@/lib/image-generation-options";
@@ -304,6 +305,7 @@ type ImageGenerationOptions = {
   prompt: string;
   size?: string;
   quality?: string;
+  resolution?: string;
   n?: number;
   referenceDataUrls?: string[];
   /** Managed binary references avoid a base64 round trip for multipart providers. */
@@ -357,7 +359,13 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
   } = options;
   const provider = getProvider(channel, "image");
   const size = normalizeImageSizeForProvider(options.size ?? "1024x1024");
-  const quality = normalizeImageQualityForProvider(options.quality ?? "auto", provider.protocol, model);
+  const legacyResolution = legacyImageResolutionFromQuality(options.quality);
+  const quality = normalizeImageQualityForProvider(
+    legacyResolution ? "auto" : options.quality ?? "auto",
+    provider.protocol,
+    model,
+  );
+  const resolution = options.resolution?.trim() || legacyResolution || "";
   const requestedCount = Number(options.n ?? 1);
   const maxCount = imageOutputLimitFor(provider.protocol, model);
   if (!Number.isSafeInteger(requestedCount) || requestedCount < 1 || requestedCount > maxCount) {
@@ -382,7 +390,7 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     if (transparentBackground) throw new Error("Gemini image generation does not support transparent background");
     const references = [...referenceDataUrls, ...await encodedBlobReferences()];
     return collectImageSlots(n, () =>
-      generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, references, signal), signal);
+      generateGeminiImages(provider.baseUrl, provider.apiKey, model, effectivePrompt, references, resolution, signal), signal);
   }
   if (provider.protocol === "template") {
     if (!provider.template) throw new Error("Image template configuration is missing");
@@ -392,6 +400,7 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
     const referenceImages = [...referenceDataUrls, ...await encodedBlobReferences()];
     const generateOneTemplate = async (): Promise<string[]> => generateTemplateImages(provider, {
       prompt: effectivePrompt, model, size, quality, count: 1, transparentBackground, referenceImages,
+      ...(resolution ? { resolution } : {}),
     }, signal);
     return collectImageSlots(n, generateOneTemplate, signal);
   }
@@ -410,6 +419,7 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
       form.set("n", "1");
       form.set("size", size);
       if (quality) form.set("quality", quality);
+			if (resolution) form.set("resolution", resolution);
       if (transparentBackground) form.set("background", "transparent");
       for (const [i, dataUrl] of referenceDataUrls.entries()) {
         const decoded = decodeBoundedDataUrl(dataUrl, {
@@ -434,6 +444,7 @@ async function generateImagesRequest(options: ImageGenerationOptions): Promise<s
         n: 1,
         size,
         quality,
+				...(resolution ? { resolution } : {}),
         ...(transparentBackground ? { background: "transparent" } : {}),
       }),
       signal,

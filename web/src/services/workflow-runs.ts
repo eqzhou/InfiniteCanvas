@@ -272,6 +272,7 @@ async function runBrowserStep(
         prompt,
         size: step.parameters.size,
         quality: step.parameters.quality,
+        resolution: step.parameters.resolution,
         n: splitSlots ? 1 : step.parameters.count,
         transparentBackground: step.parameters.transparentBackground,
         referenceDataUrls: await referenceDataUrls(referenceStorageKeys),

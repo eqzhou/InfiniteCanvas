@@ -157,7 +157,7 @@ func compileImageProviderTemplate(template *imageProviderTemplate, request image
 		references = append(references, "data:"+reference.MIMEType+";base64,"+base64.StdEncoding.EncodeToString(reference.Data))
 	}
 	values := map[string]any{
-		"prompt": request.Prompt, "model": request.Model, "size": request.Size,
+		"prompt": request.Prompt, "model": request.Model, "size": request.Size, "resolution": request.Resolution,
 		"quality": request.Quality, "count": request.Count,
 		"transparentBackground": request.TransparentBackground, "referenceImages": references,
 	}

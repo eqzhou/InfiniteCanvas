@@ -31,7 +31,10 @@ import {
   imageSizeOptionsFor,
   imageOutputLimitFor,
   imageQualityOptionsFor,
+  imageResolutionOptionsFor,
+  legacyImageResolutionFromQuality,
   normalizeImageQualityForProvider,
+  normalizeImageResolutionForProvider,
   optionsWithCurrentValue,
 } from "@/lib/image-generation-options";
 import {
@@ -59,6 +62,7 @@ import { uid } from "@/lib/id";
 import { useI18n } from "@/i18n/I18nProvider";
 import {
   intersectMediaCapabilities,
+  normalizeImageResolutionForCapability,
   type MediaCapability,
   type MediaCapabilityCatalog,
 } from "@/services/media-capabilities";
@@ -186,9 +190,11 @@ export function BoardNodeView({
     imageChannel,
     imageProvider,
     imageQualityOptions,
+    imageResolutionOptions,
     imageSizeOptions,
     imageOutputLimit,
     imageQuality,
+    imageResolution,
     videoProvider,
     videoCapability,
     videoRatioOptions,
@@ -212,7 +218,23 @@ export function BoardNodeView({
       : activeChannel;
     const imageChannel = configuredGenerationChannel ?? activeGenerationChannel;
     const imageProvider = imageChannel ? getProvider(imageChannel, "image") : undefined;
-    const imageModel = node.metadata.model || imageProvider?.model || "";
+    const imageCatalogCandidates = mediaCatalog?.models.filter((item) =>
+      item.kind === "image" && (imageChannel?.id === "shared-auto" || item.channelId === imageChannel?.id),
+    ) ?? [];
+    const imageCatalogModels = [...new Set(imageCatalogCandidates.map((item) => item.model))];
+    const catalogImageModel = imageChannel?.id === "shared-auto"
+      ? imageCatalogModels.find((candidate) => intersectMediaCapabilities(
+        imageCatalogCandidates.filter((item) => item.model === candidate),
+      ))
+      : imageCatalogModels[0];
+    const imageModel = node.metadata.model || imageProvider?.model || catalogImageModel || "";
+    const imageCapabilityCandidates = imageCatalogCandidates.filter((item) => item.model === imageModel);
+    const imageCapability: MediaCapability | undefined = imageChannel?.id === "shared-auto"
+      ? intersectMediaCapabilities(mediaCatalog?.models.filter((item) => item.kind === "image" && item.model === imageModel) ?? [])
+      : imageCapabilityCandidates[0];
+    const sharedImageCapabilityUnavailable = Boolean(mediaCatalog && imageChannel?.id === "shared-auto" && !imageCapability);
+    const requestedImageResolution = node.metadata.resolution ?? config.imageResolution ??
+      legacyImageResolutionFromQuality(node.metadata.quality ?? config.imageQuality) ?? "";
     const videoProvider = imageChannel ? getProvider(imageChannel, "video") : undefined;
     const videoModel = node.metadata.model || videoProvider?.model || "";
     const videoCapabilityCandidates = mediaCatalog?.models.filter((item) =>
@@ -242,13 +264,23 @@ export function BoardNodeView({
       imageChannel,
       imageProvider,
       imageQualityOptions: imageQualityOptionsFor(imageProvider?.protocol, imageModel),
+      imageResolutionOptions: sharedImageCapabilityUnavailable
+        ? []
+        : imageCapability
+        ? imageCapability.resolutions.map((value) => ({ value, label: `${value} 分辨率` }))
+        : imageResolutionOptionsFor(imageProvider?.protocol, imageModel),
       imageSizeOptions: imageSizeOptionsFor(imageProvider?.protocol, imageModel),
       imageOutputLimit: imageOutputLimitFor(imageProvider?.protocol, imageModel),
       imageQuality: normalizeImageQualityForProvider(
-        node.metadata.quality ?? config.imageQuality,
+        legacyImageResolutionFromQuality(node.metadata.quality ?? config.imageQuality) ? "auto" : node.metadata.quality ?? config.imageQuality,
         imageProvider?.protocol,
         imageModel,
       ),
+      imageResolution: sharedImageCapabilityUnavailable
+        ? ""
+        : imageCapability
+        ? normalizeImageResolutionForCapability(imageCapability, requestedImageResolution)
+        : normalizeImageResolutionForProvider(requestedImageResolution, imageProvider?.protocol, imageModel),
       videoProvider,
       videoCapability,
       videoRatioOptions: videoCapability?.ratios.length
@@ -882,24 +914,43 @@ export function BoardNodeView({
                     />
                   </label>
                 ) : null}
-                <label className="flex flex-col gap-1">
-                  {t("canvasNodes.imageQuality")}
-                  <select
-                    aria-label={t("canvasNodes.configImageQuality")}
-                    className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
-                    value={imageQuality}
-                    onChange={(event) => updateNode(node.id, {
-                      metadata: { quality: event.target.value },
-                    })}
-                  >
-                    {optionsWithCurrentValue(
-                      imageQualityOptions,
-                      imageQuality,
-                    ).map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
+                {imageQualityOptions.length ? (
+                  <label className="flex flex-col gap-1">
+                    {t("canvasNodes.imageQuality")}
+                    <select
+                      aria-label={t("canvasNodes.configImageQuality")}
+                      className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                      value={imageQuality}
+                      onChange={(event) => updateNode(node.id, {
+                        metadata: { quality: event.target.value },
+                      })}
+                    >
+                      {optionsWithCurrentValue(
+                        imageQualityOptions,
+                        imageQuality,
+                      ).map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {imageResolutionOptions.length ? (
+                  <label className="flex flex-col gap-1">
+                    {t("canvasNodes.resolution")}
+                    <select
+                      aria-label={t("canvasNodes.resolution")}
+                      className="rounded border border-[var(--ob-line)] bg-transparent px-2 py-1"
+                      value={imageResolution}
+                      onChange={(event) => updateNode(node.id, {
+                        metadata: { resolution: event.target.value },
+                      })}
+                    >
+                      {optionsWithCurrentValue(imageResolutionOptions, imageResolution).map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
               </>
             ) : null}
             <label className="flex flex-col gap-1">
@@ -1207,7 +1258,7 @@ export function BoardNodeView({
 
         {node.type === "panorama" ? (
           <Suspense fallback={<div className="grid h-full place-items-center bg-slate-950 text-xs text-slate-400">{t("canvasNodes.loadingPanorama")}</div>}>
-            <PanoramaNodeCard node={node} />
+            <PanoramaNodeCard node={node} mediaCatalog={mediaCatalog} />
           </Suspense>
         ) : null}
 
@@ -1428,6 +1479,7 @@ export function BoardNodeView({
                   model: imageProvider.model,
                   size,
                   quality: config.imageQuality,
+                  resolution: config.imageResolution,
                   count: 1,
                   transparentBackground: false,
                   referenceStorageKeys: [uploaded.storageKey],
@@ -1468,6 +1520,7 @@ export function BoardNodeView({
                   parameters: {
                     size: generation.size,
                     quality: generation.quality,
+                    resolution: generation.resolution,
                     count: 1,
                     transparentBackground: false,
                     referenceStorageKeys: [uploaded.storageKey],

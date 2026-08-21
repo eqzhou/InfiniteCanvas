@@ -136,6 +136,9 @@ export async function executeRuntimeCommand(
           prompt,
           generationMode: "image",
           model: typeof command.data.model === "string" ? command.data.model : undefined,
+          size: typeof command.data.size === "string" ? command.data.size : state.config.imageSize,
+          quality: typeof command.data.quality === "string" ? command.data.quality : state.config.imageQuality,
+          resolution: typeof command.data.resolution === "string" ? command.data.resolution : state.config.imageResolution,
           status: "loading",
         },
       });
@@ -146,6 +149,8 @@ export async function executeRuntimeCommand(
           model: configNode.metadata.model || getProvider(channel, "image").model,
           prompt,
           size: typeof command.data.size === "string" ? command.data.size : state.config.imageSize,
+          quality: typeof command.data.quality === "string" ? command.data.quality : state.config.imageQuality,
+          resolution: typeof command.data.resolution === "string" ? command.data.resolution : state.config.imageResolution,
           n: Math.min(100, Math.max(1, numberValue(command.data.count, 1))),
           systemPrompt: state.config.systemPrompt,
         });
@@ -164,6 +169,9 @@ export async function executeRuntimeCommand(
               naturalWidth: uploaded.width,
               naturalHeight: uploaded.height,
               status: "success",
+              size: configNode.metadata.size,
+              quality: configNode.metadata.quality,
+              resolution: configNode.metadata.resolution,
             },
           }));
         }

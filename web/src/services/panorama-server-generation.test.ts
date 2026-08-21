@@ -53,6 +53,7 @@ describe("panorama server generation", () => {
       model: "gpt-image-2",
       size: "2048x1024",
       quality: "high",
+      resolution: "2K",
       count: 1,
       referenceStorageKeys: ["image:source-one"],
     }, {
@@ -73,6 +74,7 @@ describe("panorama server generation", () => {
       parameters: {
         size: "2048x1024",
         quality: "high",
+        resolution: "2K",
         count: 1,
         requestedCount: 1,
         category: "panorama",
@@ -290,7 +292,7 @@ describe("panorama server generation", () => {
   });
 
   test("fans a count=2 panorama request into two n=1 server jobs", async () => {
-    const submitted: Array<{ id?: string; parameters: { count?: number; requestedCount?: number; batchIndex?: number } }> = [];
+    const submitted: Array<{ id?: string; parameters: { count?: number; requestedCount?: number; batchIndex?: number; resolution?: string } }> = [];
     let created = 0;
     const result = await runPanoramaServerGeneration({
       projectId: "project-one",
@@ -299,6 +301,7 @@ describe("panorama server generation", () => {
       model: "gpt-image-2",
       size: "2048x1024",
       quality: "high",
+      resolution: "2K",
       count: 2,
       referenceStorageKeys: [],
     }, {
@@ -330,6 +333,7 @@ describe("panorama server generation", () => {
     expect(submitted.map((item) => item.parameters.count)).toEqual([1, 1]);
     expect(submitted.map((item) => item.parameters.requestedCount)).toEqual([2, 2]);
     expect(submitted.map((item) => item.parameters.batchIndex)).toEqual([1, 2]);
+    expect(submitted.map((item) => item.parameters.resolution)).toEqual(["2K", "2K"]);
     expect(result.jobIds).toEqual(["job-panorama-1", "job-panorama-2"]);
     expect(result.media.map((item) => item.storageKey)).toEqual(["image:job-panorama-1", "image:job-panorama-2"]);
   });

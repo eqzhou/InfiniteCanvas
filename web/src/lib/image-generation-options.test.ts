@@ -6,10 +6,12 @@ import {
   clampImageCountForProvider,
   imageOutputLimitFor,
   imageQualityOptionsFor,
+  imageResolutionOptionsFor,
   normalizeImageAspectForProvider,
   normalizeImageSizeForProvider,
   imageSizeOptionsFor,
   normalizeImageQualityForProvider,
+  normalizeImageResolutionForProvider,
   optionsWithCurrentValue,
 } from "./image-generation-options";
 
@@ -40,11 +42,19 @@ describe("image generation setting options", () => {
       .toBe("medium");
   });
 
-  test("uses resolution presets for APIMart current image models", () => {
+  test("keeps image quality and resolution as independent APIMart controls", () => {
     expect(imageQualityOptionsFor("apimart", "doubao-seedream-5-0-pro").map((option) => option.value))
-      .toEqual(["auto", "1K", "2K"]);
-    expect(normalizeImageQualityForProvider("high", "apimart", "doubao-seedream-5-0-pro")).toBe("auto");
-    expect(normalizeImageQualityForProvider("2K", "apimart", "doubao-seedream-5-0-pro")).toBe("2K");
+      .toEqual([]);
+    expect(imageResolutionOptionsFor("apimart", "doubao-seedream-5-0-pro").map((option) => option.value))
+      .toEqual(["1K", "2K"]);
+    expect(imageResolutionOptionsFor("apimart", "nano-banana-2-lite").map((option) => option.value))
+      .toEqual(["1K"]);
+    expect(imageResolutionOptionsFor("openai", "gpt-image-2")).toEqual([]);
+    expect(normalizeImageQualityForProvider("high", "apimart", "doubao-seedream-5-0-pro")).toBe("high");
+    expect(normalizeImageResolutionForProvider("", "apimart", "doubao-seedream-5-0-pro")).toBe("2K");
+    expect(normalizeImageResolutionForProvider("", "apimart", "nano-banana-2-lite")).toBe("1K");
+    expect(normalizeImageResolutionForProvider("2K", "apimart", "doubao-seedream-5-0-pro")).toBe("2K");
+    expect(normalizeImageResolutionForProvider("4K", "apimart", "doubao-seedream-5-0-pro")).toBe("1K");
     expect(imageOutputLimitFor("apimart", "doubao-seedream-5-0-pro")).toBe(100);
     expect(imageOutputLimitFor("apimart", "nano-banana-2-lite")).toBe(100);
   });

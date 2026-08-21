@@ -54,7 +54,7 @@ describe("admin channel persistence state", () => {
     expect(adminChannelIsDirty({ ...saved, name: "Renamed" }, saved)).toBe(true);
     expect(adminChannelIsDirty(saved, saved, "sk-new")).toBe(true);
     expect(adminChannelIsDirty({ ...saved, mediaCapabilities: [{
-      model: "gpt-image-1", kind: "image", modes: ["text_to_image"], sizes: [], durations: [], maxReferences: 0,
+      model: "gpt-image-1", kind: "image", modes: ["text_to_image"], sizes: [], resolutions: [], durations: [], maxReferences: 0,
     }] }, saved)).toBe(true);
     expect(adminChannelIsDirty({ ...saved, tenantIds: ["tenant-b"], publishToAll: false }, {
       ...saved, tenantIds: ["tenant-a"], publishToAll: false,

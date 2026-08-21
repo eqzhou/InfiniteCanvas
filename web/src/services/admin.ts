@@ -172,6 +172,7 @@ export type AdminMediaCapability = {
   kind: AdminMediaKind;
   modes: AdminMediaMode[];
   sizes: string[];
+  resolutions: string[];
   durations: number[];
   maxReferences: number;
 };
@@ -207,6 +208,8 @@ const adminRevisionPattern = /^[a-f0-9]{64}$/;
 const channelProtocols = new Set<AdminChannelProtocol>(["openai", "gemini", "apimart", "kie", "azure", "edge"]);
 const adminMediaModes = new Set<AdminMediaMode>(["text_to_image", "image_to_image", "text_to_video", "image_to_video", "text_to_audio"]);
 const mediaSizePattern = /^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|\d{3,4}p|[1248][Kk]|auto|adaptive)$/;
+const imageSizePattern = /^(?:\d{2,5}x\d{2,5}|\d{1,2}:\d{1,2}|auto)$/;
+const mediaResolutionPattern = /^(?:\d{3,4}p|[1248][Kk]|auto)$/;
 
 function readAdminRevision(response: Response): string {
   const revision = response.headers.get("X-OpenBoard-Revision") ?? "";
@@ -252,9 +255,19 @@ export function normalizeAdminMediaCapabilities(
     if (kind !== "image" && kind !== "video" && kind !== "audio") throw new Error("媒体能力类型无效");
     const modes = [...new Set(raw.modes)];
     if (!modes.length || modes.some((mode) => !adminMediaModes.has(mode) || !validForKind[kind].has(mode))) throw new Error("媒体生成模式无效");
-    const sizes = [...new Set(raw.sizes.map((size) => size.trim().replaceAll("X", "x")).filter(Boolean))];
+    const normalizedSizes = [...new Set(raw.sizes.map((size) => size.trim().replaceAll("X", "x")).filter(Boolean))];
+    const legacyResolutions = kind === "image"
+      ? normalizedSizes.filter((size) => /^(?:1K|2K|4K)$/i.test(size))
+      : [];
+    const sizes = normalizedSizes.filter((size) => !legacyResolutions.includes(size));
+    const resolutions = [...new Set([
+      ...legacyResolutions,
+      ...(raw.resolutions ?? []).map((resolution) => resolution.trim()).filter(Boolean),
+    ])];
     const durations = [...new Set(raw.durations)];
-    if (sizes.length > 100 || sizes.some((size) => !mediaSizePattern.test(size)) || durations.length > 100 ||
+    const acceptedSizePattern = kind === "image" ? imageSizePattern : mediaSizePattern;
+    if (sizes.length > 100 || sizes.some((size) => !acceptedSizePattern.test(size)) ||
+        resolutions.length > 100 || resolutions.some((resolution) => !mediaResolutionPattern.test(resolution)) || durations.length > 100 ||
         durations.some((duration) => !Number.isSafeInteger(duration) || duration < 1 || duration > 900) ||
         !Number.isSafeInteger(raw.maxReferences) || raw.maxReferences < 0 || raw.maxReferences > 16) {
       throw new Error("媒体模型尺寸、时长或参考素材限制无效");
@@ -262,7 +275,23 @@ export function normalizeAdminMediaCapabilities(
     const key = `${model.toLowerCase()}:${kind}`;
     if (seen.has(key)) throw new Error("同一模型和媒体类型的能力不能重复");
     seen.add(key);
-    return { model, kind, modes, sizes, durations, maxReferences: raw.maxReferences };
+    return { model, kind, modes, sizes, resolutions, durations, maxReferences: raw.maxReferences };
+  });
+}
+
+function normalizeLoadedMediaCapabilities(values: unknown): AdminMediaCapability[] {
+  if (!Array.isArray(values)) return [];
+  return values.map((raw) => {
+    const capability = raw as Partial<AdminMediaCapability>;
+    return {
+      model: typeof capability.model === "string" ? capability.model : "",
+      kind: capability.kind as AdminMediaKind,
+      modes: Array.isArray(capability.modes) ? capability.modes : [],
+      sizes: Array.isArray(capability.sizes) ? capability.sizes : [],
+      resolutions: Array.isArray(capability.resolutions) ? capability.resolutions : [],
+      durations: Array.isArray(capability.durations) ? capability.durations : [],
+      maxReferences: typeof capability.maxReferences === "number" ? capability.maxReferences : 0,
+    };
   });
 }
 
@@ -616,7 +645,7 @@ export async function listAdminChannels(): Promise<{ items: AdminChannel[]; revi
   const channels = await json<AdminChannel[]>(response);
   return { revision: readAdminRevision(response), items: channels.map((channel) => ({
     ...channel,
-    mediaCapabilities: Array.isArray(channel.mediaCapabilities) ? channel.mediaCapabilities : [],
+    mediaCapabilities: normalizeLoadedMediaCapabilities(channel.mediaCapabilities),
     defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel : "",
     defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel : "",
     defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel : "",
@@ -703,7 +732,7 @@ export async function testAdminChannel(channelId: string): Promise<{ ok: boolean
 function normalizeLoadedAdminChannel(channel: AdminChannel): AdminChannel {
   return {
     ...channel,
-    mediaCapabilities: Array.isArray(channel.mediaCapabilities) ? channel.mediaCapabilities : [],
+    mediaCapabilities: normalizeLoadedMediaCapabilities(channel.mediaCapabilities),
     defaultTextModel: typeof channel.defaultTextModel === "string" ? channel.defaultTextModel : "",
     defaultImageModel: typeof channel.defaultImageModel === "string" ? channel.defaultImageModel : "",
     defaultVideoModel: typeof channel.defaultVideoModel === "string" ? channel.defaultVideoModel : "",

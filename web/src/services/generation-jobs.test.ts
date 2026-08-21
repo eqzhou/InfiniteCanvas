@@ -258,7 +258,7 @@ describe("generation job HTTP lifecycle", () => {
     const browser = await createGenerationJob({ ...job("input-job", "2026-08-01T00:00:00Z"), id: undefined });
     const serverImage = await createServerImageGenerationJob({
       id: "server-image", projectId: "board-1", prompt: "draw", providerId: "image-main",
-      parameters: { size: "1024x1024", count: 1, category: "poster" },
+      parameters: { size: "1024x1024", resolution: "2K", count: 1, category: "poster" },
     });
     const serverVideo = await createServerVideoGenerationJob({
       id: "server-video", projectId: "board-1", prompt: "animate", providerId: "video-main",
@@ -279,7 +279,7 @@ describe("generation job HTTP lifecycle", () => {
       "/api/generation-jobs/video",
       "/api/generation-jobs/audio",
     ]);
-    expect(JSON.parse(String(requests[1]?.init?.body))).toMatchObject({ id: "server-image", parameters: { category: "poster" } });
+    expect(JSON.parse(String(requests[1]?.init?.body))).toMatchObject({ id: "server-image", parameters: { category: "poster", resolution: "2K" } });
   });
 
   test("reads, updates, cancels, and deletes one job through the API", async () => {

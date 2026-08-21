@@ -210,7 +210,7 @@ const capabilityModes: Record<AdminMediaKind, Array<{ id: AdminMediaMode; label:
 };
 
 function defaultCapability(model: string, kind: AdminMediaKind = "image"): AdminMediaCapability {
-  return { model, kind, modes: [capabilityModes[kind][0].id], sizes: [], durations: [], maxReferences: 0 };
+  return { model, kind, modes: [capabilityModes[kind][0].id], sizes: [], resolutions: [], durations: [], maxReferences: 0 };
 }
 
 function parseCsv(value: string): string[] {
@@ -268,7 +268,7 @@ function CapabilityRow({
             value={capability.kind}
             onChange={(event) => {
               const kind = event.target.value as AdminMediaKind;
-              onChange({ kind, modes: [capabilityModes[kind][0].id], sizes: [], durations: [], maxReferences: 0 });
+              onChange({ kind, modes: [capabilityModes[kind][0].id], sizes: [], resolutions: [], durations: [], maxReferences: 0 });
             }}
           >
             {(["image", "video", "audio"] as AdminMediaKind[]).map((kind) => (
@@ -307,7 +307,7 @@ function CapabilityRow({
           ))}
         </div>
       </div>
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-4">
         <Field label={t("admin.channels.labelSizes")}>
           <input
             aria-label={t("admin.channels.capabilitySizes", { index: position })}
@@ -316,6 +316,16 @@ function CapabilityRow({
             title={t("admin.channels.sizesTitle")}
             value={capability.sizes.join(",")}
             onChange={(event) => onChange({ sizes: parseCsv(event.target.value) })}
+          />
+        </Field>
+        <Field label={t("admin.channels.labelResolutions")}>
+          <input
+            aria-label={t("admin.channels.capabilityResolutions", { index: position })}
+            className="ob-field"
+            placeholder={t("admin.channels.resolutionsPlaceholder")}
+            title={t("admin.channels.resolutionsTitle")}
+            value={capability.resolutions.join(",")}
+            onChange={(event) => onChange({ resolutions: parseCsv(event.target.value) })}
           />
         </Field>
         {capability.kind === "image" ? null : (

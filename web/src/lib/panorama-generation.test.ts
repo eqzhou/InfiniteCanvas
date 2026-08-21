@@ -72,16 +72,19 @@ describe("panorama generation planning", () => {
   });
 
   test("normalizes fixed-size quality and result-count settings", () => {
-    expect(getPanoramaGenerationSettings({ count: 3, quality: "high" }, "auto")).toEqual({
+    expect(getPanoramaGenerationSettings({ count: 3, quality: "high", resolution: "2K" }, "auto")).toEqual({
       count: 3,
       quality: "high",
+      resolution: "2K",
       size: "2048x1024",
     });
-    expect(getPanoramaGenerationSettings({}, "medium")).toEqual({
+    expect(getPanoramaGenerationSettings({}, "medium", "1K")).toEqual({
       count: 1,
       quality: "medium",
+      resolution: "1K",
       size: "2048x1024",
     });
+		expect(getPanoramaGenerationSettings({ quality: "high", resolution: "4K" }, "auto", "1K").resolution).toBe("1K");
     expect(() => getPanoramaGenerationSettings({ count: 9 }, "auto")).toThrow(/1-8/);
     expect(() => getPanoramaGenerationSettings({ quality: "" }, "auto")).toThrow(/质量/);
   });

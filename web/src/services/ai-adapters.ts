@@ -65,6 +65,7 @@ export async function generateGeminiImages(
   model: string,
   prompt: string,
   references: string[],
+	resolution = "",
   signal?: AbortSignal,
 ): Promise<string[]> {
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
@@ -80,7 +81,10 @@ export async function generateGeminiImages(
       method: "POST",
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+				generationConfig: {
+					responseModalities: ["TEXT", "IMAGE"],
+					...(resolution ? { imageConfig: { imageSize: resolution } } : {}),
+				},
       }),
       signal,
     },

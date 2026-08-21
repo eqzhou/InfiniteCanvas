@@ -75,11 +75,20 @@ func capabilityForExplicitChannelModel(channel adminChannelPublic, configured ad
 	capability := mediaModelCapability{
 		ChannelID: channel.ID, ChannelName: channel.Name, Protocol: channel.Protocol,
 		Model: configured.Model, Kind: configured.Kind,
-		Modes: append([]string(nil), configured.Modes...), Sizes: append([]string(nil), configured.Sizes...),
+		Modes:     append([]string(nil), configured.Modes...),
 		Durations: append([]int(nil), configured.Durations...), MaxReferences: configured.MaxReferences,
 	}
+	if configured.Kind == "image" {
+		for _, value := range configured.Sizes {
+			if isMediaResolutionValue(value) {
+				capability.Resolutions = append(capability.Resolutions, value)
+				continue
+			}
+			capability.Sizes = append(capability.Sizes, value)
+		}
+		capability.Resolutions = append(capability.Resolutions, configured.Resolutions...)
+	}
 	if configured.Kind == "video" {
-		capability.Sizes = nil
 		for _, value := range configured.Sizes {
 			normalized := strings.ToLower(strings.TrimSpace(value))
 			switch {
@@ -92,8 +101,14 @@ func capabilityForExplicitChannelModel(channel adminChannelPublic, configured ad
 				capability.Resolutions = append(capability.Resolutions, value)
 			}
 		}
+		capability.Resolutions = append(capability.Resolutions, configured.Resolutions...)
 	}
 	return capability
+}
+
+func isMediaResolutionValue(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasSuffix(normalized, "k") || strings.HasSuffix(normalized, "p")
 }
 
 func (s *Server) buildMediaCapabilityCatalog(ctx context.Context, tenantID string) (mediaCapabilityCatalog, error) {
@@ -214,6 +229,59 @@ func (s *Server) verifySharedMediaCapability(ctx context.Context, tenantID, chan
 	return "", errors.New("shared media capability is not listed")
 }
 
+func (s *Server) verifySharedImageCapabilityRequest(
+	ctx context.Context,
+	tenantID, channelID, model, mode string,
+	parameters createImageJobParameters,
+) (string, error) {
+	if !validFilmGenerationMode(mode) {
+		return "", errors.New("invalid media generation mode")
+	}
+	catalog, err := s.buildMediaCapabilityCatalog(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	for _, capability := range catalog.Models {
+		if capability.ChannelID != channelID || capability.Kind != "image" || capability.Model != model {
+			continue
+		}
+		if err := validateImageCapabilityRequest(capability, mode, parameters.Size, parameters.Resolution, len(parameters.ReferenceStorageKeys)); err != nil {
+			return "", err
+		}
+		return catalog.Version, nil
+	}
+	return "", errors.New("shared media capability is not listed")
+}
+
+func validateImageCapabilityRequest(capability mediaModelCapability, mode, _ string, resolution string, references int) error {
+	if !containsFilmMode(capability.Modes, mode) {
+		return errors.New("media generation mode is not supported")
+	}
+	if references > capability.MaxReferences {
+		return errors.New("media reference count exceeds channel capability")
+	}
+	// Exact pixel sizes are provider-native and may intentionally differ from
+	// the UI's advertised aspect presets (for example a 2:1 panorama). The
+	// provider adapter remains the authority for size; this shared contract
+	// enforces the independently declared output resolution.
+	requestedResolution := strings.ToUpper(strings.TrimSpace(resolution))
+	if requestedResolution != "" {
+		if len(capability.Resolutions) == 0 || !containsCaseInsensitive(capability.Resolutions, requestedResolution) {
+			return errors.New("media resolution is not supported by channel capability")
+		}
+	}
+	return nil
+}
+
+func containsCaseInsensitive(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), target) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) verifySharedVideoCapabilityRequest(
 	ctx context.Context,
 	tenantID, channelID, model, mode string,
@@ -259,11 +327,16 @@ func validateMediaCapabilityRequest(capability mediaModelCapability, mode string
 	}
 	requestedResolution := strings.TrimSpace(config.Resolution)
 	allowedResolutions := capability.Resolutions
-	if len(allowedResolutions) == 0 {
+	if capability.Kind != "image" && len(allowedResolutions) == 0 {
 		allowedResolutions = capability.Sizes
 	}
-	if requestedResolution != "" && len(allowedResolutions) > 0 && !containsFilmStorageKey(allowedResolutions, requestedResolution) {
-		return errors.New("media resolution is not supported by channel capability")
+	if requestedResolution != "" {
+		if capability.Kind == "image" && len(allowedResolutions) == 0 {
+			return errors.New("media resolution is not supported by channel capability")
+		}
+		if len(allowedResolutions) > 0 && !containsFilmStorageKey(allowedResolutions, requestedResolution) {
+			return errors.New("media resolution is not supported by channel capability")
+		}
 	}
 	if len(capability.Durations) > 0 {
 		allowed := false

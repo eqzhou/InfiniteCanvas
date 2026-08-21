@@ -22,6 +22,13 @@ import {
   type PanoramaGeneratedMedia,
 } from "@/lib/panorama-generation";
 import { getProvider } from "@/lib/ai-config";
+import {
+  imageQualityOptionsFor,
+  imageResolutionOptionsFor,
+  legacyImageResolutionFromQuality,
+  normalizeImageResolutionForProvider,
+  optionsWithCurrentValue,
+} from "@/lib/image-generation-options";
 import { usesServerGenerationJobs } from "@/services/generation-jobs";
 import {
   resumePanoramaServerGeneration,
@@ -31,10 +38,17 @@ import {
   resolveActiveAIChannel,
   useSharedChannels,
 } from "@/services/shared-channels";
+import {
+  intersectMediaCapabilities,
+  normalizeImageResolutionForCapability,
+  resolveMediaCapabilityForRequest,
+  type MediaCapability,
+  type MediaCapabilityCatalog,
+} from "@/services/media-capabilities";
 import { nextPanoramaPreviewZoom } from "@/lib/panorama-zoom";
 import { useI18n } from "@/i18n/I18nProvider";
 
-export function PanoramaNodeCard({ node }: { node: BoardNode }) {
+export function PanoramaNodeCard({ node, mediaCatalog = null }: { node: BoardNode; mediaCatalog?: MediaCapabilityCatalog | null }) {
   const { t } = useI18n();
   const project = useBoardStore((state) => state.getActive());
   const config = useBoardStore((state) => state.config);
@@ -48,6 +62,37 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
     sharedChannels,
     config.activeSharedChannelId,
   );
+  const imageProvider = channel ? getProvider(channel, "image") : undefined;
+  const imageCatalogCandidates = mediaCatalog?.models.filter((item) =>
+    item.kind === "image" && (channel?.id === "shared-auto" || item.channelId === channel?.id),
+  ) ?? [];
+  const imageCatalogModels = [...new Set(imageCatalogCandidates.map((item) => item.model))];
+  const catalogImageModel = channel?.id === "shared-auto"
+    ? imageCatalogModels.find((candidate) => intersectMediaCapabilities(
+      imageCatalogCandidates.filter((item) => item.model === candidate),
+    ))
+    : imageCatalogModels[0];
+  const imageModel = node.metadata.model || imageProvider?.model || catalogImageModel || "";
+  const imageCapability: MediaCapability | undefined = channel?.id === "shared-auto"
+    ? resolveMediaCapabilityForRequest(mediaCatalog, channel.id, "image", imageModel, "text_to_image") ??
+      resolveMediaCapabilityForRequest(mediaCatalog, channel.id, "image", imageModel, "image_to_image")
+    : imageCatalogCandidates.find((item) => item.model === imageModel && (item.modes.includes("text_to_image") || item.modes.includes("image_to_image")));
+  const imageQualityOptions = imageQualityOptionsFor(imageProvider?.protocol, imageModel);
+  const imageResolutionOptions = imageCapability
+    ? imageCapability.resolutions.map((value) => ({ value, label: `${value} 分辨率` }))
+    : channel?.id === "shared-auto" && mediaCatalog
+      ? []
+      : imageResolutionOptionsFor(imageProvider?.protocol, imageModel);
+  const imageResolution = normalizeImageResolutionForProvider(
+    node.metadata.resolution ?? config.imageResolution ?? legacyImageResolutionFromQuality(node.metadata.quality ?? config.imageQuality),
+    imageProvider?.protocol,
+    imageModel,
+  );
+  const effectiveImageResolution = imageCapability
+    ? normalizeImageResolutionForCapability(imageCapability, imageResolution)
+    : channel?.id === "shared-auto" && mediaCatalog
+      ? ""
+      : imageResolution;
   const [open, setOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -188,14 +233,17 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
       if (!currentNode || currentNode.type !== "panorama") throw new Error(t("canvasNodes.panorama.nodeMissing"));
       if (!channel) throw new Error(t("canvasNodes.imageChannelRequired"));
       const imageProvider = getProvider(channel, "image");
-      if (!imageProvider.apiKey || !imageProvider.baseUrl || !imageProvider.model) {
+      if (!imageProvider.apiKey || !imageProvider.baseUrl || !imageModel) {
         throw new Error(t("canvasNodes.imageChannelRequired"));
       }
+      if (mediaCatalog && channel.id === "shared-auto" && !imageCapability) {
+        throw new Error(t("creative.sharedCapabilityMissing"));
+      }
       const prompt = buildPanoramaPrompt(currentNode.metadata.prompt ?? "");
-      const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
+      const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality, effectiveImageResolution);
       const referenceInputs = getPanoramaReferenceInputs(historyProject, currentNode.id);
       const referenceStorageKeys = referenceInputs.map((input) => input.storageKey);
-      const model = currentNode.metadata.model || imageProvider.model;
+      const model = currentNode.metadata.model || imageModel;
       if (usesServerGenerationJobs()) {
         const supported = imageProvider.protocol === "openai" || imageProvider.protocol === "gemini" ||
           (imageProvider.protocol === "template" && Boolean(imageProvider.template)) || imageProvider.protocol === "apimart" ||
@@ -208,6 +256,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
           model,
           size: settings.size,
           quality: settings.quality,
+          resolution: settings.resolution,
           count: settings.count,
           referenceStorageKeys,
           signal: operation.signal,
@@ -220,6 +269,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
               prompt: currentNode.metadata.prompt ?? "",
               model,
               quality: settings.quality,
+              resolution: settings.resolution,
               count: settings.count,
               referenceStorageKeys,
               generationType: referenceStorageKeys.length > 0 ? "image-to-image" : "text-to-image",
@@ -237,6 +287,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
             prompt: currentNode.metadata.prompt ?? "",
             model,
             quality: settings.quality,
+            resolution: settings.resolution,
             referenceStorageKeys,
             generationJobId: result.jobId,
             generationJobIds: result.jobIds,
@@ -255,6 +306,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
         prompt,
         size: settings.size,
         quality: settings.quality,
+        resolution: settings.resolution,
         n: settings.count,
         referenceBlobs,
         systemPrompt: config.systemPrompt,
@@ -279,6 +331,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
         prompt: currentNode.metadata.prompt ?? "",
         model,
         quality: settings.quality,
+        resolution: settings.resolution,
         referenceStorageKeys,
       }, structuredClone(historyProject), true);
       uploadedResults = [];
@@ -309,7 +362,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
         if (!historyProject) throw new Error(t("canvasNodes.panorama.projectMissing"));
         const currentNode = historyProject.nodes.find((candidate) => candidate.id === node.id);
         if (!currentNode || currentNode.type !== "panorama") throw new Error(t("canvasNodes.panorama.nodeMissing"));
-        const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality);
+        const settings = getPanoramaGenerationSettings(currentNode.metadata, config.imageQuality, effectiveImageResolution);
         const storedJobIds = currentNode.metadata.generationJobIds?.length
           ? currentNode.metadata.generationJobIds
           : [jobId];
@@ -330,6 +383,7 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
             prompt: currentNode.metadata.prompt ?? "",
             model: currentNode.metadata.model ?? "",
             quality: settings.quality,
+            resolution: settings.resolution,
             referenceStorageKeys: [...(currentNode.metadata.referenceStorageKeys ?? [])],
             generationJobId: jobId,
             generationJobIds: currentNode.metadata.generationJobIds,
@@ -400,8 +454,8 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
           }} /></label>
           <button type="button" aria-label={t("canvasNodes.panorama.generate")} disabled={loading || isBatchChild} className="grid h-8 w-8 shrink-0 place-items-center rounded bg-[var(--ob-accent)] text-white disabled:opacity-50" onClick={() => void generate().catch((cause) => setError(panoramaGenerationError(cause)))}>{loading ? <span className="animate-pulse">…</span> : <Sparkles size={14} />}</button>
         </div>
-        <div role="group" aria-label={t("canvasNodes.panorama.settings")} className="grid grid-cols-[1fr_5rem] gap-1">
-          <label className="grid grid-cols-[2.5rem_1fr] items-center gap-1 text-[10px] text-slate-400">
+        <div role="group" aria-label={t("canvasNodes.panorama.settings")} className="grid grid-cols-[1fr_1fr_5rem] gap-1">
+          {imageQualityOptions.length ? <label className="grid grid-cols-[2.5rem_1fr] items-center gap-1 text-[10px] text-slate-400">
             {t("canvasNodes.panorama.quality")}
             <select aria-label={t("canvasNodes.panorama.generationQuality")} disabled={loading || isBatchChild} className="min-w-0 rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.quality ?? config.imageQuality} onChange={(event) => updateNode(node.id, { metadata: { quality: event.target.value } })}>
               {!["auto", "low", "medium", "high"].includes(node.metadata.quality ?? config.imageQuality) ? <option value={node.metadata.quality ?? config.imageQuality}>{node.metadata.quality ?? config.imageQuality}</option> : null}
@@ -410,7 +464,15 @@ export function PanoramaNodeCard({ node }: { node: BoardNode }) {
               <option value="medium">{t("canvasNodes.medium")}</option>
               <option value="high">{t("canvasNodes.high")}</option>
             </select>
-          </label>
+          </label> : null}
+          {imageResolutionOptions.length ? (
+            <label className="grid grid-cols-[2.5rem_1fr] items-center gap-1 text-[10px] text-slate-400">
+              {t("canvasNodes.resolution")}
+              <select aria-label={t("canvasNodes.resolution")} disabled={loading || isBatchChild} className="min-w-0 rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={effectiveImageResolution} onChange={(event) => updateNode(node.id, { metadata: { resolution: event.target.value } })}>
+                {optionsWithCurrentValue(imageResolutionOptions, effectiveImageResolution).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          ) : null}
           <label className="grid grid-cols-[2rem_1fr] items-center gap-1 text-[10px] text-slate-400">
             {t("canvasNodes.panorama.quantity")}
             <select aria-label={t("canvasNodes.panorama.generationQuantity")} disabled={loading || isBatchChild} className="rounded border border-white/10 bg-slate-900 px-1 py-1 text-[11px] text-white disabled:opacity-50" value={node.metadata.count ?? 1} onChange={(event) => updateNode(node.id, { metadata: { count: Number(event.target.value) } })}>
